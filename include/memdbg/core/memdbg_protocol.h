@@ -53,6 +53,7 @@ typedef enum memdbg_command {
   MEMDBG_CMD_BATCH_READ = 0x0202U,
   MEMDBG_CMD_BATCH_WRITE = 0x0203U,
   MEMDBG_CMD_TELEMETRY = 0x0400U,
+  MEMDBG_CMD_DISCOVERY = 0x0500U,
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
 
@@ -82,7 +83,8 @@ typedef enum memdbg_capability {
   MEMDBG_CAP_SCAN_UNKNOWN = 1U << 15,
   MEMDBG_CAP_BATCH_WRITE = 1U << 16,
   MEMDBG_CAP_LZ4 = 1U << 17,
-  MEMDBG_CAP_SCAN_PROCESS_AOB = 1U << 18
+  MEMDBG_CAP_SCAN_PROCESS_AOB = 1U << 18,
+  MEMDBG_CAP_DISCOVERY = 1U << 19
 } memdbg_capability_t;
 
 typedef enum memdbg_value_type {
@@ -304,6 +306,35 @@ typedef struct MEMDBG_PACKED memdbg_telemetry_response {
   uint32_t scan_cache_misses;
   uint32_t reserved;
 } memdbg_telemetry_response_t;
+
+/* ---- Discovery (UDP broadcast) ----
+ *
+ * Frontends send a discovery ping to the broadcast address on the
+ * discovery port.  Every payload that receives it replies with a
+ * discovery response so the frontend can auto-populate the connection
+ * dialog without knowing the debug port ahead of time.
+ *
+ * Ping:    memdbg_discovery_ping_t   (sent by frontend)
+ * Pong:    memdbg_discovery_response_t (unicast reply from payload)
+ *
+ * Both use the same MEMDBG_PACKET_MAGIC for quick filtering. */
+
+typedef struct MEMDBG_PACKED memdbg_discovery_ping {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t reserved;
+} memdbg_discovery_ping_t;
+
+typedef struct MEMDBG_PACKED memdbg_discovery_response {
+  uint32_t magic;
+  uint16_t protocol_version;
+  uint16_t platform_id;
+  uint32_t capabilities;
+  uint16_t debug_port;
+  uint16_t udp_log_port;
+  char version[16];
+  char name[16];
+} memdbg_discovery_response_t;
 
 #undef MEMDBG_PACKED
 
