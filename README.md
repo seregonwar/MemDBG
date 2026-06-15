@@ -87,9 +87,9 @@ The payload daemon exposes process enumeration, memory map inspection, and read/
 |:---------------|:--------------------|
 | PlayStation 5  | In development      |
 | PlayStation 4  | In development      |
-| Windows (host) | Planned             |
-| Linux (host)   | Planned             |
-| macOS (host)   | Planned             |
+| Windows (host) | In development      |
+| Linux (host)   | In development      |
+| macOS (host)   | In development      |
 
 Platform support depends on the availability of compatible homebrew payloads and firmware-level debugging environments.
 
