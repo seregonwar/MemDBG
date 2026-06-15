@@ -53,3 +53,10 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+/build
+/dumps
+/trainers
+/external/ps5-payload-sdk
+.DS_Store
+/reference

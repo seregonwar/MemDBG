@@ -1,0 +1,199 @@
+/*
+ * memDBG - Memory debugger payload for jailbroken consoles.
+ * Copyright (C) 2026 SeregonWar
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#include "memdbg/pal/pal_network.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+int pal_network_init(void) { return 0; }
+
+void pal_network_fini(void) {}
+
+int pal_socket_close(socket_t fd) {
+  if (fd < 0) {
+    errno = EBADF;
+    return -1;
+  }
+  int rc;
+  do {
+    rc = close(fd);
+  } while (rc < 0 && errno == EINTR);
+  return rc;
+}
+
+int pal_socket_set_nonblocking(socket_t fd, bool enabled) {
+  int flags;
+  if (fd < 0) {
+    errno = EBADF;
+    return -1;
+  }
+  flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) {
+    return -1;
+  }
+  if (enabled) {
+    flags |= O_NONBLOCK;
+  } else {
+    flags &= ~O_NONBLOCK;
+  }
+  return fcntl(fd, F_SETFL, flags);
+}
+
+int pal_socket_set_timeouts(socket_t fd, uint32_t recv_ms, uint32_t send_ms) {
+  if (fd < 0) {
+    errno = EBADF;
+    return -1;
+  }
+
+  struct timeval tv;
+  tv.tv_sec = (time_t)(recv_ms / 1000U);
+  tv.tv_usec = (suseconds_t)((recv_ms % 1000U) * 1000U);
+  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) {
+    return -1;
+  }
+
+  tv.tv_sec = (time_t)(send_ms / 1000U);
+  tv.tv_usec = (suseconds_t)((send_ms % 1000U) * 1000U);
+  return setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+}
+
+int pal_socket_configure(socket_t fd) {
+  if (fd < 0) {
+    errno = EBADF;
+    return -1;
+  }
+
+  int one = 1;
+  (void)setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+  (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  (void)pal_socket_set_timeouts(fd, 30000U, 30000U);
+  return 0;
+}
+
+int pal_tcp_listen(const char *bind_host, uint16_t port, int backlog,
+                   socket_t *out_fd) {
+  socket_t fd;
+  struct sockaddr_in addr;
+  int one = 1;
+
+  if (out_fd == NULL || port == 0U) {
+    errno = EINVAL;
+    return -1;
+  }
+  *out_fd = PAL_INVALID_SOCKET;
+
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return -1;
+  }
+
+  (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+  (void)setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  if (bind_host == NULL || bind_host[0] == '\0' ||
+      strcmp(bind_host, "0.0.0.0") == 0 || strcmp(bind_host, "*") == 0) {
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  } else if (inet_pton(AF_INET, bind_host, &addr.sin_addr) != 1) {
+    (void)pal_socket_close(fd);
+    errno = EINVAL;
+    return -1;
+  }
+
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    int saved = errno;
+    (void)pal_socket_close(fd);
+    errno = saved;
+    return -1;
+  }
+  if (listen(fd, backlog) != 0) {
+    int saved = errno;
+    (void)pal_socket_close(fd);
+    errno = saved;
+    return -1;
+  }
+
+  *out_fd = fd;
+  return 0;
+}
+
+ssize_t pal_socket_read_exact(socket_t fd, void *buffer, size_t count) {
+  unsigned char *cursor = (unsigned char *)buffer;
+  size_t total = 0U;
+
+  if (fd < 0 || (buffer == NULL && count != 0U)) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  while (total < count) {
+    ssize_t n = recv(fd, cursor + total, count - total, 0);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -1;
+    }
+    if (n == 0) {
+      errno = ECONNRESET;
+      return -1;
+    }
+    total += (size_t)n;
+  }
+
+  return (ssize_t)total;
+}
+
+ssize_t pal_socket_write_all(socket_t fd, const void *buffer, size_t count) {
+  const unsigned char *cursor = (const unsigned char *)buffer;
+  size_t total = 0U;
+
+  if (fd < 0 || (buffer == NULL && count != 0U)) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  while (total < count) {
+#ifdef MSG_NOSIGNAL
+    ssize_t n = send(fd, cursor + total, count - total, MSG_NOSIGNAL);
+#else
+    ssize_t n = send(fd, cursor + total, count - total, 0);
+#endif
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -1;
+    }
+    if (n == 0) {
+      errno = EPIPE;
+      return -1;
+    }
+    total += (size_t)n;
+  }
+
+  return (ssize_t)total;
+}
+
+const char *pal_socket_last_error(void) { return strerror(errno); }
