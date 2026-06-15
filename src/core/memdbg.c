@@ -21,6 +21,7 @@
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/privilege/privilege.h"
 #include "memdbg/scanner/memdbg_scan.h"
+#include "memdbg/telemetry/discovery.h"
 #include "memdbg/telemetry/udp_log.h"
 #include "memdbg/pal/lz4.h"
 
@@ -111,7 +112,8 @@ static uint32_t memdbg_capabilities(const memdbg_config_t *cfg) {
                   MEMDBG_CAP_FOREGROUND_APP | MEMDBG_CAP_PROCESS_CONTROL |
                   MEMDBG_CAP_BATCH_READ | MEMDBG_CAP_BATCH_WRITE |
                   MEMDBG_CAP_PERF_TELEMETRY | MEMDBG_CAP_LZ4 |
-                  MEMDBG_CAP_SCAN_UNKNOWN | MEMDBG_CAP_SCAN_PROCESS_AOB;
+                  MEMDBG_CAP_SCAN_UNKNOWN | MEMDBG_CAP_SCAN_PROCESS_AOB |
+                  MEMDBG_CAP_DISCOVERY;
   if (cfg != NULL && cfg->enable_udp_log)
     caps |= MEMDBG_CAP_UDP_LOG;
   return caps;
@@ -1035,6 +1037,14 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     memdbg_log_write(MEMDBG_LOG_WARN, "instance: failed to write pid file");
   }
 
+  /* Start UDP discovery listener so frontends can auto-detect the payload. */
+  {
+    memdbg_status_t dstatus = memdbg_discovery_start(&cfg);
+    if (dstatus != MEMDBG_OK)
+      memdbg_log_write(MEMDBG_LOG_WARN, "discovery: %s",
+                       memdbg_strerror(dstatus));
+  }
+
   if (notification_ready)
     pal_notification_send("MemDBG by seregonwar started");
 
@@ -1059,6 +1069,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     (void)pthread_join(workers[i], NULL);
 
   (void)pal_socket_close(listen_fd);
+  memdbg_discovery_stop();
   memdbg_instance_remove_pid_file(&cfg);
   memdbg_process_maps_cache_flush(0);
 
