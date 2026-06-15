@@ -83,6 +83,55 @@ public:
   bool scan_exact(const memdbg_scan_exact_request_t &request, ScanResult &out);
   bool scan_process_exact(const memdbg_scan_process_exact_request_t &request,
                           ScanResult &out);
+  bool scan_aob(const memdbg_scan_aob_request_t &request,
+                const std::vector<uint8_t> &pattern,
+                const std::vector<uint8_t> &mask, ScanResult &out);
+  bool scan_pointer(const memdbg_scan_pointer_request_t &request,
+                    ScanResult &out);
+  bool scan_unknown(const memdbg_scan_process_exact_request_t &request,
+                    ScanResult &out);
+
+  /* Batch read — up to 64 addresses in one request.
+     Items: array of (address, length).
+     Response: results[i] = (address, length, status), data = concatenated bytes.
+     Caller parses data using results[i].length offsets. */
+  struct BatchReadResult {
+    std::vector<memdbg_batch_read_result_entry_t> entries;
+    std::vector<uint8_t> data;
+  };
+  bool batch_read(int32_t pid,
+                  const std::vector<memdbg_batch_read_item_t> &items,
+                  BatchReadResult &out);
+
+  /* Batch write — up to 64 (address, data) pairs in one request.
+     Items: vector of {address, data_bytes}.
+     Response: results[i] = {address, written, status} for each item. */
+  struct BatchWriteResult {
+    std::vector<memdbg_batch_write_result_entry_t> entries;
+  };
+  bool batch_write(int32_t pid,
+                   const std::vector<std::pair<uint64_t, std::vector<uint8_t>>> &items,
+                   BatchWriteResult &out);
+
+  struct TelemetrySnapshot {
+    uint64_t total_bytes_read = 0;
+    uint64_t total_bytes_written = 0;
+    uint64_t total_read_calls = 0;
+    uint64_t total_write_calls = 0;
+    uint64_t uptime_seconds = 0;
+    uint32_t active_connections = 0;
+    uint32_t thread_pool_size = 0;
+    uint32_t scan_cache_hits = 0;
+    uint32_t scan_cache_misses = 0;
+  };
+  bool telemetry(TelemetrySnapshot &out);
+
+  bool foreground_app(int32_t pid, char *title_id, size_t title_id_size,
+                      char *content_id, size_t content_id_size,
+                      char *name, size_t name_size, char *app_ver,
+                      size_t app_ver_size);
+  bool process_stop(int32_t pid);
+  bool process_continue(int32_t pid);
 
 private:
   bool request(uint16_t command, const void *payload, uint32_t payload_len,

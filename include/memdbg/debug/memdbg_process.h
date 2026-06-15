@@ -33,9 +33,21 @@ typedef struct memdbg_map_list {
 
 memdbg_status_t memdbg_process_list(memdbg_process_list_t *out);
 void memdbg_process_list_free(memdbg_process_list_t *list);
+
 memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out);
 void memdbg_process_maps_free(memdbg_map_list_t *list);
+
+/* Cached variant — returns cached maps if still fresh (5s TTL), avoids
+   expensive sysctl/proc reads on every scan refine.  Thread-safe. */
+memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out);
+
+/* Flush a single PID from the cache, or all entries if pid <= 0. */
+void memdbg_process_maps_cache_flush(int pid);
+
 memdbg_status_t memdbg_process_info(int pid, memdbg_process_info_response_t *out);
+
+/* Cache statistics for telemetry. */
+void memdbg_process_cache_stats(uint32_t *hits, uint32_t *misses);
 
 #ifdef __cplusplus
 }
