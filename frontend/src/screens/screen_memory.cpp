@@ -1,5 +1,5 @@
 /*
- * memDBG - Memory screen.
+ * MemDBG - Memory screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

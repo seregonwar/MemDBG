@@ -1,5 +1,5 @@
 /*
- * memDBG - Shared ImGui widgets and theme.
+ * MemDBG - Shared ImGui widgets and theme.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -60,6 +60,7 @@ ImVec2 full_button(float height);
 void draw_empty_state(const char *title, const char *message);
 void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base);
 void draw_capabilities(const ::memdbg::frontend::HelloInfo &hello);
+void draw_scan_progress(const std::string &label, const char *icon, double elapsed, float bar_width);
 
 } // namespace memdbg::frontend::ui
 

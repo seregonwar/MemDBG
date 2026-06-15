@@ -1,5 +1,5 @@
 /*
- * memDBG - Embedded icon font (FontAwesome 6 Free Solid).
+ * MemDBG - Embedded icon font (FontAwesome 6 Free Solid).
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  *

@@ -1,5 +1,5 @@
 /*
- * memDBG - Telemetry / performance screen.
+ * MemDBG - Telemetry / performance screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -8,11 +8,22 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace memdbg::frontend {
 
 namespace {
+
+struct MetricItem {
+  const char *icon;
+  std::string label;
+  std::string value;
+  std::string subtitle;
+  ImVec4 value_color;
+};
 
 inline std::string format_bytes(uint64_t bytes) {
   if (bytes < 1024ULL) return std::to_string(bytes) + " B";
@@ -51,43 +62,83 @@ inline std::string format_uptime(uint64_t seconds) {
   uint64_t m = (seconds % 3600U) / 60U;
   uint64_t s = seconds % 60U;
   char buf[48];
-  if (h > 0) std::snprintf(buf, sizeof(buf), "%lluh %llum %llus", (unsigned long long)h, (unsigned long long)m, (unsigned long long)s);
-  else if (m > 0) std::snprintf(buf, sizeof(buf), "%llum %llus", (unsigned long long)m, (unsigned long long)s);
-  else std::snprintf(buf, sizeof(buf), "%llus", (unsigned long long)s);
+  if (h > 0) {
+    std::snprintf(buf, sizeof(buf), "%lluh %llum %llus",
+                  (unsigned long long)h, (unsigned long long)m,
+                  (unsigned long long)s);
+  } else if (m > 0) {
+    std::snprintf(buf, sizeof(buf), "%llum %llus",
+                  (unsigned long long)m, (unsigned long long)s);
+  } else {
+    std::snprintf(buf, sizeof(buf), "%llus", (unsigned long long)s);
+  }
   return buf;
 }
 
-inline void metric_card(const char *icon, const char *label, const char *value,
-                        const char *subtitle, ImVec2 size) {
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
-  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 14));
-  ImGui::BeginChild(label, size, true, ImGuiWindowFlags_NoScrollbar);
-
-  ImGui::TextColored(ui::colors().primary, "%s", icon);
-  ImGui::SameLine();
-  ImGui::TextColored(ui::colors().muted, "%s", label);
-
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 2));
-  ImGui::TextColored(ui::colors().text, "%s", value);
-  if (subtitle && *subtitle) {
-    ImGui::TextColored(ui::colors().dim, "%s", subtitle);
-  }
-  ImGui::PopStyleVar();
-
-  ImGui::EndChild();
-  ImGui::PopStyleVar(2);
-  ImGui::PopStyleColor();
+static void section_header(const char *title) {
+  ImGui::Spacing();
+  ImGui::TextColored(ui::colors().muted, "%s", title);
+  ImGui::Separator();
+  ImGui::Spacing();
 }
 
-inline void progress_bar_label(const char *label, double fraction, ImVec4 bar_color) {
+static void draw_metric_tile(const MetricItem &item, ImVec2 size) {
+  ImGui::PushID(item.label.c_str());
+  ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##metric", size);
+  const bool hovered = ImGui::IsItemHovered();
+
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const ImVec2 max(pos.x + size.x, pos.y + size.y);
+  const ImVec4 bg = hovered ? ui::colors().bg3 : ui::colors().bg2;
+  const ImVec4 border = hovered ? ui::colors().border_hot : ui::colors().border;
+
+  dl->AddRectFilled(pos, max, ui::color_u32(bg), 8.0f);
+  dl->AddRect(pos, max, ui::color_u32(border), 8.0f);
+  dl->PushClipRect(pos, max, true);
+
+  const float pad = 14.0f;
+  const float line_h = ImGui::GetTextLineHeight();
+  dl->AddText(ImVec2(pos.x + pad, pos.y + 13.0f),
+              ui::color_u32(ui::colors().primary2), item.icon);
+  dl->AddText(ImVec2(pos.x + pad + 34.0f, pos.y + 13.0f),
+              ui::color_u32(ui::colors().muted), item.label.c_str());
+  dl->AddText(ImVec2(pos.x + pad, pos.y + 15.0f + line_h),
+              ui::color_u32(item.value_color), item.value.c_str());
+  if (!item.subtitle.empty()) {
+    dl->AddText(ImVec2(pos.x + pad, pos.y + 18.0f + line_h * 2.0f),
+                ui::color_u32(ui::colors().dim), item.subtitle.c_str());
+  }
+
+  dl->PopClipRect();
+  ImGui::PopID();
+}
+
+static void draw_metric_grid(const std::vector<MetricItem> &items, float width) {
+  const float gap = 12.0f;
+  const int columns = width >= 900.0f ? 4 : (width >= 560.0f ? 2 : 1);
+  const float tile_w = (width - gap * static_cast<float>(columns - 1)) /
+                       static_cast<float>(columns);
+  const ImVec2 tile_size(std::max(160.0f, tile_w), 82.0f);
+
+  for (size_t i = 0; i < items.size(); ++i) {
+    const int col = static_cast<int>(i % static_cast<size_t>(columns));
+    draw_metric_tile(items[i], tile_size);
+    if (col + 1 < columns && i + 1 < items.size()) ImGui::SameLine(0, gap);
+  }
+}
+
+static void draw_progress_row(const char *label, double fraction, ImVec4 color) {
+  fraction = std::clamp(fraction, 0.0, 1.0);
+  char percent[32];
+  std::snprintf(percent, sizeof(percent), "%.1f%%", fraction * 100.0);
+
   ImGui::TextColored(ui::colors().dim, "%s", label);
-  ImGui::SameLine(128);
-  ImGui::PushStyleColor(ImGuiCol_PlotHistogram, bar_color);
+  ImGui::SameLine();
+  ImGui::TextColored(color, "%s", percent);
+  ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
   ImGui::PushStyleColor(ImGuiCol_FrameBg, ui::colors().bg2);
-  char overlay[32];
-  std::snprintf(overlay, sizeof(overlay), "%.1f%%", fraction * 100.0);
-  ImGui::ProgressBar(static_cast<float>(fraction), ImVec2(-1, 18), overlay);
+  ImGui::ProgressBar(static_cast<float>(fraction), ImVec2(-1, 18), "");
   ImGui::PopStyleColor(2);
 }
 
@@ -96,8 +147,8 @@ inline void progress_bar_label(const char *label, double fraction, ImVec4 bar_co
 void draw_telemetry(AppState &state, ImVec2 avail) {
   const double now = ImGui::GetTime();
 
-  /* Auto-poll every 1.0s while connected and on this screen */
-  if (state.client.connected() && (state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) {
+  if (state.client.connected() &&
+      (state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) {
     if (now >= state.next_telemetry_poll) {
       state.next_telemetry_poll = now + 1.0;
       state.telemetry_available = state.client.telemetry(state.telemetry_snap);
@@ -107,19 +158,16 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
     }
   }
 
-  const float gap = 16.0f;
-
   if (!state.client.connected()) {
-    /* Not connected — show empty state */
-    ui::begin_panel("TelemetryEmpty", "Payload Telemetry", ImVec2(avail.x, avail.y));
+    ui::begin_panel("TelemetryEmpty", "Payload Telemetry", avail);
     ui::draw_empty_state("Payload Required",
-                         "Connect to a console running the memDBG payload to see runtime telemetry.");
+                         "Connect to a console running the MemDBG payload to see runtime telemetry.");
     ui::end_panel();
     return;
   }
 
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) {
-    ui::begin_panel("TelemetryUnsupported", "Payload Telemetry", ImVec2(avail.x, avail.y));
+    ui::begin_panel("TelemetryUnsupported", "Payload Telemetry", avail);
     ui::draw_empty_state("Not Supported",
                          "The connected payload does not advertise the PERF_TELEMETRY capability.\n"
                          "Update to a newer payload build to enable performance telemetry.");
@@ -128,7 +176,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   }
 
   if (!state.telemetry_available) {
-    ui::begin_panel("TelemetryWaiting", "Payload Telemetry", ImVec2(avail.x, avail.y));
+    ui::begin_panel("TelemetryWaiting", "Payload Telemetry", avail);
     ui::draw_empty_state("Polling...",
                          "Waiting for the first telemetry response from the payload.\n"
                          "Check the status bar for errors if this persists.");
@@ -137,176 +185,93 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   }
 
   const auto &t = state.telemetry_snap;
+  const float panel_w = std::max(240.0f, avail.x);
 
-  /* ---- Row 0: Connection & uptime ---- */
-  char uptime_buf[128];
-  std::snprintf(uptime_buf, sizeof(uptime_buf), "Up %s  |  %s workers",
-                format_uptime(t.uptime_seconds).c_str(),
-                format_count(t.thread_pool_size).c_str());
+  ui::begin_panel("TelemetryPanel", "Payload Telemetry", avail);
 
-  ui::begin_panel("TelemetryHeader", "Runtime Overview", ImVec2(avail.x, gap + 82.0f));
-  {
-    ImVec2 card_sz((avail.x - gap * 3.0f) / 4.0f, 50.0f);
-
-    metric_card(icons::kOnline, "Uptime",
-                format_uptime(t.uptime_seconds).c_str(),
-                "since payload start", card_sz);
-
-    ImGui::SameLine(0, gap);
-    metric_card(icons::kTerminal, "Active Conns",
-                format_count(t.active_connections).c_str(),
-                (std::string("pool size ") + format_count(t.thread_pool_size)).c_str(), card_sz);
-
-    ImGui::SameLine(0, gap);
-    metric_card(icons::kGauge, "Read Calls",
-                format_count(t.total_read_calls).c_str(),
-                "total synchronous reads", card_sz);
-
-    ImGui::SameLine(0, gap);
-    metric_card(icons::kGauge, "Write Calls",
-                format_count(t.total_write_calls).c_str(),
-                "total synchronous writes", card_sz);
+  const float refresh_w = 172.0f;
+  ImGui::TextColored(ui::colors().primary2, "%s", "Runtime metrics");
+  const float right_x = ImGui::GetWindowContentRegionMax().x - refresh_w;
+  if (right_x > ImGui::GetCursorPosX() + 24.0f) {
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(right_x);
   }
-  ui::end_panel();
-
-  ImGui::Spacing(); ImGui::Spacing();
-
-  /* ---- Row 1: Throughput ---- */
-  ui::begin_panel("TelemetryThroughput", "Data Throughput", ImVec2(avail.x, gap + 82.0f));
-  {
-    ImVec2 card_sz((avail.x - gap * 3.0f) / 4.0f, 50.0f);
-
-    std::string rb_sub = "from target process";
-    std::string wb_sub = "to target process";
-
-    metric_card(icons::kImport, "Bytes Read",
-                format_bytes(t.total_bytes_read).c_str(),
-                rb_sub.c_str(), card_sz);
-
-    ImGui::SameLine(0, gap);
-    metric_card(icons::kExport, "Bytes Written",
-                format_bytes(t.total_bytes_written).c_str(),
-                wb_sub.c_str(), card_sz);
-
-    /* Also show per-call averages */
-    double avg_read = t.total_read_calls > 0
-        ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.total_read_calls)
-        : 0.0;
-    double avg_write = t.total_write_calls > 0
-        ? static_cast<double>(t.total_bytes_written) / static_cast<double>(t.total_write_calls)
-        : 0.0;
-    char avg_buf[64];
-    std::snprintf(avg_buf, sizeof(avg_buf), "%s avg/call", format_bytes(static_cast<uint64_t>(avg_read)).c_str());
-
-    ImGui::SameLine(0, gap);
-    metric_card(icons::kMemory, "Avg Read",
-                format_bytes(static_cast<uint64_t>(avg_read)).c_str(),
-                "per read call", card_sz);
-
-    ImGui::SameLine(0, gap);
-    metric_card(icons::kMemory, "Avg Write",
-                format_bytes(static_cast<uint64_t>(avg_write)).c_str(),
-                "per write call", card_sz);
-  }
-  ui::end_panel();
-
-  ImGui::Spacing(); ImGui::Spacing();
-
-  /* ---- Row 2: Scan cache + summary ---- */
-  const float half_w = (avail.x - gap) * 0.5f;
-
-  /* Cache stats */
-  ui::begin_panel("TelemetryCache", "Map Cache Performance", ImVec2(half_w, 0));
-  {
-    uint64_t total_cache = t.scan_cache_hits + t.scan_cache_misses;
-    double hit_rate = total_cache > 0
-        ? static_cast<double>(t.scan_cache_hits) / static_cast<double>(total_cache)
-        : 0.0;
-
-    char hit_text[64], miss_text[64];
-    std::snprintf(hit_text, sizeof(hit_text), "Hits  %s", format_count(t.scan_cache_hits).c_str());
-    std::snprintf(miss_text, sizeof(miss_text), "Misses  %s", format_count(t.scan_cache_misses).c_str());
-
-    ImGui::Spacing();
-    progress_bar_label("Hit Rate", hit_rate, ui::colors().success);
-    ImGui::Spacing();
-    progress_bar_label("Miss Rate", 1.0 - hit_rate, ui::colors().warning);
-    ImGui::Spacing();
-
-    ImGui::TextColored(ui::colors().muted, "%s    %s", hit_text, miss_text);
-
-    if (total_cache > 0) {
-      ImGui::Spacing();
-      ImGui::Separator();
-      ImGui::Spacing();
-
-      char ratio_buf[64];
-      std::snprintf(ratio_buf, sizeof(ratio_buf), "%.1f%% hit ratio  |  %s total cache lookups",
-                    hit_rate * 100.0, format_count(total_cache).c_str());
-      ImGui::TextColored(hit_rate > 0.7 ? ui::colors().success : ui::colors().warning,
-                         "%s", ratio_buf);
-
-      ImGui::TextColored(ui::colors().dim, "LRU cache: 8 PID entries  |  TTL: 5 seconds");
-    }
-  }
-  ui::end_panel();
-
-  ImGui::SameLine(0, gap);
-
-  /* Perf summary */
-  ui::begin_panel("TelemetryPerf", "Aggregate Performance", ImVec2(half_w, 0));
-  {
-    /* Throughput in bytes/second */
-    double read_mbps = t.uptime_seconds > 0
-        ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.uptime_seconds)
-            / (1024.0 * 1024.0)
-        : 0.0;
-    double write_mbps = t.uptime_seconds > 0
-        ? static_cast<double>(t.total_bytes_written) / static_cast<double>(t.uptime_seconds)
-            / (1024.0 * 1024.0)
-        : 0.0;
-
-    ImGui::Spacing();
-
-    char line[128];
-    std::snprintf(line, sizeof(line), "Read   %7.2f MiB/s   (%s total)",
-                  read_mbps, format_bytes(t.total_bytes_read).c_str());
-    ImGui::TextColored(ui::colors().success, "%s", line);
-
-    std::snprintf(line, sizeof(line), "Write  %7.2f MiB/s   (%s total)",
-                  write_mbps, format_bytes(t.total_bytes_written).c_str());
-    ImGui::TextColored(ui::colors().primary2, "%s", line);
-
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-
-    std::snprintf(line, sizeof(line), "Total call overhead: %s reads + %s writes",
-                  format_count(t.total_read_calls).c_str(),
-                  format_count(t.total_write_calls).c_str());
-    ImGui::TextColored(ui::colors().muted, "%s", line);
-
-    ImGui::Spacing();
-    ImGui::TextColored(ui::colors().dim, "Thread pool:  %u workers (pre-spawned, multi-accept)",
-                       t.thread_pool_size);
-    ImGui::TextColored(ui::colors().dim, "Active sessions:  %u client%s",
-                       t.active_connections,
-                       t.active_connections == 1 ? "" : "s");
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::TextColored(ui::colors().muted, "Last poll: %.0f seconds ago",
-                       now - (state.next_telemetry_poll - 1.0));
-  }
-  ui::end_panel();
-
-  /* ---- Manual refresh button ---- */
-  ImGui::Spacing();
-  ImGui::SetCursorPosX(avail.x - 190.0f);
-  if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Now").c_str(), ImVec2(180, 38))) {
+  if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Now").c_str(),
+                      ImVec2(refresh_w, 36))) {
     state.next_telemetry_poll = 0.0;
     set_status(state, "Telemetry refresh requested");
   }
+
+  section_header("Runtime Overview");
+  std::vector<MetricItem> runtime = {
+      {icons::kOnline, "Uptime", format_uptime(t.uptime_seconds),
+       "since payload start", ui::colors().text},
+      {icons::kTerminal, "Active Conns", format_count(t.active_connections),
+       "pool size " + format_count(t.thread_pool_size), ui::colors().text},
+      {icons::kGauge, "Read Calls", format_count(t.total_read_calls),
+       "total reads", ui::colors().text},
+      {icons::kGauge, "Write Calls", format_count(t.total_write_calls),
+       "total writes", ui::colors().text},
+  };
+  draw_metric_grid(runtime, panel_w - 36.0f);
+
+  section_header("Data Throughput");
+  const double avg_read = t.total_read_calls > 0
+      ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.total_read_calls)
+      : 0.0;
+  const double avg_write = t.total_write_calls > 0
+      ? static_cast<double>(t.total_bytes_written) / static_cast<double>(t.total_write_calls)
+      : 0.0;
+  std::vector<MetricItem> throughput = {
+      {icons::kImport, "Bytes Read", format_bytes(t.total_bytes_read),
+       "from target process", ui::colors().success},
+      {icons::kExport, "Bytes Written", format_bytes(t.total_bytes_written),
+       "to target process", ui::colors().primary2},
+      {icons::kMemory, "Avg Read", format_bytes(static_cast<uint64_t>(avg_read)),
+       "per read call", ui::colors().text},
+      {icons::kMemory, "Avg Write", format_bytes(static_cast<uint64_t>(avg_write)),
+       "per write call", ui::colors().text},
+  };
+  draw_metric_grid(throughput, panel_w - 36.0f);
+
+  section_header("Map Cache");
+  const uint64_t total_cache = t.scan_cache_hits + t.scan_cache_misses;
+  const double hit_rate = total_cache > 0
+      ? static_cast<double>(t.scan_cache_hits) / static_cast<double>(total_cache)
+      : 0.0;
+  draw_progress_row("Hit Rate", hit_rate, ui::colors().success);
+  draw_progress_row("Miss Rate", 1.0 - hit_rate, ui::colors().warning);
+  ImGui::TextColored(ui::colors().muted, "Hits %s    Misses %s",
+                     format_count(t.scan_cache_hits).c_str(),
+                     format_count(t.scan_cache_misses).c_str());
+  ImGui::TextColored(ui::colors().dim, "LRU cache: 8 PID entries  |  TTL: 5 seconds");
+
+  section_header("Aggregate Performance");
+  const double read_mib_s = t.uptime_seconds > 0
+      ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.uptime_seconds) /
+            (1024.0 * 1024.0)
+      : 0.0;
+  const double write_mib_s = t.uptime_seconds > 0
+      ? static_cast<double>(t.total_bytes_written) / static_cast<double>(t.uptime_seconds) /
+            (1024.0 * 1024.0)
+      : 0.0;
+  ImGui::TextColored(ui::colors().success, "Read   %.2f MiB/s   (%s total)",
+                     read_mib_s, format_bytes(t.total_bytes_read).c_str());
+  ImGui::TextColored(ui::colors().primary2, "Write  %.2f MiB/s   (%s total)",
+                     write_mib_s, format_bytes(t.total_bytes_written).c_str());
+  ImGui::Spacing();
+  ImGui::TextColored(ui::colors().muted, "Total call overhead: %s reads + %s writes",
+                     format_count(t.total_read_calls).c_str(),
+                     format_count(t.total_write_calls).c_str());
+  ImGui::TextColored(ui::colors().dim, "Thread pool: %u workers",
+                     t.thread_pool_size);
+  ImGui::TextColored(ui::colors().dim, "Active sessions: %u client%s",
+                     t.active_connections,
+                     t.active_connections == 1 ? "" : "s");
+  ImGui::TextColored(ui::colors().muted, "Last poll: %.0f seconds ago",
+                     now - (state.next_telemetry_poll - 1.0));
+
+  ui::end_panel();
 }
 
 } // namespace memdbg::frontend

@@ -1,5 +1,5 @@
 /*
- * memDBG - UDP log listener for the ImGui frontend.
+ * MemDBG - UDP log listener for the ImGui frontend.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -104,6 +104,35 @@ void pal_memory_batch_end(pal_memory_batch_t *batch) {
   free(batch);
 }
 
+/* Batch write: single fd opened O_RDWR, reused for all items. */
+struct pal_memory_batch_write { int fd; int pid; };
+
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) {
+  char path[64];
+  if (linux_mem_path(pid, path, sizeof(path)) != MEMDBG_OK) return NULL;
+  int fd = pal_file_open(path, O_RDWR, 0);
+  if (fd < 0) return NULL;
+  pal_memory_batch_write_t *b = (pal_memory_batch_write_t *)malloc(sizeof(*b));
+  if (b == NULL) { pal_file_close(fd); return NULL; }
+  b->fd  = fd;
+  b->pid = pid;
+  return b;
+}
+
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *batch,
+                                   uint64_t address, const void *buffer,
+                                   size_t length) {
+  if (batch == NULL || batch->fd < 0 || buffer == NULL || length == 0U) return 0U;
+  ssize_t n = pal_file_pwrite_all(batch->fd, buffer, length, (off_t)address);
+  return n > 0 ? (size_t)n : 0U;
+}
+
+void pal_memory_batch_write_end(pal_memory_batch_write_t *batch) {
+  if (batch == NULL) return;
+  (void)pal_file_close(batch->fd);
+  free(batch);
+}
+
 /* ========================================================================
  *  FreeBSD  —  ptrace(PT_IO)
  * ======================================================================== */
@@ -160,6 +189,27 @@ size_t pal_memory_batch_item(pal_memory_batch_t *batch, uint64_t address,
 
 void pal_memory_batch_end(pal_memory_batch_t *batch) { free(batch); }
 
+/* Batch write: falls back to individual ptrace calls. */
+struct pal_memory_batch_write { int pid; };
+
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) {
+  pal_memory_batch_write_t *b = (pal_memory_batch_write_t *)malloc(sizeof(*b));
+  if (b == NULL) return NULL;
+  b->pid = pid;
+  return b;
+}
+
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *batch,
+                                   uint64_t address, const void *buffer,
+                                   size_t length) {
+  size_t written = 0U;
+  if (pal_memory_write(batch->pid, address, buffer, length, &written) != MEMDBG_OK)
+    return 0U;
+  return written;
+}
+
+void pal_memory_batch_write_end(pal_memory_batch_write_t *batch) { free(batch); }
+
 /* ========================================================================
  *  PS4 (Orbis)  —  sceDbgMemoryRead / sceDbgMemoryWrite
  * ======================================================================== */
@@ -186,6 +236,12 @@ pal_memory_batch_t *pal_memory_batch_begin(int pid) { (void)pid; return NULL; }
 size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_t len) {
   (void)b; (void)a; (void)buf; (void)len; return 0U; }
 void pal_memory_batch_end(pal_memory_batch_t *b) { free(b); }
+
+struct pal_memory_batch_write { int unused; };
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) { (void)pid; return NULL; }
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
+  (void)b; (void)a; (void)buf; (void)len; return 0U; }
+void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
 
 /* ========================================================================
  *  PS5 (Prospero)  —  sceDbgMemoryRead / sceDbgMemoryWrite (Prospero SDK)
@@ -214,6 +270,12 @@ size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_
   (void)b; (void)a; (void)buf; (void)len; return 0U; }
 void pal_memory_batch_end(pal_memory_batch_t *b) { free(b); }
 
+struct pal_memory_batch_write { int unused; };
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) { (void)pid; return NULL; }
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
+  (void)b; (void)a; (void)buf; (void)len; return 0U; }
+void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
+
 /* ========================================================================
  *  macOS / other  —  stub for now (mach_vm would go here)
  * ======================================================================== */
@@ -239,5 +301,11 @@ pal_memory_batch_t *pal_memory_batch_begin(int pid) { (void)pid; return NULL; }
 size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_t len) {
   (void)b; (void)a; (void)buf; (void)len; return 0U; }
 void pal_memory_batch_end(pal_memory_batch_t *b) { free(b); }
+
+struct pal_memory_batch_write { int unused; };
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) { (void)pid; return NULL; }
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
+  (void)b; (void)a; (void)buf; (void)len; return 0U; }
+void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
 
 #endif

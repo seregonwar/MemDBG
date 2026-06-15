@@ -1,5 +1,5 @@
 /*
- * memDBG - Multi-format trainer file support.
+ * MemDBG - Multi-format trainer file support.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -35,7 +35,7 @@ TrainerFormat detect_trainer_format(const std::string &path) {
 
 const char *trainer_format_name(TrainerFormat fmt) {
   switch (fmt) {
-  case TrainerFormat::CHT:   return "memDBG .cht";
+  case TrainerFormat::CHT:   return "MemDBG .cht";
   case TrainerFormat::SHN:   return "Reaper .shn";
   case TrainerFormat::JSON:  return "GoldHEN .json";
   case TrainerFormat::MC4:   return "Reaper .mc4 (encrypted)";
@@ -224,7 +224,7 @@ static bool save_pipe_delimited(AppState &state, const std::string &path) {
   if (state.has_process_info && !state.selected_process_info.title_id.empty())
     out << "|ID:" << state.selected_process_info.title_id;
   else out << "|ID:unknown";
-  out << "|VER:unknown|FM:memDBG\n";
+  out << "|VER:unknown|FM:MemDBG\n";
   for (const auto &cheat : state.cheats) {
     int section = map_index_for_address(state, cheat.address);
     uint64_t offset = cheat.address;

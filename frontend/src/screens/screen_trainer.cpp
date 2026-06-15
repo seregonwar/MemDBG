@@ -1,5 +1,5 @@
 /*
- * memDBG - Trainer screen.
+ * MemDBG - Trainer screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -187,13 +187,20 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   if (!state.scan_result.addresses.empty() && ui::soft_button("Use First Scan Hit", ImVec2(190,36)))
     std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", hex_u64(state.scan_result.addresses.front()).c_str());
 
-  ImGui::InputText("Name", state.cheat_description, sizeof(state.cheat_description));
+  ImGui::TextColored(ui::colors().muted, "Name");
+  ImGui::SetNextItemWidth(-1.0f);
+  ImGui::InputText("##CheatName", state.cheat_description, sizeof(state.cheat_description));
+  ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputText("Address", state.cheat_address, sizeof(state.cheat_address));
   ImGui::Combo("Value type", &state.cheat_type, type_names, IM_ARRAYSIZE(type_names));
+  ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputText("Value", state.cheat_value, sizeof(state.cheat_value));
   ImGui::Checkbox("Lock value", &state.cheat_lock);
   ImGui::SliderFloat("Lock interval", &state.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
+  bool can_train = state.client.connected() && state.selected_pid > 0;
+  ImGui::BeginDisabled(!can_train);
   if (ui::primary_button((std::string(icons::kAdd) + "  Add To Trainer").c_str(), ui::full_button(40))) add_cheat_from_fields(state);
+  ImGui::EndDisabled();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Trainer File");
@@ -222,12 +229,14 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   /* Apply locked cheats automatically */
   apply_locked_cheats(state);
 
+  ImGui::BeginDisabled(!state.client.connected());
   if (ui::soft_button((std::string(icons::kPlay) + "  Apply Enabled").c_str(), ImVec2(150,38))) {
     int applied=0;
     for (auto &cheat : state.cheats) if (cheat.enabled && apply_cheat(state,cheat)) applied++;
     set_status(state, "Applied "+std::to_string(applied)+" trainer entries");
     push_notification(state, "Applied " + std::to_string(applied) + " trainer entries");
   }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (ui::soft_button((std::string(icons::kTrash) + "  Clear Disabled").c_str(), ImVec2(150,38))) {
     state.cheats.erase(std::remove_if(state.cheats.begin(), state.cheats.end(),

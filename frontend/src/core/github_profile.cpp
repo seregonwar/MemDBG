@@ -1,5 +1,5 @@
 /*
- * memDBG - GitHub profile loader for frontend credits.
+ * MemDBG - GitHub profile loader for frontend credits.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

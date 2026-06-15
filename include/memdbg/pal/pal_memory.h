@@ -52,6 +52,22 @@ size_t pal_memory_batch_item(pal_memory_batch_t *batch, uint64_t address,
 /* End the batch session and free all resources. */
 void pal_memory_batch_end(pal_memory_batch_t *batch);
 
+/* ---- Batch write ---- */
+
+typedef struct pal_memory_batch_write pal_memory_batch_write_t;
+
+/* Begin a batch write session for `pid`. Returns NULL on error. */
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid);
+
+/* Write `length` bytes from `buffer` to `address`.
+   Returns the number of bytes actually written (0 on error). */
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *batch,
+                                   uint64_t address, const void *buffer,
+                                   size_t length);
+
+/* End the batch write session and free all resources. */
+void pal_memory_batch_write_end(pal_memory_batch_write_t *batch);
+
 #ifdef __cplusplus
 }
 #endif

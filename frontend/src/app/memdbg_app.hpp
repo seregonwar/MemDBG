@@ -1,5 +1,5 @@
 /*
- * memDBG - ImGui console frontend app entry.
+ * MemDBG - ImGui console frontend app entry.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

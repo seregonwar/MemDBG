@@ -3,9 +3,11 @@
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Verifies that the AOB scanner's carry/overlap mechanism correctly detects
- * patterns that cross the 1 MiB chunk boundary, as well as patterns contained
- * entirely within a single chunk.
+ * Verifies:
+ *   - Single-range AOB scanner: carry/overlap across chunk boundaries,
+ *     wildcard patterns, good-suffix shift.
+ *   - Process-wide AOB scanner: map iteration, protection filtering,
+ *     start/end range filtering, multi-map results.
  */
 
 #include "memdbg/scanner/memdbg_scan.h"
@@ -36,16 +38,59 @@ memdbg_status_t memdbg_memory_read(int pid, uint64_t address, void *buffer,
   return MEMDBG_OK;
 }
 
-/* ---- Stubs: unused by AOB scan but needed to link memdbg_scan.o ---- */
+/* ---- Mock maps: controllable map list for process-wide AOB scans ---- */
+
+static memdbg_map_list_t g_mock_maps;
+static memdbg_map_entry_t *g_mock_map_entries = NULL;
+static size_t g_mock_map_capacity = 0;
+
+static void mock_maps_init(void) {
+  memset(&g_mock_maps, 0, sizeof(g_mock_maps));
+}
+
+static void mock_maps_reset(void) {
+  free(g_mock_map_entries);
+  g_mock_map_entries = NULL;
+  g_mock_map_capacity = 0;
+  mock_maps_init();
+}
+
+static void mock_maps_add(uint64_t start, uint64_t end, uint32_t prot) {
+  if (g_mock_maps.count >= g_mock_map_capacity) {
+    size_t new_cap = g_mock_map_capacity == 0 ? 4 : g_mock_map_capacity * 2;
+    memdbg_map_entry_t *new_entries = (memdbg_map_entry_t *)realloc(
+        g_mock_map_entries, new_cap * sizeof(memdbg_map_entry_t));
+    if (new_entries == NULL) return;
+    g_mock_map_entries = new_entries;
+    g_mock_map_capacity = new_cap;
+  }
+  memset(&g_mock_map_entries[g_mock_maps.count], 0, sizeof(memdbg_map_entry_t));
+  g_mock_map_entries[g_mock_maps.count].start      = start;
+  g_mock_map_entries[g_mock_maps.count].end        = end;
+  g_mock_map_entries[g_mock_maps.count].protection = prot;
+  g_mock_maps.count++;
+  g_mock_maps.entries = g_mock_map_entries;
+}
 
 memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *maps) {
   (void)pid;
+  if (maps == NULL) return MEMDBG_ERR_PARAM;
+  /* Return a copy of the mock maps */
   memset(maps, 0, sizeof(*maps));
-  return MEMDBG_ERR_UNSUPPORTED;
+  if (g_mock_maps.count == 0) return MEMDBG_OK;
+  maps->count = g_mock_maps.count;
+  maps->entries = (memdbg_map_entry_t *)malloc(
+      g_mock_maps.count * sizeof(memdbg_map_entry_t));
+  if (maps->entries == NULL) return MEMDBG_ERR_NOMEM;
+  memcpy(maps->entries, g_mock_maps.entries,
+         g_mock_maps.count * sizeof(memdbg_map_entry_t));
+  return MEMDBG_OK;
 }
 
 void memdbg_process_maps_free(memdbg_map_list_t *maps) {
-  (void)maps;
+  if (maps == NULL) return;
+  free(maps->entries);
+  memset(maps, 0, sizeof(*maps));
 }
 
 /* ---- Helpers ---- */
@@ -98,6 +143,62 @@ static int test_aob_scan(const unsigned char *buf, size_t buf_size,
   return failures;
 }
 
+static int test_process_aob_scan(
+    const unsigned char *buf, size_t buf_size,
+    const unsigned char *pattern, const unsigned char *mask,
+    size_t pat_len,
+    uint64_t expected_count, const uint64_t *expected_addrs,
+    uint32_t protection_mask, uint64_t start_filter, uint64_t end_filter,
+    const char *test_name) {
+  g_mock_buffer = buf;
+  g_mock_size   = buf_size;
+
+  memdbg_scan_process_aob_request_t request;
+  memset(&request, 0, sizeof(request));
+  request.pid              = 1;
+  request.protection_mask  = protection_mask;
+  request.max_results      = 16U;
+  request.pattern_length   = (uint32_t)pat_len;
+  request.start            = start_filter;
+  request.end              = end_filter;
+
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_process_aob(&request, pattern, mask,
+      &result);
+
+  if (status != MEMDBG_OK) {
+    printf("FAIL [%s]: scan returned status %d\n", test_name, (int)status);
+    return 1;
+  }
+
+  int failures = 0;
+
+  if (result.count != expected_count) {
+    printf("FAIL [%s]: expected %llu results, got %zu\n",
+           test_name, (unsigned long long)expected_count, result.count);
+    failures++;
+  }
+
+  if (expected_addrs != NULL) {
+    for (uint64_t ei = 0; ei < expected_count; ++ei) {
+      int found = 0;
+      for (size_t ri = 0; ri < result.count; ++ri) {
+        if (result.entries[ri].address == expected_addrs[ei]) {
+          found = 1; break;
+        }
+      }
+      if (!found) {
+        printf("FAIL [%s]: missing expected address 0x%llx\n",
+               test_name, (unsigned long long)expected_addrs[ei]);
+        failures++;
+      }
+    }
+  }
+
+  memdbg_scan_result_free(&result);
+  return failures;
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -109,74 +210,70 @@ int main(void) {
   unsigned char *buf = (unsigned char *)malloc(buf_size);
   if (buf == NULL) { printf("FATAL: malloc failed\n"); return 1; }
 
-  /* Test 1 — Pattern crossing the exact 1 MiB chunk boundary.
-     Boundary is at byte 1048576.  Place 6-byte pattern {DE,AD,BE,EF,CA,FE}
-     so it starts 3 bytes BEFORE the boundary and ends 3 bytes AFTER. */
+  /* ======== Tests 1-11: single-range AOB (existing) ======== */
+
+  /* Test 1 — Pattern crossing the exact 1 MiB chunk boundary. */
   {
     memset(buf, 0x00, buf_size);
     unsigned char pattern[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE};
     unsigned char mask[6]   = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     size_t pat_len = sizeof(pattern);
-    uint64_t pos = 1048576U - 3U; /* 3 bytes before boundary */
+    uint64_t pos = 1048576U - 3U;
     memcpy(buf + pos, pattern, pat_len);
     failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
                               "cross-boundary (3 before + 3 after)");
   }
 
-  /* Test 2 — Pattern entirely in first chunk (well before boundary). */
+  /* Test 2 — Pattern entirely in first chunk. */
   {
     memset(buf, 0x00, buf_size);
     unsigned char pattern[] = {0x11, 0x22, 0x33, 0x44};
     unsigned char mask[4]   = {0xFF, 0xFF, 0xFF, 0xFF};
     size_t pat_len = sizeof(pattern);
-    uint64_t pos = 100U; /* deep in chunk 0 */
+    uint64_t pos = 100U;
     memcpy(buf + pos, pattern, pat_len);
     failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
                               "inside chunk 0");
   }
 
-  /* Test 3 — Pattern entirely in second chunk (well after boundary). */
+  /* Test 3 — Pattern entirely in second chunk. */
   {
     memset(buf, 0x00, buf_size);
     unsigned char pattern[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
     unsigned char mask[5]   = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     size_t pat_len = sizeof(pattern);
-    /* Place in chunk 1, well past the 1 MiB mark */
     uint64_t pos = 1048576U + 50000U;
     memcpy(buf + pos, pattern, pat_len);
     failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
                               "inside chunk 1");
   }
 
-  /* Test 4 — Pattern crossing boundary with wildcard bytes in mask.
-     Pattern {CA,FE,??,BA,BE} where ?? matches anything. */
+  /* Test 4 — Pattern crossing boundary with wildcard. */
   {
     memset(buf, 0x00, buf_size);
     unsigned char pattern[] = {0xCA, 0xFE, 0x00, 0xBA, 0xBE};
     unsigned char mask[5]   = {0xFF, 0xFF, 0x00, 0xFF, 0xFF};
     size_t pat_len = sizeof(pattern);
-    uint64_t pos = 1048576U - 2U; /* 2 bytes before boundary */
+    uint64_t pos = 1048576U - 2U;
     memcpy(buf + pos, pattern, pat_len);
-    /* Overwrite the wildcard byte with a different value to verify mask works */
     buf[pos + 2] = 0x77;
     failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
                               "cross-boundary with wildcard");
   }
 
-  /* Test 5 — Short 2-byte pattern exactly on the boundary.
-     Boundary at 1048576, pattern starts at 1048575, ends at 1048576. */
+  /* Test 5 — Short 2-byte pattern exactly on the boundary. */
   {
     memset(buf, 0x00, buf_size);
     unsigned char pattern[] = {0xED, 0xFE};
     unsigned char mask[2]   = {0xFF, 0xFF};
     size_t pat_len = sizeof(pattern);
-    uint64_t pos = 1048576U - 1U; /* 1 byte before boundary */
+    uint64_t pos = 1048576U - 1U;
     memcpy(buf + pos, pattern, pat_len);
     failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
                               "cross-boundary 2-byte");
   }
 
-  /* Test 6 — Negative: pattern not present at all. */
+  /* Test 6 — Negative: pattern not present. */
   {
     memset(buf, 0x00, buf_size);
     unsigned char pattern[] = {0xFF, 0xFF, 0xFF, 0xFF};
@@ -249,11 +346,178 @@ int main(void) {
     memdbg_scan_result_free(&result);
   }
 
+  /* Test 8 — GS: repeated suffix ABCD in ABCDEFABCD. */
+  {
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {'A','B','C','D','E','F','A','B','C','D'};
+    unsigned char mask[10]   = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos = 1048576U + 12345U;
+    memcpy(buf + pos, pattern, pat_len);
+    failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
+                              "GS: repeated suffix ABCD in ABCDEFABCD");
+  }
+
+  /* Test 9 — GS: repeated A's with B in middle. */
+  {
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {'A','A','A','A','A','A','B','A','A','A'};
+    unsigned char mask[10]   = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos = 500000U;
+    memcpy(buf + pos, pattern, pat_len);
+    failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
+                              "GS: repeated A's with B in middle");
+  }
+
+  /* Test 10 — Wildcard (no GS) cross-boundary. */
+  {
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0xDE, 0xAD, 0x00, 0xBE, 0xEF, 0x00, 0xCA, 0xFE};
+    unsigned char mask[8]   = {0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos = 1048576U - 4U;
+    memcpy(buf + pos, pattern, pat_len);
+    buf[pos + 2] = 0x42;
+    buf[pos + 5] = 0x99;
+    failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
+                              "wildcard (no GS) cross-boundary");
+  }
+
+  /* Test 11 — Short pattern (no GS) cross-boundary. */
+  {
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0xAB, 0xCD, 0xEF};
+    unsigned char mask[3]   = {0xFF, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos = 1048576U - 2U;
+    memcpy(buf + pos, pattern, pat_len);
+    failures += test_aob_scan(buf, buf_size, pattern, mask, pat_len, pos,
+                              "short pattern (no GS) cross-boundary");
+  }
+
+  /* ======== Tests 12-16: process-wide AOB (new) ======== */
+
+  /* Test 12 — Process-wide: pattern in one map only.
+     Three maps: [0, 64k), [64k, 128k), [128k, 256k).
+     Pattern at offset 1000 (map 0). Only map 0 should produce a hit. */
+  {
+    mock_maps_init();
+    mock_maps_add(0U, 65536U, 1U);           /* 0-64k,  READ */
+    mock_maps_add(65536U, 131072U, 1U);       /* 64-128k, READ */
+    mock_maps_add(131072U, 262144U, 1U);      /* 128-256k,READ */
+
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    unsigned char mask[4]   = {0xFF, 0xFF, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos = 1000U;
+    memcpy(buf + pos, pattern, pat_len);
+
+    uint64_t expected[] = {1000U};
+    failures += test_process_aob_scan(buf, buf_size,
+        pattern, mask, pat_len, 1U, expected, 0U, 0U, 0U,
+        "PW: pattern in single map");
+  }
+
+  /* Test 13 — Process-wide: pattern crossing map boundary is NOT found.
+     Map 0: [0, 65536), Map 1: [65536, 131072).
+     Pattern at offset 65534 (starts 2 bytes before map 0 end, ends in map 1).
+     Each map is scanned independently, so cross-map patterns are missed. */
+  {
+    mock_maps_reset();
+    mock_maps_add(0U, 65536U, 1U);
+    mock_maps_add(65536U, 131072U, 1U);
+
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0xCA, 0xFE, 0xBA, 0xBE};
+    unsigned char mask[4]   = {0xFF, 0xFF, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos = 65536U - 2U;  /* 2 bytes before map boundary */
+    memcpy(buf + pos, pattern, pat_len);
+
+    failures += test_process_aob_scan(buf, buf_size,
+        pattern, mask, pat_len, 0U, NULL, 0U, 0U, 0U,
+        "PW: cross-map boundary (no hit)");
+  }
+
+  /* Test 14 — Process-wide: pattern in two different maps.
+     Same pattern at offset 100 (map 0) and offset 66000 (map 1). */
+  {
+    mock_maps_reset();
+    mock_maps_add(0U, 65536U, 1U);
+    mock_maps_add(65536U, 131072U, 1U);
+
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0xBE, 0xEF, 0xCA, 0xFE};
+    unsigned char mask[4]   = {0xFF, 0xFF, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos1 = 100U;
+    uint64_t pos2 = 66000U;
+    memcpy(buf + pos1, pattern, pat_len);
+    memcpy(buf + pos2, pattern, pat_len);
+
+    uint64_t expected[] = {100U, 66000U};
+    failures += test_process_aob_scan(buf, buf_size,
+        pattern, mask, pat_len, 2U, expected, 0U, 0U, 0U,
+        "PW: pattern in two maps");
+  }
+
+  /* Test 15 — Process-wide: protection filtering skips non-readable map.
+     Map 0: [0, 64k) protection=0 (none) — should be skipped.
+     Map 1: [64k, 128k) protection=1 (READ) — should be scanned.
+     Pattern at offset 1000 (map 0, not readable) and 70000 (map 1, readable).
+     Only map 1 hit should be returned. */
+  {
+    mock_maps_reset();
+    mock_maps_add(0U, 65536U, 0U);       /* no protection → skipped */
+    mock_maps_add(65536U, 131072U, 1U);   /* READ */
+
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0x11, 0x22, 0x33, 0x44};
+    unsigned char mask[4]   = {0xFF, 0xFF, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos_skip = 1000U;
+    uint64_t pos_hit  = 70000U;
+    memcpy(buf + pos_skip, pattern, pat_len);
+    memcpy(buf + pos_hit, pattern, pat_len);
+
+    uint64_t expected[] = {70000U};
+    failures += test_process_aob_scan(buf, buf_size,
+        pattern, mask, pat_len, 1U, expected, 0U, 0U, 0U,
+        "PW: protection filter skips non-readable");
+  }
+
+  /* Test 16 — Process-wide: start/end range filtering.
+     Map: [0, 256k) READ.
+     Pattern at offset 50000 and 150000.
+     With filter start=100000, end=200000, only the second hit should appear. */
+  {
+    mock_maps_reset();
+    mock_maps_add(0U, 262144U, 1U);
+
+    memset(buf, 0x00, buf_size);
+    unsigned char pattern[] = {0xAA, 0xBB, 0xCC, 0xDD};
+    unsigned char mask[4]   = {0xFF, 0xFF, 0xFF, 0xFF};
+    size_t pat_len = sizeof(pattern);
+    uint64_t pos_outside = 50000U;
+    uint64_t pos_inside  = 150000U;
+    memcpy(buf + pos_outside, pattern, pat_len);
+    memcpy(buf + pos_inside, pattern, pat_len);
+
+    uint64_t expected[] = {150000U};
+    failures += test_process_aob_scan(buf, buf_size,
+        pattern, mask, pat_len, 1U, expected, 0U, 100000U, 200000U,
+        "PW: start/end range filter");
+  }
+
   /* ---- Summary ---- */
+  mock_maps_reset();
+
   if (failures == 0) {
-    printf("\nAll AOB boundary tests PASSED (7/7).\n");
+    printf("\nAll AOB boundary tests PASSED (16/16).\n");
   } else {
-    printf("\n%d test(s) FAILED out of 7.\n", failures);
+    printf("\n%d test(s) FAILED out of 16.\n", failures);
   }
 
   free(buf);

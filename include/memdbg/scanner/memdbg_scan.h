@@ -43,6 +43,10 @@ memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
                 const uint8_t *pattern, const uint8_t *mask,
                 memdbg_scan_result_t *out);
 memdbg_status_t
+memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t *request,
+                        const uint8_t *pattern, const uint8_t *mask,
+                        memdbg_scan_result_t *out);
+memdbg_status_t
 memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request,
                     memdbg_scan_result_t *out);
 memdbg_status_t

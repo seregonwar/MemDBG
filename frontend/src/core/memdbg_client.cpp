@@ -1,10 +1,12 @@
 /*
- * memDBG - ImGui frontend client.
+ * MemDBG - ImGui frontend client.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "memdbg_client.hpp"
+
+#include "memdbg/core/memdbg.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -15,6 +17,48 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+
+extern "C" {
+int lz4_decompress_safe(const char *src, char *dst, int compressed_size, int dst_capacity);
+}
+
+namespace {
+
+/* Decompress LZ4 prefix format: byte 0 = 0x00 (raw) or 0x01 (LZ4).
+   LZ4: bytes 1-4 = uncompressed_size LE, bytes 5+ = compressed data. */
+static bool maybe_decompress(const std::vector<uint8_t> &response,
+                             std::vector<uint8_t> &out) {
+  if (response.empty()) { out.clear(); return true; }
+  if (response[0] == 0x00U) {
+    /* Uncompressed — strip 1-byte prefix */
+    out.assign(response.begin() + 1, response.end());
+    return true;
+  }
+  if (response[0] == 0x01U && response.size() >= 5U) {
+    /* LZ4 compressed: 4-byte uncompressed size + compressed payload */
+    uint32_t uncomp_len = (uint32_t)response[1] |
+                          ((uint32_t)response[2] << 8U) |
+                          ((uint32_t)response[3] << 16U) |
+                          ((uint32_t)response[4] << 24U);
+    out.resize(uncomp_len);
+    int dec = lz4_decompress_safe(
+        (const char *)(response.data() + 5),
+        (char *)out.data(),
+        (int)(response.size() - 5U),
+        (int)uncomp_len);
+    if (dec != (int)uncomp_len) {
+      /* Decompression failed — return what we got */
+      out.clear();
+      return false;
+    }
+    return true;
+  }
+  /* Unknown format — pass through as-is */
+  out = response;
+  return true;
+}
+
+} // namespace
 
 namespace memdbg::frontend {
 
@@ -34,6 +78,50 @@ std::string fixed_string(const char *data, size_t size) {
     ++len;
   }
   return std::string(data, len);
+}
+
+const char *payload_status_name(int32_t status) {
+  switch (static_cast<memdbg_status_t>(status)) {
+  case MEMDBG_OK:
+    return "ok";
+  case MEMDBG_ERR_PARAM:
+    return "invalid parameter";
+  case MEMDBG_ERR_NOMEM:
+    return "out of memory";
+  case MEMDBG_ERR_IO:
+    return "i/o error";
+  case MEMDBG_ERR_NET:
+    return "network error";
+  case MEMDBG_ERR_PROTOCOL:
+    return "protocol error";
+  case MEMDBG_ERR_UNSUPPORTED:
+    return "unsupported";
+  case MEMDBG_ERR_NOT_FOUND:
+    return "not found";
+  case MEMDBG_ERR_PERMISSION:
+    return "permission denied";
+  case MEMDBG_ERR_OVERFLOW:
+    return "overflow";
+  case MEMDBG_ERR_STATE:
+    return "invalid state";
+  default:
+    return "unknown error";
+  }
+}
+
+const char *payload_status_hint(int32_t status) {
+  switch (static_cast<memdbg_status_t>(status)) {
+  case MEMDBG_ERR_IO:
+    return "verify the target process, selected map/range, and payload privileges";
+  case MEMDBG_ERR_PERMISSION:
+    return "the payload could not access the target process memory";
+  case MEMDBG_ERR_PARAM:
+    return "check that a process and a valid address/range are selected";
+  case MEMDBG_ERR_UNSUPPORTED:
+    return "this payload/platform does not expose the requested operation";
+  default:
+    return "";
+  }
 }
 
 } // namespace
@@ -82,6 +170,19 @@ void Client::disconnect() {
     (void)::close(fd_);
     fd_ = -1;
   }
+}
+
+int Client::release_fd() {
+  int fd = fd_;
+  fd_ = -1;
+  last_error_.clear();
+  return fd;
+}
+
+void Client::take_fd(int fd) {
+  if (fd_ >= 0) disconnect();
+  fd_ = fd;
+  last_error_.clear();
 }
 
 bool Client::connected() const { return fd_ >= 0; }
@@ -219,7 +320,14 @@ bool Client::memory_read(int32_t pid, uint64_t address, uint32_t length,
   body.pid = pid;
   body.address = address;
   body.length = length;
-  return request(MEMDBG_CMD_MEMORY_READ, &body, sizeof(body), out);
+  std::vector<uint8_t> raw;
+  if (!request(MEMDBG_CMD_MEMORY_READ, &body, sizeof(body), raw))
+    return false;
+  if (!maybe_decompress(raw, out)) {
+    set_error("LZ4 decompression failed");
+    return false;
+  }
+  return true;
 }
 
 bool Client::memory_write(int32_t pid, uint64_t address,
@@ -320,6 +428,28 @@ bool Client::scan_aob(const memdbg_scan_aob_request_t &request_body,
   return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
 }
 
+bool Client::scan_process_aob(
+    const memdbg_scan_process_aob_request_t &request_body,
+    const std::vector<uint8_t> &pattern,
+    const std::vector<uint8_t> &mask, ScanResult &out) {
+  size_t pat_len = pattern.size();
+  if (pat_len != mask.size() || pat_len > 256U) {
+    set_error("invalid AOB pattern/mask");
+    return false;
+  }
+  std::vector<uint8_t> body;
+  body.resize(sizeof(request_body) + pat_len + pat_len);
+  memcpy(body.data(), &request_body, sizeof(request_body));
+  memcpy(body.data() + sizeof(request_body), pattern.data(), pat_len);
+  memcpy(body.data() + sizeof(request_body) + pat_len, mask.data(), pat_len);
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_SCAN_PROCESS_AOB, body.data(),
+               static_cast<uint32_t>(body.size()), response)) {
+    return false;
+  }
+  return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
+}
+
 bool Client::scan_pointer(const memdbg_scan_pointer_request_t &request_body,
                           ScanResult &out) {
   std::vector<uint8_t> response;
@@ -392,8 +522,13 @@ bool Client::batch_read(int32_t pid,
   out.entries.resize(count);
   memcpy(out.entries.data(), response.data(), results_size);
 
-  size_t data_len = response.size() - results_size;
-  out.data.assign(response.begin() + (ptrdiff_t)results_size, response.end());
+  /* Decompress data portion */
+  std::vector<uint8_t> compressed_data(
+      response.begin() + (ptrdiff_t)results_size, response.end());
+  if (!maybe_decompress(compressed_data, out.data)) {
+    set_error("batch_read: LZ4 decompression failed");
+    return false;
+  }
 
   return true;
 }
@@ -542,7 +677,12 @@ bool Client::request(uint16_t command, const void *payload,
 
   if (response_header.status != 0) {
     std::ostringstream oss;
-    oss << "payload status " << response_header.status;
+    const char *hint = payload_status_hint(response_header.status);
+    oss << "payload status " << response_header.status << " ("
+        << payload_status_name(response_header.status) << ")";
+    if (hint[0] != '\0') {
+      oss << ": " << hint;
+    }
     set_error(oss.str());
     return false;
   }
@@ -634,6 +774,8 @@ std::string capability_text(uint32_t capabilities) {
       {MEMDBG_CAP_PERF_TELEMETRY, "perf telemetry"},
       {MEMDBG_CAP_SCAN_UNKNOWN, "unknown scan"},
       {MEMDBG_CAP_BATCH_WRITE, "batch write"},
+      {MEMDBG_CAP_LZ4, "lz4 compression"},
+      {MEMDBG_CAP_SCAN_PROCESS_AOB, "process aob scan"},
   };
 
   std::ostringstream oss;

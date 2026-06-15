@@ -1,5 +1,5 @@
 /*
- * memDBG - AOB Scanner screen.
+ * MemDBG - AOB Scanner screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <exception>
+#include <future>
 #include <sstream>
 #include <vector>
 
@@ -58,15 +60,44 @@ static bool parse_aob_pattern(const char *text,
   return true;
 }
 
+/* ---- Async scan poll ---- */
+static void poll_aob_async(AppState &state) {
+  if (!state.scan_async_pending) return;
+  if (!state.scan_async_future.valid()) return;
+
+  auto status = state.scan_async_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) return;
+  if (state.scan_async_owner != Screen::AOBScanner) return;
+
+  state.scan_async_pending = false;
+  bool ok = false;
+  try {
+    ok = state.scan_async_future.get();
+  } catch (const std::exception &ex) {
+    state.scan_async_error = ex.what();
+  } catch (...) {
+    state.scan_async_error = "Unknown AOB scanner error";
+  }
+
+  if (!ok) {
+    if (state.scan_async_error.empty()) state.scan_async_error = "AOB scanner request failed";
+    set_status(state, state.scan_async_error);
+    push_notification(state, "AOB scan failed: " + state.scan_async_error, 5.0);
+    return;
+  }
+
+  /* Apply results from temp storage */
+  state.aob_result = std::move(state.scan_async_temp_result);
+  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
+                "%s", state.scan_async_temp_session_status);
+  set_status(state, state.scan_session_status);
+}
+
 /* ---- AOB scan execution ---- */
 static void run_aob_scan(AppState &state) {
+  if (state.scan_async_pending) return;
   if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
   if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
-
-  uint64_t start = 0, length = 0;
-  if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_length, length)) {
-    set_status(state, "Invalid scan range"); return;
-  }
 
   std::vector<uint8_t> pattern, mask;
   std::string error;
@@ -76,26 +107,92 @@ static void run_aob_scan(AppState &state) {
 
   state.scan_max_results = std::max(state.scan_max_results, 1);
 
-  memdbg_scan_aob_request_t request{};
-  request.pid = state.selected_pid;
-  request.start = start;
-  request.length = length;
-  request.max_results = static_cast<uint32_t>(state.scan_max_results);
-  request.pattern_length = static_cast<uint32_t>(pattern.size());
+  if (state.aob_process_wide) {
+    state.scan_async_label = "Process AOB";
+    uint64_t start = 0, end = 0;
+    if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_end, end)) {
+      set_status(state, "Invalid process scan window"); return;
+    }
+    if (end != 0U && end <= start) {
+      set_status(state, "End filter must be greater than start, or 0x0"); return;
+    }
 
-  if (!state.client.scan_aob(request, pattern, mask, state.aob_result)) {
-    set_status(state, state.client.last_error()); return;
+    state.scan_async_start_time = ImGui::GetTime();
+    state.scan_async_pending = true;
+    state.scan_async_owner = Screen::AOBScanner;
+
+    memdbg_scan_process_aob_request_t request{};
+    request.pid = state.selected_pid;
+    request.protection_mask = state.scan_readable_only ? 1U : 0U;
+    request.max_results = static_cast<uint32_t>(state.scan_max_results);
+    request.pattern_length = static_cast<uint32_t>(pattern.size());
+    request.start = start;
+    request.end = end;
+
+    auto &client = state.client;
+    auto &temp_result = state.scan_async_temp_result;
+    auto &temp_status = state.scan_async_temp_session_status;
+    auto &error_out = state.scan_async_error;
+
+    state.scan_async_future = std::async(std::launch::async,
+      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out]() -> bool {
+        ScanResult res;
+        if (!client.scan_process_aob(request, pattern, mask, res)) {
+          error_out = client.last_error();
+          return false;
+        }
+        temp_result = std::move(res);
+        std::snprintf(temp_status, sizeof(temp_status),
+                      "Process AOB: %u hits in %u regions (%.2f MiB)",
+                      temp_result.count, temp_result.regions_scanned,
+                      static_cast<double>(temp_result.bytes_scanned) / (1024.0 * 1024.0));
+        return true;
+      });
+  } else {
+    state.scan_async_label = "AOB scan";
+    uint64_t start = 0, length = 0;
+    if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_length, length)) {
+      set_status(state, "Invalid scan range"); return;
+    }
+    if (length == 0U) { set_status(state, "Scan length must be greater than zero"); return; }
+
+    state.scan_async_start_time = ImGui::GetTime();
+    state.scan_async_pending = true;
+    state.scan_async_owner = Screen::AOBScanner;
+
+    auto &client = state.client;
+    auto &temp_result = state.scan_async_temp_result;
+    auto &temp_status = state.scan_async_temp_session_status;
+    auto &error_out = state.scan_async_error;
+
+    memdbg_scan_aob_request_t request{};
+    request.pid = state.selected_pid;
+    request.start = start;
+    request.length = length;
+    request.max_results = static_cast<uint32_t>(state.scan_max_results);
+    request.pattern_length = static_cast<uint32_t>(pattern.size());
+
+    state.scan_async_future = std::async(std::launch::async,
+      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out]() -> bool {
+        ScanResult res;
+        if (!client.scan_aob(request, pattern, mask, res)) {
+          error_out = client.last_error();
+          return false;
+        }
+        temp_result = std::move(res);
+        std::snprintf(temp_status, sizeof(temp_status),
+                      "AOB scan: %u hits (%.2f MiB scanned)",
+                      temp_result.count,
+                      static_cast<double>(temp_result.bytes_scanned) / (1024.0 * 1024.0));
+        return true;
+      });
   }
-
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
-                "AOB scan: %u hits (%.2f MiB scanned)",
-                state.aob_result.count,
-                static_cast<double>(state.aob_result.bytes_scanned) / (1024.0 * 1024.0));
-  set_status(state, state.scan_session_status);
 }
 
 /* ---- Main draw ---- */
 void draw_aob_scanner(AppState &state, ImVec2 avail) {
+  poll_aob_async(state);
+
   const float gap = 16.0f;
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
 
@@ -128,15 +225,43 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
   ui::text_dim("Use ?? for wildcard bytes (e.g. 48 8B ?? ?? C3)");
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-  ImGui::InputText("Start", state.scan_start, sizeof(state.scan_start));
-  ImGui::InputText("Length", state.scan_length, sizeof(state.scan_length));
+  /* Process-wide toggle */
+  ImGui::Checkbox("Process-wide scan (all maps)", &state.aob_process_wide);
+  ImGui::Spacing();
+
+  if (state.aob_process_wide) {
+    /* Process-wide mode: uses protection_mask + start/end range filter.
+       The payload iterates cached maps, skipping non-readable regions
+       when protection_mask != 0. */
+    ui::text_dim("Scan all readable memory maps in the target process.");
+    ImGui::Checkbox("Readable only", &state.scan_readable_only);
+    ImGui::InputText("Start filter", state.scan_start, sizeof(state.scan_start));
+    ImGui::InputText("End filter", state.scan_end, sizeof(state.scan_end));
+    ui::text_dim("Leave 0x0 to scan the entire address space.");
+  } else {
+    /* Single-range mode: explicit start + length. */
+    ImGui::InputText("Start", state.scan_start, sizeof(state.scan_start));
+    ImGui::InputText("Length", state.scan_length, sizeof(state.scan_length));
+  }
+
   ImGui::InputInt("Max results", &state.scan_max_results);
   state.scan_max_results = std::max(state.scan_max_results, 1);
 
   ImGui::Spacing();
-  if (ui::primary_button((std::string(icons::kSearch) + "  Scan AOB").c_str(),
-                         ui::full_button(42)))
+  std::string scan_label = state.aob_process_wide
+      ? std::string(icons::kSearch) + "  Scan Process AOB"
+      : std::string(icons::kSearch) + "  Scan AOB";
+  bool can_scan = state.client.connected() && state.selected_pid > 0 && !state.scan_async_pending;
+  ImGui::BeginDisabled(!can_scan);
+  if (ui::primary_button(scan_label.c_str(), ui::full_button(42)))
     run_aob_scan(state);
+  ImGui::EndDisabled();
+
+  /* Progress bar for async AOB scans */
+  if (state.scan_async_pending)
+    ui::draw_scan_progress(state.scan_async_label, icons::kSearch,
+                           ImGui::GetTime() - state.scan_async_start_time,
+                           ImGui::GetContentRegionAvail().x);
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ui::text_dim("AOB Tips");

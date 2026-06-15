@@ -1,5 +1,5 @@
 /*
- * memDBG - Logs screen.
+ * MemDBG - Logs screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

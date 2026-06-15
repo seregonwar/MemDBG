@@ -39,6 +39,13 @@ memdbg_status_t memdbg_memory_batch_read(
 /* Populate telemetry counters (bytes read/written, call counts). */
 void memdbg_memory_telemetry(memdbg_telemetry_response_t *out);
 
+/* Batch write: write up to 64 addresses in one PAL session.
+   Uses a single fd on Linux, individual writes on other platforms.
+   Results include per-address written count and status. */
+memdbg_status_t memdbg_memory_batch_write(
+    int pid, const memdbg_batch_write_item_t *items, const uint8_t *data,
+    uint32_t count, memdbg_batch_write_result_entry_t *results);
+
 #ifdef __cplusplus
 }
 #endif

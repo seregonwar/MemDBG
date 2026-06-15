@@ -67,6 +67,9 @@ add_executable(memdbg_frontend
   src/ui/icon_font.cpp
   src/ui/ui_widgets.cpp
 
+  # pal (LZ4 decompression for client)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+
   # screens
   src/screens/screen_home.cpp
   src/screens/screen_consoles.cpp
@@ -104,6 +107,7 @@ target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
 add_executable(memdbg_probe
   src/proto/protocol_probe.cpp
   src/core/memdbg_client.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 )
 
 target_include_directories(memdbg_probe PRIVATE

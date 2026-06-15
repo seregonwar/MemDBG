@@ -46,6 +46,7 @@ typedef enum memdbg_command {
   MEMDBG_CMD_SCAN_AOB = 0x0302U,
   MEMDBG_CMD_SCAN_POINTER = 0x0303U,
   MEMDBG_CMD_SCAN_UNKNOWN = 0x0304U,
+  MEMDBG_CMD_SCAN_PROCESS_AOB = 0x0305U,
   MEMDBG_CMD_FOREGROUND_APP = 0x0103U,
   MEMDBG_CMD_PROCESS_STOP = 0x0104U,
   MEMDBG_CMD_PROCESS_CONTINUE = 0x0105U,
@@ -79,7 +80,9 @@ typedef enum memdbg_capability {
   MEMDBG_CAP_BATCH_READ = 1U << 13,
   MEMDBG_CAP_PERF_TELEMETRY = 1U << 14,
   MEMDBG_CAP_SCAN_UNKNOWN = 1U << 15,
-  MEMDBG_CAP_BATCH_WRITE = 1U << 16
+  MEMDBG_CAP_BATCH_WRITE = 1U << 16,
+  MEMDBG_CAP_LZ4 = 1U << 17,
+  MEMDBG_CAP_SCAN_PROCESS_AOB = 1U << 18
 } memdbg_capability_t;
 
 typedef enum memdbg_value_type {
@@ -201,6 +204,16 @@ typedef struct MEMDBG_PACKED memdbg_scan_aob_request {
   uint32_t pattern_length;
   uint8_t reserved[4];
 } memdbg_scan_aob_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_scan_process_aob_request {
+  int32_t pid;
+  uint32_t protection_mask;
+  uint32_t max_results;
+  uint32_t pattern_length;
+  uint64_t start;
+  uint64_t end;
+  uint32_t reserved[2];
+} memdbg_scan_process_aob_request_t;
 
 typedef struct MEMDBG_PACKED memdbg_scan_aob_response_prefix {
   uint32_t count;

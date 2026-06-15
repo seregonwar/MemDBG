@@ -1,5 +1,5 @@
 /*
- * memDBG - ImGui frontend client.
+ * MemDBG - ImGui frontend client.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -67,6 +67,8 @@ public:
 
   bool connect_to(const std::string &host, uint16_t port);
   void disconnect();
+  int  release_fd();      /* Release fd ownership for async transfer */
+  void take_fd(int fd);   /* Adopt a connected fd from async transfer */
   bool connected() const;
   const std::string &last_error() const;
 
@@ -86,6 +88,9 @@ public:
   bool scan_aob(const memdbg_scan_aob_request_t &request,
                 const std::vector<uint8_t> &pattern,
                 const std::vector<uint8_t> &mask, ScanResult &out);
+  bool scan_process_aob(const memdbg_scan_process_aob_request_t &request,
+                        const std::vector<uint8_t> &pattern,
+                        const std::vector<uint8_t> &mask, ScanResult &out);
   bool scan_pointer(const memdbg_scan_pointer_request_t &request,
                     ScanResult &out);
   bool scan_unknown(const memdbg_scan_process_exact_request_t &request,

@@ -16,6 +16,7 @@
 #include "memdbg/debug/memdbg_process.h"
 
 #include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,16 +26,20 @@
 #define MEMDBG_SCAN_INITIAL_CAPACITY 256U
 #define MEMDBG_MAP_PROT_READ 1U
 
-/* ---- Boyer-Moore-Horspool skip table (256 entries) ---- */
+/* ---- Boyer-Moore-Horspool skip tables ---- */
 
 #define BM_ALPHABET_SIZE 256U
+#define BM_GS_MIN_LENGTH 4U  /* Only apply good-suffix for patterns >= 4 bytes */
 
 typedef struct {
-  size_t skip[BM_ALPHABET_SIZE];
+  size_t skip[BM_ALPHABET_SIZE];  /* Bad-character shift */
+  size_t *gs_shift;               /* Good-suffix shift (NULL if not used) */
 } bm_table_t;
 
-static void bm_build_table(const unsigned char *pattern, size_t pat_len,
-                           const unsigned char *mask, bm_table_t *table) {
+/* ---- Bad-character (BMH) skip table ---- */
+
+static void bm_build_bc_table(const unsigned char *pattern, size_t pat_len,
+                              const unsigned char *mask, bm_table_t *table) {
   for (size_t i = 0U; i < BM_ALPHABET_SIZE; ++i)
     table->skip[i] = pat_len;
   for (size_t i = 0U; i < pat_len - 1U; ++i) {
@@ -53,6 +58,92 @@ static void bm_build_table(const unsigned char *pattern, size_t pat_len,
           table->skip[b] = cap;
     }
   }
+}
+
+/* ---- Good-suffix shift table (Boyer-Moore) ----
+ *
+ * Only built for exact patterns (no wildcards) of length >= BM_GS_MIN_LENGTH.
+ * This is O(pat_len) to build.  For wildcard patterns the gs_shift pointer
+ * stays NULL and only bad-character shifts are used.
+ *
+ * Reference: Gusfield, "Algorithms on Strings, Trees, and Sequences", §2.2 */
+
+static bool bm_build_gs_table(const unsigned char *pattern, size_t pat_len,
+                              bm_table_t *table) {
+  if (pat_len < BM_GS_MIN_LENGTH) return true;
+
+  table->gs_shift = (size_t *)malloc(pat_len * sizeof(size_t));
+  if (table->gs_shift == NULL) return false;
+
+  /* Compute suffix lengths: suffix[i] = length of the longest suffix of P[0..i]
+     that matches a suffix of P.  Goodman-Liang algorithm, O(pat_len). */
+  size_t *suffix = (size_t *)malloc(pat_len * sizeof(size_t));
+  if (suffix == NULL) { free(table->gs_shift); table->gs_shift = NULL; return false; }
+
+  /* Goodman-Liang suffix algorithm uses signed arithmetic: when the
+     while-loop matches all the way past position 0, g becomes -1 and
+     suffix[i] = f - g = f - (-1) = f + 1, which is the correct length.
+     With unsigned size_t, g would wrap to SIZE_MAX and corrupt the result. */
+  suffix[pat_len - 1U] = pat_len;
+  ptrdiff_t f = 0, g = (ptrdiff_t)(pat_len - 1U);
+  for (ptrdiff_t i = (ptrdiff_t)(pat_len - 2U); i >= 0; --i) {
+    if (i > g && suffix[i + pat_len - 1U - (size_t)f] < (size_t)(i - g)) {
+      suffix[i] = suffix[i + pat_len - 1U - (size_t)f];
+    } else {
+      if (i < g) g = i;
+      f = i;
+      while (g >= 0 && pattern[g] == pattern[g + pat_len - 1U - (size_t)f])
+        --g;
+      suffix[i] = (size_t)(f - g);
+    }
+  }
+
+  /* Build good-suffix shift table from suffix array.
+     gs_shift[j] = shift to apply when a mismatch occurs at position j
+     (0-indexed, j = position in pattern where mismatch happened). */
+  for (size_t j = 0U; j < pat_len; ++j)
+    table->gs_shift[j] = pat_len;
+
+  /* Case 1: The matching suffix occurs elsewhere in the pattern. */
+  size_t j = 0U;
+  for (size_t i = pat_len - 1U; i != (size_t)-1; --i) {
+    if (suffix[i] == i + 1U) {
+      /* Full prefix of length i+1 matches suffix */
+      for (; j < pat_len - 1U - i; ++j)
+        if (table->gs_shift[j] == pat_len)
+          table->gs_shift[j] = pat_len - 1U - i;
+    }
+  }
+
+  /* Case 2: The longest suffix ending at i appears elsewhere. */
+  for (size_t i = 0U; i <= pat_len - 2U; ++i) {
+    size_t pos = pat_len - 1U - suffix[i];
+    if (table->gs_shift[pos] > pat_len - 1U - i)
+      table->gs_shift[pos] = pat_len - 1U - i;
+  }
+
+  free(suffix);
+  return true;
+}
+
+static void bm_build_table(const unsigned char *pattern, size_t pat_len,
+                           const unsigned char *mask, bm_table_t *table) {
+  bm_build_bc_table(pattern, pat_len, mask, table);
+
+  /* Good-suffix only for exact patterns (no wildcards). */
+  bool all_exact = true;
+  for (size_t i = 0U; i < pat_len; ++i) {
+    if (mask[i] == 0U) { all_exact = false; break; }
+  }
+  if (all_exact)
+    bm_build_gs_table(pattern, pat_len, table);
+  else
+    table->gs_shift = NULL;
+}
+
+static void bm_free_table(bm_table_t *table) {
+  free(table->gs_shift);
+  table->gs_shift = NULL;
 }
 
 /* ---- Match function type ---- */
@@ -363,63 +454,45 @@ memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_reques
   return st;
 }
 
-/* ---- Public API: AOB scan (Boyer-Moore-Horspool) ---- */
+/* ---- AOB range scanner (BMH + good-suffix, reusable helper) ----
+ *
+ * Scans a single memory range [range_start, range_start + range_len)
+ * using a pre-built BMH table.  Caller owns the buffer, builder, and
+ * bm_table.  Returns MEMDBG_OK on success (including when truncated). */
 
-memdbg_status_t memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
-                                const uint8_t *pattern, const uint8_t *mask,
-                                memdbg_scan_result_t *out) {
-  if (request == NULL || pattern == NULL || mask == NULL || out == NULL)
-    return MEMDBG_ERR_PARAM;
-  if (request->pattern_length == 0U || request->length == 0U)
-    return MEMDBG_ERR_PARAM;
+static memdbg_status_t scan_aob_range(const bm_table_t *bm,
+                                      const unsigned char *pattern,
+                                      const unsigned char *mask,
+                                      size_t pat_len,
+                                      int pid,
+                                      uint64_t range_start, uint64_t range_len,
+                                      unsigned char *buffer,
+                                      scan_builder_t *builder) {
+  if (range_len < pat_len) return MEMDBG_OK;
 
-  memset(out, 0, sizeof(*out));
-
-  /* Buffer: chunk size + pattern overlap so patterns crossing chunk
-     boundaries are never missed. */
-  size_t pat_len = (size_t)request->pattern_length;
   size_t overlap = pat_len > 1U ? pat_len - 1U : 0U;
-  size_t buf_size = MEMDBG_SCAN_CHUNK + overlap;
-  unsigned char *buffer = (unsigned char *)malloc(buf_size);
-  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
-
-  scan_builder_t builder;
-  memset(&builder, 0, sizeof(builder));
-  builder.result = out;
-  builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
-
-  /* Build BMH skip table with wildcard-aware shifts. */
-  bm_table_t bm;
-  bm_build_table(pattern, pat_len, mask, &bm);
-
   uint64_t scanned = 0U;
   size_t carry = 0U;
-  uint64_t start_ns = monotonic_ns();
 
-  while (scanned < request->length && !out->truncated) {
-    uint64_t remaining = request->length - scanned;
+  while (scanned < range_len && !builder->result->truncated) {
+    uint64_t remaining = range_len - scanned;
     size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
     size_t read_len = 0U;
 
-    out->read_calls++;
-    memdbg_status_t st = memdbg_memory_read(request->pid, request->start + scanned,
+    builder->result->read_calls++;
+    memdbg_status_t st = memdbg_memory_read(pid, range_start + scanned,
         buffer + carry, to_read, &read_len);
-    if (st != MEMDBG_OK) { out->read_errors++; break; }
+    if (st != MEMDBG_OK) { builder->result->read_errors++; break; }
     if (read_len == 0U) break;
-    out->bytes_scanned += (uint64_t)read_len;
+    builder->result->bytes_scanned += (uint64_t)read_len;
 
-    /* window = carry from previous chunk + freshly read data.
-       base_addr is shifted back by carry bytes so absolute addresses
-       are computed correctly. */
     size_t window = carry + read_len;
-    uint64_t base_addr = request->start + scanned - (uint64_t)carry;
+    uint64_t base_addr = range_start + scanned - (uint64_t)carry;
 
-    /* Boyer-Moore-Horspool search with wildcard-aware match. */
+    /* BMH + good-suffix search loop. */
     size_t i = pat_len - 1U;
     const unsigned char *hay = buffer;
-    while (i < window && !out->truncated) {
-      /* Full pattern check backward from current position */
+    while (i < window && !builder->result->truncated) {
       size_t j = pat_len - 1U;
       const unsigned char *h = hay + i;
       bool match = true;
@@ -432,15 +505,18 @@ memdbg_status_t memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
       }
       if (match) {
         uint64_t addr = base_addr + (uint64_t)(i - pat_len + 1U);
-        memdbg_status_t as = scan_builder_append(&builder, addr);
-        if (as != MEMDBG_OK) { free(buffer); return as; }
-        i += 1U; /* start at next byte */
+        memdbg_status_t as = scan_builder_append(builder, addr);
+        if (as != MEMDBG_OK) return as;
+        i += 1U;
       } else {
-        i += bm.skip[hay[i]];
+        size_t bc = bm->skip[hay[i]];
+        size_t gs = 1U;
+        if (bm->gs_shift != NULL && j < pat_len - 1U)
+          gs = bm->gs_shift[j + 1U];
+        i += bc > gs ? bc : gs;
       }
     }
 
-    /* Preserve tail for cross-chunk continuity. */
     if (overlap != 0U) {
       carry = window < overlap ? window : overlap;
       if (carry > 0U)
@@ -449,11 +525,106 @@ memdbg_status_t memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
     scanned += read_len;
   }
 
+  return MEMDBG_OK;
+}
+
+/* ---- Public API: AOB scan (single range, Boyer-Moore-Horspool) ---- */
+
+memdbg_status_t memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
+                                const uint8_t *pattern, const uint8_t *mask,
+                                memdbg_scan_result_t *out) {
+  if (request == NULL || pattern == NULL || mask == NULL || out == NULL)
+    return MEMDBG_ERR_PARAM;
+  if (request->pattern_length == 0U || request->length == 0U)
+    return MEMDBG_ERR_PARAM;
+
+  memset(out, 0, sizeof(*out));
+
+  size_t pat_len = (size_t)request->pattern_length;
+  size_t overlap = pat_len > 1U ? pat_len - 1U : 0U;
+  size_t buf_size = MEMDBG_SCAN_CHUNK + overlap;
+  unsigned char *buffer = (unsigned char *)malloc(buf_size);
+  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
+
+  scan_builder_t builder;
+  memset(&builder, 0, sizeof(builder));
+  builder.result = out;
+  builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
+  scan_builder_prealloc(&builder);
+
+  bm_table_t bm;
+  bm_build_table(pattern, pat_len, mask, &bm);
+
+  uint64_t start_ns = monotonic_ns();
+  memdbg_status_t st = scan_aob_range(&bm, pattern, mask, pat_len,
+      request->pid, request->start, request->length, buffer, &builder);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
   out->regions_scanned = 1U;
+
+  bm_free_table(&bm);
   free(buffer);
-  return MEMDBG_OK;
+  if (st != MEMDBG_OK) memdbg_scan_result_free(out);
+  return st;
+}
+
+/* ---- Public API: process-wide AOB scan (BMH + good-suffix over cached maps) ---- */
+
+memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t *request,
+                                        const uint8_t *pattern, const uint8_t *mask,
+                                        memdbg_scan_result_t *out) {
+  if (request == NULL || pattern == NULL || mask == NULL || out == NULL)
+    return MEMDBG_ERR_PARAM;
+  if (request->pattern_length == 0U || request->pattern_length > 256U)
+    return MEMDBG_ERR_PARAM;
+
+  memset(out, 0, sizeof(*out));
+
+  size_t pat_len = (size_t)request->pattern_length;
+  size_t overlap = pat_len > 1U ? pat_len - 1U : 0U;
+  size_t buf_size = MEMDBG_SCAN_CHUNK + overlap;
+  unsigned char *buffer = (unsigned char *)malloc(buf_size);
+  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
+
+  memdbg_map_list_t maps;
+  memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
+  if (st != MEMDBG_OK) { free(buffer); return st; }
+
+  scan_builder_t builder;
+  memset(&builder, 0, sizeof(builder));
+  builder.result = out;
+  builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
+  scan_builder_prealloc(&builder);
+
+  bm_table_t bm;
+  bm_build_table(pattern, pat_len, mask, &bm);
+
+  uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
+  uint64_t start_ns = monotonic_ns();
+
+  for (size_t i = 0U; i < maps.count && !out->truncated; ++i) {
+    const memdbg_map_entry_t *map = &maps.entries[i];
+    if ((map->protection & prot_mask) != prot_mask || map->end <= map->start) continue;
+    uint64_t scan_start = map->start, scan_end = map->end;
+    if (request->start != 0U && scan_start < request->start) scan_start = request->start;
+    if (request->end   != 0U && scan_end   > request->end)   scan_end   = request->end;
+    if (scan_end <= scan_start) continue;
+    uint64_t map_len = scan_end - scan_start;
+    if (map_len < pat_len) continue;
+    out->regions_scanned++;
+    st = scan_aob_range(&bm, pattern, mask, pat_len,
+        request->pid, scan_start, map_len, buffer, &builder);
+    if (st != MEMDBG_OK) break;
+  }
+
+  uint64_t end_ns = monotonic_ns();
+  if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
+
+  bm_free_table(&bm);
+  memdbg_process_maps_free(&maps);
+  free(buffer);
+  if (st != MEMDBG_OK) memdbg_scan_result_free(out);
+  return st;
 }
 
 /* ---- Public API: unknown initial value scan (captures every aligned address) ---- */

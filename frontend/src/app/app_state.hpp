@@ -1,5 +1,5 @@
 /*
- * memDBG - Frontend application state and shared types.
+ * MemDBG - Frontend application state and shared types.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <future>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -100,6 +101,7 @@ struct AppState {
 
   char write_address[32] = "0x0";
   char write_bytes[512] = "";
+  char dump_path[512] = "dumps";
 
   int scan_type = MEMDBG_VALUE_U32;
   char scan_value[128] = "0";
@@ -114,6 +116,7 @@ struct AppState {
   uint32_t scan_snapshot_value_len = 0;
   int scan_snapshot_type = MEMDBG_VALUE_U32;
   char scan_session_status[256] = "No scan session";
+  bool scan_is_unknown_session = false;
 
   char map_filter[96] = "";
   bool map_filter_readable = true;
@@ -141,6 +144,7 @@ struct AppState {
   /* ---- AOB Scanner ---- */
   char aob_pattern[512] = "";
   ScanResult aob_result;
+  bool aob_process_wide = false;  /* Scan across all process maps */
 
   /* ---- Pointer Scanner ---- */
   char pointer_target_address[32] = "0x0";
@@ -148,6 +152,24 @@ struct AppState {
   int pointer_max_results = 256;
   int pointer_alignment = 4;
   ScanResult pointer_result;
+
+  /* ---- Async connect ---- */
+  bool connect_pending = false;
+
+  /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
+  bool scan_async_pending = false;
+  std::future<bool> scan_async_future;
+  std::string scan_async_label;
+  double scan_async_start_time = 0.0;
+  Screen scan_async_owner = Screen::Home;  /* prevents cross-screen result contamination */
+  /* Temp storage populated by async worker, consumed by poll on UI thread */
+  ScanResult scan_async_temp_result;
+  std::vector<ScanSnapshotEntry> scan_async_temp_snapshot;
+  uint32_t scan_async_temp_snapshot_value_len = 0U;
+  int scan_async_temp_snapshot_type = MEMDBG_VALUE_U32;
+  bool scan_async_temp_is_unknown = false;
+  char scan_async_temp_session_status[256] = {};
+  std::string scan_async_error;
 
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
@@ -292,7 +314,7 @@ inline const char *screen_title(Screen s) {
   case Screen::Logs: return "Logs"; case Screen::Settings: return "Settings";
   case Screen::Telemetry: return "Telemetry";
   case Screen::Credits: return "Credits";
-  } return "memDBG";
+  } return "MemDBG";
 }
 
 inline const char *screen_subtitle(Screen s) {
@@ -328,6 +350,8 @@ void normalize_ports(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
 void disconnect_console(AppState &state);
+bool load_frontend_settings(AppState &state, std::string *error = nullptr);
+bool save_frontend_settings(const AppState &state, std::string *error = nullptr);
 
 /* ---- screen drawing declarations ---- */
 void draw_home(AppState &state, struct ImVec2 avail);

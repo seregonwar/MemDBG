@@ -1,5 +1,5 @@
 /*
- * memDBG - protocol probe using the frontend client.
+ * MemDBG - protocol probe using the frontend client.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

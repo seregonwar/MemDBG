@@ -1,10 +1,10 @@
 /*
- * memDBG - Multi-format trainer file support.
+ * MemDBG - Multi-format trainer file support.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Supported formats:
- *   .cht     — memDBG native pipe-delimited (load + save)
+ *   .cht     — MemDBG native pipe-delimited (load + save)
  *   .shn     — Reaper Software Suite / MultiTrainer II (load + save, same as .cht)
  *   .json    — GoldHEN cheat JSON (load + save)
  *   .mc4     — Reaper encrypted format (detection only)
@@ -20,7 +20,7 @@
 namespace memdbg::frontend {
 
 enum class TrainerFormat {
-  CHT,       /* memDBG native .cht */
+  CHT,       /* MemDBG native .cht */
   SHN,       /* Reaper MultiTrainer .shn (pipe-delimited, same structure) */
   JSON,      /* GoldHEN JSON cheat format */
   MC4,       /* Reaper encrypted .mc4 (read-only by Reaper Studio) */

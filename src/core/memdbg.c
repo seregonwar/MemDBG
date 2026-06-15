@@ -17,8 +17,11 @@
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_network.h"
+#include "memdbg/pal/pal_notification.h"
+#include "memdbg/privilege/privilege.h"
 #include "memdbg/scanner/memdbg_scan.h"
 #include "memdbg/telemetry/udp_log.h"
+#include "../pal/lz4.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -104,14 +107,77 @@ static uint32_t memdbg_capabilities(const memdbg_config_t *cfg) {
                   MEMDBG_CAP_SCAN_AOB | MEMDBG_CAP_SCAN_POINTER |
                   MEMDBG_CAP_FOREGROUND_APP | MEMDBG_CAP_PROCESS_CONTROL |
                   MEMDBG_CAP_BATCH_READ | MEMDBG_CAP_BATCH_WRITE |
-                  MEMDBG_CAP_PERF_TELEMETRY |
-                  MEMDBG_CAP_SCAN_UNKNOWN;
+                  MEMDBG_CAP_PERF_TELEMETRY | MEMDBG_CAP_LZ4 |
+                  MEMDBG_CAP_SCAN_UNKNOWN | MEMDBG_CAP_SCAN_PROCESS_AOB;
   if (cfg != NULL && cfg->enable_udp_log)
     caps |= MEMDBG_CAP_UDP_LOG;
   return caps;
 }
 
-/* ---- Send response ---- */
+#define MEMDBG_LZ4_THRESHOLD 4096U
+
+/* Forward declaration */
+static int send_response(socket_t fd, const memdbg_packet_header_t *req,
+                         memdbg_status_t status, const void *payload,
+                         uint32_t payload_len);
+
+/* ---- Send compressed response ----
+   Prefix byte: 0x00 = raw data follows (strip prefix on client)
+                0x01 = LZ4: 4-byte uncomp_len LE + compressed data
+   Always sends prefix for consistency — client always strips/decompresses. */
+
+static int send_compressed_response(socket_t fd, const memdbg_packet_header_t *req,
+                                    memdbg_status_t status, const void *data,
+                                    uint32_t data_len) {
+  if (data == NULL || data_len == 0U) {
+    unsigned char zero = 0x00U;
+    return send_response(fd, req, status, &zero, 1U);
+  }
+
+  /* Small payloads: raw with 0x00 prefix */
+  if (data_len < MEMDBG_LZ4_THRESHOLD) {
+    unsigned char *raw = (unsigned char *)malloc(data_len + 1U);
+    if (raw == NULL) return send_response(fd, req, status, data, data_len);
+    raw[0] = 0x00U;
+    memcpy(raw + 1, data, data_len);
+    int rc = send_response(fd, req, status, raw, data_len + 1U);
+    free(raw);
+    return rc;
+  }
+
+  /* Large payloads: try LZ4 compression */
+  int bound = lz4_compress_bound((int)data_len);
+  unsigned char *compressed = (unsigned char *)malloc((size_t)bound + 5U);
+  if (compressed == NULL) goto _send_raw;
+
+  int csize = lz4_compress_default((const char *)data, (char *)(compressed + 5),
+                                   (int)data_len, bound);
+  if (csize <= 0 || (uint32_t)csize >= data_len - (data_len / 8U)) {
+    free(compressed);
+    goto _send_raw;
+  }
+
+  /* Compressed: prefix 0x01 + 4-byte uncompressed_size LE + compressed data */
+  compressed[0] = 0x01U;
+  compressed[1] = (unsigned char)(data_len & 0xFFU);
+  compressed[2] = (unsigned char)((data_len >> 8U) & 0xFFU);
+  compressed[3] = (unsigned char)((data_len >> 16U) & 0xFFU);
+  compressed[4] = (unsigned char)((data_len >> 24U) & 0xFFU);
+  int rc = send_response(fd, req, status, compressed, (uint32_t)csize + 5U);
+  free(compressed);
+  return rc;
+
+_send_raw:
+  { unsigned char *raw = (unsigned char *)malloc(data_len + 1U);
+    if (raw == NULL) return send_response(fd, req, status, data, data_len);
+    raw[0] = 0x00U;
+    memcpy(raw + 1, data, data_len);
+    int rc = send_response(fd, req, status, raw, data_len + 1U);
+    free(raw);
+    return rc; }
+}
+
+/* ---- Send response (implementation) ---- */
 
 static int send_response(socket_t fd, const memdbg_packet_header_t *req,
                          memdbg_status_t status, const void *payload,
@@ -142,7 +208,7 @@ static memdbg_status_t handle_hello(const memdbg_config_t *cfg,
   out->debug_port       = cfg->debug_port;
   out->udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
   (void)snprintf(out->version, sizeof(out->version), "%s", MEMDBG_VERSION_STRING);
-  (void)snprintf(out->name, sizeof(out->name), "memDBG");
+  (void)snprintf(out->name, sizeof(out->name), "MemDBG");
   return MEMDBG_OK;
 }
 
@@ -225,7 +291,7 @@ static memdbg_status_t handle_memory_read(socket_t fd, const memdbg_packet_heade
   memdbg_status_t status = memdbg_memory_read(read_req->pid, read_req->address,
       buffer, read_req->length, &read_len);
   if (status == MEMDBG_OK) {
-    if (send_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0)
+    if (send_compressed_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0)
       status = MEMDBG_ERR_NET;
   }
   free(buffer);
@@ -288,12 +354,19 @@ static memdbg_status_t handle_batch_read(socket_t fd, const memdbg_packet_header
   memdbg_status_t status = memdbg_memory_batch_read(batch_req->pid, items, count,
       results, data_out, (uint32_t)total_data, &data_used);
 
-  int rc = send_response(fd, req, status, payload, results_size + data_used);
+  int rc = send_compressed_response(fd, req, status, payload, results_size + data_used);
   free(payload);
   return rc == 0 ? (status == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : status) : MEMDBG_ERR_NET;
 }
 
-/* ---- BATCH_WRITE ---- */
+/* ---- BATCH_WRITE ----
+ *
+ * Wire format: batch_req (pid + count) followed by count repetitions of
+ *   { memdbg_batch_write_item_t, item->length raw bytes }.
+ *
+ * Uses memdbg_memory_batch_write for OS-level batching: a single fd to
+ * /proc/pid/mem on Linux (vs N× open/seek/write/close with individual
+ * writes), individual ptrace calls on FreeBSD, etc. */
 
 static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_header_t *req,
                                           const memdbg_config_t *cfg, const void *body,
@@ -306,15 +379,24 @@ static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_heade
 
   size_t results_size = count * sizeof(memdbg_batch_write_result_entry_t);
 
-  /* Allocate results buffer */
-  unsigned char *results_buf = (unsigned char *)malloc(results_size);
+  /* Allocate and zero-initialize results buffer.  Zeroing ensures that
+     unprocessed entries (after an early protocol-error goto) are safely
+     reported as address=0, written=0, status=ERR_IO. */
+  unsigned char *results_buf = (unsigned char *)calloc(1U, results_size);
   if (results_buf == NULL) return MEMDBG_ERR_NOMEM;
 
   memdbg_batch_write_result_entry_t *results =
       (memdbg_batch_write_result_entry_t *)results_buf;
 
+  /* Phase 1: parse wire format, validating and collecting item descriptors
+     + data pointers.  The wire interleaves item headers with their data,
+     so we need to collect them before calling the batch API. */
   const uint8_t *cursor = (const uint8_t *)body + sizeof(*batch_req);
   const uint8_t *end    = (const uint8_t *)body + body_len;
+
+  memdbg_batch_write_item_t items[MEMDBG_BATCH_WRITE_MAX_ITEMS];
+  const uint8_t *data_ptrs[MEMDBG_BATCH_WRITE_MAX_ITEMS];
+  uint32_t valid = 0U;
   memdbg_status_t overall = MEMDBG_OK;
 
   for (uint32_t i = 0U; i < count; ++i) {
@@ -325,7 +407,7 @@ static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_heade
     if ((size_t)(end - cursor) < sizeof(memdbg_batch_write_item_t)) {
       results[i].status = (uint32_t)MEMDBG_ERR_PROTOCOL;
       overall = MEMDBG_ERR_PROTOCOL;
-      break;
+      goto _send;
     }
 
     const memdbg_batch_write_item_t *item = (const memdbg_batch_write_item_t *)cursor;
@@ -343,7 +425,7 @@ static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_heade
     if ((size_t)(end - cursor) < dlen) {
       results[i].status = (uint32_t)MEMDBG_ERR_PROTOCOL;
       overall = MEMDBG_ERR_PROTOCOL;
-      break;
+      goto _send;
     }
 
     if (dlen > cfg->max_read_bytes) {
@@ -353,20 +435,57 @@ static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_heade
       continue;
     }
 
-    size_t written = 0U;
-    memdbg_status_t st = memdbg_memory_write(batch_req->pid, item->address,
-        cursor, dlen, &written);
-    results[i].status  = (uint32_t)st;
-    results[i].written = (uint32_t)written;
-    if (st != MEMDBG_OK && overall == MEMDBG_OK)
-      overall = st;
-
+    /* Collect for batch write */
+    items[valid].address = item->address;
+    items[valid].length  = dlen;
+    data_ptrs[valid]     = cursor;
+    valid++;
     cursor += dlen;
   }
 
-  int rc = send_response(fd, req, overall, results_buf, (uint32_t)results_size);
-  free(results_buf);
-  return rc == 0 ? (overall == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : overall) : MEMDBG_ERR_NET;
+  /* Phase 2: build flat data buffer from scattered wire data,
+     then execute all writes in one PAL batch session. */
+  if (overall != MEMDBG_ERR_PROTOCOL && valid > 0U) {
+    /* Compute total data size */
+    size_t total_data = 0U;
+    for (uint32_t i = 0U; i < valid; ++i)
+      total_data += items[i].length;
+
+    uint8_t *flat_data = (uint8_t *)malloc(total_data);
+    if (flat_data != NULL) {
+      size_t off = 0U;
+      for (uint32_t i = 0U; i < valid; ++i) {
+        memcpy(flat_data + off, data_ptrs[i], items[i].length);
+        off += items[i].length;
+      }
+
+      memdbg_batch_write_result_entry_t batch_results[MEMDBG_BATCH_WRITE_MAX_ITEMS];
+      (void)memdbg_memory_batch_write(batch_req->pid, items,
+          flat_data, valid, batch_results);
+      free(flat_data);
+
+      /* Map batch results back to wire-ordered results array.
+         Only items with pre-batch status ERR_IO were passed to the batch;
+         dlen==0 items (status OK) and overflow items (status OVERFLOW)
+         are skipped, keeping their pre-batch values. */
+      uint32_t vr = 0U;
+      for (uint32_t i = 0U; i < count && vr < valid; ++i) {
+        if (results[i].status == (uint32_t)MEMDBG_ERR_IO) {
+          results[i].status  = batch_results[vr].status;
+          results[i].written = batch_results[vr].written;
+          ++vr;
+        }
+      }
+    } else {
+      overall = MEMDBG_ERR_NOMEM;
+    }
+  }
+
+_send: {
+    int rc = send_response(fd, req, overall, results_buf, (uint32_t)results_size);
+    free(results_buf);
+    return rc == 0 ? (overall == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : overall) : MEMDBG_ERR_NET;
+  }
 }
 
 /* ---- Scan result sender ---- */
@@ -448,6 +567,29 @@ static memdbg_status_t handle_scan_aob(socket_t fd, const memdbg_packet_header_t
     req_copy.max_results = cfg->max_scan_results;
   memdbg_scan_result_t result;
   memdbg_status_t status = memdbg_scan_aob(&req_copy, pattern, mask, &result);
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
+  memdbg_scan_result_free(&result);
+  return status;
+}
+
+static memdbg_status_t handle_scan_process_aob(socket_t fd, const memdbg_packet_header_t *req,
+                                               const memdbg_config_t *cfg, const void *body,
+                                               uint32_t body_len) {
+  if (body_len < sizeof(memdbg_scan_process_aob_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_scan_process_aob_request_t *scan_req =
+      (const memdbg_scan_process_aob_request_t *)body;
+  uint32_t pat_len = scan_req->pattern_length;
+  if (pat_len == 0U || pat_len > 256U) return MEMDBG_ERR_PARAM;
+  uint32_t expected = sizeof(*scan_req) + pat_len + pat_len;
+  if (body_len < expected) return MEMDBG_ERR_PROTOCOL;
+  const uint8_t *pattern = (const uint8_t *)body + sizeof(*scan_req);
+  const uint8_t *mask    = pattern + pat_len;
+  memdbg_scan_process_aob_request_t req_copy = *scan_req;
+  if (req_copy.max_results == 0U || req_copy.max_results > cfg->max_scan_results)
+    req_copy.max_results = cfg->max_scan_results;
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_process_aob(&req_copy, pattern, mask,
+      &result);
   if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
   memdbg_scan_result_free(&result);
   return status;
@@ -567,6 +709,8 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_SCAN_EXACT:         return handle_scan_exact_v2(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_PROCESS_EXACT: return handle_scan_process_exact(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_AOB:           return handle_scan_aob(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_PROCESS_AOB:
+    return handle_scan_process_aob(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_POINTER:       return handle_scan_pointer(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_UNKNOWN:       return handle_scan_unknown(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_FOREGROUND_APP:     return handle_foreground_app(fd, req, body, req->length);
@@ -688,6 +832,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     (void)pal_network_fini();
     return MEMDBG_ERR_IO;
   }
+  int notification_ready = (pal_notification_init() == 0);
 
   install_signal_handlers();
 
@@ -703,19 +848,29 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   }
 
   memdbg_log_write(MEMDBG_LOG_INFO,
-                   "memDBG %s starting debug=%s:%u udp_log=%s:%u pool=%d",
+                   "MemDBG %s starting debug=%s:%u udp_log=%s:%u pool=%d",
                    MEMDBG_VERSION_STRING, cfg.bind_host, cfg.debug_port,
                    cfg.enable_udp_log ? cfg.udp_log_host : "off",
                    cfg.enable_udp_log ? cfg.udp_log_port : 0U,
                    MEMDBG_THREAD_POOL_SIZE);
 
+  if (memdbg_privilege_supported() &&
+      memdbg_privilege_jailbreak_self() != 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "privilege: payload escalation failed; memory actions may fail with permission/i-o status");
+  }
+
   if (pal_tcp_listen(cfg.bind_host, cfg.debug_port, 16, &listen_fd) != 0) {
     memdbg_log_write(MEMDBG_LOG_ERROR, "debug listener failed: %s", pal_socket_last_error());
+    if (notification_ready) pal_notification_shutdown();
     memdbg_udp_log_stop();
     memdbg_log_close();
     pal_network_fini();
     return MEMDBG_ERR_NET;
   }
+
+  if (notification_ready)
+    pal_notification_send("MemDBG by seregonwar started");
 
   /* Pre-create thread pool workers. All block on accept() — kernel distributes. */
   worker_args_t wargs;
@@ -738,7 +893,8 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   (void)pal_socket_close(listen_fd);
   memdbg_process_maps_cache_flush(0);
 
-  memdbg_log_write(MEMDBG_LOG_INFO, "memDBG stopped");
+  memdbg_log_write(MEMDBG_LOG_INFO, "MemDBG stopped");
+  if (notification_ready) pal_notification_shutdown();
   memdbg_udp_log_stop();
   memdbg_log_close();
   pal_network_fini();

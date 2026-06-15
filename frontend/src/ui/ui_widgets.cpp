@@ -1,5 +1,5 @@
 /*
- * memDBG - Shared ImGui widgets and theme implementation.
+ * MemDBG - Shared ImGui widgets and theme implementation.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -10,6 +10,7 @@
 #include "memdbg/core/memdbg_protocol.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <iomanip>
 #include <sstream>
@@ -231,6 +232,43 @@ void draw_capabilities(const memdbg::frontend::HelloInfo &hello) {
   ImGui::Text("UDP log port: %u", static_cast<unsigned>(hello.udp_log_port));
   ImGui::Spacing();
   ImGui::TextWrapped("Capabilities: %s", memdbg::frontend::capability_text(hello.capabilities).c_str());
+}
+
+void draw_scan_progress(const std::string &label, const char *icon, double elapsed, float bar_width) {
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  ImGui::TextColored(colors().primary2, "%s  %s...", icon, label.c_str());
+
+  const float bar_h = 8.0f;
+  ImVec2 cursor = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+
+  /* Track background */
+  dl->AddRectFilled(cursor, ImVec2(cursor.x + bar_width, cursor.y + bar_h),
+                    color_u32(colors().bg3), bar_h * 0.5f);
+
+  /* Animated fill segment — ping-pong between 0 and 1 */
+  float t = static_cast<float>(std::fmod(elapsed * 2.2, 2.0));
+  if (t > 1.0f) t = 2.0f - t;  /* ping-pong */
+  float seg_w = bar_width * 0.28f;
+  float seg_x = (bar_width - seg_w) * t;
+
+  dl->AddRectFilled(ImVec2(cursor.x + seg_x, cursor.y),
+                    ImVec2(cursor.x + seg_x + seg_w, cursor.y + bar_h),
+                    color_u32(colors().primary2), bar_h * 0.5f);
+
+  ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + bar_h + 8.0f));
+
+  /* Elapsed time */
+  if (elapsed < 60.0)
+    ImGui::TextColored(colors().muted, "Elapsed: %.1fs", elapsed);
+  else {
+    int mins = static_cast<int>(elapsed) / 60;
+    int secs = static_cast<int>(elapsed) % 60;
+    ImGui::TextColored(colors().muted, "Elapsed: %dm %ds", mins, secs);
+  }
 }
 
 } // namespace memdbg::frontend::ui

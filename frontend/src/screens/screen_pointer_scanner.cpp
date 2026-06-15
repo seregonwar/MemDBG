@@ -1,5 +1,5 @@
 /*
- * memDBG - Pointer Scanner screen.
+ * MemDBG - Pointer Scanner screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -10,11 +10,47 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <exception>
+#include <future>
 
 namespace memdbg::frontend {
 
+/* ---- Async scan poll ---- */
+static void poll_pointer_async(AppState &state) {
+  if (!state.scan_async_pending) return;
+  if (!state.scan_async_future.valid()) return;
+
+  auto status = state.scan_async_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) return;
+  if (state.scan_async_owner != Screen::PointerScanner) return;
+
+  state.scan_async_pending = false;
+  bool ok = false;
+  try {
+    ok = state.scan_async_future.get();
+  } catch (const std::exception &ex) {
+    state.scan_async_error = ex.what();
+  } catch (...) {
+    state.scan_async_error = "Unknown pointer scanner error";
+  }
+
+  if (!ok) {
+    if (state.scan_async_error.empty()) state.scan_async_error = "Pointer scanner request failed";
+    set_status(state, state.scan_async_error);
+    push_notification(state, "Pointer scan failed: " + state.scan_async_error, 5.0);
+    return;
+  }
+
+  /* Apply results from temp storage */
+  state.pointer_result = std::move(state.scan_async_temp_result);
+  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
+                "%s", state.scan_async_temp_session_status);
+  set_status(state, state.scan_session_status);
+}
+
 /* ---- Pointer scan execution ---- */
 static void run_pointer_scan(AppState &state) {
+  if (state.scan_async_pending) return;
   if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
   if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
 
@@ -22,6 +58,7 @@ static void run_pointer_scan(AppState &state) {
   if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_length, length)) {
     set_status(state, "Invalid scan range"); return;
   }
+  if (length == 0U) { set_status(state, "Scan length must be greater than zero"); return; }
   if (!parse_u64(state.pointer_target_address, target)) {
     set_status(state, "Invalid target address"); return;
   }
@@ -39,19 +76,36 @@ static void run_pointer_scan(AppState &state) {
   request.max_results    = static_cast<uint32_t>(state.pointer_max_results);
   request.alignment      = static_cast<uint32_t>(state.pointer_alignment);
 
-  if (!state.client.scan_pointer(request, state.pointer_result)) {
-    set_status(state, state.client.last_error()); return;
-  }
+  state.scan_async_label = "Pointer scan";
+  state.scan_async_start_time = ImGui::GetTime();
+  state.scan_async_pending = true;
+  state.scan_async_owner = Screen::PointerScanner;
 
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
-                "Pointer scan: %u candidates (%.2f MiB scanned)",
-                state.pointer_result.count,
-                static_cast<double>(state.pointer_result.bytes_scanned) / (1024.0 * 1024.0));
-  set_status(state, state.scan_session_status);
+  auto &client = state.client;
+  auto &temp_result = state.scan_async_temp_result;
+  auto &temp_status = state.scan_async_temp_session_status;
+  auto &error_out = state.scan_async_error;
+
+  state.scan_async_future = std::async(std::launch::async,
+    [&client, request, &temp_result, &temp_status, &error_out]() -> bool {
+      ScanResult res;
+      if (!client.scan_pointer(request, res)) {
+        error_out = client.last_error();
+        return false;
+      }
+      temp_result = std::move(res);
+      std::snprintf(temp_status, sizeof(temp_status),
+                    "Pointer scan: %u candidates (%.2f MiB scanned)",
+                    temp_result.count,
+                    static_cast<double>(temp_result.bytes_scanned) / (1024.0 * 1024.0));
+      return true;
+    });
 }
 
 /* ---- Main draw ---- */
 void draw_pointer_scanner(AppState &state, ImVec2 avail) {
+  poll_pointer_async(state);
+
   const float gap = 16.0f;
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
 
@@ -88,9 +142,18 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
     ImGui::SetTooltip("Memory range to search for pointer candidates");
 
   ImGui::Spacing();
+  bool can_scan = state.client.connected() && state.selected_pid > 0 && !state.scan_async_pending;
+  ImGui::BeginDisabled(!can_scan);
   if (ui::primary_button((std::string(icons::kPointer) + "  Scan Pointers").c_str(),
                          ui::full_button(42)))
     run_pointer_scan(state);
+  ImGui::EndDisabled();
+
+  /* Progress bar for async pointer scans */
+  if (state.scan_async_pending)
+    ui::draw_scan_progress(state.scan_async_label, icons::kPointer,
+                           ImGui::GetTime() - state.scan_async_start_time,
+                           ImGui::GetContentRegionAvail().x);
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ui::text_dim("How it works");

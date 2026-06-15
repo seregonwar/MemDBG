@@ -1,5 +1,5 @@
 /*
- * memDBG - Processes screen.
+ * MemDBG - Processes screen.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -62,11 +62,21 @@ static void dump_selected_map(AppState &state) {
   }
   const MapEntry &map = state.maps[state.selected_map_row];
   if (map.end <= map.start) { set_status(state, "Selected map is empty"); return; }
-  std::filesystem::path dump_dir = "dumps";
+  std::string default_name = "pid_" + std::to_string(state.selected_pid) + "_" +
+                             hex_u64(map.start).substr(2) + ".bin";
+  std::filesystem::path configured = trim_copy(state.dump_path);
+  if (configured.empty()) configured = "dumps";
+
+  std::filesystem::path out_path;
+  const bool looks_like_file = configured.has_extension();
+  if (looks_like_file) out_path = configured;
+  else                 out_path = configured / default_name;
+
+  std::filesystem::path dump_dir = out_path.parent_path();
+  if (dump_dir.empty()) dump_dir = ".";
   std::error_code ec;
   std::filesystem::create_directories(dump_dir, ec);
   if (ec) { set_status(state, "Failed to create dumps directory"); return; }
-  std::filesystem::path out_path = dump_dir / ("pid_" + std::to_string(state.selected_pid) + "_" + hex_u64(map.start).substr(2) + ".bin");
   std::ofstream out(out_path, std::ios::binary);
   if (!out) { set_status(state, "Failed to open dump file"); return; }
   uint64_t address = map.start;
@@ -86,6 +96,7 @@ static void dump_selected_map(AppState &state) {
     written_total += bytes.size();
   }
   set_status(state, "Dumped " + std::to_string(written_total) + " bytes to " + out_path.string());
+  push_notification(state, "Map dumped to " + out_path.string(), 5.0);
 }
 
 /* ---- Process selection ---- */
@@ -99,6 +110,7 @@ static void select_process(AppState &state, int row) {
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear();
   state.scan_snapshot_value_len = 0;
+  state.scan_is_unknown_session = false;
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
   state.has_process_info = false;
   if (state.client.connected() && state.client.process_info(state.selected_pid, state.selected_process_info))
@@ -118,8 +130,18 @@ static void select_map(AppState &state, int row) {
 }
 
 static void refresh_processes(AppState &state) {
-  if (!state.client.connected()) { set_status(state, "Connect a console before refreshing processes"); return; }
-  if (!state.client.process_list(state.processes)) { set_status(state, state.client.last_error()); return; }
+  if (!state.client.connected()) {
+    set_status(state, "Connect a console before refreshing processes");
+    push_notification(state, "Connect a console before loading processes", 4.0);
+    return;
+  }
+  if (!state.client.process_list(state.processes)) {
+    std::string error = state.client.last_error();
+    if (error.empty()) error = "Process refresh failed";
+    set_status(state, error);
+    push_notification(state, "Process refresh failed: " + error, 5.0);
+    return;
+  }
   if (state.processes.empty()) {
     state.selected_pid = 0; state.selected_process_row = -1;
     state.has_process_info = false; state.maps.clear();
@@ -211,6 +233,9 @@ void draw_processes(AppState &state, ImVec2 avail) {
 
   ui::begin_panel("ProcessesPanel", "Console Processes", ImVec2(left_w, avail.y));
   if (!state.client.connected()) {
+    if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Processes").c_str(), ImVec2(190, 38)))
+      refresh_processes(state);
+    ImGui::Spacing();
     ui::draw_empty_state("Connect a console", "Process enumeration is available after a payload session is open.");
   } else {
     if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Processes").c_str(), ImVec2(180, 38))) refresh_processes(state);
@@ -236,11 +261,17 @@ void draw_processes(AppState &state, ImVec2 avail) {
       if (!state.selected_process_info.path.empty())
         ImGui::TextWrapped("Path: %s", state.selected_process_info.path.c_str());
     }
+    ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0);
     if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Maps").c_str(), ImVec2(150, 38))) refresh_maps(state);
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kFilter) + "  Use Filtered Window").c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kDump) + "  Dump Selected Map").c_str(), ImVec2(170, 38))) dump_selected_map(state);
+    ImGui::EndDisabled();
+    ImGui::Spacing();
+    ImGui::InputText("Dump output", state.dump_path, sizeof(state.dump_path));
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Directory or full .bin file path for Dump Selected Map");
     ImGui::Spacing();
     ImGui::InputText("Filter", state.map_filter, sizeof(state.map_filter));
     ImGui::Checkbox("Readable", &state.map_filter_readable);
