@@ -27,60 +27,52 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
-typedef struct client_ctx {
-  socket_t fd;
-  memdbg_config_t cfg;
-} client_ctx_t;
+/* ---- Thread pool config ---- */
+
+#define MEMDBG_THREAD_POOL_SIZE 4
+
+/* ---- Globals ---- */
 
 static atomic_bool g_stop_requested = ATOMIC_VAR_INIT(false);
+static atomic_uint g_active_connections = 0;
+static time_t      g_start_time = 0;
+
+/* ---- Config ---- */
 
 void memdbg_config_defaults(memdbg_config_t *cfg) {
-  if (cfg == NULL) {
-    return;
-  }
+  if (cfg == NULL) return;
   memset(cfg, 0, sizeof(*cfg));
   (void)snprintf(cfg->bind_host, sizeof(cfg->bind_host), "0.0.0.0");
   (void)snprintf(cfg->udp_log_host, sizeof(cfg->udp_log_host), "%s",
                  MEMDBG_DEFAULT_UDP_LOG_HOST);
   (void)snprintf(cfg->data_root, sizeof(cfg->data_root), "%s",
                  MEMDBG_DEFAULT_DATA_ROOT);
-  cfg->debug_port = MEMDBG_DEFAULT_DEBUG_PORT;
-  cfg->udp_log_port = MEMDBG_DEFAULT_UDP_LOG_PORT;
-  cfg->discovery_port = MEMDBG_DEFAULT_DISCOVERY_PORT;
-  cfg->enable_udp_log = true;
+  cfg->debug_port      = MEMDBG_DEFAULT_DEBUG_PORT;
+  cfg->udp_log_port    = MEMDBG_DEFAULT_UDP_LOG_PORT;
+  cfg->discovery_port  = MEMDBG_DEFAULT_DISCOVERY_PORT;
+  cfg->enable_udp_log  = true;
   cfg->max_packet_bytes = MEMDBG_PROTOCOL_MAX_PACKET;
-  cfg->max_read_bytes = MEMDBG_PROTOCOL_MAX_READ;
+  cfg->max_read_bytes   = MEMDBG_PROTOCOL_MAX_READ;
   cfg->max_scan_results = 200000U;
 }
 
 const char *memdbg_strerror(memdbg_status_t status) {
   switch (status) {
-  case MEMDBG_OK:
-    return "ok";
-  case MEMDBG_ERR_PARAM:
-    return "invalid parameter";
-  case MEMDBG_ERR_NOMEM:
-    return "out of memory";
-  case MEMDBG_ERR_IO:
-    return "i/o error";
-  case MEMDBG_ERR_NET:
-    return "network error";
-  case MEMDBG_ERR_PROTOCOL:
-    return "protocol error";
-  case MEMDBG_ERR_UNSUPPORTED:
-    return "unsupported";
-  case MEMDBG_ERR_NOT_FOUND:
-    return "not found";
-  case MEMDBG_ERR_PERMISSION:
-    return "permission denied";
-  case MEMDBG_ERR_OVERFLOW:
-    return "overflow";
-  case MEMDBG_ERR_STATE:
-    return "invalid state";
-  default:
-    return "unknown error";
+  case MEMDBG_OK:             return "ok";
+  case MEMDBG_ERR_PARAM:      return "invalid parameter";
+  case MEMDBG_ERR_NOMEM:      return "out of memory";
+  case MEMDBG_ERR_IO:         return "i/o error";
+  case MEMDBG_ERR_NET:        return "network error";
+  case MEMDBG_ERR_PROTOCOL:   return "protocol error";
+  case MEMDBG_ERR_UNSUPPORTED: return "unsupported";
+  case MEMDBG_ERR_NOT_FOUND:  return "not found";
+  case MEMDBG_ERR_PERMISSION: return "permission denied";
+  case MEMDBG_ERR_OVERFLOW:   return "overflow";
+  case MEMDBG_ERR_STATE:      return "invalid state";
+  default:                    return "unknown error";
   }
 }
 
@@ -91,6 +83,8 @@ void memdbg_daemon_request_stop(void) {
 bool memdbg_daemon_should_stop(void) {
   return atomic_load_explicit(&g_stop_requested, memory_order_relaxed);
 }
+
+/* ---- Helpers ---- */
 
 static uint16_t memdbg_platform_id(void) {
 #if defined(PLATFORM_PS4) || defined(PS4)
@@ -106,79 +100,69 @@ static uint32_t memdbg_capabilities(const memdbg_config_t *cfg) {
   uint32_t caps = MEMDBG_CAP_PROCESS_LIST | MEMDBG_CAP_PROCESS_MAPS |
                   MEMDBG_CAP_MEMORY_READ | MEMDBG_CAP_MEMORY_WRITE |
                   MEMDBG_CAP_SCAN_EXACT | MEMDBG_CAP_SCAN_PROCESS_EXACT |
-                  MEMDBG_CAP_SCAN_TELEMETRY | MEMDBG_CAP_PROCESS_INFO;
-  if (cfg != NULL && cfg->enable_udp_log) {
+                  MEMDBG_CAP_SCAN_TELEMETRY | MEMDBG_CAP_PROCESS_INFO |
+                  MEMDBG_CAP_SCAN_AOB | MEMDBG_CAP_SCAN_POINTER |
+                  MEMDBG_CAP_FOREGROUND_APP | MEMDBG_CAP_PROCESS_CONTROL |
+                  MEMDBG_CAP_BATCH_READ | MEMDBG_CAP_BATCH_WRITE |
+                  MEMDBG_CAP_PERF_TELEMETRY |
+                  MEMDBG_CAP_SCAN_UNKNOWN;
+  if (cfg != NULL && cfg->enable_udp_log)
     caps |= MEMDBG_CAP_UDP_LOG;
-  }
   return caps;
 }
+
+/* ---- Send response ---- */
 
 static int send_response(socket_t fd, const memdbg_packet_header_t *req,
                          memdbg_status_t status, const void *payload,
                          uint32_t payload_len) {
   memdbg_response_header_t hdr;
   memset(&hdr, 0, sizeof(hdr));
-  hdr.magic = MEMDBG_PACKET_MAGIC;
-  hdr.version = MEMDBG_PROTOCOL_VERSION;
-  hdr.command = req != NULL ? req->command : 0U;
+  hdr.magic      = MEMDBG_PACKET_MAGIC;
+  hdr.version    = MEMDBG_PROTOCOL_VERSION;
+  hdr.command    = req != NULL ? req->command : 0U;
   hdr.request_id = req != NULL ? req->request_id : 0U;
-  hdr.status = (int32_t)status;
-  hdr.length = payload_len;
+  hdr.status     = (int32_t)status;
+  hdr.length     = payload_len;
 
-  if (pal_socket_write_all(fd, &hdr, sizeof(hdr)) < 0) {
-    return -1;
-  }
-  if (payload_len != 0U &&
-      pal_socket_write_all(fd, payload, payload_len) < 0) {
-    return -1;
-  }
+  if (pal_socket_write_all(fd, &hdr, sizeof(hdr)) < 0) return -1;
+  if (payload_len != 0U && pal_socket_write_all(fd, payload, payload_len) < 0) return -1;
   return 0;
 }
 
+/* ---- HELLO ---- */
+
 static memdbg_status_t handle_hello(const memdbg_config_t *cfg,
                                     memdbg_hello_response_t *out) {
-  if (cfg == NULL || out == NULL) {
-    return MEMDBG_ERR_PARAM;
-  }
+  if (cfg == NULL || out == NULL) return MEMDBG_ERR_PARAM;
   memset(out, 0, sizeof(*out));
   out->protocol_version = MEMDBG_PROTOCOL_VERSION;
-  out->platform_id = memdbg_platform_id();
-  out->capabilities = memdbg_capabilities(cfg);
-  out->debug_port = cfg->debug_port;
-  out->udp_log_port = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
-  (void)snprintf(out->version, sizeof(out->version), "%s",
-                 MEMDBG_VERSION_STRING);
+  out->platform_id      = memdbg_platform_id();
+  out->capabilities     = memdbg_capabilities(cfg);
+  out->debug_port       = cfg->debug_port;
+  out->udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
+  (void)snprintf(out->version, sizeof(out->version), "%s", MEMDBG_VERSION_STRING);
   (void)snprintf(out->name, sizeof(out->name), "memDBG");
   return MEMDBG_OK;
 }
 
-static memdbg_status_t handle_process_list(socket_t fd,
-                                           const memdbg_packet_header_t *req) {
+/* ---- PROCESS_LIST ---- */
+
+static memdbg_status_t handle_process_list(socket_t fd, const memdbg_packet_header_t *req) {
   memdbg_process_list_t list;
   memdbg_status_t status = memdbg_process_list(&list);
-  if (status != MEMDBG_OK) {
-    return status;
-  }
+  if (status != MEMDBG_OK) return status;
 
-  size_t payload_len =
-      sizeof(uint32_t) + list.count * sizeof(memdbg_process_entry_t);
-  if (payload_len > UINT32_MAX) {
-    memdbg_process_list_free(&list);
-    return MEMDBG_ERR_OVERFLOW;
-  }
+  size_t payload_len = sizeof(uint32_t) + list.count * sizeof(memdbg_process_entry_t);
+  if (payload_len > UINT32_MAX) { memdbg_process_list_free(&list); return MEMDBG_ERR_OVERFLOW; }
 
   unsigned char *payload = (unsigned char *)malloc(payload_len);
-  if (payload == NULL) {
-    memdbg_process_list_free(&list);
-    return MEMDBG_ERR_NOMEM;
-  }
+  if (payload == NULL) { memdbg_process_list_free(&list); return MEMDBG_ERR_NOMEM; }
 
   uint32_t count = (uint32_t)list.count;
   memcpy(payload, &count, sizeof(count));
-  if (list.count != 0U) {
-    memcpy(payload + sizeof(count), list.entries,
-           list.count * sizeof(memdbg_process_entry_t));
-  }
+  if (list.count != 0U)
+    memcpy(payload + sizeof(count), list.entries, list.count * sizeof(memdbg_process_entry_t));
 
   int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
   free(payload);
@@ -186,40 +170,26 @@ static memdbg_status_t handle_process_list(socket_t fd,
   return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
-static memdbg_status_t handle_process_maps(socket_t fd,
-                                           const memdbg_packet_header_t *req,
-                                           const void *body,
-                                           uint32_t body_len) {
-  if (body_len != sizeof(memdbg_process_maps_request_t)) {
-    return MEMDBG_ERR_PROTOCOL;
-  }
+/* ---- PROCESS_MAPS ---- */
 
-  const memdbg_process_maps_request_t *maps_req =
-      (const memdbg_process_maps_request_t *)body;
+static memdbg_status_t handle_process_maps(socket_t fd, const memdbg_packet_header_t *req,
+                                           const void *body, uint32_t body_len) {
+  if (body_len != sizeof(memdbg_process_maps_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_process_maps_request_t *maps_req = (const memdbg_process_maps_request_t *)body;
   memdbg_map_list_t maps;
-  memdbg_status_t status = memdbg_process_maps(maps_req->pid, &maps);
-  if (status != MEMDBG_OK) {
-    return status;
-  }
+  memdbg_status_t status = memdbg_process_maps_cached(maps_req->pid, &maps);
+  if (status != MEMDBG_OK) return status;
 
   size_t payload_len = sizeof(uint32_t) + maps.count * sizeof(memdbg_map_entry_t);
-  if (payload_len > UINT32_MAX) {
-    memdbg_process_maps_free(&maps);
-    return MEMDBG_ERR_OVERFLOW;
-  }
+  if (payload_len > UINT32_MAX) { memdbg_process_maps_free(&maps); return MEMDBG_ERR_OVERFLOW; }
 
   unsigned char *payload = (unsigned char *)malloc(payload_len);
-  if (payload == NULL) {
-    memdbg_process_maps_free(&maps);
-    return MEMDBG_ERR_NOMEM;
-  }
+  if (payload == NULL) { memdbg_process_maps_free(&maps); return MEMDBG_ERR_NOMEM; }
 
   uint32_t count = (uint32_t)maps.count;
   memcpy(payload, &count, sizeof(count));
-  if (maps.count != 0U) {
-    memcpy(payload + sizeof(count), maps.entries,
-           maps.count * sizeof(memdbg_map_entry_t));
-  }
+  if (maps.count != 0U)
+    memcpy(payload + sizeof(count), maps.entries, maps.count * sizeof(memdbg_map_entry_t));
 
   int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
   free(payload);
@@ -227,233 +197,402 @@ static memdbg_status_t handle_process_maps(socket_t fd,
   return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
-static memdbg_status_t handle_process_info(socket_t fd,
-                                           const memdbg_packet_header_t *req,
-                                           const void *body,
-                                           uint32_t body_len) {
-  if (body_len != sizeof(memdbg_process_info_request_t)) {
-    return MEMDBG_ERR_PROTOCOL;
-  }
+/* ---- PROCESS_INFO ---- */
 
-  const memdbg_process_info_request_t *info_req =
-      (const memdbg_process_info_request_t *)body;
+static memdbg_status_t handle_process_info(socket_t fd, const memdbg_packet_header_t *req,
+                                           const void *body, uint32_t body_len) {
+  if (body_len != sizeof(memdbg_process_info_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_process_info_request_t *info_req = (const memdbg_process_info_request_t *)body;
   memdbg_process_info_response_t info;
   memdbg_status_t status = memdbg_process_info(info_req->pid, &info);
-  if (status != MEMDBG_OK) {
-    return status;
-  }
-
-  return send_response(fd, req, MEMDBG_OK, &info, sizeof(info)) == 0
-             ? MEMDBG_OK
-             : MEMDBG_ERR_NET;
+  if (status != MEMDBG_OK) return status;
+  return send_response(fd, req, MEMDBG_OK, &info, sizeof(info)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
-static memdbg_status_t handle_memory_read(socket_t fd,
-                                          const memdbg_packet_header_t *req,
-                                          const memdbg_config_t *cfg,
-                                          const void *body,
-                                          uint32_t body_len) {
-  if (body_len != sizeof(memdbg_memory_request_t)) {
-    return MEMDBG_ERR_PROTOCOL;
-  }
+/* ---- MEMORY_READ / MEMORY_WRITE ---- */
 
-  const memdbg_memory_request_t *read_req =
-      (const memdbg_memory_request_t *)body;
-  if (read_req->length > cfg->max_read_bytes) {
-    return MEMDBG_ERR_OVERFLOW;
-  }
+static memdbg_status_t handle_memory_read(socket_t fd, const memdbg_packet_header_t *req,
+                                          const memdbg_config_t *cfg, const void *body,
+                                          uint32_t body_len) {
+  if (body_len != sizeof(memdbg_memory_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_memory_request_t *read_req = (const memdbg_memory_request_t *)body;
+  if (read_req->length > cfg->max_read_bytes) return MEMDBG_ERR_OVERFLOW;
 
   unsigned char *buffer = (unsigned char *)malloc(read_req->length);
-  if (buffer == NULL && read_req->length != 0U) {
-    return MEMDBG_ERR_NOMEM;
-  }
+  if (buffer == NULL && read_req->length != 0U) return MEMDBG_ERR_NOMEM;
 
   size_t read_len = 0U;
-  memdbg_status_t status =
-      memdbg_memory_read(read_req->pid, read_req->address, buffer,
-                         read_req->length, &read_len);
+  memdbg_status_t status = memdbg_memory_read(read_req->pid, read_req->address,
+      buffer, read_req->length, &read_len);
   if (status == MEMDBG_OK) {
-    if (send_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0) {
+    if (send_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0)
       status = MEMDBG_ERR_NET;
-    }
   }
   free(buffer);
   return status;
 }
 
-static memdbg_status_t handle_memory_write(socket_t fd,
-                                           const memdbg_packet_header_t *req,
-                                           const memdbg_config_t *cfg,
-                                           const void *body,
+static memdbg_status_t handle_memory_write(socket_t fd, const memdbg_packet_header_t *req,
+                                           const memdbg_config_t *cfg, const void *body,
                                            uint32_t body_len) {
-  if (body_len < sizeof(memdbg_memory_request_t)) {
-    return MEMDBG_ERR_PROTOCOL;
-  }
-
-  const memdbg_memory_request_t *write_req =
-      (const memdbg_memory_request_t *)body;
+  if (body_len < sizeof(memdbg_memory_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_memory_request_t *write_req = (const memdbg_memory_request_t *)body;
   if (write_req->length > cfg->max_read_bytes ||
-      body_len != sizeof(*write_req) + write_req->length) {
+      body_len != sizeof(*write_req) + write_req->length)
     return MEMDBG_ERR_PROTOCOL;
-  }
 
-  const unsigned char *data =
-      (const unsigned char *)body + sizeof(memdbg_memory_request_t);
+  const unsigned char *data = (const unsigned char *)body + sizeof(memdbg_memory_request_t);
   size_t written = 0U;
-  memdbg_status_t status =
-      memdbg_memory_write(write_req->pid, write_req->address, data,
-                          write_req->length, &written);
-  if (status != MEMDBG_OK) {
-    return status;
-  }
+  memdbg_status_t status = memdbg_memory_write(write_req->pid, write_req->address,
+      data, write_req->length, &written);
+  if (status != MEMDBG_OK) return status;
 
   uint32_t written32 = (uint32_t)written;
-  return send_response(fd, req, MEMDBG_OK, &written32, sizeof(written32)) == 0
-             ? MEMDBG_OK
-             : MEMDBG_ERR_NET;
+  return send_response(fd, req, MEMDBG_OK, &written32, sizeof(written32)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
-static memdbg_status_t send_scan_result(socket_t fd,
-                                        const memdbg_packet_header_t *req,
+/* ---- BATCH_READ ---- */
+
+static memdbg_status_t handle_batch_read(socket_t fd, const memdbg_packet_header_t *req,
+                                         const memdbg_config_t *cfg, const void *body,
+                                         uint32_t body_len) {
+  if (body_len < sizeof(memdbg_batch_read_request_t)) return MEMDBG_ERR_PROTOCOL;
+
+  const memdbg_batch_read_request_t *batch_req = (const memdbg_batch_read_request_t *)body;
+  uint32_t count = batch_req->count;
+  if (count == 0U || count > MEMDBG_BATCH_READ_MAX_ITEMS) return MEMDBG_ERR_PARAM;
+
+  size_t items_size = count * sizeof(memdbg_batch_read_item_t);
+  size_t results_size = count * sizeof(memdbg_batch_read_result_entry_t);
+  if (body_len < sizeof(*batch_req) + items_size) return MEMDBG_ERR_PROTOCOL;
+
+  const memdbg_batch_read_item_t *items =
+      (const memdbg_batch_read_item_t *)((const uint8_t *)body + sizeof(*batch_req));
+
+  /* Calculate total data needed. */
+  uint64_t total_data = 0U;
+  for (uint32_t i = 0U; i < count; ++i)
+    total_data += items[i].length;
+
+  if (total_data > cfg->max_read_bytes * 2U) return MEMDBG_ERR_OVERFLOW;
+
+  size_t payload_len = results_size + (size_t)total_data;
+  unsigned char *payload = (unsigned char *)malloc(payload_len);
+  if (payload == NULL) return MEMDBG_ERR_NOMEM;
+
+  memdbg_batch_read_result_entry_t *results =
+      (memdbg_batch_read_result_entry_t *)payload;
+  uint8_t *data_out = payload + results_size;
+  uint32_t data_used = 0U;
+
+  memdbg_status_t status = memdbg_memory_batch_read(batch_req->pid, items, count,
+      results, data_out, (uint32_t)total_data, &data_used);
+
+  int rc = send_response(fd, req, status, payload, results_size + data_used);
+  free(payload);
+  return rc == 0 ? (status == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : status) : MEMDBG_ERR_NET;
+}
+
+/* ---- BATCH_WRITE ---- */
+
+static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_header_t *req,
+                                          const memdbg_config_t *cfg, const void *body,
+                                          uint32_t body_len) {
+  if (body_len < sizeof(memdbg_batch_write_request_t)) return MEMDBG_ERR_PROTOCOL;
+
+  const memdbg_batch_write_request_t *batch_req = (const memdbg_batch_write_request_t *)body;
+  uint32_t count = batch_req->count;
+  if (count == 0U || count > MEMDBG_BATCH_WRITE_MAX_ITEMS) return MEMDBG_ERR_PARAM;
+
+  size_t results_size = count * sizeof(memdbg_batch_write_result_entry_t);
+
+  /* Allocate results buffer */
+  unsigned char *results_buf = (unsigned char *)malloc(results_size);
+  if (results_buf == NULL) return MEMDBG_ERR_NOMEM;
+
+  memdbg_batch_write_result_entry_t *results =
+      (memdbg_batch_write_result_entry_t *)results_buf;
+
+  const uint8_t *cursor = (const uint8_t *)body + sizeof(*batch_req);
+  const uint8_t *end    = (const uint8_t *)body + body_len;
+  memdbg_status_t overall = MEMDBG_OK;
+
+  for (uint32_t i = 0U; i < count; ++i) {
+    results[i].address = 0U;
+    results[i].written = 0U;
+    results[i].status  = (uint32_t)MEMDBG_ERR_IO;
+
+    if ((size_t)(end - cursor) < sizeof(memdbg_batch_write_item_t)) {
+      results[i].status = (uint32_t)MEMDBG_ERR_PROTOCOL;
+      overall = MEMDBG_ERR_PROTOCOL;
+      break;
+    }
+
+    const memdbg_batch_write_item_t *item = (const memdbg_batch_write_item_t *)cursor;
+    cursor += sizeof(*item);
+
+    results[i].address = item->address;
+    uint32_t dlen = item->length;
+
+    if (dlen == 0U) {
+      results[i].status  = (uint32_t)MEMDBG_OK;
+      results[i].written = 0U;
+      continue;
+    }
+
+    if ((size_t)(end - cursor) < dlen) {
+      results[i].status = (uint32_t)MEMDBG_ERR_PROTOCOL;
+      overall = MEMDBG_ERR_PROTOCOL;
+      break;
+    }
+
+    if (dlen > cfg->max_read_bytes) {
+      results[i].status = (uint32_t)MEMDBG_ERR_OVERFLOW;
+      overall = MEMDBG_ERR_OVERFLOW;
+      cursor += dlen;
+      continue;
+    }
+
+    size_t written = 0U;
+    memdbg_status_t st = memdbg_memory_write(batch_req->pid, item->address,
+        cursor, dlen, &written);
+    results[i].status  = (uint32_t)st;
+    results[i].written = (uint32_t)written;
+    if (st != MEMDBG_OK && overall == MEMDBG_OK)
+      overall = st;
+
+    cursor += dlen;
+  }
+
+  int rc = send_response(fd, req, overall, results_buf, (uint32_t)results_size);
+  free(results_buf);
+  return rc == 0 ? (overall == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : overall) : MEMDBG_ERR_NET;
+}
+
+/* ---- Scan result sender ---- */
+
+static memdbg_status_t send_scan_result(socket_t fd, const memdbg_packet_header_t *req,
                                         memdbg_scan_result_t *result) {
   size_t payload_len = sizeof(memdbg_scan_response_prefix_t) +
                        result->count * sizeof(memdbg_scan_result_entry_t);
-  if (payload_len > UINT32_MAX) {
-    return MEMDBG_ERR_OVERFLOW;
-  }
+  if (payload_len > UINT32_MAX) return MEMDBG_ERR_OVERFLOW;
 
   unsigned char *payload = (unsigned char *)malloc(payload_len);
-  if (payload == NULL) {
-    return MEMDBG_ERR_NOMEM;
-  }
+  if (payload == NULL) return MEMDBG_ERR_NOMEM;
 
   memdbg_scan_response_prefix_t prefix;
   memset(&prefix, 0, sizeof(prefix));
-  prefix.count = (uint32_t)result->count;
-  prefix.truncated = result->truncated ? 1U : 0U;
-  prefix.bytes_scanned = result->bytes_scanned;
-  prefix.elapsed_ns = result->elapsed_ns;
-  prefix.read_calls = result->read_calls;
+  prefix.count           = (uint32_t)result->count;
+  prefix.truncated       = result->truncated ? 1U : 0U;
+  prefix.bytes_scanned   = result->bytes_scanned;
+  prefix.elapsed_ns      = result->elapsed_ns;
+  prefix.read_calls      = result->read_calls;
   prefix.regions_scanned = result->regions_scanned;
-  prefix.read_errors = result->read_errors;
+  prefix.read_errors     = result->read_errors;
 
   memcpy(payload, &prefix, sizeof(prefix));
-  if (result->count != 0U) {
+  if (result->count != 0U)
     memcpy(payload + sizeof(prefix), result->entries,
            result->count * sizeof(memdbg_scan_result_entry_t));
-  }
 
   int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
   free(payload);
   return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
-static memdbg_status_t handle_scan_exact_v2(socket_t fd,
-                                            const memdbg_packet_header_t *req,
-                                            const memdbg_config_t *cfg,
-                                            const void *body,
-                                            uint32_t body_len) {
-  if (body_len != sizeof(memdbg_scan_exact_request_t)) {
-    return MEMDBG_ERR_PROTOCOL;
-  }
+/* ---- Scan handlers ---- */
 
+static memdbg_status_t handle_scan_exact_v2(socket_t fd, const memdbg_packet_header_t *req,
+                                            const memdbg_config_t *cfg, const void *body,
+                                            uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_exact_request_t)) return MEMDBG_ERR_PROTOCOL;
   memdbg_scan_exact_request_t scan_req;
   memcpy(&scan_req, body, sizeof(scan_req));
-  if (scan_req.max_results == 0U ||
-      scan_req.max_results > cfg->max_scan_results) {
+  if (scan_req.max_results == 0U || scan_req.max_results > cfg->max_scan_results)
     scan_req.max_results = cfg->max_scan_results;
-  }
-
   memdbg_scan_result_t result;
   memdbg_status_t status = memdbg_scan_exact(&scan_req, &result);
-  if (status == MEMDBG_OK) {
-    status = send_scan_result(fd, req, &result);
-  }
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
   memdbg_scan_result_free(&result);
   return status;
 }
 
-static memdbg_status_t
-handle_scan_process_exact(socket_t fd, const memdbg_packet_header_t *req,
-                          const memdbg_config_t *cfg, const void *body,
-                          uint32_t body_len) {
-  if (body_len != sizeof(memdbg_scan_process_exact_request_t)) {
-    return MEMDBG_ERR_PROTOCOL;
-  }
-
+static memdbg_status_t handle_scan_process_exact(socket_t fd, const memdbg_packet_header_t *req,
+                                                 const memdbg_config_t *cfg, const void *body,
+                                                 uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_process_exact_request_t)) return MEMDBG_ERR_PROTOCOL;
   memdbg_scan_process_exact_request_t scan_req;
   memcpy(&scan_req, body, sizeof(scan_req));
-  if (scan_req.max_results == 0U ||
-      scan_req.max_results > cfg->max_scan_results) {
+  if (scan_req.max_results == 0U || scan_req.max_results > cfg->max_scan_results)
     scan_req.max_results = cfg->max_scan_results;
-  }
-
   memdbg_scan_result_t result;
   memdbg_status_t status = memdbg_scan_process_exact(&scan_req, &result);
-  if (status == MEMDBG_OK) {
-    status = send_scan_result(fd, req, &result);
-  }
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
   memdbg_scan_result_free(&result);
   return status;
 }
 
+static memdbg_status_t handle_scan_aob(socket_t fd, const memdbg_packet_header_t *req,
+                                       const memdbg_config_t *cfg, const void *body,
+                                       uint32_t body_len) {
+  if (body_len < sizeof(memdbg_scan_aob_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_scan_aob_request_t *aob_req = (const memdbg_scan_aob_request_t *)body;
+  uint32_t pat_len = aob_req->pattern_length;
+  if (pat_len == 0U || pat_len > 256U) return MEMDBG_ERR_PARAM;
+  uint32_t expected = sizeof(*aob_req) + pat_len + pat_len;
+  if (body_len < expected) return MEMDBG_ERR_PROTOCOL;
+  const uint8_t *pattern = (const uint8_t *)body + sizeof(*aob_req);
+  const uint8_t *mask    = pattern + pat_len;
+  memdbg_scan_aob_request_t req_copy = *aob_req;
+  if (req_copy.max_results == 0U || req_copy.max_results > cfg->max_scan_results)
+    req_copy.max_results = cfg->max_scan_results;
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_aob(&req_copy, pattern, mask, &result);
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
+  memdbg_scan_result_free(&result);
+  return status;
+}
+
+static memdbg_status_t handle_scan_unknown(socket_t fd, const memdbg_packet_header_t *req,
+                                           const memdbg_config_t *cfg, const void *body,
+                                           uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_process_exact_request_t)) return MEMDBG_ERR_PROTOCOL;
+  memdbg_scan_process_exact_request_t scan_req;
+  memcpy(&scan_req, body, sizeof(scan_req));
+  if (scan_req.max_results == 0U || scan_req.max_results > cfg->max_scan_results)
+    scan_req.max_results = cfg->max_scan_results;
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_unknown(&scan_req, &result);
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
+  memdbg_scan_result_free(&result);
+  return status;
+}
+
+static memdbg_status_t handle_scan_pointer(socket_t fd, const memdbg_packet_header_t *req,
+                                           const memdbg_config_t *cfg, const void *body,
+                                           uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_pointer_request_t)) return MEMDBG_ERR_PROTOCOL;
+  memdbg_scan_pointer_request_t scan_req;
+  memcpy(&scan_req, body, sizeof(scan_req));
+  if (scan_req.max_results == 0U || scan_req.max_results > cfg->max_scan_results)
+    scan_req.max_results = cfg->max_scan_results;
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_pointer(&scan_req, &result);
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
+  memdbg_scan_result_free(&result);
+  return status;
+}
+
+/* ---- FOREGROUND_APP ---- */
+
+static memdbg_status_t handle_foreground_app(socket_t fd, const memdbg_packet_header_t *req,
+                                             const void *body, uint32_t body_len) {
+  (void)body; (void)body_len;
+  memdbg_foreground_app_response_t app;
+  memset(&app, 0, sizeof(app));
+  memdbg_process_list_t list;
+  memdbg_status_t status = memdbg_process_list(&list);
+  if (status != MEMDBG_OK) return status;
+  for (size_t i = 0U; i < list.count; ++i) {
+    if (list.entries[i].pid > 0) {
+      app.pid = list.entries[i].pid;
+      memdbg_process_info_response_t info;
+      if (memdbg_process_info(list.entries[i].pid, &info) == MEMDBG_OK) {
+        memcpy(app.title_id, info.title_id, sizeof(app.title_id));
+        memcpy(app.content_id, info.content_id, sizeof(app.content_id));
+        memcpy(app.name, info.name, sizeof(app.name));
+      }
+      break;
+    }
+  }
+  memdbg_process_list_free(&list);
+  return send_response(fd, req, MEMDBG_OK, &app, sizeof(app)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+/* ---- PROCESS_STOP / PROCESS_CONTINUE ---- */
+
+static memdbg_status_t handle_process_control(socket_t fd, const memdbg_packet_header_t *req,
+                                              const void *body, uint32_t body_len,
+                                              uint32_t expected_action) {
+  if (body_len != sizeof(memdbg_process_control_request_t)) return MEMDBG_ERR_PROTOCOL;
+  const memdbg_process_control_request_t *ctrl = (const memdbg_process_control_request_t *)body;
+  if (ctrl->action != expected_action) return MEMDBG_ERR_PARAM;
+  int sig = (expected_action == 1U) ? 17 : 19;
+  if (kill((pid_t)ctrl->pid, sig) != 0)
+    return errno == EPERM ? MEMDBG_ERR_PERMISSION : MEMDBG_ERR_NOT_FOUND;
+  return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+/* ---- TELEMETRY ---- */
+
+static memdbg_status_t handle_telemetry(socket_t fd, const memdbg_packet_header_t *req) {
+  memdbg_telemetry_response_t telemetry;
+  memset(&telemetry, 0, sizeof(telemetry));
+
+  memdbg_memory_telemetry(&telemetry);
+
+  time_t now = time(NULL);
+  telemetry.uptime_seconds     = (uint64_t)(now - g_start_time);
+  telemetry.active_connections = atomic_load_explicit(&g_active_connections, memory_order_relaxed);
+  telemetry.thread_pool_size   = MEMDBG_THREAD_POOL_SIZE;
+
+  uint32_t hits = 0U, misses = 0U;
+  memdbg_process_cache_stats(&hits, &misses);
+  telemetry.scan_cache_hits   = hits;
+  telemetry.scan_cache_misses = misses;
+
+  return send_response(fd, req, MEMDBG_OK, &telemetry, sizeof(telemetry)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+/* ---- Dispatch ---- */
+
 static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
-                                       const memdbg_packet_header_t *req,
-                                       const void *body) {
+                                       const memdbg_packet_header_t *req, const void *body) {
   switch ((memdbg_command_t)req->command) {
   case MEMDBG_CMD_HELLO: {
     memdbg_hello_response_t hello;
     memdbg_status_t status = handle_hello(cfg, &hello);
-    if (status != MEMDBG_OK) {
-      return status;
-    }
-    return send_response(fd, req, MEMDBG_OK, &hello, sizeof(hello)) == 0
-               ? MEMDBG_OK
-               : MEMDBG_ERR_NET;
+    if (status != MEMDBG_OK) return status;
+    return send_response(fd, req, MEMDBG_OK, &hello, sizeof(hello)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
   case MEMDBG_CMD_PING:
-    return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK
-                                                            : MEMDBG_ERR_NET;
-  case MEMDBG_CMD_PROCESS_LIST:
-    return handle_process_list(fd, req);
-  case MEMDBG_CMD_PROCESS_MAPS:
-    return handle_process_maps(fd, req, body, req->length);
-  case MEMDBG_CMD_PROCESS_INFO:
-    return handle_process_info(fd, req, body, req->length);
-  case MEMDBG_CMD_MEMORY_READ:
-    return handle_memory_read(fd, req, cfg, body, req->length);
-  case MEMDBG_CMD_MEMORY_WRITE:
-    return handle_memory_write(fd, req, cfg, body, req->length);
-  case MEMDBG_CMD_SCAN_EXACT:
-    return handle_scan_exact_v2(fd, req, cfg, body, req->length);
-  case MEMDBG_CMD_SCAN_PROCESS_EXACT:
-    return handle_scan_process_exact(fd, req, cfg, body, req->length);
+    return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  case MEMDBG_CMD_PROCESS_LIST:       return handle_process_list(fd, req);
+  case MEMDBG_CMD_PROCESS_MAPS:       return handle_process_maps(fd, req, body, req->length);
+  case MEMDBG_CMD_PROCESS_INFO:       return handle_process_info(fd, req, body, req->length);
+  case MEMDBG_CMD_MEMORY_READ:        return handle_memory_read(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_MEMORY_WRITE:       return handle_memory_write(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_BATCH_READ:         return handle_batch_read(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_BATCH_WRITE:        return handle_batch_write(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_EXACT:         return handle_scan_exact_v2(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_PROCESS_EXACT: return handle_scan_process_exact(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_AOB:           return handle_scan_aob(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_POINTER:       return handle_scan_pointer(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_UNKNOWN:       return handle_scan_unknown(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_FOREGROUND_APP:     return handle_foreground_app(fd, req, body, req->length);
+  case MEMDBG_CMD_PROCESS_STOP:       return handle_process_control(fd, req, body, req->length, 1U);
+  case MEMDBG_CMD_PROCESS_CONTINUE:   return handle_process_control(fd, req, body, req->length, 2U);
+  case MEMDBG_CMD_TELEMETRY:          return handle_telemetry(fd, req);
   case MEMDBG_CMD_SHUTDOWN:
     memdbg_daemon_request_stop();
-    return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK
-                                                            : MEMDBG_ERR_NET;
+    return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   default:
     return MEMDBG_ERR_PROTOCOL;
   }
 }
 
-static void *client_thread(void *arg) {
-  client_ctx_t *ctx = (client_ctx_t *)arg;
-  socket_t fd = ctx->fd;
-  memdbg_config_t cfg = ctx->cfg;
-  free(ctx);
+/* ---- Single client handler (runs in thread pool worker) ---- */
 
+static void handle_client(socket_t fd, const memdbg_config_t *cfg) {
+  atomic_fetch_add_explicit(&g_active_connections, 1U, memory_order_relaxed);
   (void)pal_socket_configure(fd);
 
   while (!memdbg_daemon_should_stop()) {
     memdbg_packet_header_t req;
-    if (pal_socket_read_exact(fd, &req, sizeof(req)) < 0) {
-      break;
-    }
+    if (pal_socket_read_exact(fd, &req, sizeof(req)) < 0) break;
 
-    if (req.magic != MEMDBG_PACKET_MAGIC ||
-        req.version != MEMDBG_PROTOCOL_VERSION ||
-        req.length > cfg.max_packet_bytes) {
+    if (req.magic != MEMDBG_PACKET_MAGIC || req.version != MEMDBG_PROTOCOL_VERSION ||
+        req.length > cfg->max_packet_bytes) {
       (void)send_response(fd, &req, MEMDBG_ERR_PROTOCOL, NULL, 0U);
       break;
     }
@@ -465,22 +604,50 @@ static void *client_thread(void *arg) {
         (void)send_response(fd, &req, MEMDBG_ERR_NOMEM, NULL, 0U);
         break;
       }
-      if (pal_socket_read_exact(fd, body, req.length) < 0) {
-        free(body);
-        break;
-      }
+      if (pal_socket_read_exact(fd, body, req.length) < 0) { free(body); break; }
     }
 
-    memdbg_status_t status = dispatch_packet(fd, &cfg, &req, body);
+    memdbg_status_t status = dispatch_packet(fd, cfg, &req, body);
     free(body);
-    if (status != MEMDBG_OK) {
+    if (status != MEMDBG_OK)
       (void)send_response(fd, &req, status, NULL, 0U);
-    }
   }
 
   (void)pal_socket_close(fd);
+  atomic_fetch_sub_explicit(&g_active_connections, 1U, memory_order_relaxed);
+}
+
+/* ---- Thread pool worker (multi-accept pattern) ---- */
+
+typedef struct {
+  socket_t            listen_fd;
+  const memdbg_config_t *cfg;
+} worker_args_t;
+
+static void *worker_thread(void *arg) {
+  worker_args_t *args = (worker_args_t *)arg;
+  socket_t listen_fd  = args->listen_fd;
+  memdbg_config_t cfg = *args->cfg;
+
+  while (!memdbg_daemon_should_stop()) {
+    struct sockaddr_storage ss;
+    socklen_t slen = (socklen_t)sizeof(ss);
+    socket_t client_fd = accept(listen_fd, (struct sockaddr *)&ss, &slen);
+
+    if (client_fd < 0) {
+      if (errno == EINTR) continue;
+      if (memdbg_daemon_should_stop()) break;
+      memdbg_log_write(MEMDBG_LOG_WARN, "accept failed: %s", pal_socket_last_error());
+      continue;
+    }
+
+    handle_client(client_fd, &cfg);
+  }
+
   return NULL;
 }
+
+/* ---- Signal handlers ---- */
 
 static void signal_handler(int signum) {
   (void)signum;
@@ -492,7 +659,7 @@ static void install_signal_handlers(void) {
   memset(&sa, 0, sizeof(sa));
   sa.sa_handler = signal_handler;
   (void)sigemptyset(&sa.sa_mask);
-  (void)sigaction(SIGINT, &sa, NULL);
+  (void)sigaction(SIGINT,  &sa, NULL);
   (void)sigaction(SIGTERM, &sa, NULL);
 #ifdef SIGHUP
   (void)sigaction(SIGHUP, &sa, NULL);
@@ -503,21 +670,19 @@ static void install_signal_handlers(void) {
 #endif
 }
 
+/* ---- Daemon entry point ---- */
+
 int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   memdbg_config_t cfg;
   socket_t listen_fd = PAL_INVALID_SOCKET;
 
-  if (cfg_in == NULL) {
-    memdbg_config_defaults(&cfg);
-  } else {
-    cfg = *cfg_in;
-  }
+  if (cfg_in == NULL) memdbg_config_defaults(&cfg);
+  else                cfg = *cfg_in;
 
   atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
+  g_start_time = time(NULL);
 
-  if (pal_network_init() != 0) {
-    return MEMDBG_ERR_NET;
-  }
+  if (pal_network_init() != 0) return MEMDBG_ERR_NET;
 
   if (memdbg_log_init(cfg.data_root) != 0) {
     (void)pal_network_fini();
@@ -533,61 +698,46 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     ucfg.port = cfg.udp_log_port;
     ucfg.broadcast = strcmp(cfg.udp_log_host, "255.255.255.255") == 0;
     memdbg_status_t ustatus = memdbg_udp_log_start(&ucfg);
-    if (ustatus != MEMDBG_OK) {
-      memdbg_log_write(MEMDBG_LOG_WARN, "UDP log disabled: %s",
-                       memdbg_strerror(ustatus));
-    }
+    if (ustatus != MEMDBG_OK)
+      memdbg_log_write(MEMDBG_LOG_WARN, "UDP log disabled: %s", memdbg_strerror(ustatus));
   }
 
   memdbg_log_write(MEMDBG_LOG_INFO,
-                   "memDBG %s starting debug=%s:%u udp_log=%s:%u",
+                   "memDBG %s starting debug=%s:%u udp_log=%s:%u pool=%d",
                    MEMDBG_VERSION_STRING, cfg.bind_host, cfg.debug_port,
                    cfg.enable_udp_log ? cfg.udp_log_host : "off",
-                   cfg.enable_udp_log ? cfg.udp_log_port : 0U);
+                   cfg.enable_udp_log ? cfg.udp_log_port : 0U,
+                   MEMDBG_THREAD_POOL_SIZE);
 
   if (pal_tcp_listen(cfg.bind_host, cfg.debug_port, 16, &listen_fd) != 0) {
-    memdbg_log_write(MEMDBG_LOG_ERROR, "debug listener failed: %s",
-                     pal_socket_last_error());
+    memdbg_log_write(MEMDBG_LOG_ERROR, "debug listener failed: %s", pal_socket_last_error());
     memdbg_udp_log_stop();
     memdbg_log_close();
     pal_network_fini();
     return MEMDBG_ERR_NET;
   }
 
-  while (!memdbg_daemon_should_stop()) {
-    struct sockaddr_storage ss;
-    socklen_t slen = (socklen_t)sizeof(ss);
-    socket_t client_fd = accept(listen_fd, (struct sockaddr *)&ss, &slen);
-    if (client_fd < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      if (memdbg_daemon_should_stop()) {
-        break;
-      }
-      memdbg_log_write(MEMDBG_LOG_WARN, "accept failed: %s",
-                       pal_socket_last_error());
-      continue;
-    }
+  /* Pre-create thread pool workers. All block on accept() — kernel distributes. */
+  worker_args_t wargs;
+  wargs.listen_fd = listen_fd;
+  wargs.cfg       = &cfg;
 
-    client_ctx_t *ctx = (client_ctx_t *)calloc(1, sizeof(*ctx));
-    if (ctx == NULL) {
-      (void)pal_socket_close(client_fd);
-      continue;
+  pthread_t workers[MEMDBG_THREAD_POOL_SIZE];
+  for (int i = 0; i < MEMDBG_THREAD_POOL_SIZE; ++i) {
+    if (pthread_create(&workers[i], NULL, worker_thread, &wargs) != 0) {
+      memdbg_log_write(MEMDBG_LOG_ERROR, "failed to create worker thread %d", i);
+      memdbg_daemon_request_stop();
+      break;
     }
-    ctx->fd = client_fd;
-    ctx->cfg = cfg;
-
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, client_thread, ctx) != 0) {
-      free(ctx);
-      (void)pal_socket_close(client_fd);
-      continue;
-    }
-    (void)pthread_detach(thread);
   }
 
+  /* Wait for workers to exit (happens on shutdown). */
+  for (int i = 0; i < MEMDBG_THREAD_POOL_SIZE; ++i)
+    (void)pthread_join(workers[i], NULL);
+
   (void)pal_socket_close(listen_fd);
+  memdbg_process_maps_cache_flush(0);
+
   memdbg_log_write(MEMDBG_LOG_INFO, "memDBG stopped");
   memdbg_udp_log_stop();
   memdbg_log_close();

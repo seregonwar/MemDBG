@@ -28,11 +28,17 @@ HOST_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/host/%.o,$(SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps5 payload-ps5-lib deploy-ps5 frontend verify
+.PHONY: all clean host payload-ps5 payload-ps5-lib deploy-ps5 frontend verify test-aob-boundary
 
 all: host
 
 host: $(HOST_TARGET)
+
+test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o tests/test_aob_boundary.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $< -o $(BUILD_DIR)/test_aob_boundary
+	@echo "--- Running AOB boundary test ---"
+	$(BUILD_DIR)/test_aob_boundary
 
 ifeq ($(wildcard $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk),)
 payload-ps5 payload-ps5-lib deploy-ps5:

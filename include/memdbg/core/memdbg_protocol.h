@@ -29,6 +29,8 @@ extern "C" {
 #define MEMDBG_PROTOCOL_VERSION 1U
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
+#define MEMDBG_BATCH_READ_MAX_ITEMS 64U
+#define MEMDBG_BATCH_WRITE_MAX_ITEMS 64U
 #define MEMDBG_SCAN_VALUE_MAX 16U
 
 typedef enum memdbg_command {
@@ -41,6 +43,15 @@ typedef enum memdbg_command {
   MEMDBG_CMD_MEMORY_WRITE = 0x0201U,
   MEMDBG_CMD_SCAN_EXACT = 0x0300U,
   MEMDBG_CMD_SCAN_PROCESS_EXACT = 0x0301U,
+  MEMDBG_CMD_SCAN_AOB = 0x0302U,
+  MEMDBG_CMD_SCAN_POINTER = 0x0303U,
+  MEMDBG_CMD_SCAN_UNKNOWN = 0x0304U,
+  MEMDBG_CMD_FOREGROUND_APP = 0x0103U,
+  MEMDBG_CMD_PROCESS_STOP = 0x0104U,
+  MEMDBG_CMD_PROCESS_CONTINUE = 0x0105U,
+  MEMDBG_CMD_BATCH_READ = 0x0202U,
+  MEMDBG_CMD_BATCH_WRITE = 0x0203U,
+  MEMDBG_CMD_TELEMETRY = 0x0400U,
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
 
@@ -60,7 +71,15 @@ typedef enum memdbg_capability {
   MEMDBG_CAP_UDP_LOG = 1U << 5,
   MEMDBG_CAP_SCAN_PROCESS_EXACT = 1U << 6,
   MEMDBG_CAP_SCAN_TELEMETRY = 1U << 7,
-  MEMDBG_CAP_PROCESS_INFO = 1U << 8
+  MEMDBG_CAP_PROCESS_INFO = 1U << 8,
+  MEMDBG_CAP_SCAN_AOB = 1U << 9,
+  MEMDBG_CAP_SCAN_POINTER = 1U << 10,
+  MEMDBG_CAP_FOREGROUND_APP = 1U << 11,
+  MEMDBG_CAP_PROCESS_CONTROL = 1U << 12,
+  MEMDBG_CAP_BATCH_READ = 1U << 13,
+  MEMDBG_CAP_PERF_TELEMETRY = 1U << 14,
+  MEMDBG_CAP_SCAN_UNKNOWN = 1U << 15,
+  MEMDBG_CAP_BATCH_WRITE = 1U << 16
 } memdbg_capability_t;
 
 typedef enum memdbg_value_type {
@@ -173,6 +192,105 @@ typedef struct MEMDBG_PACKED memdbg_scan_response_prefix {
 typedef struct MEMDBG_PACKED memdbg_scan_result_entry {
   uint64_t address;
 } memdbg_scan_result_entry_t;
+
+typedef struct MEMDBG_PACKED memdbg_scan_aob_request {
+  int32_t pid;
+  uint64_t start;
+  uint64_t length;
+  uint32_t max_results;
+  uint32_t pattern_length;
+  uint8_t reserved[4];
+} memdbg_scan_aob_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_scan_aob_response_prefix {
+  uint32_t count;
+  uint32_t truncated;
+  uint64_t bytes_scanned;
+  uint64_t elapsed_ns;
+  uint32_t regions_scanned;
+  uint32_t reserved;
+} memdbg_scan_aob_response_prefix_t;
+
+typedef struct MEMDBG_PACKED memdbg_scan_pointer_request {
+  int32_t pid;
+  uint64_t start;
+  uint64_t length;
+  uint64_t target_address;
+  uint32_t max_depth;
+  uint32_t max_results;
+  uint32_t alignment;
+  uint32_t reserved;
+} memdbg_scan_pointer_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_pointer_chain_entry {
+  uint64_t base_address;
+  uint32_t depth;
+  uint32_t reserved;
+} memdbg_pointer_chain_entry_t;
+
+typedef struct MEMDBG_PACKED memdbg_foreground_app_response {
+  int32_t pid;
+  char title_id[16];
+  char content_id[64];
+  char name[48];
+  char app_ver[16];
+} memdbg_foreground_app_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_control_request {
+  int32_t pid;
+  uint32_t action;
+} memdbg_process_control_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_read_item {
+  uint64_t address;
+  uint32_t length;
+  uint32_t reserved;
+} memdbg_batch_read_item_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_read_request {
+  int32_t pid;
+  uint32_t count;
+  uint32_t reserved;
+} memdbg_batch_read_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_read_result_entry {
+  uint64_t address;
+  uint32_t length;
+  uint32_t status;
+} memdbg_batch_read_result_entry_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_write_item {
+  uint64_t address;
+  uint32_t length;
+  uint32_t reserved;
+  /* inline data of 'length' bytes follows in the request body */
+} memdbg_batch_write_item_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_write_request {
+  int32_t pid;
+  uint32_t count;
+  uint32_t reserved;
+  /* followed by 'count' memdbg_batch_write_item_t + inline data */
+} memdbg_batch_write_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_write_result_entry {
+  uint64_t address;
+  uint32_t written;
+  uint32_t status;
+} memdbg_batch_write_result_entry_t;
+
+typedef struct MEMDBG_PACKED memdbg_telemetry_response {
+  uint64_t total_bytes_read;
+  uint64_t total_bytes_written;
+  uint64_t total_read_calls;
+  uint64_t total_write_calls;
+  uint64_t uptime_seconds;
+  uint32_t active_connections;
+  uint32_t thread_pool_size;
+  uint32_t scan_cache_hits;
+  uint32_t scan_cache_misses;
+  uint32_t reserved;
+} memdbg_telemetry_response_t;
 
 #undef MEMDBG_PACKED
 

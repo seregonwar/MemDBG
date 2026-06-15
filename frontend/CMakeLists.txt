@@ -51,33 +51,71 @@ target_include_directories(imgui PUBLIC
 
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
+# ---- memdbg_frontend ----
+
 add_executable(memdbg_frontend
-  src/main.cpp
-  src/github_profile.cpp
-  src/memdbg_app.cpp
-  src/memdbg_client.cpp
-  src/udp_log_listener.cpp
+  # app (entry point, shell, shared state)
+  src/app/main.cpp
+  src/app/memdbg_app.cpp
+
+  # core (backend clients)
+  src/core/github_profile.cpp
+  src/core/memdbg_client.cpp
+  src/core/udp_log_listener.cpp
+
+  # ui (widgets, theme, fonts, icons)
+  src/ui/icon_font.cpp
+  src/ui/ui_widgets.cpp
+
+  # screens
+  src/screens/screen_home.cpp
+  src/screens/screen_consoles.cpp
+  src/screens/screen_processes.cpp
+  src/screens/screen_memory.cpp
+  src/screens/screen_scanner.cpp
+  src/screens/screen_pointer_scanner.cpp
+  src/screens/screen_aob_scanner.cpp
+  src/screens/screen_trainer.cpp
+  src/screens/screen_logs.cpp
+  src/screens/screen_telemetry.cpp
+  src/screens/screen_settings.cpp
+  src/screens/screen_credits.cpp
+
+  # trainer
+  src/trainer/trainer_format.cpp
 )
 
 target_include_directories(memdbg_frontend PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
   ${stb_SOURCE_DIR}
 )
 
 target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
 
+# ---- memdbg_probe (standalone protocol tester) ----
+
 add_executable(memdbg_probe
-  src/protocol_probe.cpp
-  src/memdbg_client.cpp
+  src/proto/protocol_probe.cpp
+  src/core/memdbg_client.cpp
 )
 
 target_include_directories(memdbg_probe PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
 )
 
 target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
+
+# ---- platform specific ----
 
 if(APPLE)
   target_compile_definitions(memdbg_frontend PRIVATE GL_SILENCE_DEPRECATION)

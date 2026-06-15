@@ -60,3 +60,4 @@ dkms.conf
 /external/ps5-payload-sdk
 .DS_Store
 /reference
+/make_all.sh

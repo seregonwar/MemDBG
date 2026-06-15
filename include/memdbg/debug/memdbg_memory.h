@@ -14,6 +14,7 @@
 #define MEMDBG_DEBUG_MEMORY_H
 
 #include "memdbg/core/memdbg.h"
+#include "memdbg/core/memdbg_protocol.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -26,6 +27,17 @@ memdbg_status_t memdbg_memory_read(int pid, uint64_t address, void *buffer,
 memdbg_status_t memdbg_memory_write(int pid, uint64_t address,
                                     const void *buffer, size_t length,
                                     size_t *written_out);
+
+/* Batch read: up to 64 addresses in one request. Uses the PAL memory
+   batch API for platform-optimal batching (single fd on Linux, per-call
+   on FreeBSD). Results include per-address status. */
+memdbg_status_t memdbg_memory_batch_read(
+    int pid, const memdbg_batch_read_item_t *items, uint32_t count,
+    memdbg_batch_read_result_entry_t *results, uint8_t *data_out,
+    uint32_t data_capacity, uint32_t *data_used);
+
+/* Populate telemetry counters (bytes read/written, call counts). */
+void memdbg_memory_telemetry(memdbg_telemetry_response_t *out);
 
 #ifdef __cplusplus
 }
