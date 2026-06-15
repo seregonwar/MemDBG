@@ -47,6 +47,8 @@ int pal_socket_set_nonblocking(socket_t fd, bool enabled);
 int pal_socket_set_timeouts(socket_t fd, uint32_t recv_ms, uint32_t send_ms);
 int pal_tcp_listen(const char *bind_host, uint16_t port, int backlog,
                    socket_t *out_fd);
+int pal_tcp_connect(const char *host, uint16_t port, uint32_t timeout_ms,
+                    socket_t *out_fd);
 ssize_t pal_socket_read_exact(socket_t fd, void *buffer, size_t count);
 ssize_t pal_socket_write_all(socket_t fd, const void *buffer, size_t count);
 const char *pal_socket_last_error(void);

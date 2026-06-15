@@ -58,6 +58,7 @@ typedef struct memdbg_config {
   uint16_t udp_log_port;
   uint16_t discovery_port;
   bool enable_udp_log;
+  bool replace_existing;
   uint32_t max_packet_bytes;
   uint32_t max_read_bytes;
   uint32_t max_scan_results;

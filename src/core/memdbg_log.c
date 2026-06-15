@@ -73,22 +73,22 @@ static int open_log_sink(const char *root, char *path_out, size_t path_size,
 }
 
 int memdbg_log_init(const char *data_root) {
-  const char *mirror_root = data_root;
-  bool data_ok;
-  bool mirror_ok = false;
+  const char *effective_root = (data_root != NULL && data_root[0] != '\0')
+                                   ? data_root
+                                   : MEMDBG_DEFAULT_DATA_ROOT;
 
   memdbg_log_close();
 
-  data_ok = open_log_sink(MEMDBG_DEFAULT_DATA_ROOT, g_data_log_path,
-                          sizeof(g_data_log_path), &g_data_log_file) == 0;
+  bool data_ok = open_log_sink(effective_root, g_data_log_path,
+                               sizeof(g_data_log_path),
+                               &g_data_log_file) == 0;
 
-  if (mirror_root == NULL || mirror_root[0] == '\0') {
-    mirror_root = MEMDBG_DEFAULT_DATA_ROOT;
-  }
-
-  if (strcmp(mirror_root, MEMDBG_DEFAULT_DATA_ROOT) != 0) {
-    mirror_ok = open_log_sink(mirror_root, g_mirror_log_path,
-                              sizeof(g_mirror_log_path),
+  /* Mirror only opens when explicitly requested with a different root. */
+  bool mirror_ok = false;
+  if (data_root != NULL && data_root[0] != '\0' &&
+      strcmp(data_root, MEMDBG_DEFAULT_DATA_ROOT) != 0) {
+    mirror_ok = open_log_sink(MEMDBG_DEFAULT_DATA_ROOT,
+                              g_mirror_log_path, sizeof(g_mirror_log_path),
                               &g_mirror_log_file) == 0;
   }
 

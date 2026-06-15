@@ -16,12 +16,12 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #if defined(__linux__)
 #include <sys/sendfile.h>
 #elif defined(__FreeBSD__)
-#include <sys/socket.h>
 #include <sys/uio.h>
 #endif
 
@@ -194,7 +194,12 @@ static ssize_t pal_sendfile_buffered(int sock_fd, int file_fd, off_t *offset,
 
     size_t written = 0U;
     while (written < (size_t)nr) {
-      ssize_t nw = write(sock_fd, buffer + written, (size_t)nr - written);
+#ifdef MSG_NOSIGNAL
+      ssize_t nw = send(sock_fd, buffer + written, (size_t)nr - written,
+                        MSG_NOSIGNAL);
+#else
+      ssize_t nw = send(sock_fd, buffer + written, (size_t)nr - written, 0);
+#endif
       if (nw < 0) {
         if (errno == EINTR) {
           continue;

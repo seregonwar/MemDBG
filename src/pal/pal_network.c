@@ -19,6 +19,7 @@
 #include <netinet/tcp.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -105,9 +106,6 @@ int pal_tcp_listen(const char *bind_host, uint16_t port, int backlog,
   }
 
   (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-#ifdef SO_REUSEPORT
-  (void)setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
-#endif
 
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
@@ -133,6 +131,101 @@ int pal_tcp_listen(const char *bind_host, uint16_t port, int backlog,
     errno = saved;
     return -1;
   }
+  if (pal_socket_set_nonblocking(fd, true) != 0) {
+    int saved = errno;
+    (void)pal_socket_close(fd);
+    errno = saved;
+    return -1;
+  }
+
+  *out_fd = fd;
+  return 0;
+}
+
+int pal_tcp_connect(const char *host, uint16_t port, uint32_t timeout_ms,
+                    socket_t *out_fd) {
+  socket_t fd;
+  struct sockaddr_in addr;
+  int rc;
+  int saved;
+
+  if (out_fd == NULL || host == NULL || host[0] == '\0' || port == 0U) {
+    errno = EINVAL;
+    return -1;
+  }
+  *out_fd = PAL_INVALID_SOCKET;
+
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return -1;
+  }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+    (void)pal_socket_close(fd);
+    errno = EINVAL;
+    return -1;
+  }
+
+  if (timeout_ms == 0U) {
+    timeout_ms = 3000U;
+  }
+
+  if (pal_socket_set_nonblocking(fd, true) != 0) {
+    saved = errno;
+    (void)pal_socket_close(fd);
+    errno = saved;
+    return -1;
+  }
+
+  rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  if (rc != 0 && errno == EINPROGRESS) {
+    fd_set wfds;
+    struct timeval tv;
+
+    FD_ZERO(&wfds);
+    FD_SET(fd, &wfds);
+    tv.tv_sec = (time_t)(timeout_ms / 1000U);
+    tv.tv_usec = (suseconds_t)((timeout_ms % 1000U) * 1000U);
+
+    do {
+      rc = select(fd + 1, NULL, &wfds, NULL, &tv);
+    } while (rc < 0 && errno == EINTR);
+
+    if (rc > 0) {
+      int err = 0;
+      socklen_t err_len = (socklen_t)sizeof(err);
+      if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &err_len) != 0) {
+        rc = -1;
+      } else if (err != 0) {
+        errno = err;
+        rc = -1;
+      } else {
+        rc = 0;
+      }
+    } else if (rc == 0) {
+      errno = ETIMEDOUT;
+      rc = -1;
+    }
+  }
+
+  if (rc != 0) {
+    saved = errno;
+    (void)pal_socket_close(fd);
+    errno = saved;
+    return -1;
+  }
+
+  if (pal_socket_set_nonblocking(fd, false) != 0) {
+    saved = errno;
+    (void)pal_socket_close(fd);
+    errno = saved;
+    return -1;
+  }
+  (void)pal_socket_configure(fd);
+  (void)pal_socket_set_timeouts(fd, timeout_ms, timeout_ms);
 
   *out_fd = fd;
   return 0;

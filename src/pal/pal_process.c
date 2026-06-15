@@ -154,7 +154,7 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
 }
 
 memdbg_status_t pal_process_path(int pid, char *out, size_t out_size) {
-  (void)pid; out[0] = '\0';
+  (void)pid; (void)out_size; if (out != NULL) out[0] = '\0';
   return MEMDBG_ERR_UNSUPPORTED;
 }
 
@@ -244,7 +244,7 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
 }
 
 memdbg_status_t pal_process_path(int pid, char *out, size_t out_size) {
-  (void)pid; (void)out_size; out[0] = '\0';
+  (void)pid; (void)out_size; if (out != NULL) out[0] = '\0';
   return MEMDBG_ERR_UNSUPPORTED;
 }
 
@@ -261,7 +261,7 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
 memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
   (void)pid; memset(out, 0, sizeof(*out)); return MEMDBG_ERR_UNSUPPORTED; }
 memdbg_status_t pal_process_path(int pid, char *out, size_t out_size) {
-  (void)pid; (void)out_size; out[0] = '\0'; return MEMDBG_ERR_UNSUPPORTED; }
+  (void)pid; (void)out_size; if (out != NULL) out[0] = '\0'; return MEMDBG_ERR_UNSUPPORTED; }
 void pal_process_list_free(pal_process_list_t *l) { if (l) { free(l->entries); memset(l, 0, sizeof(*l)); } }
 void pal_process_maps_free(pal_map_list_t *l)    { if (l) { free(l->entries); memset(l, 0, sizeof(*l)); } }
 

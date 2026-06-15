@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "lz4.h"
+#include "memdbg/pal/lz4.h"
 #include <string.h>
 
 #define LZ4_HASHLOG       12U

@@ -128,6 +128,7 @@ static bool bm_build_gs_table(const unsigned char *pattern, size_t pat_len,
 
 static void bm_build_table(const unsigned char *pattern, size_t pat_len,
                            const unsigned char *mask, bm_table_t *table) {
+  memset(table, 0, sizeof(*table));
   bm_build_bc_table(pattern, pat_len, mask, table);
 
   /* Good-suffix only for exact patterns (no wildcards). */
@@ -344,7 +345,8 @@ static memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
 
     if (overlap != 0U) {
       carry = window < overlap ? window : overlap;
-      memmove(ctx->buffer, ctx->buffer + window - carry, carry);
+      if (carry > 0U)
+        memmove(ctx->buffer, ctx->buffer + window - carry, carry);
     }
     scanned += read_len;
   }
@@ -636,7 +638,9 @@ memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *r
 
   uint32_t value_len = expected_value_length(request->value_type, request->value_length);
   if (value_len == 0U || value_len > MEMDBG_SCAN_VALUE_MAX) return MEMDBG_ERR_PARAM;
+  /* Hoist alignment calculation outside the region loop. */
   uint32_t alignment = request->alignment == 0U ? value_len : request->alignment;
+  bool need_alignment = alignment > 1U;
 
   /* Buffer: chunk + overlap for values crossing chunk boundaries */
   size_t overlap = value_len > 1U ? (size_t)value_len - 1U : 0U;
@@ -696,7 +700,7 @@ memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *r
         first = (size_t)off;
       }
       /* Align first to the requested alignment */
-      if (alignment > 1U) {
+      if (need_alignment) {
         uint64_t misalign = ((base_addr + first) - scan_start) % alignment;
         if (misalign != 0U) first += (size_t)((uint64_t)alignment - misalign);
       }

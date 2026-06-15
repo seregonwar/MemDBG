@@ -25,6 +25,7 @@
 
 static int test_socket = -1;
 static uint32_t next_id = 1;
+static int quiet_payload_errors = 0;
 
 static int connect_to(const char *host, uint16_t port, int timeout_sec) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -76,7 +77,8 @@ static int send_request(int fd, uint16_t cmd, const void *body, uint32_t body_le
       rhdr.command != cmd ||
       rhdr.request_id != hdr.request_id) return -1;
   if (rhdr.status != 0) {
-    fprintf(stderr, "  payload error status: %d\n", (int)rhdr.status);
+    if (!quiet_payload_errors)
+      fprintf(stderr, "  payload error status: %d\n", (int)rhdr.status);
     return -1;
   }
   if (rhdr.length > *response_len) return -1;
@@ -147,8 +149,10 @@ int main(int argc, char **argv) {
   memcpy(body_buf + sizeof(req) + pat_len, mask, pat_len);
 
   response_len = sizeof(response);
+  quiet_payload_errors = 1;
   int rc = send_request(test_socket, MEMDBG_CMD_SCAN_PROCESS_AOB,
                         body_buf, (uint32_t)body_size, response, &response_len);
+  quiet_payload_errors = 0;
   free(body_buf);
 
   if (rc != 0) {

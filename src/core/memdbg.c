@@ -12,6 +12,7 @@
 
 #include "memdbg/core/memdbg.h"
 
+#include "memdbg/core/memdbg_instance.h"
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/debug/memdbg_memory.h"
@@ -21,7 +22,7 @@
 #include "memdbg/privilege/privilege.h"
 #include "memdbg/scanner/memdbg_scan.h"
 #include "memdbg/telemetry/udp_log.h"
-#include "../pal/lz4.h"
+#include "memdbg/pal/lz4.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -30,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -57,6 +59,7 @@ void memdbg_config_defaults(memdbg_config_t *cfg) {
   cfg->udp_log_port    = MEMDBG_DEFAULT_UDP_LOG_PORT;
   cfg->discovery_port  = MEMDBG_DEFAULT_DISCOVERY_PORT;
   cfg->enable_udp_log  = true;
+  cfg->replace_existing = true;
   cfg->max_packet_bytes = MEMDBG_PROTOCOL_MAX_PACKET;
   cfg->max_read_bytes   = MEMDBG_PROTOCOL_MAX_READ;
   cfg->max_scan_results = 200000U;
@@ -121,28 +124,40 @@ static int send_response(socket_t fd, const memdbg_packet_header_t *req,
                          memdbg_status_t status, const void *payload,
                          uint32_t payload_len);
 
-/* ---- Send compressed response ----
+/* ---- Framed payload compression ----
    Prefix byte: 0x00 = raw data follows (strip prefix on client)
                 0x01 = LZ4: 4-byte uncomp_len LE + compressed data
-   Always sends prefix for consistency — client always strips/decompresses. */
+   Always emits a prefix for consistency — client always strips/decompresses. */
 
-static int send_compressed_response(socket_t fd, const memdbg_packet_header_t *req,
-                                    memdbg_status_t status, const void *data,
-                                    uint32_t data_len) {
+static memdbg_status_t build_framed_payload(const void *data, uint32_t data_len,
+                                            unsigned char **out,
+                                            uint32_t *out_len) {
+  unsigned char *raw;
+
+  if (out == NULL || out_len == NULL || (data == NULL && data_len != 0U)) {
+    return MEMDBG_ERR_PARAM;
+  }
+  *out = NULL;
+  *out_len = 0U;
+
   if (data == NULL || data_len == 0U) {
-    unsigned char zero = 0x00U;
-    return send_response(fd, req, status, &zero, 1U);
+    raw = (unsigned char *)malloc(1U);
+    if (raw == NULL) return MEMDBG_ERR_NOMEM;
+    raw[0] = 0x00U;
+    *out = raw;
+    *out_len = 1U;
+    return MEMDBG_OK;
   }
 
   /* Small payloads: raw with 0x00 prefix */
   if (data_len < MEMDBG_LZ4_THRESHOLD) {
-    unsigned char *raw = (unsigned char *)malloc(data_len + 1U);
-    if (raw == NULL) return send_response(fd, req, status, data, data_len);
+    raw = (unsigned char *)malloc(data_len + 1U);
+    if (raw == NULL) return MEMDBG_ERR_NOMEM;
     raw[0] = 0x00U;
     memcpy(raw + 1, data, data_len);
-    int rc = send_response(fd, req, status, raw, data_len + 1U);
-    free(raw);
-    return rc;
+    *out = raw;
+    *out_len = data_len + 1U;
+    return MEMDBG_OK;
   }
 
   /* Large payloads: try LZ4 compression */
@@ -163,18 +178,38 @@ static int send_compressed_response(socket_t fd, const memdbg_packet_header_t *r
   compressed[2] = (unsigned char)((data_len >> 8U) & 0xFFU);
   compressed[3] = (unsigned char)((data_len >> 16U) & 0xFFU);
   compressed[4] = (unsigned char)((data_len >> 24U) & 0xFFU);
-  int rc = send_response(fd, req, status, compressed, (uint32_t)csize + 5U);
-  free(compressed);
-  return rc;
+  *out = compressed;
+  *out_len = (uint32_t)csize + 5U;
+  return MEMDBG_OK;
 
 _send_raw:
-  { unsigned char *raw = (unsigned char *)malloc(data_len + 1U);
-    if (raw == NULL) return send_response(fd, req, status, data, data_len);
+  {
+    raw = (unsigned char *)malloc(data_len + 1U);
+    if (raw == NULL) return MEMDBG_ERR_NOMEM;
     raw[0] = 0x00U;
     memcpy(raw + 1, data, data_len);
-    int rc = send_response(fd, req, status, raw, data_len + 1U);
-    free(raw);
-    return rc; }
+    *out = raw;
+    *out_len = data_len + 1U;
+    return MEMDBG_OK;
+  }
+}
+
+static int send_framed_response(socket_t fd, const memdbg_packet_header_t *req,
+                                memdbg_status_t status, const void *data,
+                                uint32_t data_len) {
+  unsigned char *payload = NULL;
+  uint32_t payload_len = 0U;
+  memdbg_status_t frame_status =
+      build_framed_payload(data, data_len, &payload, &payload_len);
+  int rc;
+
+  if (frame_status != MEMDBG_OK) {
+    return send_response(fd, req, frame_status, NULL, 0U);
+  }
+
+  rc = send_response(fd, req, status, payload, payload_len);
+  free(payload);
+  return rc;
 }
 
 /* ---- Send response (implementation) ---- */
@@ -291,7 +326,7 @@ static memdbg_status_t handle_memory_read(socket_t fd, const memdbg_packet_heade
   memdbg_status_t status = memdbg_memory_read(read_req->pid, read_req->address,
       buffer, read_req->length, &read_len);
   if (status == MEMDBG_OK) {
-    if (send_compressed_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0)
+    if (send_framed_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0)
       status = MEMDBG_ERR_NET;
   }
   free(buffer);
@@ -322,6 +357,11 @@ static memdbg_status_t handle_memory_write(socket_t fd, const memdbg_packet_head
 static memdbg_status_t handle_batch_read(socket_t fd, const memdbg_packet_header_t *req,
                                          const memdbg_config_t *cfg, const void *body,
                                          uint32_t body_len) {
+  memdbg_batch_read_result_entry_t *results;
+  uint8_t *data_out;
+  uint32_t data_used = 0U;
+  memdbg_status_t status;
+
   if (body_len < sizeof(memdbg_batch_read_request_t)) return MEMDBG_ERR_PROTOCOL;
 
   const memdbg_batch_read_request_t *batch_req = (const memdbg_batch_read_request_t *)body;
@@ -341,22 +381,53 @@ static memdbg_status_t handle_batch_read(socket_t fd, const memdbg_packet_header
     total_data += items[i].length;
 
   if (total_data > cfg->max_read_bytes * 2U) return MEMDBG_ERR_OVERFLOW;
+  if (total_data > UINT32_MAX) return MEMDBG_ERR_OVERFLOW;
 
-  size_t payload_len = results_size + (size_t)total_data;
-  unsigned char *payload = (unsigned char *)malloc(payload_len);
-  if (payload == NULL) return MEMDBG_ERR_NOMEM;
+  results = (memdbg_batch_read_result_entry_t *)calloc(count, sizeof(*results));
+  if (results == NULL) return MEMDBG_ERR_NOMEM;
 
-  memdbg_batch_read_result_entry_t *results =
-      (memdbg_batch_read_result_entry_t *)payload;
-  uint8_t *data_out = payload + results_size;
-  uint32_t data_used = 0U;
+  data_out = (uint8_t *)malloc(total_data == 0U ? 1U : (size_t)total_data);
+  if (data_out == NULL) {
+    free(results);
+    return MEMDBG_ERR_NOMEM;
+  }
 
-  memdbg_status_t status = memdbg_memory_batch_read(batch_req->pid, items, count,
+  status = memdbg_memory_batch_read(batch_req->pid, items, count,
       results, data_out, (uint32_t)total_data, &data_used);
 
-  int rc = send_compressed_response(fd, req, status, payload, results_size + data_used);
-  free(payload);
-  return rc == 0 ? (status == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : status) : MEMDBG_ERR_NET;
+  if (status == MEMDBG_OK || status == MEMDBG_ERR_OVERFLOW) {
+    unsigned char *framed_data = NULL;
+    uint32_t framed_len = 0U;
+    memdbg_status_t frame_status =
+        build_framed_payload(data_out, data_used, &framed_data, &framed_len);
+    if (frame_status != MEMDBG_OK) {
+      free(data_out);
+      free(results);
+      return frame_status;
+    }
+
+    size_t payload_len = results_size + framed_len;
+    unsigned char *payload = (unsigned char *)malloc(payload_len);
+    if (payload == NULL) {
+      free(framed_data);
+      free(data_out);
+      free(results);
+      return MEMDBG_ERR_NOMEM;
+    }
+
+    memcpy(payload, results, results_size);
+    memcpy(payload + results_size, framed_data, framed_len);
+    int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
+    free(payload);
+    free(framed_data);
+    free(data_out);
+    free(results);
+    return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+
+  free(data_out);
+  free(results);
+  return status;
 }
 
 /* ---- BATCH_WRITE ----
@@ -477,14 +548,22 @@ static memdbg_status_t handle_batch_write(socket_t fd, const memdbg_packet_heade
         }
       }
     } else {
-      overall = MEMDBG_ERR_NOMEM;
+      for (uint32_t i = 0U; i < count; ++i) {
+        if (results[i].status == (uint32_t)MEMDBG_ERR_IO) {
+          results[i].status = (uint32_t)MEMDBG_ERR_NOMEM;
+        }
+      }
+      overall = MEMDBG_OK;
     }
   }
 
 _send: {
-    int rc = send_response(fd, req, overall, results_buf, (uint32_t)results_size);
+    memdbg_status_t header_status =
+        overall == MEMDBG_ERR_PROTOCOL ? MEMDBG_ERR_PROTOCOL : MEMDBG_OK;
+    int rc = send_response(fd, req, header_status, results_buf,
+                           (uint32_t)results_size);
     free(results_buf);
-    return rc == 0 ? (overall == MEMDBG_ERR_OVERFLOW ? MEMDBG_OK : overall) : MEMDBG_ERR_NET;
+    return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 }
 
@@ -659,7 +738,7 @@ static memdbg_status_t handle_process_control(socket_t fd, const memdbg_packet_h
   if (body_len != sizeof(memdbg_process_control_request_t)) return MEMDBG_ERR_PROTOCOL;
   const memdbg_process_control_request_t *ctrl = (const memdbg_process_control_request_t *)body;
   if (ctrl->action != expected_action) return MEMDBG_ERR_PARAM;
-  int sig = (expected_action == 1U) ? 17 : 19;
+  int sig = (expected_action == 1U) ? SIGSTOP : SIGCONT;
   if (kill((pid_t)ctrl->pid, sig) != 0)
     return errno == EPERM ? MEMDBG_ERR_PERMISSION : MEMDBG_ERR_NOT_FOUND;
   return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
@@ -729,6 +808,7 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
 
 static void handle_client(socket_t fd, const memdbg_config_t *cfg) {
   atomic_fetch_add_explicit(&g_active_connections, 1U, memory_order_relaxed);
+  (void)pal_socket_set_nonblocking(fd, false);
   (void)pal_socket_configure(fd);
 
   while (!memdbg_daemon_should_stop()) {
@@ -768,6 +848,24 @@ typedef struct {
   const memdbg_config_t *cfg;
 } worker_args_t;
 
+static int wait_for_client(socket_t listen_fd) {
+  fd_set rfds;
+  struct timeval tv;
+  int rc;
+
+  FD_ZERO(&rfds);
+  FD_SET(listen_fd, &rfds);
+  tv.tv_sec = 0;
+  tv.tv_usec = 250000;
+
+  do {
+    rc = select(listen_fd + 1, &rfds, NULL, NULL, &tv);
+  } while (rc < 0 && errno == EINTR);
+
+  if (rc <= 0) return rc;
+  return FD_ISSET(listen_fd, &rfds) ? 1 : 0;
+}
+
 static void *worker_thread(void *arg) {
   worker_args_t *args = (worker_args_t *)arg;
   socket_t listen_fd  = args->listen_fd;
@@ -776,10 +874,21 @@ static void *worker_thread(void *arg) {
   while (!memdbg_daemon_should_stop()) {
     struct sockaddr_storage ss;
     socklen_t slen = (socklen_t)sizeof(ss);
+    int ready = wait_for_client(listen_fd);
+
+    if (ready == 0) continue;
+    if (ready < 0) {
+      if (memdbg_daemon_should_stop()) break;
+      memdbg_log_write(MEMDBG_LOG_WARN, "listener wait failed: %s",
+                       pal_socket_last_error());
+      break;
+    }
+
     socket_t client_fd = accept(listen_fd, (struct sockaddr *)&ss, &slen);
 
     if (client_fd < 0) {
       if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
       if (memdbg_daemon_should_stop()) break;
       memdbg_log_write(MEMDBG_LOG_WARN, "accept failed: %s", pal_socket_last_error());
       continue;
@@ -814,11 +923,64 @@ static void install_signal_handlers(void) {
 #endif
 }
 
+static void daemon_sleep_ms(uint32_t ms) {
+  struct timespec ts;
+  ts.tv_sec = (time_t)(ms / 1000U);
+  ts.tv_nsec = (long)((ms % 1000U) * 1000000UL);
+  while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+  }
+}
+
+static memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
+                                           socket_t *listen_fd) {
+  int saved_errno;
+  memdbg_status_t replace_status;
+
+  if (cfg == NULL || listen_fd == NULL) return MEMDBG_ERR_PARAM;
+
+  if (cfg->replace_existing) {
+    replace_status = memdbg_instance_stop_previous(cfg);
+    if (replace_status == MEMDBG_OK) {
+      daemon_sleep_ms(200U);
+    }
+  }
+
+  if (pal_tcp_listen(cfg->bind_host, cfg->debug_port, 16, listen_fd) == 0) {
+    return MEMDBG_OK;
+  }
+
+  saved_errno = errno;
+  if (!cfg->replace_existing || saved_errno != EADDRINUSE) {
+    errno = saved_errno;
+    return MEMDBG_ERR_NET;
+  }
+
+  memdbg_log_write(MEMDBG_LOG_INFO,
+                   "debug port %u is still busy; retrying previous payload stop",
+                   cfg->debug_port);
+  (void)memdbg_instance_stop_previous(cfg);
+
+  for (uint32_t i = 0U; i < 25U; ++i) {
+    daemon_sleep_ms(100U);
+    if (pal_tcp_listen(cfg->bind_host, cfg->debug_port, 16, listen_fd) == 0) {
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "debug listener rebound after replacing previous payload");
+      return MEMDBG_OK;
+    }
+    saved_errno = errno;
+    if (saved_errno != EADDRINUSE) break;
+  }
+
+  errno = saved_errno;
+  return MEMDBG_ERR_NET;
+}
+
 /* ---- Daemon entry point ---- */
 
 int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   memdbg_config_t cfg;
   socket_t listen_fd = PAL_INVALID_SOCKET;
+  int worker_count = 0;
 
   if (cfg_in == NULL) memdbg_config_defaults(&cfg);
   else                cfg = *cfg_in;
@@ -860,7 +1022,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                      "privilege: payload escalation failed; memory actions may fail with permission/i-o status");
   }
 
-  if (pal_tcp_listen(cfg.bind_host, cfg.debug_port, 16, &listen_fd) != 0) {
+  if (open_debug_listener(&cfg, &listen_fd) != MEMDBG_OK) {
     memdbg_log_write(MEMDBG_LOG_ERROR, "debug listener failed: %s", pal_socket_last_error());
     if (notification_ready) pal_notification_shutdown();
     memdbg_udp_log_stop();
@@ -869,10 +1031,15 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     return MEMDBG_ERR_NET;
   }
 
+  if (memdbg_instance_write_pid_file(&cfg) != 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN, "instance: failed to write pid file");
+  }
+
   if (notification_ready)
     pal_notification_send("MemDBG by seregonwar started");
 
-  /* Pre-create thread pool workers. All block on accept() — kernel distributes. */
+  /* Pre-create thread pool workers. They wait with a short select timeout so
+     SHUTDOWN and signals can stop the daemon without waiting on blocking accept(). */
   worker_args_t wargs;
   wargs.listen_fd = listen_fd;
   wargs.cfg       = &cfg;
@@ -884,13 +1051,15 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
       memdbg_daemon_request_stop();
       break;
     }
+    worker_count++;
   }
 
   /* Wait for workers to exit (happens on shutdown). */
-  for (int i = 0; i < MEMDBG_THREAD_POOL_SIZE; ++i)
+  for (int i = 0; i < worker_count; ++i)
     (void)pthread_join(workers[i], NULL);
 
   (void)pal_socket_close(listen_fd);
+  memdbg_instance_remove_pid_file(&cfg);
   memdbg_process_maps_cache_flush(0);
 
   memdbg_log_write(MEMDBG_LOG_INFO, "MemDBG stopped");

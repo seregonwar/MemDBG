@@ -78,7 +78,10 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
   }
   pthread_mutex_unlock(&g_cache_mtx);
 
-  /* Miss — fetch from PAL */
+    /* Miss — fetch from PAL.
+   * Note: memdbg_map_entry_t and pal_map_entry_t share identical layout
+   * ({uint64_t start/end; uint32_t prot/flags; char name[64]}).  If either
+   * struct changes, the other must be kept in sync. */
   atomic_fetch_add_explicit(&g_cache_misses, 1U, memory_order_relaxed);
   pal_map_list_t pmaps;
   memdbg_status_t st = pal_process_maps(pid, &pmaps);

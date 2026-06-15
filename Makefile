@@ -28,7 +28,7 @@ HOST_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/host/%.o,$(SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps5 payload-ps5-lib deploy-ps5 frontend verify test-aob-boundary
+.PHONY: all clean host payload-ps5 payload-ps5-lib deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e
 
 all: host
 
@@ -39,6 +39,20 @@ test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o tests/test_aob_bounda
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $< -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
+
+test-process-aob-e2e: host tests/test_process_aob_e2e.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_aob_e2e.c -o $(BUILD_DIR)/test_process_aob_e2e
+	@echo "--- Running process AOB E2E test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e.XXXXXX); \
+	port=19120; \
+	$(HOST_TARGET) --bind=127.0.0.1 --debug-port=$$port --udp-port=19123 --data-root=$$tmpdir --no-udp-log --no-replace-existing >$$tmpdir/payload.log 2>&1 & \
+	pid=$$!; \
+	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
+	sleep 0.6; \
+	$(BUILD_DIR)/test_process_aob_e2e 127.0.0.1 $$port
+
+test: test-aob-boundary test-process-aob-e2e
 
 ifeq ($(wildcard $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk),)
 payload-ps5 payload-ps5-lib deploy-ps5:
