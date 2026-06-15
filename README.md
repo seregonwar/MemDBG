@@ -1,207 +1,154 @@
-# MemDBG
+<div align="center">
 
-**MemDBG** is a high-performance memory debugging and inspection suite designed for PlayStation 4 and PlayStation 5 homebrew research environments.
+<br/>
 
-The goal of the project is to provide a clean, fast, and extensible interface for memory scanning, process inspection, debugging workflows, and runtime analysis across supported console platforms.
+<img src="assets/logo-nobg.png" width="480" height="480" alt="MemDBG" />
 
-> MemDBG is intended for educational, research, preservation, and offline homebrew development purposes only.
+<br/>
+<br/>
 
----
+**Memory debugging and inspection suite for PS4 / PS5 research environments.**
 
-## Overview
+<br/>
 
-MemDBG combines the flexibility of a memory scanner with the power of a remote debugging frontend.
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-black?style=flat-square)](LICENSE)
+[![Platform: PS4 / PS5](https://img.shields.io/badge/Platform-PS4%20%2F%20PS5-black?style=flat-square)](#supported-platforms)
+[![Status: Early Development](https://img.shields.io/badge/Status-Early%20Development-black?style=flat-square)](#repository-status)
+[![Language: C11 / C++](https://img.shields.io/badge/Language-C11%20%2F%20C%2B%2B-black?style=flat-square)](#building)
 
-It is designed to work with compatible debugging payloads and homebrew environments on PS4 and PS5, offering a unified interface for developers, researchers, and advanced users who need to inspect memory, analyze processes, and build custom debugging workflows.
+<br/>
 
----
-
-## Key Features
-
-* Cross-platform support for **PS4** and **PS5**
-* High-performance memory scanning engine
-* Remote process inspection
-* Memory read/write interface
-* Address search and filtering
-* Hex viewer and memory editor
-* Pointer and address tracking
-* Debugger-oriented workflow
-* Modular backend support
-* Clean and responsive UI
-* Project/session management
-* Extensible architecture for future plugins
+</div>
 
 ---
 
-## Planned Features
+MemDBG is a high-performance memory debugging suite designed for PlayStation 4 and PlayStation 5 homebrew research. It combines a precise memory scanning engine with a remote debugging frontend, providing a unified interface for process inspection, memory analysis, and runtime debugging workflows.
 
-* Advanced value scanner
-* Multi-stage scan refinement
-* Cheat table support
-* Symbol and module viewer
-* Breakpoint management
-* Watchlist system
-* Pointer scanner
-* Memory region visualization
-* Import/export profiles
-* Plugin API
-* Scripting support
-* Trainer-style runtime controls
-* Performance profiling tools
+Built for developers, security researchers, and advanced users who need low-level visibility into console memory — without compromising on speed or ergonomics.
 
----
+> Intended for educational, research, preservation, and offline homebrew development purposes only.
 
-## Supported Platforms
-
-| Platform         | Status                   |
-| ---------------- | ------------------------ |
-| PlayStation 4    | Planned / In development |
-| PlayStation 5    | Planned / In development |
-| Windows frontend | Planned                  |
-| Linux frontend   | Planned                  |
-| macOS frontend   | Planned                  |
-
-Support depends on the availability of compatible payloads, firmware support, and homebrew/debugging environments.
-
----
-
-## Project Goals
-
-MemDBG aims to be:
-
-* **Fast** — optimized scanning and memory operations
-* **Clean** — simple interface, readable codebase, minimal clutter
-* **Modular** — backend support can evolve independently
-* **Cross-generation** — one tool for both PS4 and PS5 workflows
-* **Research-focused** — useful for debugging, analysis, and homebrew development
-* **Extensible** — designed with future plugins and automation in mind
-
----
-
-## Non-Goals
-
-MemDBG is **not** intended for:
-
-* Online cheating
-* Multiplayer advantage
-* Piracy
-* Circumventing paid content
-* Attacking third-party systems
-* Bypassing platform security for unauthorized purposes
-* Disrupting online services or other users
-
-The project should be used only on hardware, software, and data you own or are authorized to analyze.
-
----
+<br/>
 
 ## Architecture
 
-MemDBG is designed around a modular architecture:
-
-```text
+```
 MemDBG
-├── Payload Daemon
-├── Wire Protocol
-├── Core Scanner
-├── Process / Memory Backend
-├── Platform Abstraction Layer
-├── UDP Telemetry
-├── Frontend UI
-└── Plugin / Scripting Layer
+├── Payload Daemon          C11 — TCP wire protocol, process & memory backend
+├── Core Scanner            High-performance scan engine, value comparison, filtering
+├── Platform Abstraction    PS4 / PS5 backend isolation layer
+├── UDP Telemetry           Diagnostic mirror → /data/MemDBG/MemDBG.log
+├── Frontend UI             C++ / Dear ImGui — scanner, editor, trainer, watchlist
+└── Plugin / Scripting      Planned extensibility layer
 ```
 
-### Payload Daemon
+The payload daemon exposes process enumeration, memory map inspection, and read/write primitives over a compact TCP protocol. The frontend connects to the payload port, listens for UDP telemetry, and provides the full interactive interface.
 
-The C11 payload daemon exposes process listing, memory map inspection, memory read/write, and exact-value scanning through a compact TCP protocol.
+<br/>
 
-### Frontend
+## Features
 
-The frontend provides the main user interface for process selection, memory scanning, editing, watchlists, and debugging controls.
+**Core**
+- Memory read / write interface
+- Remote process inspection and listing
+- Memory region and map enumeration
+- Hex viewer and live memory editor
+- Exact-value memory scan with type selection
+- Scan refinement (increased / decreased / unchanged / changed)
+- Pointer and address tracking
+- Session and project management
 
-### Core Scanner
+**Frontend**
+- Dear ImGui — responsive, keyboard-navigable interface
+- Runtime trainer list with ON / OFF capture and value lock / freeze
+- Base cheat table load and save (`.cht`)
+- Memory map dump for selected regions
+- UDP log viewer with live telemetry feed
 
-The scanner handles high-performance memory search operations, value comparison, filtering, and scan refinement.
+**Planned**
+- Unknown initial value scan
+- Multi-stage scan refinement pipeline
+- Watchlist system
+- Symbol and module viewer
+- Thread information and register / context view
+- Breakpoint management (where platform supports)
+- Pointer scanner
+- Memory region visualization
+- Import / export profiles
+- Plugin API and scripting support
+- Automation interface
+- Performance profiling tools
 
-### Platform Backends
+<br/>
 
-Platform backends communicate with compatible PS4 or PS5 debugging payloads and expose a common interface to the rest of the application.
+## Supported Platforms
 
-### UDP Telemetry
+| Platform       | Status              |
+|:---------------|:--------------------|
+| PlayStation 5  | In development      |
+| PlayStation 4  | In development      |
+| Windows (host) | Planned             |
+| Linux (host)   | Planned             |
+| macOS (host)   | Planned             |
 
-The payload mirrors diagnostic output to UDP while still writing persistent logs to `/data/MemDBG/MemDBG.log`.
+Platform support depends on the availability of compatible homebrew payloads and firmware-level debugging environments.
 
----
-
-## Example Workflow
-
-A typical MemDBG workflow may look like this:
-
-1. Connect to a supported console running a compatible debugging environment.
-2. Select a target process.
-3. Scan memory for a known value.
-4. Refine the scan after the value changes.
-5. Add relevant addresses to the watchlist.
-6. Inspect or edit values during runtime.
-7. Save the session for later analysis.
-
----
-
-## Repository Status
-
-This project is currently in early development.
-
-APIs, file formats, UI layout, and backend behavior may change frequently before the first stable release.
-
----
-
-## Installation
-
-Installation instructions will be added once the first public build is available.
-
-```bash
-# Placeholder
-git clone https://github.com/your-username/MemDBG.git
-cd MemDBG
-```
-
----
+<br/>
 
 ## Building
 
-The payload side is C11.
+### Prerequisites
 
-Host validation build:
+- PS5 payload SDK at `external/ps5-payload-sdk/` (override with `PS5_PAYLOAD_SDK`)
+- C11-compatible compiler for the payload target
+- C++ toolchain with Dear ImGui for the frontend
 
-```bash
-make clean
-make
-./build/MemDBG-host --bind=127.0.0.1 --udp-host=127.0.0.1 --data-root=/tmp/MemDBG
-```
+### Payload — PS5
 
-PS5 payload build:
-
-```bash
+```sh
 make payload-ps5
 ```
 
-The PS5 target uses `external/ps5-payload-sdk/` by default. Override `PS5_PAYLOAD_SDK`, `PS5_HOST`, or `PS5_PORT` when needed.
+Override variables as needed:
 
-Frontend build:
+```sh
+make payload-ps5 PS5_PAYLOAD_SDK=/path/to/sdk PS5_HOST=192.168.1.100 PS5_PORT=9020
+```
 
-```bash
+### Host Validation Build
+
+```sh
+make clean && make
+./build/MemDBG-host --bind=127.0.0.1 --udp-host=127.0.0.1 --data-root=/tmp/MemDBG
+```
+
+### Frontend
+
+```sh
 make frontend
 ./build/frontend/MemDBG_frontend
 ```
 
-The frontend is a C++/Dear ImGui desktop app. It can connect to the payload TCP port, listen for UDP logs, list processes and maps, show process metadata when available, read/write memory, run exact scans, refine scan results, dump selected memory maps, and build a small runtime trainer list with ON/OFF capture, lock/freeze support, and base `.cht` load/save.
+<br/>
 
-Feature research and the implementation roadmap are tracked in `docs/feature_research.md`.
+## Workflow
 
----
+A typical MemDBG session:
+
+1. Deploy the compatible debugging payload to a supported console.
+2. Connect the frontend to the payload TCP endpoint.
+3. Select a target process from the process list.
+4. Run an exact-value scan for a known value.
+5. After the value changes in-game, refine the scan.
+6. Add candidate addresses to the watchlist.
+7. Inspect or modify values at runtime.
+8. Save the session for later analysis or sharing.
+
+<br/>
 
 ## Configuration
 
-A future configuration file may include:
+A future configuration file will allow persistent settings:
 
 ```json
 {
@@ -213,115 +160,59 @@ A future configuration file may include:
 }
 ```
 
-Configuration options are subject to change.
+Options are subject to change before the first stable release.
 
----
-
-## Roadmap
-
-### Phase 1 — Core Foundation
-
-* Basic project structure
-* PS4/PS5 backend abstraction
-* Remote connection manager
-* Process list
-* Memory region listing
-* Basic memory read/write
-
-### Phase 2 — Scanner
-
-* Exact value scan
-* Unknown initial value scan
-* Increased/decreased value filtering
-* Data type support
-* Result table
-* Watchlist
-
-### Phase 3 — Debugging Tools
-
-* Module viewer
-* Thread information
-* Register/context view
-* Breakpoint support where available
-* Runtime memory tools
-
-### Phase 4 — Usability
-
-* Session save/load
-* Cheat table format
-* Import/export
-* UI polish
-* Error reporting
-* Performance improvements
-
-### Phase 5 — Extensibility
-
-* Plugin system
-* Scripting support
-* Automation API
-* Custom backend modules
-
----
+<br/>
 
 ## Contributing
 
-Contributions are welcome once the project reaches a public development stage.
+Contributions are welcome once the project reaches its first public development milestone.
 
-Possible contribution areas:
+Open contribution areas:
 
-* UI development
-* Scanner optimization
-* Backend integration
-* Documentation
-* Testing
-* Bug reports
-* Feature proposals
+- UI development (Dear ImGui panels, layout, UX)
+- Scanner optimization (SIMD, parallelism, filtering)
+- Backend integration (new payload protocols)
+- Documentation and testing
+- Bug reports and feature proposals
 
-Before submitting a pull request, please make sure your contribution follows the goals and ethical guidelines of the project.
+Please review the project goals and ethical guidelines before submitting a pull request.
 
----
+<br/>
 
 ## Ethical Use
 
-MemDBG is built for legitimate debugging, research, education, and homebrew development.
+MemDBG is built for legitimate debugging, security research, education, and homebrew development.
 
-Do not use this project to gain unfair advantages in online games, interfere with services, violate terms of service, or access systems and software without permission.
+It is **not** intended for:
 
-The maintainers do not support piracy, online cheating, or malicious use.
+- Online cheating or multiplayer advantage
+- Piracy or circumventing paid content
+- Accessing systems or software without authorization
+- Attacking third-party services or disrupting online play
 
----
+The maintainers do not support and will not assist with any of the above.
+
+<br/>
 
 ## Disclaimer
 
-This project is provided for educational and research purposes only.
+This project is provided for educational and research purposes only. The authors and contributors accept no responsibility for misuse, hardware or software damage, account actions, legal consequences, or violations of third-party terms of service.
 
-The authors and contributors are not responsible for misuse, damage, account bans, hardware issues, software issues, legal consequences, or violations of third-party terms of service.
+Use at your own risk, on hardware and software you own or are authorized to analyze.
 
-Use at your own risk.
-
----
+<br/>
 
 ## License
 
-MemDBG is licensed under GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later — see [LICENSE](LICENSE).
+
+<br/>
 
 ---
 
-## Credits
+<div align="center">
 
-MemDBG is inspired by existing homebrew debugging and memory inspection tools from the console research community.
+**MemDBG** — `mem` + `DBG` — memory debugging for PS4 / PS5 research.
 
-Special thanks to developers and researchers who contribute to open-source homebrew tooling, debugging payloads, and memory analysis projects.
-
----
-
-## Name
-
-**MemDBG** stands for:
-
-```text
-mem  = memory
-DBG  = debug
-```
-
-A short, technical name for a cross-generation memory debugging suite.
+</div>
