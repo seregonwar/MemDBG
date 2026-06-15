@@ -17,6 +17,7 @@
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
+#include "memdbg/pal/pal_memory.h"
 #include "memdbg/pal/pal_network.h"
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/privilege/privilege.h"
@@ -1070,6 +1071,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
 
   (void)pal_socket_close(listen_fd);
   memdbg_discovery_stop();
+  pal_memory_fd_cache_flush(0);  /* close all cached /proc/pid/mem fds */
   memdbg_instance_remove_pid_file(&cfg);
   memdbg_process_maps_cache_flush(0);
 

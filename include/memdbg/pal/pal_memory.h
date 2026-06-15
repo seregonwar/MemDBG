@@ -68,6 +68,11 @@ size_t pal_memory_batch_write_item(pal_memory_batch_write_t *batch,
 /* End the batch write session and free all resources. */
 void pal_memory_batch_write_end(pal_memory_batch_write_t *batch);
 
+/* Flush cached /proc/pid/mem fds for `pid`, or all if pid <= 0.
+   Called on daemon shutdown and when a mem read returns a persistent
+   error (to invalidate stale cache entries).  Only meaningful on Linux. */
+void pal_memory_fd_cache_flush(int pid);
+
 #ifdef __cplusplus
 }
 #endif

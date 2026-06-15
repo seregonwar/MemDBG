@@ -16,15 +16,18 @@
 #include "memdbg/debug/memdbg_process.h"
 
 #include <limits.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#define MEMDBG_SCAN_CHUNK (1024U * 1024U)  /* 1 MiB (was 256 KiB) */
+#define MEMDBG_SCAN_CHUNK (4U * 1024U * 1024U)  /* 4 MiB — fewer read() syscalls */
 #define MEMDBG_SCAN_INITIAL_CAPACITY 256U
 #define MEMDBG_MAP_PROT_READ 1U
+#define MEMDBG_SCAN_PARALLEL_THREADS 4U
+#define MEMDBG_SCAN_PARALLEL_MIN_MAPS  2U  /* minimum maps per thread */
 
 /* ---- Boyer-Moore-Horspool skip tables ---- */
 
@@ -201,18 +204,24 @@ static bool match_u8(const unsigned char *c, const unsigned char *n, size_t len)
 
 static bool match_u16(const unsigned char *c, const unsigned char *n, size_t len) {
   (void)len;
-  return c[0] == n[0] && c[1] == n[1];
+  /* Single uint16 comparison — compiler emits one load+cmp on LE targets. */
+  uint16_t cv, nv;
+  memcpy(&cv, c, sizeof(cv)); memcpy(&nv, n, sizeof(nv));
+  return cv == nv;
 }
 
 static bool match_u32(const unsigned char *c, const unsigned char *n, size_t len) {
   (void)len;
-  return c[0] == n[0] && c[1] == n[1] && c[2] == n[2] && c[3] == n[3];
+  uint32_t cv, nv;
+  memcpy(&cv, c, sizeof(cv)); memcpy(&nv, n, sizeof(nv));
+  return cv == nv;
 }
 
 static bool match_u64(const unsigned char *c, const unsigned char *n, size_t len) {
   (void)len;
-  return c[0] == n[0] && c[1] == n[1] && c[2] == n[2] && c[3] == n[3] &&
-         c[4] == n[4] && c[5] == n[5] && c[6] == n[6] && c[7] == n[7];
+  uint64_t cv, nv;
+  memcpy(&cv, c, sizeof(cv)); memcpy(&nv, n, sizeof(nv));
+  return cv == nv;
 }
 
 static bool match_bytes(const unsigned char *candidate,
@@ -379,6 +388,334 @@ static void scan_context_fini(scan_context_t *ctx) {
   memset(ctx, 0, sizeof(*ctx));
 }
 
+/* ================================================================
+ *  Parallel map scanner
+ * ================================================================
+ *
+ * Divides filtered map entries across N threads.  Each thread gets
+ * its own buffer and result builder; results are merged at the end.
+ *
+ * map_scan_fn signature:
+ *   memdbg_status_t (*)(void *ctx, int pid, uint64_t start,
+ *                       uint64_t len, unsigned char *buffer,
+ *                       scan_builder_t *builder)
+ *
+ * The callback scans one memory range, writing addresses into the
+ * thread-local builder.  The caller provides the per-thread buffer
+ * size (buf_size) so the orchestrator can allocate buffers. */
+
+typedef memdbg_status_t (*parallel_map_scan_fn_t)(
+    void *ctx, int pid, uint64_t start, uint64_t len,
+    unsigned char *buffer, scan_builder_t *builder);
+
+typedef struct {
+  parallel_map_scan_fn_t scan_fn;
+  void                 *ctx;
+  int                   pid;
+  size_t                max_results;
+  size_t                buf_size;
+  const memdbg_map_entry_t *maps;
+  size_t                map_start;   /* first assigned map index */
+  size_t                map_end;     /* one past last assigned map */
+  uint32_t              prot_mask;
+  uint64_t              start_filter;
+  uint64_t              end_filter;
+  size_t                min_map_len;
+  /* Output — per thread */
+  memdbg_scan_result_t  result;
+  uint32_t              read_calls;
+  uint32_t              read_errors;
+  uint64_t              bytes_scanned;
+  uint32_t              regions_scanned;
+  memdbg_status_t       status;
+} parallel_worker_t;
+
+static void *parallel_worker_thread(void *arg) {
+  parallel_worker_t *w = (parallel_worker_t *)arg;
+  unsigned char *buffer;
+
+  memset(&w->result, 0, sizeof(w->result));
+  w->read_calls      = 0U;
+  w->read_errors     = 0U;
+  w->bytes_scanned   = 0U;
+  w->regions_scanned = 0U;
+  w->status          = MEMDBG_OK;
+
+  /* Allocate per-thread buffer. */
+  buffer = (unsigned char *)malloc(w->buf_size);
+  if (buffer == NULL) {
+    w->status = MEMDBG_ERR_NOMEM;
+    return NULL;
+  }
+
+  /* Per-thread result builder */
+  scan_builder_t builder;
+  builder.result       = &w->result;
+  builder.max_results  = w->max_results;
+  builder.capacity     = 0U;
+
+  if (scan_builder_prealloc(&builder) != MEMDBG_OK) {
+    free(buffer);
+    w->status = MEMDBG_ERR_NOMEM;
+    return NULL;
+  }
+
+  for (size_t i = w->map_start; i < w->map_end && !w->result.truncated; ++i) {
+    const memdbg_map_entry_t *map = &w->maps[i];
+    if ((map->protection & w->prot_mask) != w->prot_mask ||
+        map->end <= map->start)
+      continue;
+
+    uint64_t scan_start = map->start, scan_end = map->end;
+    if (w->start_filter != 0U && scan_start < w->start_filter)
+      scan_start = w->start_filter;
+    if (w->end_filter   != 0U && scan_end   > w->end_filter)
+      scan_end   = w->end_filter;
+    if (scan_end <= scan_start) continue;
+
+    uint64_t map_len = scan_end - scan_start;
+    if (map_len < w->min_map_len) continue;
+
+    w->regions_scanned++;
+    w->status = w->scan_fn(w->ctx, w->pid, scan_start, map_len,
+                           buffer, &builder);
+
+    /* Accumulate per-map metrics.  read_calls/errors/bytes are
+       updated by scan_range/scan_aob_range inside the callback
+       via builder.result, so we just snapshot them here. */
+    if (w->status != MEMDBG_OK) break;
+  }
+
+  /* Snapshot final per-thread metrics from the result struct. */
+  w->read_calls    = (uint32_t)w->result.read_calls;
+  w->read_errors   = w->result.read_errors;
+  w->bytes_scanned = w->result.bytes_scanned;
+
+  free(buffer);
+  return NULL;
+}
+
+/* ---- Result merge helper ----
+ *
+ * Copies entries from per-thread result buffers into `out`, respecting
+ * max_results.  Sets `out->truncated` if any thread was truncated. */
+
+static memdbg_status_t merge_scan_results(
+    parallel_worker_t *workers, size_t num_workers,
+    memdbg_scan_result_t *out) {
+  size_t total_count = 0U;
+  bool any_truncated = false;
+
+  for (size_t w = 0U; w < num_workers; ++w) {
+    total_count += workers[w].result.count;
+    if (workers[w].result.truncated) any_truncated = true;
+    out->read_calls      += workers[w].read_calls;
+    out->read_errors     += workers[w].read_errors;
+    out->bytes_scanned   += workers[w].bytes_scanned;
+    out->regions_scanned += workers[w].regions_scanned;
+  }
+
+  /* Clamp to max_results */
+  if (total_count > out->count) {
+    total_count = out->count;
+    any_truncated = true;
+  }
+
+  if (total_count == 0U) { out->count = 0U; return MEMDBG_OK; }
+
+  /* Allocate merge buffer */
+  memdbg_scan_result_entry_t *merged =
+      (memdbg_scan_result_entry_t *)malloc(
+          total_count * sizeof(memdbg_scan_result_entry_t));
+  if (merged == NULL) return MEMDBG_ERR_NOMEM;
+
+  size_t pos = 0U;
+  for (size_t w = 0U; w < num_workers && pos < total_count; ++w) {
+    size_t wc = workers[w].result.count;
+    if (wc == 0U) continue;
+    if (pos + wc > total_count) wc = total_count - pos;
+    memcpy(merged + pos, workers[w].result.entries,
+           wc * sizeof(memdbg_scan_result_entry_t));
+    pos += wc;
+  }
+
+  /* Replace out->entries with merged buffer.  out was pre-allocated
+     by scan_builder_prealloc, so we free that allocation first. */
+  free(out->entries);
+  out->entries   = merged;
+  out->count     = total_count;
+  out->truncated = any_truncated;
+  return MEMDBG_OK;
+}
+
+/* ---- Parallel map scan orchestrator ---- */
+
+static memdbg_status_t scan_maps_parallel(
+    parallel_map_scan_fn_t scan_fn, void *ctx,
+    int pid, const memdbg_map_entry_t *maps, size_t map_count,
+    size_t max_results, size_t buf_size, size_t min_map_len,
+    uint32_t prot_mask, uint64_t start_filter, uint64_t end_filter,
+    memdbg_scan_result_t *out) {
+
+  /* Determine thread count: clamp to available maps and config. */
+  size_t num_threads = MEMDBG_SCAN_PARALLEL_THREADS;
+  if (num_threads < 1U) num_threads = 1U;
+
+  /* Count mappable regions so we know the effective workload. */
+  size_t effective_maps = 0U;
+  for (size_t i = 0U; i < map_count; ++i) {
+    const memdbg_map_entry_t *map = &maps[i];
+    if ((map->protection & prot_mask) != prot_mask ||
+        map->end <= map->start)
+      continue;
+    uint64_t ms = map->start, me = map->end;
+    if (start_filter != 0U && ms < start_filter) ms = start_filter;
+    if (end_filter   != 0U && me > end_filter)   me = end_filter;
+    if (me <= ms) continue;
+    if ((uint64_t)(me - ms) < (uint64_t)min_map_len) continue;
+    effective_maps++;
+  }
+
+  /* Not worth parallelizing */
+  if (effective_maps < MEMDBG_SCAN_PARALLEL_MIN_MAPS * 2U ||
+      num_threads <= 1U) {
+    num_threads = 1U;
+  } else {
+    if (num_threads > effective_maps / MEMDBG_SCAN_PARALLEL_MIN_MAPS)
+      num_threads = effective_maps / MEMDBG_SCAN_PARALLEL_MIN_MAPS;
+    if (num_threads < 1U) num_threads = 1U;
+  }
+
+  /* Allocate worker structs */
+  parallel_worker_t *workers =
+      (parallel_worker_t *)calloc(num_threads, sizeof(parallel_worker_t));
+  if (workers == NULL) return MEMDBG_ERR_NOMEM;
+
+  /* Pre-allocate the output buffer at max_results.  Workers get
+     their own per-thread preallocated buffers inside the thread. */
+  memset(out, 0, sizeof(*out));
+  out->entries = (memdbg_scan_result_entry_t *)malloc(
+      max_results * sizeof(memdbg_scan_result_entry_t));
+  if (out->entries == NULL) {
+    free(workers);
+    return MEMDBG_ERR_NOMEM;
+  }
+  out->count = max_results; /* capacity marker for merge_scan_results */
+
+  /* Partition: collect qualifying map indices, then slice. */
+  size_t *eff_indices = (size_t *)malloc(
+      effective_maps * sizeof(size_t));
+  if (eff_indices == NULL) {
+    free(out->entries);
+    free(workers);
+    return MEMDBG_ERR_NOMEM;
+  }
+
+  {
+    size_t ei = 0U;
+    for (size_t i = 0U; i < map_count; ++i) {
+      const memdbg_map_entry_t *map = &maps[i];
+      if ((map->protection & prot_mask) != prot_mask ||
+          map->end <= map->start)
+        continue;
+      uint64_t ms = map->start, me = map->end;
+      if (start_filter != 0U && ms < start_filter) ms = start_filter;
+      if (end_filter   != 0U && me > end_filter)   me = end_filter;
+      if (me <= ms) continue;
+      if ((uint64_t)(me - ms) < (uint64_t)min_map_len) continue;
+      eff_indices[ei++] = i;
+    }
+  }
+
+  for (size_t t = 0U; t < num_threads; ++t) {
+    size_t chunk = effective_maps / num_threads;
+    size_t rem   = (effective_maps % num_threads);
+    size_t start_idx = t * chunk + (t < rem ? t : rem);
+    size_t extra     = (t < rem ? 1U : 0U);
+    workers[t].map_start = (start_idx < effective_maps)
+        ? eff_indices[start_idx] : map_count;
+    workers[t].map_end   = (start_idx + chunk + extra <= effective_maps)
+        ? ((start_idx + chunk + extra < effective_maps)
+           ? eff_indices[start_idx + chunk + extra] : map_count)
+        : workers[t].map_start;
+  }
+
+  free(eff_indices);
+
+  /* Ensure at least one map per thread and fill gaps for single-thread. */
+  if (num_threads == 1U) {
+    workers[0].map_start = 0U;
+    workers[0].map_end   = map_count;
+  }
+
+  /* Populate shared fields and spawn threads. */
+  pthread_t *threads =
+      (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+  bool spawn_ok = (threads != NULL);
+
+  for (size_t t = 0U; t < num_threads; ++t) {
+    workers[t].scan_fn      = scan_fn;
+    workers[t].ctx          = ctx;
+    workers[t].pid          = pid;
+    workers[t].max_results  = max_results;
+    workers[t].buf_size     = buf_size;
+    workers[t].maps         = maps;
+    workers[t].prot_mask    = prot_mask;
+    workers[t].start_filter = start_filter;
+    workers[t].end_filter   = end_filter;
+    workers[t].min_map_len  = min_map_len;
+
+    if (spawn_ok && num_threads > 1U &&
+        workers[t].map_start < workers[t].map_end) {
+      if (pthread_create(&threads[t], NULL,
+                         parallel_worker_thread, &workers[t]) != 0) {
+        spawn_ok = false;
+        workers[t].status = MEMDBG_ERR_NET;
+      }
+    } else {
+      /* Run inline for single-thread or empty range. */
+      parallel_worker_thread(&workers[t]);
+    }
+  }
+
+  /* Join all spawned threads. */
+  for (size_t t = 0U; t < num_threads && spawn_ok && num_threads > 1U; ++t) {
+    if (workers[t].status != MEMDBG_ERR_NET)
+      (void)pthread_join(threads[t], NULL);
+  }
+
+  free(threads);
+
+  /* Merge results */
+  {
+    memdbg_status_t merge_st =
+        merge_scan_results(workers, num_threads, out);
+    memdbg_status_t first_err = MEMDBG_OK;
+
+    for (size_t t = 0U; t < num_threads; ++t) {
+      if (workers[t].status != MEMDBG_OK && first_err == MEMDBG_OK)
+        first_err = workers[t].status;
+      /* Free per-thread result entries (now copied into `out`). */
+      free(workers[t].result.entries);
+    }
+
+    free(workers);
+
+    if (merge_st != MEMDBG_OK) {
+      memdbg_scan_result_free(out);
+      return merge_st;
+    }
+    if (first_err != MEMDBG_OK) {
+      memdbg_scan_result_free(out);
+      return first_err;
+    }
+  }
+
+  return MEMDBG_OK;
+}
+
+/* ---- Map-filter helper (shared by process-wide scans) ---- */
+
 /* ---- Public API: exact scan ---- */
 
 memdbg_status_t memdbg_scan_exact(const memdbg_scan_exact_request_t *request,
@@ -410,7 +747,21 @@ memdbg_status_t memdbg_scan_exact(const memdbg_scan_exact_request_t *request,
   return st;
 }
 
-/* ---- Public API: process exact scan (uses cached maps) ---- */
+/* ---- Callback: exact-value scan of one map range ---- */
+
+static memdbg_status_t scan_range_cb(void *ctx, int pid, uint64_t start,
+                                     uint64_t len, unsigned char *buffer,
+                                     scan_builder_t *builder) {
+  scan_context_t *sctx = (scan_context_t *)ctx;
+  unsigned char *saved = sctx->buffer;
+  (void)pid;
+  sctx->buffer = buffer;
+  memdbg_status_t st = scan_range(sctx, builder, start, len, start, true);
+  sctx->buffer = saved;
+  return st;
+}
+
+/* ---- Public API: process exact scan (uses cached maps, parallel) ---- */
 
 memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_request_t *request,
                                           memdbg_scan_result_t *out) {
@@ -423,30 +774,18 @@ memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_reques
   if (st != MEMDBG_OK) return st;
 
   memdbg_map_list_t maps;
-  st = memdbg_process_maps_cached(request->pid, &maps);  /* <-- cached */
+  st = memdbg_process_maps_cached(request->pid, &maps);
   if (st != MEMDBG_OK) { scan_context_fini(&ctx); return st; }
 
-  scan_builder_t builder;
-  memset(&builder, 0, sizeof(builder));
-  builder.result = out;
-  builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
-
+  size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
+  size_t buf_size = MEMDBG_SCAN_CHUNK + (size_t)ctx.value_len - 1U;
+
   uint64_t start_ns = monotonic_ns();
-
-  for (size_t i = 0U; i < maps.count && !out->truncated; ++i) {
-    const memdbg_map_entry_t *map = &maps.entries[i];
-    if ((map->protection & prot_mask) != prot_mask || map->end <= map->start) continue;
-    uint64_t scan_start = map->start, scan_end = map->end;
-    if (request->start != 0U && scan_start < request->start) scan_start = request->start;
-    if (request->end   != 0U && scan_end   > request->end)   scan_end   = request->end;
-    if (scan_end <= scan_start || scan_end - scan_start < ctx.value_len) continue;
-    out->regions_scanned++;
-    st = scan_range(&ctx, &builder, scan_start, scan_end - scan_start, scan_start, true);
-    if (st != MEMDBG_OK) break;
-  }
-
+  st = scan_maps_parallel(scan_range_cb, &ctx,
+      request->pid, maps.entries, maps.count,
+      max_results, buf_size, (size_t)ctx.value_len,
+      prot_mask, request->start, request->end, out);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
@@ -570,7 +909,24 @@ memdbg_status_t memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
   return st;
 }
 
-/* ---- Public API: process-wide AOB scan (BMH + good-suffix over cached maps) ---- */
+/* ---- AOB parallel context ---- */
+
+typedef struct {
+  const bm_table_t    *bm;
+  const unsigned char *pattern;
+  const unsigned char *mask;
+  size_t               pat_len;
+} aob_parallel_ctx_t;
+
+static memdbg_status_t scan_aob_cb(void *ctx, int pid, uint64_t start,
+                                   uint64_t len, unsigned char *buffer,
+                                   scan_builder_t *builder) {
+  aob_parallel_ctx_t *ac = (aob_parallel_ctx_t *)ctx;
+  return scan_aob_range(ac->bm, ac->pattern, ac->mask, ac->pat_len,
+                        pid, start, len, buffer, builder);
+}
+
+/* ---- Public API: process-wide AOB scan (BMH + good-suffix over cached maps, parallel) ---- */
 
 memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t *request,
                                         const uint8_t *pattern, const uint8_t *mask,
@@ -583,53 +939,102 @@ memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t 
   memset(out, 0, sizeof(*out));
 
   size_t pat_len = (size_t)request->pattern_length;
-  size_t overlap = pat_len > 1U ? pat_len - 1U : 0U;
-  size_t buf_size = MEMDBG_SCAN_CHUNK + overlap;
-  unsigned char *buffer = (unsigned char *)malloc(buf_size);
-  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
+  size_t buf_size = MEMDBG_SCAN_CHUNK + (pat_len > 1U ? pat_len - 1U : 0U);
 
   memdbg_map_list_t maps;
   memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
-  if (st != MEMDBG_OK) { free(buffer); return st; }
-
-  scan_builder_t builder;
-  memset(&builder, 0, sizeof(builder));
-  builder.result = out;
-  builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
+  if (st != MEMDBG_OK) return st;
 
   bm_table_t bm;
   bm_build_table(pattern, pat_len, mask, &bm);
 
+  aob_parallel_ctx_t ac;
+  ac.bm      = &bm;
+  ac.pattern = pattern;
+  ac.mask    = mask;
+  ac.pat_len = pat_len;
+
+  size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
+
   uint64_t start_ns = monotonic_ns();
-
-  for (size_t i = 0U; i < maps.count && !out->truncated; ++i) {
-    const memdbg_map_entry_t *map = &maps.entries[i];
-    if ((map->protection & prot_mask) != prot_mask || map->end <= map->start) continue;
-    uint64_t scan_start = map->start, scan_end = map->end;
-    if (request->start != 0U && scan_start < request->start) scan_start = request->start;
-    if (request->end   != 0U && scan_end   > request->end)   scan_end   = request->end;
-    if (scan_end <= scan_start) continue;
-    uint64_t map_len = scan_end - scan_start;
-    if (map_len < pat_len) continue;
-    out->regions_scanned++;
-    st = scan_aob_range(&bm, pattern, mask, pat_len,
-        request->pid, scan_start, map_len, buffer, &builder);
-    if (st != MEMDBG_OK) break;
-  }
-
+  st = scan_maps_parallel(scan_aob_cb, &ac,
+      request->pid, maps.entries, maps.count,
+      max_results, buf_size, pat_len,
+      prot_mask, request->start, request->end, out);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
   bm_free_table(&bm);
   memdbg_process_maps_free(&maps);
-  free(buffer);
   if (st != MEMDBG_OK) memdbg_scan_result_free(out);
   return st;
 }
 
-/* ---- Public API: unknown initial value scan (captures every aligned address) ---- */
+/* ---- Unknown scan parallel context ---- */
+
+typedef struct {
+  uint32_t value_len;
+  uint32_t alignment;
+  bool     need_alignment;
+} unknown_parallel_ctx_t;
+
+static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
+                                       uint64_t len, unsigned char *buffer,
+                                       scan_builder_t *builder) {
+  unknown_parallel_ctx_t *uc = (unknown_parallel_ctx_t *)ctx;
+  size_t overlap = uc->value_len > 1U ? (size_t)uc->value_len - 1U : 0U;
+  uint64_t scanned = 0U;
+  size_t carry = 0U;
+  uint64_t range_end = start + len;
+
+  while (scanned < len && !builder->result->truncated) {
+    uint64_t remaining = len - scanned;
+    size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
+    size_t read_len = 0U;
+
+    builder->result->read_calls++;
+    memdbg_status_t st = memdbg_memory_read(pid, start + scanned,
+        buffer + carry, to_read, &read_len);
+    if (st != MEMDBG_OK) { builder->result->read_errors++; break; }
+    if (read_len == 0U) break;
+    builder->result->bytes_scanned += (uint64_t)read_len;
+
+    size_t window = carry + read_len;
+    uint64_t base_addr = start + scanned - (uint64_t)carry;
+
+    size_t first = 0U;
+    if (base_addr < start) {
+      uint64_t off = start - base_addr;
+      if (off >= window) { scanned += read_len; continue; }
+      first = (size_t)off;
+    }
+    if (uc->need_alignment) {
+      uint64_t misalign = ((base_addr + first) - start) % uc->alignment;
+      if (misalign != 0U) first += (size_t)((uint64_t)uc->alignment - misalign);
+    }
+
+    for (size_t pos = first;
+         pos + uc->value_len <= window && !builder->result->truncated;
+         pos += uc->alignment) {
+      uint64_t addr = base_addr + (uint64_t)pos;
+      if (addr + uc->value_len > range_end) break;
+      memdbg_status_t as = scan_builder_append(builder, addr);
+      if (as != MEMDBG_OK) return as;
+    }
+
+    if (overlap != 0U) {
+      carry = window < overlap ? window : overlap;
+      if (carry > 0U)
+        memmove(buffer, buffer + window - carry, carry);
+    }
+    scanned += read_len;
+  }
+
+  return MEMDBG_OK;
+}
+
+/* ---- Public API: unknown initial value scan (captures every aligned address, parallel) ---- */
 
 memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *request,
                                     memdbg_scan_result_t *out) {
@@ -638,96 +1043,32 @@ memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *r
 
   uint32_t value_len = expected_value_length(request->value_type, request->value_length);
   if (value_len == 0U || value_len > MEMDBG_SCAN_VALUE_MAX) return MEMDBG_ERR_PARAM;
-  /* Hoist alignment calculation outside the region loop. */
-  uint32_t alignment = request->alignment == 0U ? value_len : request->alignment;
-  bool need_alignment = alignment > 1U;
 
-  /* Buffer: chunk + overlap for values crossing chunk boundaries */
-  size_t overlap = value_len > 1U ? (size_t)value_len - 1U : 0U;
-  size_t buf_size = MEMDBG_SCAN_CHUNK + overlap;
-  unsigned char *buffer = (unsigned char *)malloc(buf_size);
-  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
+  unknown_parallel_ctx_t uc;
+  uc.value_len      = value_len;
+  uc.alignment      = request->alignment == 0U ? value_len : request->alignment;
+  uc.need_alignment = uc.alignment > 1U;
+
+  size_t buf_size = MEMDBG_SCAN_CHUNK + (value_len > 1U ? (size_t)value_len - 1U : 0U);
 
   memdbg_map_list_t maps;
   memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
-  if (st != MEMDBG_OK) { free(buffer); return st; }
+  if (st != MEMDBG_OK) return st;
 
-  scan_builder_t builder;
-  memset(&builder, 0, sizeof(builder));
-  builder.result = out;
-  builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
-
+  size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
+
   uint64_t start_ns = monotonic_ns();
-
-  for (size_t mi = 0U; mi < maps.count && !out->truncated; ++mi) {
-    const memdbg_map_entry_t *map = &maps.entries[mi];
-    if ((map->protection & prot_mask) != prot_mask || map->end <= map->start) continue;
-    uint64_t scan_start = map->start, scan_end = map->end;
-    if (request->start != 0U && scan_start < request->start) scan_start = request->start;
-    if (request->end   != 0U && scan_end   > request->end)   scan_end   = request->end;
-    if (scan_end <= scan_start) continue;
-    uint64_t map_len = scan_end - scan_start;
-    if (map_len < value_len) continue;
-    out->regions_scanned++;
-
-    uint64_t scanned = 0U;
-    size_t carry = 0U;
-
-    while (scanned < map_len && !out->truncated) {
-      uint64_t remaining = map_len - scanned;
-      size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
-      size_t read_len = 0U;
-
-      out->read_calls++;
-      st = memdbg_memory_read(request->pid, scan_start + scanned,
-          buffer + carry, to_read, &read_len);
-      if (st != MEMDBG_OK) { out->read_errors++; break; }
-      if (read_len == 0U) break;
-      out->bytes_scanned += (uint64_t)read_len;
-
-      size_t window = carry + read_len;
-      uint64_t base_addr = scan_start + scanned - (uint64_t)carry;
-
-      /* Capture every aligned address in this window. */
-      size_t first = 0U;
-      if (base_addr < scan_start) {
-        /* The first carry bytes are from the previous chunk — skip
-           positions whose absolute address is < scan_start. */
-        uint64_t off = scan_start - base_addr;
-        if (off >= window) { scanned += read_len; continue; }
-        first = (size_t)off;
-      }
-      /* Align first to the requested alignment */
-      if (need_alignment) {
-        uint64_t misalign = ((base_addr + first) - scan_start) % alignment;
-        if (misalign != 0U) first += (size_t)((uint64_t)alignment - misalign);
-      }
-
-      for (size_t pos = first; pos + value_len <= window && !out->truncated; pos += alignment) {
-        uint64_t addr = base_addr + (uint64_t)pos;
-        if (addr + value_len > scan_end) break;
-        st = scan_builder_append(&builder, addr);
-        if (st != MEMDBG_OK) { free(buffer); memdbg_process_maps_free(&maps); return st; }
-      }
-
-      /* Carry tail for cross-chunk coverage. */
-      if (overlap != 0U) {
-        carry = window < overlap ? window : overlap;
-        if (carry > 0U)
-          memmove(buffer, buffer + window - carry, carry);
-      }
-      scanned += read_len;
-    }
-  }
-
+  st = scan_maps_parallel(scan_unknown_cb, &uc,
+      request->pid, maps.entries, maps.count,
+      max_results, buf_size, (size_t)value_len,
+      prot_mask, request->start, request->end, out);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
   memdbg_process_maps_free(&maps);
-  free(buffer);
-  return MEMDBG_OK;
+  if (st != MEMDBG_OK) memdbg_scan_result_free(out);
+  return st;
 }
 
 /* ---- Public API: pointer scan ---- */
