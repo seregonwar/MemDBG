@@ -2,7 +2,7 @@
 
 <br/>
 
-<img src="assets/logo-nobg.png" width="480" height="480" alt="MemDBG" />
+<img src="assets/logo-nobg.png" width="550" height="550" alt="MemDBG" />
 
 <br/>
 <br/>
