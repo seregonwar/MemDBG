@@ -17,6 +17,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +29,31 @@
 static socket_t g_udp_fd = PAL_INVALID_SOCKET;
 static struct sockaddr_in g_udp_addr;
 static atomic_bool g_udp_enabled = ATOMIC_VAR_INIT(false);
+static pthread_mutex_t g_udp_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static memdbg_status_t set_destination_locked(const char *host, uint16_t port,
+                                              bool broadcast) {
+  struct sockaddr_in next_addr;
+
+  if (host == NULL || host[0] == '\0' || port == 0U) {
+    return MEMDBG_ERR_PARAM;
+  }
+
+  memset(&next_addr, 0, sizeof(next_addr));
+  next_addr.sin_family = AF_INET;
+  next_addr.sin_port = htons(port);
+  if (inet_pton(AF_INET, host, &next_addr.sin_addr) != 1) {
+    return MEMDBG_ERR_PARAM;
+  }
+
+  if (g_udp_fd >= 0 && broadcast) {
+    int one = 1;
+    (void)setsockopt(g_udp_fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+  }
+
+  g_udp_addr = next_addr;
+  return MEMDBG_OK;
+}
 
 void memdbg_udp_log_config_defaults(memdbg_udp_log_config_t *cfg) {
   if (cfg == NULL) {
@@ -62,26 +88,46 @@ memdbg_status_t memdbg_udp_log_start(const memdbg_udp_log_config_t *cfg) {
     (void)setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
   }
 
-  memset(&g_udp_addr, 0, sizeof(g_udp_addr));
-  g_udp_addr.sin_family = AF_INET;
-  g_udp_addr.sin_port = htons(cfg->port);
-  if (inet_pton(AF_INET, cfg->host, &g_udp_addr.sin_addr) != 1) {
+  pthread_mutex_lock(&g_udp_lock);
+  g_udp_fd = fd;
+  memdbg_status_t status =
+      set_destination_locked(cfg->host, cfg->port, cfg->broadcast);
+  if (status != MEMDBG_OK) {
+    g_udp_fd = PAL_INVALID_SOCKET;
+    pthread_mutex_unlock(&g_udp_lock);
     (void)pal_socket_close(fd);
-    return MEMDBG_ERR_PARAM;
+    return status;
   }
 
-  g_udp_fd = fd;
   atomic_store_explicit(&g_udp_enabled, true, memory_order_relaxed);
+  pthread_mutex_unlock(&g_udp_lock);
   return MEMDBG_OK;
 }
 
+memdbg_status_t memdbg_udp_log_set_destination(const char *host, uint16_t port,
+                                               bool broadcast) {
+  memdbg_status_t status;
+
+  pthread_mutex_lock(&g_udp_lock);
+  if (!memdbg_udp_log_enabled() || g_udp_fd < 0) {
+    pthread_mutex_unlock(&g_udp_lock);
+    return MEMDBG_ERR_STATE;
+  }
+
+  status = set_destination_locked(host, port, broadcast);
+  pthread_mutex_unlock(&g_udp_lock);
+  return status;
+}
+
 void memdbg_udp_log_stop(void) {
+  pthread_mutex_lock(&g_udp_lock);
   atomic_store_explicit(&g_udp_enabled, false, memory_order_relaxed);
   if (g_udp_fd >= 0) {
     (void)pal_socket_close(g_udp_fd);
     g_udp_fd = PAL_INVALID_SOCKET;
   }
   memset(&g_udp_addr, 0, sizeof(g_udp_addr));
+  pthread_mutex_unlock(&g_udp_lock);
 }
 
 bool memdbg_udp_log_enabled(void) {
@@ -89,7 +135,13 @@ bool memdbg_udp_log_enabled(void) {
 }
 
 void memdbg_udp_log_send(const char *data, size_t len) {
-  if (!memdbg_udp_log_enabled() || g_udp_fd < 0 || data == NULL || len == 0U) {
+  if (data == NULL || len == 0U) {
+    return;
+  }
+
+  pthread_mutex_lock(&g_udp_lock);
+  if (!memdbg_udp_log_enabled() || g_udp_fd < 0) {
+    pthread_mutex_unlock(&g_udp_lock);
     return;
   }
 
@@ -104,9 +156,11 @@ void memdbg_udp_log_send(const char *data, size_t len) {
     } while (n < 0 && errno == EINTR);
 
     if (n < 0) {
+      pthread_mutex_unlock(&g_udp_lock);
       return;
     }
     data += chunk;
     len -= chunk;
   }
+  pthread_mutex_unlock(&g_udp_lock);
 }

@@ -25,6 +25,8 @@ struct MetricItem {
   ImVec4 value_color;
 };
 
+constexpr uint64_t kMaxPlausibleUptimeSeconds = 366ULL * 24ULL * 60ULL * 60ULL;
+
 inline std::string format_bytes(uint64_t bytes) {
   if (bytes < 1024ULL) return std::to_string(bytes) + " B";
   double v;
@@ -58,11 +60,17 @@ inline std::string format_count(uint64_t count) {
 }
 
 inline std::string format_uptime(uint64_t seconds) {
+  uint64_t d = seconds / 86400U;
   uint64_t h = seconds / 3600U;
   uint64_t m = (seconds % 3600U) / 60U;
   uint64_t s = seconds % 60U;
   char buf[48];
-  if (h > 0) {
+  if (d > 0) {
+    h = (seconds % 86400U) / 3600U;
+    std::snprintf(buf, sizeof(buf), "%llud %lluh %llum",
+                  (unsigned long long)d, (unsigned long long)h,
+                  (unsigned long long)m);
+  } else if (h > 0) {
     std::snprintf(buf, sizeof(buf), "%lluh %llum %llus",
                   (unsigned long long)h, (unsigned long long)m,
                   (unsigned long long)s);
@@ -148,7 +156,8 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   const double now = ImGui::GetTime();
 
   if (state.client.connected() &&
-      (state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) {
+      (state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY) &&
+      !state.scan_async_pending) {
     if (now >= state.next_telemetry_poll) {
       state.next_telemetry_poll = now + 1.0;
       state.telemetry_available = state.client.telemetry(state.telemetry_snap);
@@ -186,6 +195,8 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
 
   const auto &t = state.telemetry_snap;
   const float panel_w = std::max(240.0f, avail.x);
+  const bool uptime_valid =
+      t.uptime_seconds > 0U && t.uptime_seconds <= kMaxPlausibleUptimeSeconds;
 
   ui::begin_panel("TelemetryPanel", "Payload Telemetry", avail);
 
@@ -196,16 +207,30 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
     ImGui::SameLine();
     ImGui::SetCursorPosX(right_x);
   }
+  ImGui::BeginDisabled(state.scan_async_pending);
   if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Now").c_str(),
                       ImVec2(refresh_w, 36))) {
-    state.next_telemetry_poll = 0.0;
-    set_status(state, "Telemetry refresh requested");
+    if (state.client.telemetry(state.telemetry_snap)) {
+      state.telemetry_available = true;
+      state.next_telemetry_poll = now + 1.0;
+      set_status(state, "Telemetry refreshed");
+    } else {
+      state.telemetry_available = false;
+      set_status(state, "Telemetry: " + state.client.last_error());
+    }
+  }
+  ImGui::EndDisabled();
+  if (state.scan_async_pending) {
+    ImGui::TextColored(ui::colors().warning,
+                       "Telemetry polling is paused while a scan is running.");
   }
 
   section_header("Runtime Overview");
   std::vector<MetricItem> runtime = {
-      {icons::kOnline, "Uptime", format_uptime(t.uptime_seconds),
-       "since payload start", ui::colors().text},
+      {icons::kOnline, "Uptime",
+       uptime_valid ? format_uptime(t.uptime_seconds) : "unavailable",
+       uptime_valid ? "since payload start" : "payload reported an invalid clock",
+       uptime_valid ? ui::colors().text : ui::colors().warning},
       {icons::kTerminal, "Active Conns", format_count(t.active_connections),
        "pool size " + format_count(t.thread_pool_size), ui::colors().text},
       {icons::kGauge, "Read Calls", format_count(t.total_read_calls),
@@ -236,29 +261,43 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
 
   section_header("Map Cache");
   const uint64_t total_cache = t.scan_cache_hits + t.scan_cache_misses;
-  const double hit_rate = total_cache > 0
-      ? static_cast<double>(t.scan_cache_hits) / static_cast<double>(total_cache)
-      : 0.0;
-  draw_progress_row("Hit Rate", hit_rate, ui::colors().success);
-  draw_progress_row("Miss Rate", 1.0 - hit_rate, ui::colors().warning);
-  ImGui::TextColored(ui::colors().muted, "Hits %s    Misses %s",
-                     format_count(t.scan_cache_hits).c_str(),
-                     format_count(t.scan_cache_misses).c_str());
-  ImGui::TextColored(ui::colors().dim, "LRU cache: 8 PID entries  |  TTL: 5 seconds");
+  if (total_cache == 0U) {
+    ImGui::TextColored(ui::colors().muted,
+                       "No process map cache activity yet.");
+    ImGui::TextColored(ui::colors().dim,
+                       "Run a map refresh or process-wide scan to populate this section.");
+  } else {
+    const double hit_rate =
+        static_cast<double>(t.scan_cache_hits) / static_cast<double>(total_cache);
+    draw_progress_row("Hit Rate", hit_rate, ui::colors().success);
+    draw_progress_row("Miss Rate", 1.0 - hit_rate, ui::colors().warning);
+    ImGui::TextColored(ui::colors().muted, "Hits %s    Misses %s",
+                       format_count(t.scan_cache_hits).c_str(),
+                       format_count(t.scan_cache_misses).c_str());
+    ImGui::TextColored(ui::colors().dim, "LRU cache: 8 PID entries  |  TTL: 5 seconds");
+  }
 
   section_header("Aggregate Performance");
-  const double read_mib_s = t.uptime_seconds > 0
+  const double read_mib_s = uptime_valid
       ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.uptime_seconds) /
             (1024.0 * 1024.0)
       : 0.0;
-  const double write_mib_s = t.uptime_seconds > 0
+  const double write_mib_s = uptime_valid
       ? static_cast<double>(t.total_bytes_written) / static_cast<double>(t.uptime_seconds) /
             (1024.0 * 1024.0)
       : 0.0;
-  ImGui::TextColored(ui::colors().success, "Read   %.2f MiB/s   (%s total)",
-                     read_mib_s, format_bytes(t.total_bytes_read).c_str());
-  ImGui::TextColored(ui::colors().primary2, "Write  %.2f MiB/s   (%s total)",
-                     write_mib_s, format_bytes(t.total_bytes_written).c_str());
+  if (uptime_valid) {
+    ImGui::TextColored(ui::colors().success, "Read   %.2f MiB/s   (%s total)",
+                       read_mib_s, format_bytes(t.total_bytes_read).c_str());
+    ImGui::TextColored(ui::colors().primary2, "Write  %.2f MiB/s   (%s total)",
+                       write_mib_s, format_bytes(t.total_bytes_written).c_str());
+  } else {
+    ImGui::TextColored(ui::colors().warning,
+                       "Throughput rate unavailable until the payload reports a valid monotonic uptime.");
+    ImGui::TextColored(ui::colors().muted, "Read %s total  |  Write %s total",
+                       format_bytes(t.total_bytes_read).c_str(),
+                       format_bytes(t.total_bytes_written).c_str());
+  }
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Total call overhead: %s reads + %s writes",
                      format_count(t.total_read_calls).c_str(),

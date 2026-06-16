@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <sstream>
 
 extern "C" {
@@ -58,6 +59,13 @@ static bool maybe_decompress(const std::vector<uint8_t> &response,
 namespace memdbg::frontend {
 
 namespace {
+
+constexpr uint32_t kMaxProcessEntries =
+    (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
+    sizeof(memdbg_process_entry_t);
+constexpr uint32_t kMaxMapEntries =
+    (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
+    sizeof(memdbg_map_entry_t);
 
 template <typename T> bool read_object(const std::vector<uint8_t> &data, T &out) {
   if (data.size() < sizeof(T)) {
@@ -126,7 +134,8 @@ Client::Client() = default;
 Client::~Client() { disconnect(); }
 
 bool Client::connect_to(const std::string &host, uint16_t port) {
-  disconnect();
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  disconnect_unlocked();
 
   std::string startup_error;
   if (!platform::socket_startup(&startup_error)) {
@@ -138,7 +147,7 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
   fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
   if (!platform::socket_valid(fd_)) {
     set_error_from_errno("socket");
-    disconnect();
+    disconnect_unlocked();
     return false;
   }
 
@@ -150,13 +159,13 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
   addr.sin_port = htons(port);
   if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
     set_error("invalid IPv4 address");
-    disconnect();
+    disconnect_unlocked();
     return false;
   }
 
   if (::connect(fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
     set_error_from_errno("connect");
-    disconnect();
+    disconnect_unlocked();
     return false;
   }
 
@@ -165,6 +174,11 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
 }
 
 void Client::disconnect() {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  disconnect_unlocked();
+}
+
+void Client::disconnect_unlocked() {
   if (platform::socket_valid(fd_)) {
     platform::socket_shutdown_both(fd_);
     platform::socket_close(fd_);
@@ -177,6 +191,7 @@ void Client::disconnect() {
 }
 
 platform::socket_handle_t Client::release_fd() {
+  std::lock_guard<std::mutex> lock(io_mutex_);
   platform::socket_handle_t fd = fd_;
   fd_ = platform::invalid_socket();
   last_error_.clear();
@@ -184,7 +199,8 @@ platform::socket_handle_t Client::release_fd() {
 }
 
 void Client::take_fd(platform::socket_handle_t fd) {
-  if (platform::socket_valid(fd_)) disconnect();
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  if (platform::socket_valid(fd_)) disconnect_unlocked();
   if (platform::socket_valid(fd) && !socket_runtime_active_) {
     std::string startup_error;
     if (!platform::socket_startup(&startup_error)) {
@@ -246,6 +262,10 @@ bool Client::process_list(std::vector<ProcessEntry> &out) {
 
   uint32_t count = 0;
   std::memcpy(&count, response.data(), sizeof(count));
+  if (count > kMaxProcessEntries) {
+    set_error("process list response has an invalid item count");
+    return false;
+  }
   size_t expected = sizeof(count) + static_cast<size_t>(count) *
                                        sizeof(memdbg_process_entry_t);
   if (response.size() < expected) {
@@ -258,9 +278,15 @@ bool Client::process_list(std::vector<ProcessEntry> &out) {
   const auto *entries = reinterpret_cast<const memdbg_process_entry_t *>(
       response.data() + sizeof(count));
   for (uint32_t i = 0; i < count; ++i) {
+    if (entries[i].pid <= 0) {
+      continue;
+    }
     ProcessEntry entry;
     entry.pid = entries[i].pid;
     entry.name = fixed_string(entries[i].name, sizeof(entries[i].name));
+    if (entry.name.empty()) {
+      entry.name = "pid " + std::to_string(entry.pid);
+    }
     out.push_back(std::move(entry));
   }
   return true;
@@ -281,6 +307,10 @@ bool Client::process_maps(int32_t pid, std::vector<MapEntry> &out) {
 
   uint32_t count = 0;
   std::memcpy(&count, response.data(), sizeof(count));
+  if (count > kMaxMapEntries) {
+    set_error("map response has an invalid item count");
+    return false;
+  }
   size_t expected =
       sizeof(count) + static_cast<size_t>(count) * sizeof(memdbg_map_entry_t);
   if (response.size() < expected) {
@@ -293,10 +323,13 @@ bool Client::process_maps(int32_t pid, std::vector<MapEntry> &out) {
   const auto *entries =
       reinterpret_cast<const memdbg_map_entry_t *>(response.data() + sizeof(count));
   for (uint32_t i = 0; i < count; ++i) {
+    if (entries[i].end <= entries[i].start) {
+      continue;
+    }
     MapEntry entry;
     entry.start = entries[i].start;
     entry.end = entries[i].end;
-    entry.protection = entries[i].protection;
+    entry.protection = entries[i].protection & 0x7U;
     entry.flags = entries[i].flags;
     entry.name = fixed_string(entries[i].name, sizeof(entries[i].name));
     out.push_back(std::move(entry));
@@ -648,6 +681,7 @@ bool Client::process_continue(int32_t pid) {
 
 bool Client::request(uint16_t command, const void *payload,
                      uint32_t payload_len, std::vector<uint8_t> &response) {
+  std::lock_guard<std::mutex> lock(io_mutex_);
   if (!platform::socket_valid(fd_)) {
     set_error("not connected");
     return false;

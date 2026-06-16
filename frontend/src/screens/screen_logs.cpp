@@ -25,6 +25,18 @@ void draw_logs(AppState &state, ImVec2 avail) {
   ImGui::SameLine();
   if (ui::soft_button((std::string(icons::kTrash) + "  Clear").c_str(), ImVec2(110, 38))) state.udp_listener.clear();
   ImGui::SameLine();
+  auto logs = state.udp_listener.snapshot();
+  if (ui::soft_button((std::string(icons::kCopy) + "  Copy").c_str(), ImVec2(110, 38))) {
+    if (!logs.empty()) {
+      std::string all;
+      for (const auto &line : logs) all += line + "\n";
+      ImGui::SetClipboardText(all.c_str());
+      set_status(state, "Logs copied to clipboard");
+    } else {
+      set_status(state, "No logs to copy");
+    }
+  }
+  ImGui::SameLine();
   const auto log_stats = state.udp_listener.stats();
   ImGui::TextColored(ui::colors().dim,
     "UDP %u | in %llu | lost %llu | evicted %llu | cap %d",
@@ -42,7 +54,6 @@ void draw_logs(AppState &state, ImVec2 avail) {
   if (!err.empty()) ImGui::TextColored(ui::colors().warning, "UDP error: %s", err.c_str());
 
   ImGui::Spacing();
-  auto logs = state.udp_listener.snapshot();
   ImGui::BeginChild("LogLines", ImVec2(0,0), false, ImGuiWindowFlags_HorizontalScrollbar);
   if (logs.empty()) {
     ui::draw_empty_state("No UDP messages yet", "Payload telemetry will appear here after the console sends datagrams.");

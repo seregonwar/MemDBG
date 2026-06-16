@@ -34,6 +34,12 @@
 #define MEMDBG_PAL_CONSOLE 1
 #endif
 
+#if defined(MEMDBG_PAL_PS4)
+#include <ps4/mdbg.h>
+#elif defined(MEMDBG_PAL_PS5)
+#include <ps5/mdbg.h>
+#endif
+
 #if defined(__FreeBSD__) && !defined(MEMDBG_PAL_CONSOLE)
 #include <sys/ptrace.h>
 #include <sys/types.h>
@@ -340,71 +346,91 @@ void pal_memory_batch_write_end(pal_memory_batch_write_t *batch) { free(batch); 
 void pal_memory_fd_cache_flush(int pid) { (void)pid; }
 
 /* ========================================================================
- *  PS4 (Orbis)  —  sceDbgMemoryRead / sceDbgMemoryWrite
+ *  PS4 / PS5  —  mdbg_copyout / mdbg_copyin
  * ======================================================================== */
-#elif defined(MEMDBG_PAL_PS4)
+#elif defined(MEMDBG_PAL_CONSOLE)
 
-/* Stub — replace with actual sceDbg* calls when building with Orbis SDK. */
+static memdbg_status_t mdbg_errno_status(void) {
+  switch (errno) {
+  case EACCES:
+  case EPERM:
+    return MEMDBG_ERR_PERMISSION;
+  case ESRCH:
+  case ENOENT:
+    return MEMDBG_ERR_NOT_FOUND;
+  case EINVAL:
+    return MEMDBG_ERR_PARAM;
+  default:
+    return MEMDBG_ERR_IO;
+  }
+}
+
 memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
                                 size_t length, size_t *read_out) {
-  (void)pid; (void)address; (void)buffer; (void)length;
   if (read_out != NULL) *read_out = 0U;
-  return MEMDBG_ERR_UNSUPPORTED;
+  if (pid <= 0 || (buffer == NULL && length != 0U)) return MEMDBG_ERR_PARAM;
+  if (pid <= 1) return MEMDBG_ERR_PERMISSION;
+  if (length == 0U) return MEMDBG_OK;
+
+  errno = 0;
+  if (mdbg_copyout((pid_t)pid, (intptr_t)address, buffer, length) != 0)
+    return mdbg_errno_status();
+
+  if (read_out != NULL) *read_out = length;
+  return MEMDBG_OK;
 }
 
 memdbg_status_t pal_memory_write(int pid, uint64_t address,
                                  const void *buffer, size_t length,
                                  size_t *written_out) {
-  (void)pid; (void)address; (void)buffer; (void)length;
   if (written_out != NULL) *written_out = 0U;
-  return MEMDBG_ERR_UNSUPPORTED;
+  if (pid <= 0 || (buffer == NULL && length != 0U)) return MEMDBG_ERR_PARAM;
+  if (pid <= 1) return MEMDBG_ERR_PERMISSION;
+  if (length == 0U) return MEMDBG_OK;
+
+  errno = 0;
+  if (mdbg_copyin((pid_t)pid, buffer, (intptr_t)address, length) != 0)
+    return mdbg_errno_status();
+
+  if (written_out != NULL) *written_out = length;
+  return MEMDBG_OK;
 }
 
-struct pal_memory_batch { int unused; };
-pal_memory_batch_t *pal_memory_batch_begin(int pid) { (void)pid; return NULL; }
+struct pal_memory_batch { int pid; };
+pal_memory_batch_t *pal_memory_batch_begin(int pid) {
+  if (pid <= 1) return NULL;
+  pal_memory_batch_t *b = (pal_memory_batch_t *)malloc(sizeof(*b));
+  if (b == NULL) return NULL;
+  b->pid = pid;
+  return b;
+}
+
 size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_t len) {
-  (void)b; (void)a; (void)buf; (void)len; return 0U; }
+  if (b == NULL || buf == NULL || len == 0U) return 0U;
+  if (b->pid <= 1) return 0U;
+  errno = 0;
+  return mdbg_copyout((pid_t)b->pid, (intptr_t)a, buf, len) == 0 ? len : 0U;
+}
+
 void pal_memory_batch_end(pal_memory_batch_t *b) { free(b); }
 
-struct pal_memory_batch_write { int unused; };
-pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) { (void)pid; return NULL; }
-size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
-  (void)b; (void)a; (void)buf; (void)len; return 0U; }
-void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
-
-void pal_memory_fd_cache_flush(int pid) { (void)pid; }
-
-/* ========================================================================
- *  PS5 (Prospero)  —  sceDbgMemoryRead / sceDbgMemoryWrite (Prospero SDK)
- * ======================================================================== */
-#elif defined(MEMDBG_PAL_PS5)
-
-/* Stub — replace with actual Prospero SDK calls. */
-memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
-                                size_t length, size_t *read_out) {
-  (void)pid; (void)address; (void)buffer; (void)length;
-  if (read_out != NULL) *read_out = 0U;
-  return MEMDBG_ERR_UNSUPPORTED;
+struct pal_memory_batch_write { int pid; };
+pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) {
+  if (pid <= 1) return NULL;
+  pal_memory_batch_write_t *b =
+      (pal_memory_batch_write_t *)malloc(sizeof(*b));
+  if (b == NULL) return NULL;
+  b->pid = pid;
+  return b;
 }
 
-memdbg_status_t pal_memory_write(int pid, uint64_t address,
-                                 const void *buffer, size_t length,
-                                 size_t *written_out) {
-  (void)pid; (void)address; (void)buffer; (void)length;
-  if (written_out != NULL) *written_out = 0U;
-  return MEMDBG_ERR_UNSUPPORTED;
+size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
+  if (b == NULL || buf == NULL || len == 0U) return 0U;
+  if (b->pid <= 1) return 0U;
+  errno = 0;
+  return mdbg_copyin((pid_t)b->pid, buf, (intptr_t)a, len) == 0 ? len : 0U;
 }
 
-struct pal_memory_batch { int unused; };
-pal_memory_batch_t *pal_memory_batch_begin(int pid) { (void)pid; return NULL; }
-size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_t len) {
-  (void)b; (void)a; (void)buf; (void)len; return 0U; }
-void pal_memory_batch_end(pal_memory_batch_t *b) { free(b); }
-
-struct pal_memory_batch_write { int unused; };
-pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) { (void)pid; return NULL; }
-size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
-  (void)b; (void)a; (void)buf; (void)len; return 0U; }
 void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
 
 void pal_memory_fd_cache_flush(int pid) { (void)pid; }
