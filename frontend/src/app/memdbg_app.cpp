@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -27,8 +28,156 @@
 #include <fstream>
 #include <future>
 #include <string>
+#include <vector>
+
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+
+#include "stb_image.h"
 
 namespace memdbg::frontend {
+
+namespace {
+
+struct TextureAsset {
+  GLuint texture = 0;
+  int width = 0;
+  int height = 0;
+  int content_width = 0;
+  int content_height = 0;
+  ImVec2 uv0 = ImVec2(0.0f, 0.0f);
+  ImVec2 uv1 = ImVec2(1.0f, 1.0f);
+  bool attempted = false;
+};
+
+static TextureAsset s_logo_texture;
+static std::filesystem::path s_executable_dir;
+
+static ImTextureID texture_id(GLuint texture) {
+  return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(texture));
+}
+
+static void add_asset_candidates(std::vector<std::filesystem::path> &out,
+                                 const std::filesystem::path &root,
+                                 const std::filesystem::path &relative_path) {
+  if (root.empty()) return;
+  std::filesystem::path current = root;
+  for (int depth = 0; depth < 6; ++depth) {
+    out.push_back(current / relative_path);
+    if (!current.has_parent_path() || current.parent_path() == current) break;
+    current = current.parent_path();
+  }
+}
+
+static void init_executable_dir(const char *argv0) {
+  if (argv0 == nullptr || argv0[0] == '\0') return;
+
+  std::error_code ec;
+  std::filesystem::path path(argv0);
+  if (path.is_relative()) {
+    path = std::filesystem::current_path(ec) / path;
+    ec.clear();
+  }
+  const std::filesystem::path canonical = std::filesystem::weakly_canonical(path, ec);
+  if (!ec && !canonical.empty()) path = canonical;
+  if (path.has_parent_path()) s_executable_dir = path.parent_path();
+}
+
+static std::filesystem::path find_asset_path(const char *relative_path) {
+  const std::filesystem::path rel(relative_path);
+  std::vector<std::filesystem::path> candidates;
+  candidates.reserve(16);
+  candidates.push_back(rel);
+  add_asset_candidates(candidates, s_executable_dir, rel);
+
+  std::error_code ec;
+  add_asset_candidates(candidates, std::filesystem::current_path(ec), rel);
+
+  for (const auto &candidate : candidates) {
+    ec.clear();
+    if (std::filesystem::exists(candidate, ec) && !ec) {
+      const std::filesystem::path canonical = std::filesystem::weakly_canonical(candidate, ec);
+      return !ec && !canonical.empty() ? canonical : candidate;
+    }
+  }
+  return rel;
+}
+
+static void compute_content_uv(TextureAsset &asset, const unsigned char *pixels) {
+  int min_x = asset.width;
+  int min_y = asset.height;
+  int max_x = -1;
+  int max_y = -1;
+
+  for (int y = 0; y < asset.height; ++y) {
+    for (int x = 0; x < asset.width; ++x) {
+      const unsigned char alpha = pixels[(static_cast<size_t>(y) * asset.width + x) * 4U + 3U];
+      if (alpha < 8U) continue;
+      min_x = std::min(min_x, x);
+      min_y = std::min(min_y, y);
+      max_x = std::max(max_x, x);
+      max_y = std::max(max_y, y);
+    }
+  }
+
+  if (max_x < min_x || max_y < min_y) {
+    asset.content_width = asset.width;
+    asset.content_height = asset.height;
+    return;
+  }
+
+  asset.content_width = max_x - min_x + 1;
+  asset.content_height = max_y - min_y + 1;
+  asset.uv0 = ImVec2(static_cast<float>(min_x) / static_cast<float>(asset.width),
+                     static_cast<float>(min_y) / static_cast<float>(asset.height));
+  asset.uv1 = ImVec2(static_cast<float>(max_x + 1) / static_cast<float>(asset.width),
+                     static_cast<float>(max_y + 1) / static_cast<float>(asset.height));
+}
+
+static bool load_texture_png(TextureAsset &asset, const char *relative_path) {
+  if (asset.texture != 0U) return true;
+  if (asset.attempted) return false;
+  asset.attempted = true;
+
+  const std::filesystem::path path = find_asset_path(relative_path);
+  int width = 0, height = 0, channels = 0;
+  unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
+  if (pixels == nullptr || width <= 0 || height <= 0) {
+    stbi_image_free(pixels);
+    return false;
+  }
+
+  asset.width = width;
+  asset.height = height;
+  compute_content_uv(asset, pixels);
+
+  GLuint texture = 0;
+  glGenTextures(1, &texture);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, pixels);
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  stbi_image_free(pixels);
+  asset.texture = texture;
+  return true;
+}
+
+static void shutdown_texture(TextureAsset &asset) {
+  if (asset.texture != 0U) {
+    GLuint texture = asset.texture;
+    glDeleteTextures(1, &texture);
+  }
+  asset = TextureAsset{};
+}
+
+} // namespace
 
 /* ---- State helpers ---- */
 
@@ -307,17 +456,42 @@ static ImVec4 alpha(ImVec4 color, float value) {
   return color;
 }
 
+static void text_ellipsis(const char *text, float max_width, ImVec4 color) {
+  if (text == nullptr || text[0] == '\0') return;
+  if (ImGui::CalcTextSize(text).x <= max_width || max_width <= 24.0f) {
+    ImGui::TextColored(color, "%s", text);
+    return;
+  }
+
+  const float ellipsis_w = ImGui::CalcTextSize("...").x;
+  const size_t len = strlen(text);
+  const float avg_w = ImGui::CalcTextSize(text).x / static_cast<float>(len);
+  size_t keep = static_cast<size_t>((max_width - ellipsis_w) / avg_w);
+  if (keep > len) keep = len;
+  if (keep < 1U) keep = 1U;
+
+  char buf[512];
+  while (keep > 0U) {
+    const size_t n = std::min(keep, sizeof(buf) - 4U);
+    std::memcpy(buf, text, n);
+    std::memcpy(buf + n, "...", 4U);
+    if (ImGui::CalcTextSize(buf).x <= max_width) break;
+    --keep;
+  }
+  ImGui::TextColored(color, "%s", buf);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text);
+}
+
 static void sidebar_section(const char *label) {
-  ImGui::SetCursorPosX(24.0f);
+  ImGui::SetCursorPosX(10.0f);
   ImGui::TextColored(ui::colors().dim, "%s", label);
-  ImGui::Dummy(ImVec2(0.0f, 1.0f));
 }
 
 static void nav_item(AppState &state, Screen screen, const char *icon, const char *label) {
   bool selected = state.screen == screen;
   ImGui::PushID(label);
 
-  const float row_h = 34.0f;
+  const float row_h = 28.0f;
   const float row_w = ImGui::GetContentRegionAvail().x;
   ImVec2 pos = ImGui::GetCursorScreenPos();
   ImGui::InvisibleButton("##nav", ImVec2(row_w, row_h));
@@ -325,22 +499,22 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
   if (ImGui::IsItemClicked()) state.screen = screen;
 
   ImDrawList *dl = ImGui::GetWindowDrawList();
-  const ImVec2 min(pos.x + 6.0f, pos.y + 2.0f);
-  const ImVec2 max(pos.x + row_w - 4.0f, pos.y + row_h - 2.0f);
+  const ImVec2 min(pos.x + 2.0f, pos.y);
+  const ImVec2 max(pos.x + row_w - 2.0f, pos.y + row_h);
 
   if (selected || hovered) {
     const ImVec4 bg = selected ? ui::colors().bg3 : alpha(ui::colors().bg3, 0.58f);
-    dl->AddRectFilled(min, max, ui::color_u32(bg), 8.0f);
+    dl->AddRectFilled(min, max, ui::color_u32(bg), 1.0f);
     dl->AddRect(min, max,
                 ui::color_u32(selected ? alpha(ui::colors().border_hot, 0.72f)
                                        : alpha(ui::colors().border, 0.45f)),
-                8.0f);
+                1.0f);
   }
 
   if (selected) {
-    dl->AddRectFilled(ImVec2(pos.x + 10.0f, pos.y + 9.0f),
-                      ImVec2(pos.x + 14.0f, pos.y + row_h - 8.0f),
-                      ui::color_u32(ui::colors().primary2), 3.0f);
+    dl->AddRectFilled(ImVec2(pos.x + 3.0f, pos.y + 3.0f),
+                      ImVec2(pos.x + 6.0f, pos.y + row_h - 3.0f),
+                      ui::color_u32(ui::colors().primary2), 1.0f);
   }
 
   const ImVec4 icon_col = selected ? ui::colors().primary2 :
@@ -349,11 +523,11 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
                           hovered ? ui::colors().text : ui::colors().muted;
   const ImVec2 icon_size = ImGui::CalcTextSize(icon);
   const ImVec2 label_size = ImGui::CalcTextSize(label);
-  const float icon_x = pos.x + 25.0f - icon_size.x * 0.5f;
+  const float icon_x = pos.x + 23.0f - icon_size.x * 0.5f;
   const float icon_y = pos.y + (row_h - icon_size.y) * 0.5f;
   const float text_y = pos.y + (row_h - label_size.y) * 0.5f;
   dl->AddText(ImVec2(icon_x, icon_y), ui::color_u32(icon_col), icon);
-  dl->AddText(ImVec2(pos.x + 54.0f, text_y), ui::color_u32(text_col), label);
+  dl->AddText(ImVec2(pos.x + 45.0f, text_y), ui::color_u32(text_col), label);
 
   if (hovered) ImGui::SetTooltip("%s", label);
   ImGui::PopID();
@@ -361,20 +535,18 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
 
 static void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18,20));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8,2));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6,6));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4,2));
   ImGui::BeginChild("Sidebar", size, true, ImGuiWindowFlags_NoScrollbar);
 
-  ImGui::TextColored(ui::colors().primary2, "%s", "MemDBG");
-  ui::text_muted("Native v0.1.0");
-  ImGui::Dummy(ImVec2(0, 6));
-  ImGui::Separator();
-  ImGui::Dummy(ImVec2(0, 6));
+  ImGui::TextColored(ui::colors().muted, "TOOLBOX");
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "v0.1.0");
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14,10));
-  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-  ImGui::BeginChild("SidebarStatus", ImVec2(0,78), true, ImGuiWindowFlags_NoScrollbar);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8,6));
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 2.0f);
+  ImGui::BeginChild("SidebarStatus", ImVec2(0,52), true, ImGuiWindowFlags_NoScrollbar);
   const bool connected = state.client.connected();
   const ImVec4 status_color = state.connect_pending ? ui::colors().warning :
                               connected ? ui::colors().success : ui::colors().dim;
@@ -385,31 +557,30 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
                                           connected ? "Connected" : "Offline");
   ImGui::TextColored(ui::colors().dim, "%s:%d", state.host, state.debug_port);
   ImGui::EndGroup();
-  ImGui::Dummy(ImVec2(0, 3));
-  ImGui::TextColored(ui::colors().dim, "UDP");
-  ImGui::SameLine(72.0f);
+  ImGui::SameLine();
+  ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 72.0f);
   ImGui::TextColored(state.udp_listener.running() ? ui::colors().success : ui::colors().dim,
-                     "%s", state.udp_listener.running() ? "listening" : "stopped");
+                     "%s", state.udp_listener.running() ? "UDP on" : "UDP off");
   ImGui::EndChild();
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 
   /* Footer: fixed height, drawn first so scrollable area gets remaining space */
-  const float footer_h = 56.0f;
+  const float footer_h = 42.0f;
   const float avail_y = ImGui::GetContentRegionAvail().y;
-  const float nav_h = avail_y - footer_h - 8.0f;  /* 8px gap */
+  const float nav_h = avail_y - footer_h - 4.0f;
 
   /* Scrollable nav area */
   if (nav_h > 40.0f) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 2));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 1));
     ImGui::BeginChild("SidebarNavList", ImVec2(0, nav_h), true);
 
-    ImGui::Dummy(ImVec2(0, 6));
+    ImGui::Dummy(ImVec2(0, 3));
     sidebar_section("MAIN");
     nav_item(state, Screen::Home, icons::kHome, "Command Center");
     nav_item(state, Screen::Consoles, icons::kConsole, "Consoles");
 
-    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Dummy(ImVec2(0, 3));
     sidebar_section("TOOLS");
     nav_item(state, Screen::Processes, icons::kProcess, "Processes");
     nav_item(state, Screen::Memory, icons::kMemory, "Memory");
@@ -418,12 +589,12 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::AOBScanner, icons::kCode, "AOB Scan");
     nav_item(state, Screen::Trainer, icons::kTrainer, "Trainer");
 
-    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Dummy(ImVec2(0, 3));
     sidebar_section("OBSERVE");
     nav_item(state, Screen::Logs, icons::kLogs, "UDP Logs");
     nav_item(state, Screen::Telemetry, icons::kTelemetry, "Telemetry");
 
-    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Dummy(ImVec2(0, 3));
     sidebar_section("SYSTEM");
     nav_item(state, Screen::Settings, icons::kSettings, "Settings");
     nav_item(state, Screen::Credits, icons::kCredits, "Credits");
@@ -434,15 +605,12 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
 
   /* Fixed footer */
   ImGui::SetCursorPosY(size.y - footer_h - ImGui::GetStyle().WindowPadding.y);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18, 8));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 5));
   ImGui::BeginChild("SidebarFooter", ImVec2(0, footer_h), true, ImGuiWindowFlags_NoScrollbar);
-  ImGui::Separator();
-  ImGui::TextColored(ui::colors().dim, "TCP");
-  ImGui::SameLine(70.0f);
-  ImGui::TextColored(ui::colors().muted, "%d", state.debug_port);
-  ImGui::TextColored(ui::colors().dim, "UDP");
-  ImGui::SameLine(70.0f);
-  ImGui::TextColored(ui::colors().muted, "%d", state.udp_port);
+  ImGui::TextColored(ui::colors().dim, "TCP %d", state.debug_port);
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "UDP %d", state.udp_port);
+  ImGui::TextColored(ui::colors().dim, "PID %d", state.selected_pid);
   ImGui::EndChild();
   ImGui::PopStyleVar();
 
@@ -452,87 +620,132 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
 
 /* ---- Top bar ---- */
 
+static bool toolbar_button(const char *id, const char *icon, const char *label,
+                           const char *shortcut, float width) {
+  ImGui::PushID(id);
+  std::string text = std::string(icon) + " " + label;
+  if (shortcut != nullptr && shortcut[0] != '\0') {
+    text += " ";
+    text += shortcut;
+  }
+  const bool pressed = ui::soft_button(text.c_str(), ImVec2(width, 28.0f));
+  if (ImGui::IsItemHovered()) {
+    if (shortcut != nullptr && shortcut[0] != '\0')
+      ImGui::SetTooltip("%s (%s)", label, shortcut);
+    else
+      ImGui::SetTooltip("%s", label);
+  }
+  ImGui::PopID();
+  return pressed;
+}
+
 static void draw_top_bar(AppState &state, ImVec2 size) {
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().panel);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24, 18));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 0));
   ImGui::BeginChild("TopBar", size, true, ImGuiWindowFlags_NoScrollbar);
+  const float topbar_w = ImGui::GetWindowWidth();
 
-  const float btn_w = state.client.connected() ? 150.0f : 178.0f;
-  const float title_max_w = ImGui::GetWindowWidth() - btn_w - 64.0f;
+  load_texture_png(s_logo_texture, "assets/logo-nobg.png");
+  const float logo_h = 32.0f;
+  const int logo_content_w = s_logo_texture.content_width > 0 ? s_logo_texture.content_width : s_logo_texture.width;
+  const int logo_content_h = s_logo_texture.content_height > 0 ? s_logo_texture.content_height : s_logo_texture.height;
+  const float logo_w = logo_content_h > 0
+      ? logo_h * (static_cast<float>(logo_content_w) / static_cast<float>(logo_content_h))
+      : 136.0f;
 
-  /* Title with ellipsis on overflow (single-pass truncation) */
-  const char *title = screen_title(state.screen);
-  const char *subtitle = screen_subtitle(state.screen);
-  const float ellipsis_w = ImGui::CalcTextSize("...").x;
-
-  auto draw_truncated = [&](const char *text, ImVec4 color) {
-    if (ImGui::CalcTextSize(text).x <= title_max_w || title_max_w <= 40.0f) {
-      ImGui::TextColored(color, "%s", text);
-      return;
-    }
-    /* Estimate truncation point using average char width */
-    size_t len = strlen(text);
-    if (len == 0) return;
-    float full_w = ImGui::CalcTextSize(text).x;
-    float avg_w = full_w / (float)len;
-    size_t keep = (size_t)((title_max_w - ellipsis_w) / avg_w);
-    if (keep > len) keep = len;
-    if (keep < 1) keep = 1;
-    /* Walk back if overshoot */
-    char buf[256];
-    while (keep > 0) {
-      size_t n = keep < sizeof(buf) - 4 ? keep : sizeof(buf) - 4;
-      memcpy(buf, text, n);
-      memcpy(buf + n, "...", 4);
-      if (ImGui::CalcTextSize(buf).x <= title_max_w) break;
-      --keep;
-    }
-    ImGui::TextColored(color, "%.*s...", (int)keep, text);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text);
-  };
-
-  ImGui::BeginGroup();
-  draw_truncated(title, ui::colors().primary2);
-  draw_truncated(subtitle, ui::colors().muted);
-  ImGui::EndGroup();
-
+  if (s_logo_texture.texture != 0U) {
+    ImGui::Image(texture_id(s_logo_texture.texture), ImVec2(logo_w, logo_h),
+                 s_logo_texture.uv0, s_logo_texture.uv1);
+  } else {
+    ImGui::Dummy(ImVec2(logo_w, logo_h));
+  }
+  ImGui::SameLine(0.0f, 12.0f);
+  ImGui::SetCursorPosY(8.0f);
+  if (toolbar_button("ToolbarHome", icons::kHome, "Home", "F1", 82.0f))
+    state.screen = Screen::Home;
   ImGui::SameLine();
-  ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btn_w - 24.0f);
-  ImGui::SetCursorPosY(22.0f);
+  if (toolbar_button("ToolbarProcesses", icons::kProcess, "Proc", "F6", 84.0f))
+    state.screen = Screen::Processes;
+  ImGui::SameLine();
+  if (toolbar_button("ToolbarMemory", icons::kMemory, "Memory", "F8", 102.0f))
+    state.screen = Screen::Memory;
+  ImGui::SameLine();
+  if (toolbar_button("ToolbarScanner", icons::kScanner, "Scan", "F7", 88.0f))
+    state.screen = Screen::Scanner;
+  if (topbar_w > 980.0f) {
+    ImGui::SameLine();
+    if (toolbar_button("ToolbarAOB", icons::kCode, "AOB", "", 72.0f))
+      state.screen = Screen::AOBScanner;
+  }
+  if (topbar_w > 1120.0f) {
+    ImGui::SameLine();
+    if (toolbar_button("ToolbarTrainer", icons::kTrainer, "Trainer", "F9", 104.0f))
+      state.screen = Screen::Trainer;
+  }
+  if (topbar_w > 1220.0f) {
+    ImGui::SameLine();
+    if (toolbar_button("ToolbarLogs", icons::kLogs, "Logs", "F10", 86.0f))
+      state.screen = Screen::Logs;
+  }
+
+  const float right_w = 360.0f;
+  if (topbar_w > 1260.0f) {
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(topbar_w - right_w);
+    ImGui::SetCursorPosY(7.0f);
+    ImGui::BeginGroup();
+    ImGui::TextColored(ui::colors().dim, "VIEW");
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().text, "%s", screen_title(state.screen));
+    ImGui::TextColored(ui::colors().dim, "PID %d | %s:%d",
+                       state.selected_pid, state.host, state.debug_port);
+    ImGui::EndGroup();
+    ImGui::SameLine();
+  } else {
+    ImGui::SameLine();
+  }
+
+  ImGui::SetCursorPosX(topbar_w - 132.0f);
+  ImGui::SetCursorPosY(9.0f);
   if (state.connect_pending) {
     ImGui::TextColored(ui::colors().warning, "%s  Connecting...", icons::kConnect);
   } else if (!state.client.connected()) {
-    std::string label = std::string(icons::kConnect) + "  Connect";
-    if (ui::primary_button(label.c_str(), ImVec2(btn_w, 42))) connect_console(state);
+    std::string label = std::string(icons::kConnect) + " Connect F5";
+    if (ui::primary_button(label.c_str(), ImVec2(124.0f, 28.0f))) connect_console(state);
   } else {
-    std::string label = std::string(icons::kDisconnect) + "  Disconnect";
-    if (ui::danger_button(label.c_str(), ImVec2(btn_w, 42))) disconnect_console(state);
+    std::string label = std::string(icons::kDisconnect) + " Drop F5";
+    if (ui::danger_button(label.c_str(), ImVec2(124.0f, 28.0f))) disconnect_console(state);
   }
   ImGui::EndChild();
-  ImGui::PopStyleVar(); ImGui::PopStyleColor();
+  ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 }
 
 /* ---- Status bar ---- */
 
 static void draw_status_bar(AppState &state, ImVec2 size) {
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().panel);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22, 10));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
   ImGui::BeginChild("StatusBar", size, true, ImGuiWindowFlags_NoScrollbar);
 
   ui::status_dot(state.client.connected() ? ui::colors().success : ui::colors().muted);
   ImGui::SameLine();
 
   /* Status text with ellipsis on overflow */
-  const float rhs_width = 440.0f;
-  float avail_for_status = ImGui::GetWindowWidth() - rhs_width - 40.0f;
+  const float rhs_width = 580.0f;
+  float avail_for_status = ImGui::GetWindowWidth() - rhs_width - 32.0f;
   if (avail_for_status < 80.0f) avail_for_status = 80.0f;
-  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + avail_for_status);
-  ImGui::TextUnformatted(state.status);
-  ImGui::PopTextWrapPos();
+  text_ellipsis(state.status, avail_for_status, ui::colors().text);
 
   const auto log_stats = state.udp_listener.stats();
   ImGui::SameLine();
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - rhs_width));
+  ImGui::TextColored(ui::colors().dim, "%s", state.client.connected() ? "SESSION open" : "SESSION idle");
+  ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
+  ImGui::SameLine(0, 6);
+  ImGui::TextColored(ui::colors().dim, "TARGET pid=%d", state.selected_pid);
+  ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
+  ImGui::SameLine(0, 6);
   ImGui::TextColored(ui::colors().dim, "FPS %.0f", ImGui::GetIO().Framerate);
   ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
   ImGui::SameLine(0, 6);
@@ -542,7 +755,7 @@ static void draw_status_bar(AppState &state, ImVec2 size) {
 
   /* Compact stats: abbreviate when narrow */
   if (ImGui::GetWindowWidth() > 1100.0f) {
-    ImGui::TextColored(ui::colors().dim, "%llu rx  %llu lost  %llu evicted",
+    ImGui::TextColored(ui::colors().dim, "rx=%llu lost=%llu evict=%llu",
                         static_cast<unsigned long long>(log_stats.received),
                         static_cast<unsigned long long>(log_stats.dropped),
                         static_cast<unsigned long long>(log_stats.evicted));
@@ -651,11 +864,30 @@ void draw_screen(AppState &state, ImVec2 avail) {
   }
 }
 
+static void handle_global_shortcuts(AppState &state) {
+  ImGuiIO &io = ImGui::GetIO();
+  if (io.WantTextInput) return;
+
+  if (ImGui::IsKeyPressed(ImGuiKey_F1)) state.screen = Screen::Home;
+  if (ImGui::IsKeyPressed(ImGuiKey_F6)) state.screen = Screen::Processes;
+  if (ImGui::IsKeyPressed(ImGuiKey_F7)) state.screen = Screen::Scanner;
+  if (ImGui::IsKeyPressed(ImGuiKey_F8)) state.screen = Screen::Memory;
+  if (ImGui::IsKeyPressed(ImGuiKey_F9)) state.screen = Screen::Trainer;
+  if (ImGui::IsKeyPressed(ImGuiKey_F10)) state.screen = Screen::Logs;
+  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending) {
+    if (state.client.connected())
+      disconnect_console(state);
+    else
+      connect_console(state);
+  }
+}
+
 /* ---- Main app draw ---- */
 
 static void draw_app(AppState &state) {
   poll_connect(state);
   poll_telemetry(state);
+  handle_global_shortcuts(state);
 
   ImGuiViewport *viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -668,25 +900,21 @@ static void draw_app(AppState &state) {
   ImVec2 win_pos = ImGui::GetWindowPos(), win_size = ImGui::GetWindowSize();
   ui::draw_background(ImGui::GetWindowDrawList(), win_pos, win_size);
 
-  /* Responsive scaling: base reference is 1400 px width */
-  float scale = win_size.x / 1400.0f;
-  if (scale < 0.42f) scale = 0.42f;
-  if (scale > 2.2f) scale = 2.2f;
-
-  const float sidebar_w = std::clamp(win_size.x * 0.21f, 190.0f * scale, 320.0f * scale);
-  const float top_h = std::max(56.0f, 88.0f * scale);
-  const float status_h = std::max(28.0f, 42.0f * scale);
-  const float gap = std::max(8.0f, 16.0f * scale);
+  const float sidebar_w = std::clamp(win_size.x * 0.15f, 160.0f, 224.0f);
+  const float top_h = 46.0f;
+  const float status_h = 26.0f;
+  const float gap = 6.0f;
+  const float content_h = win_size.y - top_h - status_h;
   const float content_w = win_size.x - sidebar_w;
 
   ImGui::SetCursorPos(ImVec2(0,0));
-  draw_sidebar(state, ImVec2(sidebar_w, win_size.y));
-  ImGui::SetCursorPos(ImVec2(sidebar_w, 0));
-  draw_top_bar(state, ImVec2(content_w, top_h));
+  draw_top_bar(state, ImVec2(win_size.x, top_h));
+  ImGui::SetCursorPos(ImVec2(0, top_h));
+  draw_sidebar(state, ImVec2(sidebar_w, content_h));
   ImGui::SetCursorPos(ImVec2(sidebar_w+gap, top_h+gap));
-  draw_screen(state, ImVec2(content_w-(gap*2.0f), win_size.y-top_h-status_h-(gap*2.0f)));
-  ImGui::SetCursorPos(ImVec2(sidebar_w, win_size.y-status_h));
-  draw_status_bar(state, ImVec2(content_w, status_h));
+  draw_screen(state, ImVec2(content_w-(gap*2.0f), content_h-(gap*2.0f)));
+  ImGui::SetCursorPos(ImVec2(0, win_size.y-status_h));
+  draw_status_bar(state, ImVec2(win_size.x, status_h));
 
   draw_notifications(state);
   draw_connect_spinner(state);
@@ -704,7 +932,7 @@ static bool readable_file(const char *path) {
 }
 
 static void setup_fonts(ImGuiIO &io) {
-  const float text_size = 17.0f;
+  const float text_size = 15.0f;
   ImFontConfig base_cfg;
   base_cfg.OversampleH = 3;
   base_cfg.OversampleV = 2;
@@ -746,16 +974,17 @@ static void setup_fonts(ImGuiIO &io) {
   icon_cfg.MergeMode = true;
   icon_cfg.FontDataOwnedByAtlas = false;
   icon_cfg.PixelSnapH = true;
-  icon_cfg.GlyphMinAdvanceX = 17.0f;
+  icon_cfg.GlyphMinAdvanceX = 15.0f;
   icon_cfg.GlyphOffset = ImVec2(0.0f, 1.0f);
   static const ImWchar icon_ranges[] = { 0xF000, 0xF8FF, 0 };
   io.Fonts->AddFontFromMemoryTTF(
       fa_solid_900, (int)fa_solid_900_len,
-      16.0f, &icon_cfg, icon_ranges);
+      14.0f, &icon_cfg, icon_ranges);
   io.Fonts->Build();
 }
 
-int run_frontend(int, char **) {
+int run_frontend(int, char **argv) {
+  init_executable_dir(argv != nullptr ? argv[0] : nullptr);
   if (!glfwInit()) return 1;
 #if defined(__APPLE__)
   const char *glsl_version = "#version 150";
@@ -836,6 +1065,7 @@ int run_frontend(int, char **) {
 
   state.udp_listener.stop(); state.client.disconnect();
   github_profile_shutdown(state.github_profile);
+  shutdown_texture(s_logo_texture);
   ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext(); glfwDestroyWindow(window); glfwTerminate();
   s_render_state = nullptr;

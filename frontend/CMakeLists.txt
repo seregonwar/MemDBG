@@ -112,6 +112,13 @@ target_include_directories(memdbg_frontend PRIVATE
 
 target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
 
+add_custom_command(TARGET memdbg_frontend POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:memdbg_frontend>/assets"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_CURRENT_SOURCE_DIR}/../assets/logo-nobg.png"
+          "$<TARGET_FILE_DIR:memdbg_frontend>/assets/logo-nobg.png"
+)
+
 # ---- memdbg_probe (standalone protocol tester) ----
 
 add_executable(memdbg_probe

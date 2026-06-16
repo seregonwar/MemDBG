@@ -37,76 +37,66 @@ void apply_theme() {
   c[ImGuiCol_TextDisabled] = p.dim;
   c[ImGuiCol_WindowBg] = p.bg0;
   c[ImGuiCol_ChildBg] = p.panel;
-  c[ImGuiCol_PopupBg] = ImVec4(9.0f/255.0f,13.0f/255.0f,18.0f/255.0f,0.98f);
+  c[ImGuiCol_PopupBg] = ImVec4(18.0f/255.0f,19.0f/255.0f,20.0f/255.0f,0.98f);
   c[ImGuiCol_Border] = p.border;
   c[ImGuiCol_BorderShadow] = ImVec4(0,0,0,0);
-  c[ImGuiCol_FrameBg] = ImVec4(24.0f/255.0f, 34.0f/255.0f, 42.0f/255.0f, 1.0f);
-  c[ImGuiCol_FrameBgHovered] = ImVec4(32.0f/255.0f, 46.0f/255.0f, 56.0f/255.0f, 1.0f);
-  c[ImGuiCol_FrameBgActive] = ImVec4(38.0f/255.0f, 58.0f/255.0f, 70.0f/255.0f, 1.0f);
-  c[ImGuiCol_ScrollbarBg] = ImVec4(7.0f/255.0f,10.0f/255.0f,14.0f/255.0f,0.65f);
-  c[ImGuiCol_ScrollbarGrab] = ImVec4(44.0f/255.0f,58.0f/255.0f,69.0f/255.0f,1.0f);
-  c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(58.0f/255.0f,78.0f/255.0f,91.0f/255.0f,1.0f);
+  c[ImGuiCol_FrameBg] = ImVec4(28.0f/255.0f, 30.0f/255.0f, 32.0f/255.0f, 1.0f);
+  c[ImGuiCol_FrameBgHovered] = ImVec4(38.0f/255.0f, 42.0f/255.0f, 45.0f/255.0f, 1.0f);
+  c[ImGuiCol_FrameBgActive] = ImVec4(44.0f/255.0f, 76.0f/255.0f, 58.0f/255.0f, 1.0f);
+  c[ImGuiCol_ScrollbarBg] = ImVec4(14.0f/255.0f,15.0f/255.0f,16.0f/255.0f,0.88f);
+  c[ImGuiCol_ScrollbarGrab] = ImVec4(55.0f/255.0f,59.0f/255.0f,63.0f/255.0f,1.0f);
+  c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(72.0f/255.0f,78.0f/255.0f,82.0f/255.0f,1.0f);
   c[ImGuiCol_ScrollbarGrabActive] = p.primary;
   c[ImGuiCol_CheckMark] = p.primary2;
   c[ImGuiCol_SliderGrab] = p.primary;
   c[ImGuiCol_SliderGrabActive] = p.primary2;
-  c[ImGuiCol_Button] = ImVec4(30.0f/255.0f, 42.0f/255.0f, 52.0f/255.0f, 1.0f);
-  c[ImGuiCol_ButtonHovered] = ImVec4(40.0f/255.0f, 68.0f/255.0f, 80.0f/255.0f, 1.0f);
-  c[ImGuiCol_ButtonActive] = ImVec4(24.0f/255.0f, 120.0f/255.0f, 134.0f/255.0f, 1.0f);
-  c[ImGuiCol_Header] = ImVec4(30.0f/255.0f, 42.0f/255.0f, 52.0f/255.0f, 1.0f);
-  c[ImGuiCol_HeaderHovered] = ImVec4(40.0f/255.0f, 68.0f/255.0f, 80.0f/255.0f, 1.0f);
-  c[ImGuiCol_HeaderActive] = ImVec4(26.0f/255.0f, 112.0f/255.0f, 126.0f/255.0f, 1.0f);
+  c[ImGuiCol_Button] = ImVec4(35.0f/255.0f, 38.0f/255.0f, 41.0f/255.0f, 1.0f);
+  c[ImGuiCol_ButtonHovered] = ImVec4(50.0f/255.0f, 58.0f/255.0f, 54.0f/255.0f, 1.0f);
+  c[ImGuiCol_ButtonActive] = ImVec4(39.0f/255.0f, 118.0f/255.0f, 80.0f/255.0f, 1.0f);
+  c[ImGuiCol_Header] = ImVec4(35.0f/255.0f, 38.0f/255.0f, 41.0f/255.0f, 1.0f);
+  c[ImGuiCol_HeaderHovered] = ImVec4(49.0f/255.0f, 57.0f/255.0f, 53.0f/255.0f, 1.0f);
+  c[ImGuiCol_HeaderActive] = ImVec4(39.0f/255.0f, 112.0f/255.0f, 76.0f/255.0f, 1.0f);
   c[ImGuiCol_Separator] = p.border;
   c[ImGuiCol_SeparatorHovered] = p.primary;
   c[ImGuiCol_SeparatorActive] = p.primary2;
-  c[ImGuiCol_ResizeGrip] = ImVec4(45.0f/255.0f,91.0f/255.0f,101.0f/255.0f,0.47f);
-  c[ImGuiCol_ResizeGripHovered] = ImVec4(28.0f/255.0f,184.0f/255.0f,196.0f/255.0f,0.70f);
+  c[ImGuiCol_ResizeGrip] = ImVec4(70.0f/255.0f,79.0f/255.0f,74.0f/255.0f,0.50f);
+  c[ImGuiCol_ResizeGripHovered] = ImVec4(52.0f/255.0f,151.0f/255.0f,112.0f/255.0f,0.70f);
   c[ImGuiCol_ResizeGripActive] = p.primary;
   c[ImGuiCol_Tab] = p.bg1;
-  c[ImGuiCol_TabHovered] = ImVec4(36.0f/255.0f,63.0f/255.0f,74.0f/255.0f,1.0f);
-  c[ImGuiCol_TabActive] = ImVec4(26.0f/255.0f,47.0f/255.0f,57.0f/255.0f,1.0f);
-  c[ImGuiCol_TableHeaderBg] = ImVec4(24.0f/255.0f,34.0f/255.0f,42.0f/255.0f,1.0f);
+  c[ImGuiCol_TabHovered] = ImVec4(44.0f/255.0f,54.0f/255.0f,48.0f/255.0f,1.0f);
+  c[ImGuiCol_TabActive] = ImVec4(34.0f/255.0f,49.0f/255.0f,40.0f/255.0f,1.0f);
+  c[ImGuiCol_TableHeaderBg] = ImVec4(29.0f/255.0f,31.0f/255.0f,33.0f/255.0f,1.0f);
   c[ImGuiCol_TableBorderStrong] = p.border_hot;
   c[ImGuiCol_TableBorderLight] = p.border;
   c[ImGuiCol_TableRowBg] = ImVec4(0,0,0,0);
-  c[ImGuiCol_TableRowBgAlt] = ImVec4(1,1,1,0.025f);
-  c[ImGuiCol_TextSelectedBg] = ImVec4(28.0f/255.0f,184.0f/255.0f,196.0f/255.0f,0.30f);
+  c[ImGuiCol_TableRowBgAlt] = ImVec4(1,1,1,0.035f);
+  c[ImGuiCol_TextSelectedBg] = ImVec4(52.0f/255.0f,151.0f/255.0f,112.0f/255.0f,0.35f);
 
   style.WindowPadding = ImVec2(0, 0);
-  style.FramePadding = ImVec2(14, 9);
-  style.CellPadding = ImVec2(10, 9);
-  style.ItemSpacing = ImVec2(10, 9);
-  style.ItemInnerSpacing = ImVec2(8, 7);
-  style.ScrollbarSize = 12.0f;
+  style.FramePadding = ImVec2(7, 4);
+  style.CellPadding = ImVec2(6, 3);
+  style.ItemSpacing = ImVec2(6, 4);
+  style.ItemInnerSpacing = ImVec2(6, 4);
+  style.ScrollbarSize = 11.0f;
   style.WindowBorderSize = 0.0f;
   style.ChildBorderSize = 1.0f;
   style.PopupBorderSize = 1.0f;
   style.FrameBorderSize = 1.0f;
   style.WindowRounding = 0.0f;
-  style.ChildRounding = 10.0f;
-  style.FrameRounding = 8.0f;
-  style.PopupRounding = 10.0f;
-  style.ScrollbarRounding = 10.0f;
-  style.GrabRounding = 10.0f;
-  style.TabRounding = 8.0f;
+  style.ChildRounding = 2.0f;
+  style.FrameRounding = 2.0f;
+  style.PopupRounding = 2.0f;
+  style.ScrollbarRounding = 2.0f;
+  style.GrabRounding = 2.0f;
+  style.TabRounding = 2.0f;
 }
 
 void draw_background(ImDrawList *draw_list, ImVec2 pos, ImVec2 size) {
   const auto &p = colors();
   const ImVec2 max(pos.x + size.x, pos.y + size.y);
   draw_list->AddRectFilled(pos, max, color_u32(p.bg0));
-  draw_list->AddRectFilledMultiColor(
-      pos, max,
-      IM_COL32(10,28,34,245),
-      IM_COL32(7,10,14,255),
-      IM_COL32(7,10,14,255),
-      IM_COL32(7,10,14,255));
-  const float grid = 52.0f;
-  const ImU32 grid_color = IM_COL32(28,184,196,10);
-  for (float x = pos.x; x < max.x; x += grid)
-    draw_list->AddLine(ImVec2(x, pos.y), ImVec2(x, max.y), grid_color);
-  for (float y = pos.y; y < max.y; y += grid)
-    draw_list->AddLine(ImVec2(pos.x, y), ImVec2(max.x, y), grid_color);
+  draw_list->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(max.x, pos.y + 1.0f),
+                           color_u32(p.border_hot));
 }
 
 void text_muted(const char *text) { ImGui::TextColored(colors().muted, "%s", text); }
@@ -115,13 +105,12 @@ void text_dim(const char *text)   { ImGui::TextColored(colors().dim, "%s", text)
 void section_label(const char *title) {
   ImGui::TextColored(colors().muted, "%s", title);
   ImGui::Separator();
-  ImGui::Spacing();
 }
 
 void begin_panel(const char *id, const char *title, ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, colors().panel2);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18,18));
-  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8,7));
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 2.0f);
   ImGui::BeginChild(id, size, true);
   section_label(title);
 }
@@ -151,14 +140,14 @@ bool styled_button(const char *label, ImVec2 size, ImVec4 base, ImVec4 hover, Im
 bool primary_button(const char *label, ImVec2 size) {
   const auto &p = colors();
   return styled_button(label, size, p.primary, p.primary2,
-                       ImVec4(16.0f/255.0f,128.0f/255.0f,142.0f/255.0f,1.0f));
+                       ImVec4(29.0f/255.0f,117.0f/255.0f,79.0f/255.0f,1.0f));
 }
 
 bool soft_button(const char *label, ImVec2 size) {
   return styled_button(label, size,
-    ImVec4(26.0f/255.0f,36.0f/255.0f,44.0f/255.0f,1.0f),
-    ImVec4(38.0f/255.0f,62.0f/255.0f,72.0f/255.0f,1.0f),
-    ImVec4(28.0f/255.0f,98.0f/255.0f,110.0f/255.0f,1.0f));
+    ImVec4(33.0f/255.0f,36.0f/255.0f,39.0f/255.0f,1.0f),
+    ImVec4(48.0f/255.0f,54.0f/255.0f,51.0f/255.0f,1.0f),
+    ImVec4(42.0f/255.0f,90.0f/255.0f,66.0f/255.0f,1.0f));
 }
 
 bool danger_button(const char *label, ImVec2 size) {
