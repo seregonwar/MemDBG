@@ -9,6 +9,7 @@
 
 #include "imgui.h"
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -58,7 +59,8 @@ bool danger_button(const char *label, ImVec2 size);
 ImVec2 full_button(float height);
 
 void draw_empty_state(const char *title, const char *message);
-void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base);
+void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base,
+                    const std::function<void(uint64_t)> &on_address_clicked = {});
 void draw_capabilities(const ::memdbg::frontend::HelloInfo &hello);
 void draw_scan_progress(const std::string &label, const char *icon, double elapsed, float bar_width);
 

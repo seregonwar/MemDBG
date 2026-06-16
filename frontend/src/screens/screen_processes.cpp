@@ -10,9 +10,13 @@
 #include "file_picker.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 namespace memdbg::frontend {
 
@@ -35,6 +39,115 @@ static size_t filtered_map_count(const AppState &state) {
   for (const auto &map : state.maps)
     if (map_passes_filters(state, map)) count++;
   return count;
+}
+
+static std::string format_bytes(uint64_t bytes) {
+  const char *units[] = {"B", "KiB", "MiB", "GiB"};
+  double value = static_cast<double>(bytes);
+  size_t unit = 0;
+  while (value >= 1024.0 && unit + 1U < std::size(units)) {
+    value /= 1024.0;
+    unit++;
+  }
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(unit == 0U ? 0 : 2) << value
+      << ' ' << units[unit];
+  return out.str();
+}
+
+static std::string sanitize_component(std::string value) {
+  for (char &c : value) {
+    unsigned char ch = static_cast<unsigned char>(c);
+    if (std::isalnum(ch) == 0 && c != '_' && c != '-' && c != '.')
+      c = '_';
+  }
+  while (!value.empty() && value.front() == '_') value.erase(value.begin());
+  while (!value.empty() && value.back() == '_') value.pop_back();
+  if (value.empty()) value = "process";
+  if (value.size() > 64U) value.resize(64U);
+  return value;
+}
+
+static bool add_saturating(uint64_t &total, uint64_t value) {
+  if (std::numeric_limits<uint64_t>::max() - total < value) {
+    total = std::numeric_limits<uint64_t>::max();
+    return false;
+  }
+  total += value;
+  return true;
+}
+
+static void analyze_process(AppState &state) {
+  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (state.maps.empty()) { set_status(state, "Refresh process maps first"); return; }
+
+  uint64_t total_bytes = 0;
+  uint64_t readable_bytes = 0;
+  uint64_t writable_bytes = 0;
+  uint64_t executable_bytes = 0;
+  uint64_t heap_candidate_bytes = 0;
+  uint64_t filtered_bytes = 0;
+  uint64_t largest_size = 0;
+  const MapEntry *largest = nullptr;
+  size_t valid_maps = 0;
+  size_t readable_maps = 0;
+  size_t writable_maps = 0;
+  size_t executable_maps = 0;
+  size_t heap_candidates = 0;
+  size_t system_maps = 0;
+  size_t filtered_maps = 0;
+
+  for (const auto &map : state.maps) {
+    if (map.end <= map.start) continue;
+    const uint64_t size = map.end - map.start;
+    valid_maps++;
+    add_saturating(total_bytes, size);
+    if (size > largest_size) {
+      largest_size = size;
+      largest = &map;
+    }
+    const bool readable = (map.protection & 1U) != 0U;
+    const bool writable = (map.protection & 2U) != 0U;
+    const bool executable = (map.protection & 4U) != 0U;
+    const bool system = map_is_system_like(map);
+    if (readable) { readable_maps++; add_saturating(readable_bytes, size); }
+    if (writable) { writable_maps++; add_saturating(writable_bytes, size); }
+    if (executable) { executable_maps++; add_saturating(executable_bytes, size); }
+    if (system) system_maps++;
+    if (readable && writable && !executable && !system) {
+      heap_candidates++;
+      add_saturating(heap_candidate_bytes, size);
+    }
+    if (map_passes_filters(state, map)) {
+      filtered_maps++;
+      add_saturating(filtered_bytes, size);
+    }
+  }
+
+  std::ostringstream out;
+  out << "PID " << state.selected_pid << " - " << selected_process_name(state) << '\n';
+  if (state.has_process_info) {
+    if (!state.selected_process_info.title_id.empty())
+      out << "Title ID: " << state.selected_process_info.title_id << '\n';
+    if (!state.selected_process_info.path.empty())
+      out << "Path: " << state.selected_process_info.path << '\n';
+  }
+  out << "Maps: " << valid_maps << " total, " << filtered_maps << " currently filtered\n";
+  out << "Address space in maps: " << format_bytes(total_bytes) << '\n';
+  out << "Readable: " << readable_maps << " maps / " << format_bytes(readable_bytes) << '\n';
+  out << "Writable: " << writable_maps << " maps / " << format_bytes(writable_bytes) << '\n';
+  out << "Executable: " << executable_maps << " maps / " << format_bytes(executable_bytes) << '\n';
+  out << "Non-system RW heap candidates: " << heap_candidates << " maps / "
+      << format_bytes(heap_candidate_bytes) << '\n';
+  out << "System-like maps hidden by default: " << system_maps << '\n';
+  out << "Filtered dump size before cap: " << format_bytes(filtered_bytes) << '\n';
+  if (largest) {
+    out << "Largest map: " << hex_u64(largest->start) << " - " << hex_u64(largest->end)
+        << " (" << format_bytes(largest_size) << ", " << prot_text(largest->protection)
+        << ") " << largest->name << '\n';
+  }
+  state.process_analysis_report = out.str();
+  set_status(state, "Process analysis updated");
 }
 
 static void set_scan_window_from_filtered_maps(AppState &state) {
@@ -112,6 +225,113 @@ static void dump_selected_map(AppState &state) {
   }
   set_status(state, "Dumped " + std::to_string(written_total) + " bytes to " + out_path.string());
   push_notification(state, "Map dumped to " + out_path.string(), 5.0);
+}
+
+static void dump_filtered_maps(AppState &state) {
+  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
+  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (state.maps.empty()) { set_status(state, "Refresh process maps first"); return; }
+
+  state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
+  std::filesystem::path base_dir = trim_copy(state.dump_path);
+  if (base_dir.empty()) base_dir = "dumps";
+  if (base_dir.has_extension()) base_dir = base_dir.parent_path();
+  if (base_dir.empty()) base_dir = ".";
+
+  std::string process_name = sanitize_component(selected_process_name(state));
+  std::filesystem::path out_dir = base_dir /
+      ("pid_" + std::to_string(state.selected_pid) + "_" + process_name + "_maps");
+  std::error_code ec;
+  std::filesystem::create_directories(out_dir, ec);
+  if (ec) { set_status(state, "Failed to create process dump directory"); return; }
+
+  std::ofstream manifest(out_dir / "manifest.txt", std::ios::binary);
+  if (!manifest) { set_status(state, "Failed to create dump manifest"); return; }
+  manifest << "MemDBG process dump\n";
+  manifest << "pid=" << state.selected_pid << "\n";
+  manifest << "process=" << selected_process_name(state) << "\n";
+  manifest << "filter=" << trim_copy(state.map_filter) << "\n";
+  manifest << "readable=" << state.map_filter_readable
+           << " writable=" << state.map_filter_writable
+           << " executable=" << state.map_filter_executable
+           << " hide_system=" << state.map_filter_hide_system
+           << " min_kb=" << state.map_filter_min_kb << "\n\n";
+  manifest << "file,start,end,prot,dumped_bytes,name\n";
+
+  const uint64_t budget =
+      static_cast<uint64_t>(state.process_dump_max_mb) * 1024ULL * 1024ULL;
+  uint64_t dumped_total = 0;
+  size_t dumped_maps = 0;
+  size_t skipped_maps = 0;
+
+  for (size_t i = 0; i < state.maps.size(); ++i) {
+    const auto &map = state.maps[i];
+    if (!map_passes_filters(state, map) || (map.protection & 1U) == 0U ||
+        map.end <= map.start) {
+      continue;
+    }
+    if (dumped_total >= budget) break;
+
+    const uint64_t map_size = map.end - map.start;
+    const uint64_t budget_left = budget - dumped_total;
+    const uint64_t target_size = std::min(map_size, budget_left);
+    std::string file_name = "map_" + std::to_string(i) + "_" +
+        hex_u64(map.start).substr(2) + "_" + hex_u64(map.end).substr(2) +
+        "_" + prot_text(map.protection) + ".bin";
+    file_name = sanitize_component(file_name);
+    std::filesystem::path file_path = out_dir / file_name;
+    std::ofstream out(file_path, std::ios::binary);
+    if (!out) {
+      skipped_maps++;
+      manifest << "# open_failed," << hex_u64(map.start) << ',' << hex_u64(map.end)
+               << ',' << prot_text(map.protection) << ',' << map.name << "\n";
+      continue;
+    }
+
+    uint64_t address = map.start;
+    uint64_t remaining = target_size;
+    uint64_t written = 0;
+    while (remaining != 0U) {
+      uint32_t chunk = remaining > MEMDBG_PROTOCOL_MAX_READ
+                           ? MEMDBG_PROTOCOL_MAX_READ
+                           : static_cast<uint32_t>(remaining);
+      std::vector<uint8_t> bytes;
+      if (!state.client.memory_read(state.selected_pid, address, chunk, bytes)) {
+        manifest << "# read_failed," << file_name << ',' << hex_u64(address)
+                 << ',' << state.client.last_error() << "\n";
+        break;
+      }
+      if (bytes.empty()) break;
+      out.write(reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+      if (!out) {
+        manifest << "# write_failed," << file_name << ',' << hex_u64(address) << "\n";
+        break;
+      }
+      address += bytes.size();
+      remaining -= bytes.size();
+      written += bytes.size();
+      dumped_total += bytes.size();
+      if (dumped_total >= budget) break;
+    }
+
+    if (written == 0U) {
+      skipped_maps++;
+      std::filesystem::remove(file_path, ec);
+      continue;
+    }
+    dumped_maps++;
+    manifest << file_name << ',' << hex_u64(map.start) << ',' << hex_u64(map.end)
+             << ',' << prot_text(map.protection) << ',' << written << ','
+             << map.name << "\n";
+  }
+
+  manifest << "\nsummary_maps=" << dumped_maps
+           << "\nskipped_maps=" << skipped_maps
+           << "\ndumped_bytes=" << dumped_total << "\n";
+  set_status(state, "Dumped " + std::to_string(dumped_maps) + " filtered map(s) to " +
+                    out_dir.string());
+  push_notification(state, "Process dump written to " + out_dir.string(), 5.0);
 }
 
 /* ---- Process selection ---- */
@@ -210,6 +430,7 @@ static void draw_process_table(AppState &state) {
         select_process(state, i);
       ImGui::TableSetColumnIndex(1);
       ImGui::TextUnformatted(process.name.c_str());
+      if (ImGui::IsItemHovered() && !process.name.empty()) ImGui::SetTooltip("%s", process.name.c_str());
       ImGui::TableSetColumnIndex(2);
       if (state.has_process_info && state.selected_pid == process.pid)
         ImGui::TextColored(ui::colors().primary2, "%s", state.selected_process_info.title_id.c_str());
@@ -254,6 +475,7 @@ static void draw_maps_table(AppState &state) {
       ImGui::TextUnformatted(prot_text(map.protection).c_str());
       ImGui::TableSetColumnIndex(4);
       ImGui::TextUnformatted(map.name.c_str());
+      if (ImGui::IsItemHovered() && !map.name.empty()) ImGui::SetTooltip("%s", map.name.c_str());
     }
     ImGui::EndTable();
   }
@@ -300,6 +522,9 @@ void draw_processes(AppState &state, ImVec2 avail) {
     if (ui::soft_button((std::string(icons::kFilter) + "  Use Filtered Window").c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kDump) + "  Dump Selected Map").c_str(), ImVec2(170, 38))) dump_selected_map(state);
+    if (ui::soft_button((std::string(icons::kSearch) + "  Analyze Process").c_str(), ImVec2(170, 38))) analyze_process(state);
+    ImGui::SameLine();
+    if (ui::soft_button((std::string(icons::kDump) + "  Dump Filtered Maps").c_str(), ImVec2(190, 38))) dump_filtered_maps(state);
     ImGui::EndDisabled();
     ImGui::Spacing();
     ImGui::InputText("Dump output", state.dump_path, sizeof(state.dump_path));
@@ -321,7 +546,19 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ImGui::SetNextItemWidth(120.0f);
     ImGui::InputInt("Min KB", &state.map_filter_min_kb);
     state.map_filter_min_kb = std::max(state.map_filter_min_kb, 0);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::InputInt("Dump cap MB", &state.process_dump_max_mb);
+    state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
     ImGui::TextColored(ui::colors().dim, "%zu / %zu maps shown", filtered_map_count(state), state.maps.size());
+    if (!state.process_analysis_report.empty()) {
+      ImGui::Spacing();
+      if (ImGui::BeginChild("ProcessAnalysisReport", ImVec2(0, 118), true,
+                            ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+        ImGui::TextWrapped("%s", state.process_analysis_report.c_str());
+      }
+      ImGui::EndChild();
+    }
     ImGui::Spacing();
     draw_maps_table(state);
   }

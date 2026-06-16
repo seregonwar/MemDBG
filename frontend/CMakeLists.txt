@@ -92,6 +92,9 @@ add_executable(memdbg_frontend
 
   # trainer
   src/trainer/trainer_format.cpp
+
+  # scanner (auto-search heuristic engine)
+  src/scanner/auto_search.cpp
 )
 
 target_include_directories(memdbg_frontend PRIVATE
@@ -102,6 +105,7 @@ target_include_directories(memdbg_frontend PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
   ${CMAKE_CURRENT_SOURCE_DIR}/src/screens
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
   ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
   ${stb_SOURCE_DIR}
 )
@@ -126,6 +130,22 @@ target_include_directories(memdbg_probe PRIVATE
 
 target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 
+# ---- memdbg_auto_search_test ----
+
+add_executable(memdbg_auto_search_test
+  tests/test_auto_search.cpp
+  src/scanner/auto_search.cpp
+)
+
+target_include_directories(memdbg_auto_search_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
+  ${imgui_SOURCE_DIR}
+)
+
 # ---- platform specific ----
 
 if(APPLE)
@@ -142,7 +162,9 @@ endif()
 if(MSVC)
   target_compile_options(memdbg_frontend PRIVATE /W4)
   target_compile_options(memdbg_probe PRIVATE /W4)
+  target_compile_options(memdbg_auto_search_test PRIVATE /W4)
 else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()

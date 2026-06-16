@@ -48,6 +48,10 @@ int load_trainer_file(AppState &state, const std::string &path);
    Uses the file extension to choose format. */
 bool save_trainer_file(AppState &state, const std::string &path);
 
+/* Capture the current memory value at a cheat's address as the OFF value.
+   Called automatically after loading trainer entries and manually via the UI. */
+bool capture_off_value(AppState &state, CheatEntry &cheat);
+
 } // namespace memdbg::frontend
 
 #endif /* MEMDBG_FRONTEND_TRAINER_FORMAT_HPP */

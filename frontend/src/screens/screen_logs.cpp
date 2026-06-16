@@ -54,11 +54,16 @@ void draw_logs(AppState &state, ImVec2 avail) {
   if (!err.empty()) ImGui::TextColored(ui::colors().warning, "UDP error: %s", err.c_str());
 
   ImGui::Spacing();
-  ImGui::BeginChild("LogLines", ImVec2(0,0), false, ImGuiWindowFlags_HorizontalScrollbar);
+  ImGui::BeginChild("LogLines", ImVec2(0,0), true);
   if (logs.empty()) {
     ui::draw_empty_state("No UDP messages yet", "Payload telemetry will appear here after the console sends datagrams.");
   } else {
-    for (const auto &line : logs) ImGui::TextUnformatted(line.c_str());
+    const float wrap_x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+    for (const auto &line : logs) {
+      ImGui::PushTextWrapPos(wrap_x);
+      ImGui::TextUnformatted(line.c_str());
+      ImGui::PopTextWrapPos();
+    }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 8.0f) ImGui::SetScrollHereY(1.0f);
   }
   ImGui::EndChild();

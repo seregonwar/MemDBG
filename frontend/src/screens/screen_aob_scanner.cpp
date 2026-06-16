@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 #include <exception>
 #include <future>
 #include <sstream>
@@ -281,6 +280,28 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
               result.regions_scanned, result.read_errors);
   ImGui::Spacing();
 
+  /* Copy All logic shared between button and keyboard shortcut */
+  auto copy_all = [&](const char *suffix = nullptr) {
+    std::string all;
+    all.reserve(result.addresses.size() * 18U);
+    for (uint64_t addr : result.addresses)
+      all += hex_u64(addr) + "\n";
+    ImGui::SetClipboardText(all.c_str());
+    set_status(state, "Copied " + std::to_string(result.addresses.size()) + " addresses");
+    push_notification(state, "Copied " + std::to_string(result.addresses.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+  };
+
+  if (!result.addresses.empty()) {
+    if (ui::soft_button((std::string(icons::kCopy) + "  Copy All Addresses").c_str(),
+                        ImVec2(200, 30)))
+      copy_all();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Copy all %u addresses to clipboard, one per line",
+                        result.count);
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+      copy_all(" (Ctrl+C)");
+  }
+
   if (result.addresses.empty()) {
     if (result.count == 0 && result.bytes_scanned > 0)
       ui::draw_empty_state("No hits", "The pattern was not found in the selected range.");
@@ -305,9 +326,13 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
                       hex_u64(result.addresses[i]).c_str());
         state.screen = Screen::Memory;
       }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Click to jump to %s",
+                          hex_u64(result.addresses[i]).c_str());
     }
     ImGui::EndTable();
   }
+
   ui::end_panel();
 }
 

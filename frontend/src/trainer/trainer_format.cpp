@@ -132,7 +132,7 @@ static std::vector<std::string> split_pipe(const std::string &line) {
   return tokens;
 }
 
-static bool capture_off_value(AppState &state, CheatEntry &cheat) {
+bool capture_off_value(AppState &state, CheatEntry &cheat) {
   if (!state.client.connected()) { cheat.status = "No console session"; return false; }
   int32_t pid = cheat.pid > 0 ? cheat.pid : state.selected_pid;
   if (pid <= 0 || cheat.bytes.empty()) { cheat.status = "No target value"; return false; }
