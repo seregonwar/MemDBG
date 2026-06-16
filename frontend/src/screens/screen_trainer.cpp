@@ -22,23 +22,6 @@ namespace memdbg::frontend {
 /* build_value_bytes and build_scan_value are in app_state.hpp */
 /* trainer load/save now in trainer_format.cpp */
 
-/* ---- Cheat operations ---- */
-static bool capture_cheat_off_value(AppState &state, CheatEntry &cheat) {
-  if (!state.client.connected()) { cheat.status="No console session"; return false; }
-  int32_t pid = cheat.pid>0 ? cheat.pid : state.selected_pid;
-  if (pid<=0||cheat.bytes.empty()) { cheat.status="No target value"; return false; }
-  std::vector<uint8_t> current;
-  if (!state.client.memory_read(pid, cheat.address, static_cast<uint32_t>(cheat.bytes.size()), current) ||
-      current.size()!=cheat.bytes.size()) {
-    cheat.status = state.client.last_error().empty()?"OFF capture failed":state.client.last_error();
-    return false;
-  }
-  cheat.off_bytes = std::move(current);
-  cheat.has_off_bytes = true;
-  cheat.status = "OFF value captured";
-  return true;
-}
-
 static bool apply_cheat(AppState &state, CheatEntry &cheat) {
   if (!state.client.connected()) { cheat.status="No console session"; return false; }
   int32_t pid = cheat.pid>0 ? cheat.pid : state.selected_pid;
@@ -73,7 +56,7 @@ static void add_cheat_from_fields(AppState &state) {
   cheat.description = state.cheat_description[0]!='\0'?state.cheat_description:"Cheat";
   cheat.pid=state.selected_pid; cheat.address=address; cheat.value_type=state.cheat_type;
   cheat.value_text=state.cheat_value; cheat.bytes=std::move(bytes); cheat.locked=state.cheat_lock;
-  if (state.client.connected()) (void)capture_cheat_off_value(state, cheat);
+  if (state.client.connected()) (void)capture_off_value(state, cheat);
   state.cheats.push_back(std::move(cheat));
   set_status(state, "Trainer entry added");
   push_notification(state, "Trainer entry added: " + std::string(state.cheat_description));
@@ -254,6 +237,28 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   ImGui::TextColored(ui::colors().dim, "%zu entries", state.cheats.size());
   ImGui::Spacing();
 
+  /* Copy All logic shared between button and keyboard shortcut */
+  auto copy_all = [&](const char *suffix = nullptr) {
+    std::string all;
+    all.reserve(state.cheats.size() * 18U);
+    for (const auto &cheat : state.cheats)
+      all += hex_u64(cheat.address) + "\n";
+    ImGui::SetClipboardText(all.c_str());
+    set_status(state, "Copied " + std::to_string(state.cheats.size()) + " addresses");
+    push_notification(state, "Copied " + std::to_string(state.cheats.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+  };
+
+  if (!state.cheats.empty()) {
+    if (ui::soft_button((std::string(icons::kCopy) + "  Copy All Addresses").c_str(),
+                        ImVec2(200, 30)))
+      copy_all();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Copy all %zu addresses to clipboard, one per line",
+                        state.cheats.size());
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+      copy_all(" (Ctrl+C)");
+  }
+
   if (state.cheats.empty()) {
     ui::draw_empty_state("No trainer entries", "Add scan hits or manual addresses to build a runtime cheat list.");
   } else if (ImGui::BeginTable("TrainerTable", 10,
@@ -279,11 +284,17 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       ImGui::TextColored(cheat.active?ui::colors().success:ui::colors().dim, "%s", cheat.active?"Active":"Idle");
       ImGui::TableSetColumnIndex(3);
       ImGui::TextUnformatted(cheat.description.c_str());
-      if (!cheat.status.empty()&&ImGui::IsItemHovered()) ImGui::SetTooltip("%s", cheat.status.c_str());
+      if (ImGui::IsItemHovered()) {
+        if (!cheat.status.empty())
+          ImGui::SetTooltip("%s \xe2\x80\x94 %s", cheat.description.c_str(), cheat.status.c_str());
+        else if (!cheat.description.empty())
+          ImGui::SetTooltip("%s", cheat.description.c_str());
+      }
       ImGui::TableSetColumnIndex(4); ImGui::Text("%d", cheat.pid);
       ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(hex_u64(cheat.address).c_str());
       ImGui::TableSetColumnIndex(6); ImGui::TextUnformatted(value_type_name(cheat.value_type));
       ImGui::TableSetColumnIndex(7); ImGui::TextUnformatted(cheat.value_text.c_str());
+      if (ImGui::IsItemHovered() && !cheat.value_text.empty()) ImGui::SetTooltip("%s", cheat.value_text.c_str());
       ImGui::TableSetColumnIndex(8);
       ImGui::TextColored(cheat.has_off_bytes?ui::colors().success:ui::colors().warning, "%s", cheat.has_off_bytes?"Yes":"No");
       ImGui::TableSetColumnIndex(9);
@@ -298,7 +309,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       }
       ImGui::SameLine();
       if (ImGui::SmallButton("Cap")) {
-        if (capture_cheat_off_value(state,cheat)) set_status(state, cheat.description+" OFF captured");
+        if (capture_off_value(state,cheat)) set_status(state, cheat.description+" OFF captured");
         else set_status(state, cheat.status);
       }
       ImGui::PopID();

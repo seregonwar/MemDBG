@@ -176,6 +176,28 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
               state.pointer_target_address, state.pointer_max_depth);
   ImGui::Spacing();
 
+  /* Copy All logic shared between button and keyboard shortcut */
+  auto copy_all = [&](const char *suffix = nullptr) {
+    std::string all;
+    all.reserve(result.addresses.size() * 18U);
+    for (uint64_t addr : result.addresses)
+      all += hex_u64(addr) + "\n";
+    ImGui::SetClipboardText(all.c_str());
+    set_status(state, "Copied " + std::to_string(result.addresses.size()) + " addresses");
+    push_notification(state, "Copied " + std::to_string(result.addresses.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+  };
+
+  if (!result.addresses.empty()) {
+    if (ui::soft_button((std::string(icons::kCopy) + "  Copy All Addresses").c_str(),
+                        ImVec2(200, 30)))
+      copy_all();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Copy all %u addresses to clipboard, one per line",
+                        result.count);
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+      copy_all(" (Ctrl+C)");
+  }
+
   if (result.addresses.empty()) {
     if (result.count == 0 && result.bytes_scanned > 0)
       ui::draw_empty_state("No pointers found",
@@ -206,6 +228,8 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
                       hex_u64(addr).c_str());
         state.screen = Screen::Memory;
       }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Click to jump to %s", hex_u64(addr).c_str());
       ImGui::TableSetColumnIndex(2);
       if (target > 0 && addr < target)
         ImGui::TextColored(ui::colors().dim, "+0x%llX",
@@ -215,6 +239,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
     }
     ImGui::EndTable();
   }
+
   ui::end_panel();
 }
 

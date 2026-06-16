@@ -393,40 +393,59 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::EndChild();
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 
-  ImGui::Dummy(ImVec2(0, 6));
-  sidebar_section("MAIN");
-  nav_item(state, Screen::Home, icons::kHome, "Command Center");
-  nav_item(state, Screen::Consoles, icons::kConsole, "Consoles");
+  /* Footer: fixed height, drawn first so scrollable area gets remaining space */
+  const float footer_h = 56.0f;
+  const float avail_y = ImGui::GetContentRegionAvail().y;
+  const float nav_h = avail_y - footer_h - 8.0f;  /* 8px gap */
 
-  ImGui::Dummy(ImVec2(0, 4));
-  sidebar_section("TOOLS");
-  nav_item(state, Screen::Processes, icons::kProcess, "Processes");
-  nav_item(state, Screen::Memory, icons::kMemory, "Memory");
-  nav_item(state, Screen::Scanner, icons::kScanner, "Scanner");
-  nav_item(state, Screen::PointerScanner, icons::kPointer, "Pointer Scan");
-  nav_item(state, Screen::AOBScanner, icons::kCode, "AOB Scan");
-  nav_item(state, Screen::Trainer, icons::kTrainer, "Trainer");
+  /* Scrollable nav area */
+  if (nav_h > 40.0f) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 2));
+    ImGui::BeginChild("SidebarNavList", ImVec2(0, nav_h), true);
 
-  ImGui::Dummy(ImVec2(0, 4));
-  sidebar_section("OBSERVE");
-  nav_item(state, Screen::Logs, icons::kLogs, "UDP Logs");
-  nav_item(state, Screen::Telemetry, icons::kTelemetry, "Telemetry");
+    ImGui::Dummy(ImVec2(0, 6));
+    sidebar_section("MAIN");
+    nav_item(state, Screen::Home, icons::kHome, "Command Center");
+    nav_item(state, Screen::Consoles, icons::kConsole, "Consoles");
 
-  ImGui::Dummy(ImVec2(0, 4));
-  sidebar_section("SYSTEM");
-  nav_item(state, Screen::Settings, icons::kSettings, "Settings");
-  nav_item(state, Screen::Credits, icons::kCredits, "Credits");
+    ImGui::Dummy(ImVec2(0, 4));
+    sidebar_section("TOOLS");
+    nav_item(state, Screen::Processes, icons::kProcess, "Processes");
+    nav_item(state, Screen::Memory, icons::kMemory, "Memory");
+    nav_item(state, Screen::Scanner, icons::kScanner, "Scanner");
+    nav_item(state, Screen::PointerScanner, icons::kPointer, "Pointer Scan");
+    nav_item(state, Screen::AOBScanner, icons::kCode, "AOB Scan");
+    nav_item(state, Screen::Trainer, icons::kTrainer, "Trainer");
 
-  float footer_y = ImGui::GetWindowHeight() - 84.0f;
-  if (ImGui::GetCursorPosY() < footer_y) ImGui::SetCursorPosY(footer_y);
+    ImGui::Dummy(ImVec2(0, 4));
+    sidebar_section("OBSERVE");
+    nav_item(state, Screen::Logs, icons::kLogs, "UDP Logs");
+    nav_item(state, Screen::Telemetry, icons::kTelemetry, "Telemetry");
+
+    ImGui::Dummy(ImVec2(0, 4));
+    sidebar_section("SYSTEM");
+    nav_item(state, Screen::Settings, icons::kSettings, "Settings");
+    nav_item(state, Screen::Credits, icons::kCredits, "Credits");
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+  }
+
+  /* Fixed footer */
+  ImGui::SetCursorPosY(size.y - footer_h - ImGui::GetStyle().WindowPadding.y);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18, 8));
+  ImGui::BeginChild("SidebarFooter", ImVec2(0, footer_h), true, ImGuiWindowFlags_NoScrollbar);
   ImGui::Separator();
-  ImGui::Dummy(ImVec2(0, 4));
   ImGui::TextColored(ui::colors().dim, "TCP");
   ImGui::SameLine(70.0f);
   ImGui::TextColored(ui::colors().muted, "%d", state.debug_port);
   ImGui::TextColored(ui::colors().dim, "UDP");
   ImGui::SameLine(70.0f);
   ImGui::TextColored(ui::colors().muted, "%d", state.udp_port);
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+
   ImGui::EndChild();
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 }
@@ -746,7 +765,7 @@ int run_frontend(int, char **) {
   const char *glsl_version = "#version 130";
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
-  GLFWwindow *window = glfwCreateWindow(1400, 900, "MemDBG Native", nullptr, nullptr);
+  GLFWwindow *window = glfwCreateWindow(1400, 900, "MemDBG", nullptr, nullptr);
   if (!window) { glfwTerminate(); return 1; }
   glfwMakeContextCurrent(window); glfwSwapInterval(1);
 

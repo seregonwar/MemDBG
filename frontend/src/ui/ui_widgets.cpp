@@ -5,6 +5,7 @@
  */
 
 #include "ui_widgets.hpp"
+#include "ui_icons.hpp"
 
 #include "memdbg_client.hpp"
 #include "memdbg/core/memdbg_protocol.h"
@@ -177,11 +178,28 @@ void draw_empty_state(const char *title, const char *message) {
   ImGui::TextWrapped("%s", message);
 }
 
-void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base) {
+void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base,
+                    const std::function<void(uint64_t)> &on_address_clicked) {
   if (data.empty()) {
     draw_empty_state("No memory buffer", "Read memory from the selected process to populate this view.");
     return;
   }
+
+  /* Copy entire buffer as pure hex */
+  if (soft_button((std::string(icons::kCopy) + "  Copy Hex").c_str(),
+                      ImVec2(140, 30))) {
+    std::ostringstream oss;
+    oss << std::hex << std::uppercase << std::setfill('0');
+    for (size_t i = 0; i < data.size(); ++i) {
+      if (i > 0) oss << ' ';
+      oss << std::setw(2) << static_cast<unsigned>(data[i]);
+    }
+    ImGui::SetClipboardText(oss.str().c_str());
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Copy %zu bytes as space-separated hex", data.size());
+  ImGui::Spacing();
+
   if (ImGui::BeginTable("hex_view", 3,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,
         ImVec2(0,0))) {
@@ -195,7 +213,21 @@ void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base) {
       {
         std::ostringstream oss;
         oss << "0x" << std::hex << std::uppercase << std::setw(0) << (base+row);
-        ImGui::TextUnformatted(oss.str().c_str());
+        const std::string addr_str = oss.str();
+        ImGui::TextUnformatted(addr_str.c_str());
+        if (ImGui::IsItemHovered()) {
+          if (on_address_clicked)
+            ImGui::SetTooltip("Click to jump to %s", addr_str.c_str());
+          else
+            ImGui::SetTooltip("Click to copy: %s", addr_str.c_str());
+        }
+        if (ImGui::IsItemClicked()) {
+          const uint64_t row_addr = base + row;
+          if (on_address_clicked)
+            on_address_clicked(row_addr);
+          else
+            ImGui::SetClipboardText(addr_str.c_str());
+        }
       }
       ImGui::TableSetColumnIndex(1);
       {
@@ -206,6 +238,11 @@ void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base) {
           else hex << "   ";
         }
         ImGui::TextUnformatted(hex.str().c_str());
+        if (ImGui::IsItemHovered()) {
+          size_t end = std::min(row + 15U, data.size() - 1U);
+          ImGui::SetTooltip("+0x%zX \xe2\x80\x93 +0x%zX  (%zu bytes)",
+                            row, end, end - row + 1U);
+        }
       }
       ImGui::TableSetColumnIndex(2);
       {
@@ -215,6 +252,11 @@ void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base) {
           ascii[i] = std::isprint(c)!=0 ? static_cast<char>(c) : '.';
         }
         ImGui::TextUnformatted(ascii);
+        if (ImGui::IsItemHovered()) {
+          std::ostringstream tip;
+          tip << "0x" << std::hex << std::uppercase << (base + row);
+          ImGui::SetTooltip("%s +%zu", tip.str().c_str(), row);
+        }
       }
     }
     ImGui::EndTable();

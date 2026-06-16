@@ -73,6 +73,132 @@ struct Notification {
   bool dismissed = false;
 };
 
+struct MemoryWatchpoint {
+  uint64_t address = 0;
+  uint32_t length = 0;
+  bool enabled = true;
+  bool changed = false;
+  std::vector<uint8_t> last_bytes;
+  std::vector<uint8_t> current_bytes;
+  std::string label;
+  std::string status;
+};
+
+struct AllocationRecord {
+  uint64_t address = 0;
+  uint64_t size = 0;
+  bool freed = false;
+  uint64_t alloc_event = 0;
+  uint64_t free_event = 0;
+  std::string note;
+};
+
+struct GadgetMatch {
+  uint64_t address = 0;
+  std::string name;
+  std::string bytes;
+  std::string map_name;
+};
+
+struct HeapSprayFinding {
+  uint64_t start = 0;
+  uint64_t end = 0;
+  double entropy = 0.0;
+  double dominant_ratio = 0.0;
+  uint32_t longest_run = 0;
+  std::string detail;
+};
+
+/* ---- Auto-Search types (shared between engine and state) ---- */
+
+enum class AutoSearchTarget {
+  Health    = 0,
+  Ammo      = 1,
+  Resources = 2,
+};
+
+inline const char *auto_search_target_name(AutoSearchTarget t) {
+  switch (t) {
+  case AutoSearchTarget::Health:    return "Health";
+  case AutoSearchTarget::Ammo:      return "Ammo";
+  case AutoSearchTarget::Resources: return "Resources";
+  }
+  return "Unknown";
+}
+
+inline const char *auto_search_target_hint(AutoSearchTarget t) {
+  switch (t) {
+  case AutoSearchTarget::Health:
+    return "Capture baseline, take damage in-game, then Next Scan.";
+  case AutoSearchTarget::Ammo:
+    return "Capture baseline, fire a few shots (don't reload), then Next Scan.";
+  case AutoSearchTarget::Resources:
+    return "Capture baseline, collect or spend resources, then Next Scan.";
+  }
+  return "";
+}
+
+enum AutoSearchFlag : uint32_t {
+  kFlagNone          = 0,
+  kFlagDecreased     = 1U << 0,
+  kFlagIncreased     = 1U << 1,
+  kFlagSmallDelta    = 1U << 2,
+  kFlagReasonableRange = 1U << 3,
+  kFlagNonZero       = 1U << 4,
+  kFlagIntegerType   = 1U << 5,
+  kFlagAlignedAddr   = 1U << 6,
+  kFlagFloatRepr     = 1U << 7,
+};
+
+struct AutoSearchCandidate {
+  uint64_t address = 0;
+  float    score = 0.0f;
+  int      value_type = MEMDBG_VALUE_U32;
+  double   old_value = 0.0;
+  double   new_value = 0.0;
+  uint32_t matched_flags = 0;
+
+  std::string old_value_str() const {
+    char buf[64];
+    switch (value_type) {
+    case MEMDBG_VALUE_U8:  std::snprintf(buf, sizeof(buf), "%u", (unsigned)old_value); break;
+    case MEMDBG_VALUE_U16: std::snprintf(buf, sizeof(buf), "%u", (unsigned)old_value); break;
+    case MEMDBG_VALUE_U32: std::snprintf(buf, sizeof(buf), "%u", (unsigned)old_value); break;
+    case MEMDBG_VALUE_U64: std::snprintf(buf, sizeof(buf), "%llu", (unsigned long long)old_value); break;
+    case MEMDBG_VALUE_F32: case MEMDBG_VALUE_F64: std::snprintf(buf, sizeof(buf), "%.4g", old_value); break;
+    default: std::snprintf(buf, sizeof(buf), "%.0f", old_value); break;
+    }
+    return buf;
+  }
+
+  std::string new_value_str() const {
+    char buf[64];
+    switch (value_type) {
+    case MEMDBG_VALUE_U8:  std::snprintf(buf, sizeof(buf), "%u", (unsigned)new_value); break;
+    case MEMDBG_VALUE_U16: std::snprintf(buf, sizeof(buf), "%u", (unsigned)new_value); break;
+    case MEMDBG_VALUE_U32: std::snprintf(buf, sizeof(buf), "%u", (unsigned)new_value); break;
+    case MEMDBG_VALUE_U64: std::snprintf(buf, sizeof(buf), "%llu", (unsigned long long)new_value); break;
+    case MEMDBG_VALUE_F32: case MEMDBG_VALUE_F64: std::snprintf(buf, sizeof(buf), "%.4g", new_value); break;
+    default: std::snprintf(buf, sizeof(buf), "%.0f", new_value); break;
+    }
+    return buf;
+  }
+
+  std::string reason() const {
+    std::string r;
+    auto add = [&r](const char *s) { if (!r.empty()) r += ", "; r += s; };
+    if (matched_flags & kFlagDecreased)      add("decreased");
+    if (matched_flags & kFlagIncreased)      add("increased");
+    if (matched_flags & kFlagSmallDelta)     add("small delta");
+    if (matched_flags & kFlagReasonableRange) add("in range");
+    if (matched_flags & kFlagNonZero)        add("non-zero");
+    if (matched_flags & kFlagIntegerType)    add("integer");
+    if (matched_flags & kFlagAlignedAddr)    add("aligned");
+    if (matched_flags & kFlagFloatRepr)      add("float repr");
+    return r.empty() ? "no match" : r;
+  }
+};
+
 struct AppState {
   Client client;
   UdpLogListener udp_listener;
@@ -98,10 +224,43 @@ struct AppState {
   char read_address[32] = "0x0";
   int read_length = 256;
   std::vector<uint8_t> memory;
+  std::vector<uint8_t> memory_previous;
+  uint64_t memory_base = 0;
+  uint64_t memory_previous_base = 0;
+  bool memory_overlay_changes = true;
+  bool memory_overlay_watchpoints = true;
+  bool memory_overlay_freed_allocs = true;
 
   char write_address[32] = "0x0";
   char write_bytes[512] = "";
   char dump_path[512] = "dumps";
+
+  char watch_address[32] = "0x0";
+  int watch_length = 4;
+  bool watchpoints_polling = false;
+  float watchpoint_interval = 0.75f;
+  double next_watchpoint_poll = 0.0;
+  std::vector<MemoryWatchpoint> watchpoints;
+
+  char alloc_address[32] = "0x0";
+  char alloc_size[32] = "0x100";
+  char alloc_events_text[4096] = "";
+  uint64_t allocation_event_counter = 0;
+  std::vector<AllocationRecord> allocations;
+  std::vector<std::string> allocation_findings;
+  std::vector<std::string> allocation_alerts;
+
+  int process_dump_max_mb = 128;
+  std::string process_analysis_report;
+
+  bool gadget_selected_map_only = true;
+  bool gadget_exec_only = true;
+  int gadget_max_results = 256;
+  std::vector<GadgetMatch> gadget_results;
+
+  int heap_sample_kb = 256;
+  int heap_max_maps = 32;
+  std::vector<HeapSprayFinding> heap_findings;
 
   int scan_type = MEMDBG_VALUE_U32;
   char scan_value[128] = "0";
@@ -177,12 +336,54 @@ struct AppState {
   char scan_async_temp_session_status[256] = {};
   std::string scan_async_error;
 
+  /* ---- Auto-Search (smart heuristic game value discovery) ---- */
+  bool auto_search_enabled = false;
+  int  auto_search_target = 0;    /* AutoSearchTarget enum value */
+  bool auto_search_has_baseline = false;
+  int  auto_search_pass = 0;      /* how many refine passes so far */
+  std::vector<AutoSearchCandidate> auto_search_candidates;  /* top scored results */
+  std::vector<AutoSearchCandidate> auto_search_temp_candidates;  /* async temp */
+
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
   std::deque<Notification> notifications;
 };
 
 /* ---- utility functions ---- */
+
+template <typename T> inline T read_scalar(const std::vector<uint8_t> &bytes) {
+  T value{};
+  if (bytes.size() >= sizeof(T))
+    std::memcpy(&value, bytes.data(), sizeof(T));
+  return value;
+}
+
+inline bool bytes_to_number(int type, const std::vector<uint8_t> &bytes,
+                            long double &out) {
+  switch (type) {
+  case MEMDBG_VALUE_U8:
+    out = read_scalar<uint8_t>(bytes);
+    return bytes.size() >= sizeof(uint8_t);
+  case MEMDBG_VALUE_U16:
+    out = read_scalar<uint16_t>(bytes);
+    return bytes.size() >= sizeof(uint16_t);
+  case MEMDBG_VALUE_U32:
+    out = read_scalar<uint32_t>(bytes);
+    return bytes.size() >= sizeof(uint32_t);
+  case MEMDBG_VALUE_U64:
+  case MEMDBG_VALUE_POINTER:
+    out = static_cast<long double>(read_scalar<uint64_t>(bytes));
+    return bytes.size() >= sizeof(uint64_t);
+  case MEMDBG_VALUE_F32:
+    out = read_scalar<float>(bytes);
+    return bytes.size() >= sizeof(float);
+  case MEMDBG_VALUE_F64:
+    out = read_scalar<double>(bytes);
+    return bytes.size() >= sizeof(double);
+  default:
+    return false;
+  }
+}
 
 inline std::string hex_u64(uint64_t value, int width = 0) {
   std::ostringstream oss;

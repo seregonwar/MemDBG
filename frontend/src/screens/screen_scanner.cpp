@@ -7,12 +7,12 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "auto_search.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <exception>
 #include <future>
 
@@ -34,24 +34,6 @@ static uint32_t current_scan_value_len(const AppState &state) {
     }
   }
   return value_len;
-}
-
-template <typename T> static T read_scalar(const std::vector<uint8_t> &bytes) {
-  T value{};
-  if (bytes.size() >= sizeof(T)) std::memcpy(&value, bytes.data(), sizeof(T));
-  return value;
-}
-
-static bool bytes_to_number(int type, const std::vector<uint8_t> &bytes, long double &out) {
-  switch (type) {
-  case MEMDBG_VALUE_U8:  out = read_scalar<uint8_t>(bytes); return bytes.size() >= sizeof(uint8_t);
-  case MEMDBG_VALUE_U16: out = read_scalar<uint16_t>(bytes); return bytes.size() >= sizeof(uint16_t);
-  case MEMDBG_VALUE_U32: out = read_scalar<uint32_t>(bytes); return bytes.size() >= sizeof(uint32_t);
-  case MEMDBG_VALUE_U64: case MEMDBG_VALUE_POINTER: out = static_cast<long double>(read_scalar<uint64_t>(bytes)); return bytes.size() >= sizeof(uint64_t);
-  case MEMDBG_VALUE_F32: out = read_scalar<float>(bytes); return bytes.size() >= sizeof(float);
-  case MEMDBG_VALUE_F64: out = read_scalar<double>(bytes); return bytes.size() >= sizeof(double);
-  default: return false;
-  }
 }
 
 static bool scan_refine_match(int type, RefineMode mode, const std::vector<uint8_t> &old_bytes, const std::vector<uint8_t> &new_bytes) {
@@ -310,7 +292,27 @@ static void poll_scanner_async(AppState &state) {
   // snapshot was already captured by the async worker via temp storage
   set_status(state, state.scan_async_temp_session_status);
   push_notification(state, std::string(state.scan_async_label) + " complete: " +
-                    std::to_string(state.scan_result.count) + " results");
+                    std::to_string(state.scan_result.count) + " results");  /* If auto-search is enabled and this was a scan, track pass progression.
+   * Only the auto-search Next Scan lambda populates temp_candidates;
+   * regular scans don't, so we gate on the temp vector being non-empty. */
+  if (state.auto_search_enabled && !state.scan_snapshot.empty()) {
+    if (!state.auto_search_has_baseline) {
+      /* Baseline just captured — only set the flag, don't touch candidates */
+      state.auto_search_has_baseline = true;
+      state.auto_search_pass = 0;
+      state.auto_search_candidates.clear();
+      push_notification(state, "Auto-search baseline captured: " +
+                        std::to_string(state.scan_snapshot.size()) + " values");
+    } else if (!state.auto_search_temp_candidates.empty()) {
+      /* Next Scan just completed (only these populate temp_candidates) */
+      state.auto_search_pass++;
+      state.auto_search_candidates = std::move(state.auto_search_temp_candidates);
+      push_notification(state, "Auto-search pass " +
+                        std::to_string(state.auto_search_pass) +
+                        " complete: " +
+                        std::to_string(state.scan_result.count) + " candidates");
+    }
+  }
 }
 
 /* ---- Async scan launchers (validation on UI thread, blocking I/O on worker) ---- */
@@ -773,6 +775,254 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     set_status(state, state.scan_session_status);
   }
   ImGui::EndDisabled();
+
+  /* ---- Smart Auto-Search ---- */
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  ImGui::Checkbox("Smart Auto-Search", &state.auto_search_enabled);
+  if (state.auto_search_enabled) {
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    const char *target_names[] = {"Health", "Ammo", "Resources"};
+    if (ImGui::Combo("##autotarget", &state.auto_search_target,
+                     target_names, IM_ARRAYSIZE(target_names)))
+      state.auto_search_has_baseline = false;
+
+    /* Hint text — warn about critical instructions like "don't reload" */
+    AutoSearchTarget hint_tgt =
+        static_cast<AutoSearchTarget>(state.auto_search_target);
+    ImVec4 hint_color = hint_tgt == AutoSearchTarget::Ammo
+                            ? ui::colors().warning
+                            : ui::colors().dim;
+    ImGui::TextColored(hint_color, "%s",
+                       auto_search_target_hint(hint_tgt));
+
+    /* Baseline capture: auto-search piggybacks on the Unknown Value Scan */
+    bool can_baseline = can_launch_scan;
+    ImGui::BeginDisabled(!can_baseline);
+    if (ui::soft_button((std::string(icons::kTarget) + "  Capture Baseline").c_str(),
+                        ui::full_button(38))) {
+      state.auto_search_has_baseline = false;
+      state.auto_search_pass = 0;
+      /* Run an Unknown Value Scan — the async worker will store the snapshot
+       * as the baseline via the auto_search_has_baseline flag */
+      scan_unknown_process(state);
+    }
+    ImGui::EndDisabled();
+
+    /* Next Scan: re-read and score candidates */
+    bool can_next = state.auto_search_has_baseline && can_launch_scan &&
+                    !state.scan_snapshot.empty();
+    ImGui::BeginDisabled(!can_next);
+    std::string next_label = std::string(icons::kRefresh) +
+        "  Next Scan (Pass " + std::to_string(state.auto_search_pass + 1) + ")";
+    if (ui::primary_button(next_label.c_str(), ui::full_button(38))) {
+      /* Re-read baseline addresses and score them on the async worker.
+       * We reuse the refine_scan Changed path but with scoring layered on top. */
+      AutoSearchTarget tgt = static_cast<AutoSearchTarget>(state.auto_search_target);
+      state.scan_async_label = "Auto-search pass " +
+                               std::to_string(state.auto_search_pass + 1);
+      state.scan_async_start_time = ImGui::GetTime();
+      state.scan_async_pending = true;
+      state.scan_async_owner = Screen::Scanner;
+
+      const int32_t pid = state.selected_pid;
+      const uint32_t val_len = state.scan_snapshot_value_len;
+      const int snap_type = state.scan_snapshot_type;
+      auto &client = state.client;
+      auto &snap = state.scan_snapshot;
+      const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
+      auto &temp_result = state.scan_async_temp_result;
+      auto &temp_snapshot = state.scan_async_temp_snapshot;
+      auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
+      auto &temp_snap_type = state.scan_async_temp_snapshot_type;
+      auto &temp_is_unknown = state.scan_async_temp_is_unknown;
+      auto &temp_status = state.scan_async_temp_session_status;
+      auto &temp_candidates = state.auto_search_temp_candidates;
+
+      state.scan_async_future = std::async(std::launch::async,
+        [&client, pid, val_len, snap_type, tgt, has_batch,
+         &snap, &temp_result, &temp_snapshot, &temp_snap_val_len,
+         &temp_snap_type, &temp_is_unknown, &temp_status,
+         &temp_candidates]() -> bool {
+          /* Re-read all baseline addresses */
+          const auto &old_snap = snap;
+          std::vector<ScanSnapshotEntry> current_snap;
+          std::vector<uint64_t> current_addrs;
+          current_snap.reserve(old_snap.size());
+          current_addrs.reserve(old_snap.size());
+          uint32_t read_errors = 0;
+          uint64_t bytes_read = 0;
+          const auto t_start = std::chrono::steady_clock::now();
+          std::vector<memdbg_batch_read_item_t> batch_items;
+
+          if (has_batch) {
+            batch_items.reserve(MEMDBG_BATCH_READ_MAX_ITEMS);
+            for (size_t base = 0U; base < old_snap.size();
+                 base += MEMDBG_BATCH_READ_MAX_ITEMS) {
+              batch_items.clear();
+              size_t chunk_end = std::min(
+                  base + MEMDBG_BATCH_READ_MAX_ITEMS, old_snap.size());
+              for (size_t i = base; i < chunk_end; ++i) {
+                memdbg_batch_read_item_t item{};
+                item.address = old_snap[i].address;
+                item.length  = val_len;
+                batch_items.push_back(item);
+              }
+              Client::BatchReadResult batch;
+              if (!client.batch_read(pid, batch_items, batch)) {
+                read_errors += static_cast<uint32_t>(chunk_end - base);
+                continue;
+              }
+              uint32_t data_offset = 0U;
+              for (size_t j = 0U; j < batch.entries.size(); ++j) {
+                const auto &entry = batch.entries[j];
+                if (entry.status != 0U || entry.length != val_len) {
+                  read_errors++;
+                  data_offset += entry.length;
+                  continue;
+                }
+                ScanSnapshotEntry cur;
+                cur.address = entry.address;
+                cur.bytes.assign(batch.data.begin() + data_offset,
+                                 batch.data.begin() + data_offset + entry.length);
+                current_snap.push_back(std::move(cur));
+                current_addrs.push_back(entry.address);
+                bytes_read += entry.length;
+                data_offset += entry.length;
+              }
+            }
+          } else {
+            for (size_t i = 0U; i < old_snap.size(); ++i) {
+              std::vector<uint8_t> data;
+              if (!client.memory_read(pid, old_snap[i].address, val_len, data) ||
+                  data.size() != val_len) {
+                read_errors++;
+                continue;
+              }
+              ScanSnapshotEntry cur;
+              cur.address = old_snap[i].address;
+              cur.bytes   = std::move(data);
+              current_snap.push_back(std::move(cur));
+              current_addrs.push_back(old_snap[i].address);
+              bytes_read += val_len;
+            }
+          }
+
+          /* Run auto-search engine */
+          AutoSearchEngine engine;
+          engine.set_target(tgt);
+          engine.set_baseline(old_snap, snap_type, val_len);
+          auto candidates = engine.score_candidates(current_snap, 100);
+
+          /* Store scored candidates for UI display */
+          temp_candidates = std::move(candidates);
+
+          /* Build new snapshot from the top candidates (keep them for next pass) */
+          temp_snapshot.clear();
+          temp_snapshot.reserve(candidates.size());
+          temp_result.addresses.clear();
+          temp_result.addresses.reserve(candidates.size());
+          for (auto &c : candidates) {
+            /* Map candidate back to current snapshot bytes */
+            for (const auto &cs : current_snap) {
+              if (cs.address == c.address) {
+                ScanSnapshotEntry se;
+                se.address = c.address;
+                se.bytes   = cs.bytes;
+                temp_snapshot.push_back(std::move(se));
+                break;
+              }
+            }
+            temp_result.addresses.push_back(c.address);
+          }
+          temp_result.count = static_cast<uint32_t>(temp_result.addresses.size());
+          temp_result.bytes_scanned = bytes_read;
+          temp_result.read_calls = static_cast<uint32_t>(current_snap.size() + read_errors);
+          temp_snap_val_len = val_len;
+          temp_snap_type = snap_type;
+          temp_is_unknown = false;
+
+          const auto t_end = std::chrono::steady_clock::now();
+          const uint64_t elapsed_ns = static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count());
+          temp_result.elapsed_ns = elapsed_ns;
+          temp_result.read_errors = read_errors;
+          std::snprintf(temp_status, sizeof(temp_status),
+                        "Auto-search: %u candidates scored (%s)",
+                        temp_result.count,
+                        bytes_per_second(bytes_read, elapsed_ns).c_str());
+          return true;
+        });
+    }
+    ImGui::EndDisabled();
+
+    if (state.auto_search_has_baseline && !state.scan_snapshot.empty())
+      ImGui::TextColored(ui::colors().dim, "Baseline: %zu values",
+                         state.scan_snapshot.size());
+    if (state.auto_search_pass > 0)
+      ImGui::TextColored(ui::colors().success, "Pass %d complete",
+                         state.auto_search_pass);
+
+    /* Reset button */
+    if (state.auto_search_has_baseline) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Reset")) {
+        state.auto_search_has_baseline = false;
+        state.auto_search_pass = 0;
+        state.auto_search_candidates.clear();
+        set_status(state, "Auto-search reset");
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Clear baseline and start over");
+    }
+
+    /* Display scored candidates if available */
+    if (!state.auto_search_candidates.empty()) {
+      ImGui::Spacing();
+      ImGui::TextColored(ui::colors().primary2, "Top Candidates:");
+      ImGui::Spacing();
+      if (ImGui::BeginTable("AutoSearchResults", 4,
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+            ImVec2(0, 200.0f))) {
+        ImGui::TableSetupColumn("Score", ImGuiTableColumnFlags_WidthFixed, 55);
+        ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 140);
+        ImGui::TableSetupColumn("Old \xe2\x86\x92 New");
+        ImGui::TableSetupColumn("Reason");
+        ImGui::TableHeadersRow();
+        for (size_t i = 0U;
+             i < state.auto_search_candidates.size() && i < 20U; ++i) {
+          const auto &c = state.auto_search_candidates[i];
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          /* Color-code score: green > 0.7, yellow > 0.4, dim otherwise */
+          ImVec4 sc = c.score > 0.7f ? ui::colors().success :
+                      c.score > 0.4f ? ui::colors().warning : ui::colors().dim;
+          ImGui::TextColored(sc, "%.2f", c.score);
+          ImGui::TableSetColumnIndex(1);
+          std::string addr_label = hex_u64(c.address) + "##ac" +
+                                   std::to_string(i);
+          if (ImGui::Selectable(addr_label.c_str())) {
+            std::snprintf(state.read_address, sizeof(state.read_address),
+                          "%s", hex_u64(c.address).c_str());
+            std::snprintf(state.write_address, sizeof(state.write_address),
+                          "%s", hex_u64(c.address).c_str());
+            state.screen = Screen::Memory;
+          }
+          ImGui::TableSetColumnIndex(2);
+          ImGui::Text("%s \xe2\x86\x92 %s",
+                      c.old_value_str().c_str(), c.new_value_str().c_str());
+          ImGui::TableSetColumnIndex(3);
+          ImGui::TextColored(ui::colors().muted, "%s", c.reason().c_str());
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Type: %s", value_type_name(c.value_type));
+        }
+        ImGui::EndTable();
+      }
+    }
+  }
   ui::end_panel();
 
   ImGui::SameLine(0, gap);
@@ -796,6 +1046,28 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     }
   }
   ImGui::Spacing();
+
+  /* Copy All logic shared between button and keyboard shortcut */
+  auto copy_all = [&](const char *suffix = nullptr) {
+    std::string all;
+    all.reserve(state.scan_result.addresses.size() * 18U);
+    for (uint64_t addr : state.scan_result.addresses)
+      all += hex_u64(addr) + "\n";
+    ImGui::SetClipboardText(all.c_str());
+    set_status(state, "Copied " + std::to_string(state.scan_result.addresses.size()) + " addresses");
+    push_notification(state, "Copied " + std::to_string(state.scan_result.addresses.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+  };
+
+  if (!state.scan_result.addresses.empty()) {
+    if (ui::soft_button((std::string(icons::kCopy) + "  Copy All Addresses").c_str(),
+                        ImVec2(200, 30)))
+      copy_all();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Copy all %u addresses to clipboard, one per line",
+                        state.scan_result.count);
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+      copy_all(" (Ctrl+C)");
+  }
 
   if (ImGui::BeginTable("ScanResultsTable", 2,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY, ImVec2(0,0))) {
@@ -860,6 +1132,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     }
     ImGui::EndTable();
   }
+
   ui::end_panel();
 }
 

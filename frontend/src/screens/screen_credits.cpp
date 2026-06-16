@@ -58,7 +58,7 @@ void draw_credits(AppState &state, ImVec2 avail) {
 
   ImGui::SameLine(0, 18);
   ImGui::BeginGroup();
-  ImGui::TextColored(ui::colors().primary2, "MemDBG Native");
+  ImGui::TextColored(ui::colors().primary2, "MemDBG");
   ImGui::Text("Version 0.1.0");
   if (!profile_name.empty())
     ImGui::Text("Creator: %s (@%s)", profile_name.c_str(), profile_login.c_str());
