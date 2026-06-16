@@ -154,7 +154,7 @@ jobs:
               ;;
             frontend)
               if [ "${{ runner.os }}" = "Windows" ]; then
-                cmake -S frontend -B build/frontend -DCMAKE_BUILD_TYPE=Release
+                cmake -S frontend -B build/frontend
                 cmake --build build/frontend --config Release --parallel 4
               else
                 make clean frontend
