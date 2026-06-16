@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "trainer_format.hpp"
+#include "file_picker.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -205,6 +206,13 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Trainer File");
   ImGui::InputText("Path", state.trainer_file_path, sizeof(state.trainer_file_path));
+  ImGui::SameLine();
+  if (ImGui::SmallButton((std::string(icons::kLoad) + "##trainerpath").c_str())) {
+    std::string picked = memdbg::frontend::ui::pickFile("Open Trainer File", "Trainer Files", "*.cht;*.shn;*.json");
+    if (!picked.empty())
+      std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path), "%s", picked.c_str());
+  }
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Browse for trainer file");
   if (ui::soft_button((std::string(icons::kLoad) + "  Load").c_str(),
       ImVec2((ImGui::GetContentRegionAvail().x-8.0f)*0.5f,38))) {
     if (load_trainer_file(state, state.trainer_file_path) < 0) {

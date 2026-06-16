@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "file_picker.hpp"
 
 #include <cstdio>
 #include <string>
@@ -22,6 +23,13 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::InputInt("Debug TCP", &state.debug_port);
   ImGui::InputInt("UDP logs", &state.udp_port);
   ImGui::InputText("Dump path", state.dump_path, sizeof(state.dump_path));
+  ImGui::SameLine();
+  if (ImGui::SmallButton((std::string(icons::kLoad) + "##dumppath").c_str())) {
+    std::string picked = memdbg::frontend::ui::pickFile("Select Dump Directory");
+    if (!picked.empty())
+      std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", picked.c_str());
+  }
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Browse for dump directory");
   normalize_ports(state);
   ImGui::Spacing();
   if (ui::primary_button((std::string(icons::kSave) + "  Save Defaults").c_str(), ui::full_button(40))) {

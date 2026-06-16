@@ -160,9 +160,8 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
       !state.scan_async_pending) {
     if (now >= state.next_telemetry_poll) {
       state.next_telemetry_poll = now + 1.0;
-      state.telemetry_available = state.client.telemetry(state.telemetry_snap);
-      if (!state.telemetry_available) {
-        set_status(state, "Telemetry: " + state.client.last_error());
+      if (!state.telemetry_pending) {
+        request_telemetry_async(state);
       }
     }
   }
@@ -210,13 +209,9 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   ImGui::BeginDisabled(state.scan_async_pending);
   if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Now").c_str(),
                       ImVec2(refresh_w, 36))) {
-    if (state.client.telemetry(state.telemetry_snap)) {
-      state.telemetry_available = true;
-      state.next_telemetry_poll = now + 1.0;
-      set_status(state, "Telemetry refreshed");
-    } else {
-      state.telemetry_available = false;
-      set_status(state, "Telemetry: " + state.client.last_error());
+    if (!state.telemetry_pending) {
+      request_telemetry_async(state);
+      set_status(state, "Telemetry refresh requested");
     }
   }
   ImGui::EndDisabled();
