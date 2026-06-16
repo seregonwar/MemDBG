@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "icon_font.hpp"
+#include "embedded_logo.hpp"
 #include "github_profile.hpp"
 #include "platform.hpp"
 
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -27,6 +29,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -58,18 +61,6 @@ static ImTextureID texture_id(GLuint texture) {
   return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(texture));
 }
 
-static void add_asset_candidates(std::vector<std::filesystem::path> &out,
-                                 const std::filesystem::path &root,
-                                 const std::filesystem::path &relative_path) {
-  if (root.empty()) return;
-  std::filesystem::path current = root;
-  for (int depth = 0; depth < 6; ++depth) {
-    out.push_back(current / relative_path);
-    if (!current.has_parent_path() || current.parent_path() == current) break;
-    current = current.parent_path();
-  }
-}
-
 static void init_executable_dir(const char *argv0) {
   if (argv0 == nullptr || argv0[0] == '\0') return;
 
@@ -82,6 +73,19 @@ static void init_executable_dir(const char *argv0) {
   const std::filesystem::path canonical = std::filesystem::weakly_canonical(path, ec);
   if (!ec && !canonical.empty()) path = canonical;
   if (path.has_parent_path()) s_executable_dir = path.parent_path();
+}
+
+#if !defined(__APPLE__)
+static void add_asset_candidates(std::vector<std::filesystem::path> &out,
+                                 const std::filesystem::path &root,
+                                 const std::filesystem::path &relative_path) {
+  if (root.empty()) return;
+  std::filesystem::path current = root;
+  for (int depth = 0; depth < 6; ++depth) {
+    out.push_back(current / relative_path);
+    if (!current.has_parent_path() || current.parent_path() == current) break;
+    current = current.parent_path();
+  }
 }
 
 static std::filesystem::path find_asset_path(const char *relative_path) {
@@ -103,6 +107,7 @@ static std::filesystem::path find_asset_path(const char *relative_path) {
   }
   return rel;
 }
+#endif
 
 static void compute_content_uv(TextureAsset &asset, const unsigned char *pixels) {
   int min_x = asset.width;
@@ -135,14 +140,22 @@ static void compute_content_uv(TextureAsset &asset, const unsigned char *pixels)
                      static_cast<float>(max_y + 1) / static_cast<float>(asset.height));
 }
 
-static bool load_texture_png(TextureAsset &asset, const char *relative_path) {
+static bool load_texture_png_from_memory(TextureAsset &asset,
+                                         const std::uint8_t *data,
+                                         std::size_t data_size) {
   if (asset.texture != 0U) return true;
   if (asset.attempted) return false;
   asset.attempted = true;
 
-  const std::filesystem::path path = find_asset_path(relative_path);
+  if (data == nullptr || data_size == 0U ||
+      data_size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+
   int width = 0, height = 0, channels = 0;
-  unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
+  const auto *bytes = reinterpret_cast<const unsigned char *>(data);
+  unsigned char *pixels = stbi_load_from_memory(bytes, static_cast<int>(data_size),
+                                                &width, &height, &channels, 4);
   if (pixels == nullptr || width <= 0 || height <= 0) {
     stbi_image_free(pixels);
     return false;
@@ -175,6 +188,29 @@ static void shutdown_texture(TextureAsset &asset) {
     glDeleteTextures(1, &texture);
   }
   asset = TextureAsset{};
+}
+
+static void set_window_icon(GLFWwindow *window) {
+#if defined(__APPLE__)
+  (void)window;
+#else
+  if (window == nullptr) return;
+
+  const std::filesystem::path path = find_asset_path("assets/app-icon.png");
+  int width = 0, height = 0, channels = 0;
+  unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
+  if (pixels == nullptr || width <= 0 || height <= 0) {
+    stbi_image_free(pixels);
+    return;
+  }
+
+  GLFWimage image{};
+  image.width = width;
+  image.height = height;
+  image.pixels = pixels;
+  glfwSetWindowIcon(window, 1, &image);
+  stbi_image_free(pixels);
+#endif
 }
 
 } // namespace
@@ -484,7 +520,7 @@ static void text_ellipsis(const char *text, float max_width, ImVec4 color) {
 
 static void sidebar_section(const char *label) {
   ImGui::SetCursorPosX(10.0f);
-  ImGui::TextColored(ui::colors().dim, "%s", label);
+  ImGui::TextColored(alpha(ui::colors().primary2, 0.70f), "%s", label);
 }
 
 static void nav_item(AppState &state, Screen screen, const char *icon, const char *label) {
@@ -503,11 +539,13 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
   const ImVec2 max(pos.x + row_w - 2.0f, pos.y + row_h);
 
   if (selected || hovered) {
-    const ImVec4 bg = selected ? ui::colors().bg3 : alpha(ui::colors().bg3, 0.58f);
+    const ImVec4 bg = selected
+        ? ImVec4(32.0f/255.0f, 58.0f/255.0f, 45.0f/255.0f, 1.0f)
+        : alpha(ui::colors().bg3, 0.70f);
     dl->AddRectFilled(min, max, ui::color_u32(bg), 1.0f);
     dl->AddRect(min, max,
-                ui::color_u32(selected ? alpha(ui::colors().border_hot, 0.72f)
-                                       : alpha(ui::colors().border, 0.45f)),
+                ui::color_u32(selected ? alpha(ui::colors().border_hot, 0.92f)
+                                       : alpha(ui::colors().border, 0.62f)),
                 1.0f);
   }
 
@@ -518,7 +556,7 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
   }
 
   const ImVec4 icon_col = selected ? ui::colors().primary2 :
-                          hovered ? ui::colors().text : ui::colors().muted;
+                          hovered ? ui::colors().primary2 : ui::colors().muted;
   const ImVec4 text_col = selected ? ui::colors().text :
                           hovered ? ui::colors().text : ui::colors().muted;
   const ImVec2 icon_size = ImGui::CalcTextSize(icon);
@@ -534,16 +572,16 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
 }
 
 static void draw_sidebar(AppState &state, ImVec2 size) {
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6,6));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4,2));
   ImGui::BeginChild("Sidebar", size, true, ImGuiWindowFlags_NoScrollbar);
 
-  ImGui::TextColored(ui::colors().muted, "TOOLBOX");
+  ImGui::TextColored(ui::colors().text, "TOOLBOX");
   ImGui::SameLine();
-  ImGui::TextColored(ui::colors().dim, "v0.1.0");
+  ImGui::TextColored(ui::colors().muted, "v0.1.0");
 
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg3);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8,6));
   ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 2.0f);
   ImGui::BeginChild("SidebarStatus", ImVec2(0,52), true, ImGuiWindowFlags_NoScrollbar);
@@ -620,23 +658,138 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
 
 /* ---- Top bar ---- */
 
-static bool toolbar_button(const char *id, const char *icon, const char *label,
-                           const char *shortcut, float width) {
+static constexpr float kTopbarControlH = 32.0f;
+static constexpr float kTopbarLogoH = 34.0f;
+
+static float topbar_center_y(float item_h) {
+  return std::max(0.0f, (ImGui::GetWindowHeight() - item_h) * 0.5f);
+}
+
+static void topbar_align(float item_h = kTopbarControlH) {
+  ImGui::SetCursorPosY(topbar_center_y(item_h));
+}
+
+static void topbar_select_process(AppState &state, int row) {
+  if (row < 0 || row >= static_cast<int>(state.processes.size())) return;
+  state.selected_process_row = row;
+  state.selected_pid = state.processes[row].pid;
+  state.maps.clear();
+  state.selected_map_row = -1;
+  state.memory.clear();
+  state.scan_result = ScanResult{};
+  state.scan_snapshot.clear();
+  state.scan_snapshot_value_len = 0;
+  state.scan_is_unknown_session = false;
+  state.has_process_info = false;
+  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
+  set_status(state, "Selected PID " + std::to_string(state.selected_pid) + " (" + state.processes[row].name + ")");
+}
+
+static void topbar_refresh_processes(AppState &state) {
+  if (!state.client.connected()) {
+    set_status(state, "Connect a console before refreshing processes");
+    push_notification(state, "Connect a console before loading processes", 4.0);
+    return;
+  }
+  if (!state.client.process_list(state.processes)) {
+    std::string error = state.client.last_error();
+    if (error.empty()) error = "Process refresh failed";
+    set_status(state, error);
+    push_notification(state, "Process refresh failed: " + error, 5.0);
+    return;
+  }
+
+  int new_row = -1;
+  if (state.selected_pid > 0) {
+    for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+      if (state.processes[i].pid == state.selected_pid) { new_row = i; break; }
+    }
+  }
+  if (new_row >= 0) {
+    state.selected_process_row = new_row;
+  } else {
+    state.selected_pid = 0;
+    state.selected_process_row = -1;
+    state.has_process_info = false;
+    state.maps.clear();
+    state.selected_map_row = -1;
+  }
+  set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
+}
+
+static void topbar_refresh_maps(AppState &state) {
+  if (!state.client.connected()) { set_status(state, "Connect a console before refreshing maps"); return; }
+  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.process_maps(state.selected_pid, state.maps)) {
+    set_status(state, state.client.last_error());
+    return;
+  }
+  state.selected_map_row = -1;
+  set_status(state, "Memory maps refreshed (" + std::to_string(state.maps.size()) + " maps)");
+}
+
+static bool topbar_button(const char *id, const char *icon, const char *label,
+                          float width, bool primary = false) {
   ImGui::PushID(id);
+  topbar_align();
   std::string text = std::string(icon) + " " + label;
-  if (shortcut != nullptr && shortcut[0] != '\0') {
-    text += " ";
-    text += shortcut;
-  }
-  const bool pressed = ui::soft_button(text.c_str(), ImVec2(width, 28.0f));
-  if (ImGui::IsItemHovered()) {
-    if (shortcut != nullptr && shortcut[0] != '\0')
-      ImGui::SetTooltip("%s (%s)", label, shortcut);
-    else
-      ImGui::SetTooltip("%s", label);
-  }
+  const bool pressed = primary
+      ? ui::primary_button(text.c_str(), ImVec2(width, kTopbarControlH))
+      : ui::soft_button(text.c_str(), ImVec2(width, kTopbarControlH));
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", label);
   ImGui::PopID();
   return pressed;
+}
+
+static void topbar_chip(const char *id, const char *label, const char *value,
+                        ImVec4 accent, float width) {
+  ImGui::PushID(id);
+  topbar_align();
+  const float h = kTopbarControlH;
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##chip", ImVec2(width, h));
+  const bool hovered = ImGui::IsItemHovered();
+
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const ImVec4 bg = hovered ? ui::colors().bg3 : ui::colors().bg2;
+  dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + h), ui::color_u32(bg), 2.0f);
+  dl->AddRect(pos, ImVec2(pos.x + width, pos.y + h),
+              ui::color_u32(alpha(accent, hovered ? 0.96f : 0.58f)), 2.0f);
+  dl->AddRectFilled(ImVec2(pos.x + 5.0f, pos.y + 6.0f),
+                    ImVec2(pos.x + 8.0f, pos.y + h - 6.0f),
+                    ui::color_u32(accent), 1.0f);
+  const float text_y = pos.y + (h - ImGui::GetFontSize()) * 0.5f;
+  dl->AddText(ImVec2(pos.x + 14.0f, text_y),
+              ui::color_u32(ui::colors().dim), label);
+  const ImVec2 label_size = ImGui::CalcTextSize(label);
+  dl->AddText(ImVec2(pos.x + 18.0f + label_size.x, text_y),
+              ui::color_u32(ui::colors().text), value);
+  ImGui::PopID();
+}
+
+static void draw_process_combo(AppState &state, float width) {
+  std::string preview = state.selected_pid > 0
+      ? (std::to_string(state.selected_pid) + "  " + selected_process_name(state))
+      : "Select target process";
+  topbar_align();
+  const float frame_pad_y = std::max(0.0f, (kTopbarControlH - ImGui::GetFontSize()) * 0.5f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(9.0f, frame_pad_y));
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::BeginCombo("##TopbarProcessCombo", preview.c_str())) {
+    if (state.processes.empty()) {
+      ImGui::TextColored(ui::colors().dim, "No process list loaded");
+    }
+    for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+      const auto &process = state.processes[i];
+      const bool selected = i == state.selected_process_row;
+      std::string label = std::to_string(process.pid) + "  " + process.name;
+      if (ImGui::Selectable(label.c_str(), selected)) topbar_select_process(state, i);
+      if (selected) ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::PopStyleVar();
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select target process for all tools");
 }
 
 static void draw_top_bar(AppState &state, ImVec2 size) {
@@ -646,8 +799,10 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   ImGui::BeginChild("TopBar", size, true, ImGuiWindowFlags_NoScrollbar);
   const float topbar_w = ImGui::GetWindowWidth();
 
-  load_texture_png(s_logo_texture, "assets/logo-nobg.png");
-  const float logo_h = 32.0f;
+  load_texture_png_from_memory(s_logo_texture,
+                               assets::kLogoNobgPng,
+                               assets::kLogoNobgPngLen);
+  const float logo_h = kTopbarLogoH;
   const int logo_content_w = s_logo_texture.content_width > 0 ? s_logo_texture.content_width : s_logo_texture.width;
   const int logo_content_h = s_logo_texture.content_height > 0 ? s_logo_texture.content_height : s_logo_texture.height;
   const float logo_w = logo_content_h > 0
@@ -655,67 +810,71 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
       : 136.0f;
 
   if (s_logo_texture.texture != 0U) {
+    topbar_align(logo_h);
     ImGui::Image(texture_id(s_logo_texture.texture), ImVec2(logo_w, logo_h),
                  s_logo_texture.uv0, s_logo_texture.uv1);
   } else {
+    topbar_align(logo_h);
     ImGui::Dummy(ImVec2(logo_w, logo_h));
   }
   ImGui::SameLine(0.0f, 12.0f);
-  ImGui::SetCursorPosY(8.0f);
-  if (toolbar_button("ToolbarHome", icons::kHome, "Home", "F1", 82.0f))
-    state.screen = Screen::Home;
+
+  if (topbar_button("TopbarRefreshPids", icons::kRefresh, "PIDs", 76.0f))
+    topbar_refresh_processes(state);
   ImGui::SameLine();
-  if (toolbar_button("ToolbarProcesses", icons::kProcess, "Proc", "F6", 84.0f))
-    state.screen = Screen::Processes;
+  if (!state.client.connected()) ImGui::BeginDisabled();
+  draw_process_combo(state, topbar_w > 1280.0f ? 300.0f : 230.0f);
+  if (!state.client.connected()) ImGui::EndDisabled();
   ImGui::SameLine();
-  if (toolbar_button("ToolbarMemory", icons::kMemory, "Memory", "F8", 102.0f))
-    state.screen = Screen::Memory;
-  ImGui::SameLine();
-  if (toolbar_button("ToolbarScanner", icons::kScanner, "Scan", "F7", 88.0f))
-    state.screen = Screen::Scanner;
-  if (topbar_w > 980.0f) {
-    ImGui::SameLine();
-    if (toolbar_button("ToolbarAOB", icons::kCode, "AOB", "", 72.0f))
-      state.screen = Screen::AOBScanner;
-  }
+  if (topbar_button("TopbarRefreshMaps", icons::kMemory, "Maps", 82.0f))
+    topbar_refresh_maps(state);
+
+  const bool connected = state.client.connected();
+  const ImVec4 session_color = state.connect_pending ? ui::colors().warning :
+                               connected ? ui::colors().success : ui::colors().danger;
   if (topbar_w > 1120.0f) {
     ImGui::SameLine();
-    if (toolbar_button("ToolbarTrainer", icons::kTrainer, "Trainer", "F9", 104.0f))
-      state.screen = Screen::Trainer;
+    topbar_chip("TopbarSession", "SESSION", connected ? "online" : "offline", session_color, 116.0f);
   }
-  if (topbar_w > 1220.0f) {
-    ImGui::SameLine();
-    if (toolbar_button("ToolbarLogs", icons::kLogs, "Logs", "F10", 86.0f))
-      state.screen = Screen::Logs;
-  }
-
-  const float right_w = 360.0f;
   if (topbar_w > 1260.0f) {
     ImGui::SameLine();
-    ImGui::SetCursorPosX(topbar_w - right_w);
-    ImGui::SetCursorPosY(7.0f);
-    ImGui::BeginGroup();
-    ImGui::TextColored(ui::colors().dim, "VIEW");
+    topbar_chip("TopbarMaps", "MAPS", std::to_string(state.maps.size()).c_str(), ui::colors().link, 86.0f);
+  }
+  if (topbar_w > 1370.0f) {
     ImGui::SameLine();
-    ImGui::TextColored(ui::colors().text, "%s", screen_title(state.screen));
-    ImGui::TextColored(ui::colors().dim, "PID %d | %s:%d",
-                       state.selected_pid, state.host, state.debug_port);
-    ImGui::EndGroup();
+    topbar_chip("TopbarHits", "HITS", std::to_string(state.scan_result.count).c_str(), ui::colors().primary2, 86.0f);
+  }
+  if (topbar_w > 1480.0f) {
     ImGui::SameLine();
-  } else {
-    ImGui::SameLine();
+    topbar_chip("TopbarCheats", "CHEATS", std::to_string(state.cheats.size()).c_str(), ui::colors().warning, 104.0f);
   }
 
-  ImGui::SetCursorPosX(topbar_w - 132.0f);
-  ImGui::SetCursorPosY(9.0f);
-  if (state.connect_pending) {
-    ImGui::TextColored(ui::colors().warning, "%s  Connecting...", icons::kConnect);
-  } else if (!state.client.connected()) {
-    std::string label = std::string(icons::kConnect) + " Connect F5";
-    if (ui::primary_button(label.c_str(), ImVec2(124.0f, 28.0f))) connect_console(state);
+  const float right_w = connected ? 390.0f : 340.0f;
+  ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 8.0f, topbar_w - right_w));
+  if (connected) {
+    if (topbar_button("TopbarPing", icons::kGauge, "Ping", 74.0f))
+      set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
+    ImGui::SameLine();
+    if (topbar_button("TopbarLogs", icons::kLogs, "Logs", 74.0f))
+      state.screen = Screen::Logs;
+    ImGui::SameLine();
+    std::string label = std::string("Drop F5");
+    if (topbar_button("TopbarDrop", icons::kDisconnect, label.c_str(), 112.0f))
+      disconnect_console(state);
   } else {
-    std::string label = std::string(icons::kDisconnect) + " Drop F5";
-    if (ui::danger_button(label.c_str(), ImVec2(124.0f, 28.0f))) disconnect_console(state);
+    if (topbar_button("TopbarConfigure", icons::kConsole, "Console", 96.0f))
+      state.screen = Screen::Consoles;
+    ImGui::SameLine();
+    if (topbar_button("TopbarSettings", icons::kSettings, "Settings", 102.0f))
+      state.screen = Screen::Settings;
+    ImGui::SameLine();
+    if (state.connect_pending) {
+      ImGui::SetCursorPosY(topbar_center_y(ImGui::GetFontSize()));
+      ImGui::TextColored(ui::colors().warning, "%s  Connecting...", icons::kConnect);
+    } else {
+      if (topbar_button("TopbarConnect", icons::kConnect, "Connect F5", 124.0f, true))
+        connect_console(state);
+    }
   }
   ImGui::EndChild();
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
@@ -800,8 +959,15 @@ static void draw_notifications(AppState &state) {
     ImGui::SetNextWindowPos(ImVec2(x, y));
     ImGui::SetNextWindowSize(ImVec2(toast_w, toast_h));
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(24, 28, 36, (int)(220 * alpha)));
-    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(60, 120, 130, (int)(120 * alpha)));
+    ImVec4 toast_bg = ui::colors().bg2;
+    toast_bg.w = 0.94f * alpha;
+    ImVec4 toast_border = ui::colors().border_hot;
+    toast_border.w = 0.72f * alpha;
+    ImVec4 toast_accent = ui::colors().primary2;
+    toast_accent.w = alpha;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, toast_bg);
+    ImGui::PushStyleColor(ImGuiCol_Border, toast_border);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 14));
@@ -818,10 +984,9 @@ static void draw_notifications(AppState &state) {
     ImVec2 wpos = ImGui::GetWindowPos(), wsz = ImGui::GetWindowSize();
     dl->AddRectFilled(ImVec2(wpos.x + 6, wpos.y + 10),
                       ImVec2(wpos.x + 10, wpos.y + wsz.y - 10),
-                      IM_COL32(118, 232, 224, (int)(180 * alpha)), 3.0f);
+                      ui::color_u32(toast_accent), 3.0f);
 
-    ImGui::TextColored(ImVec4(118.0f/255.0f, 232.0f/255.0f, 224.0f/255.0f, alpha),
-                       "%s", icons::kNotify);
+    ImGui::TextColored(toast_accent, "%s", icons::kNotify);
     ImGui::SameLine(34);
 
     /* Message text with wrapping */
@@ -932,7 +1097,7 @@ static bool readable_file(const char *path) {
 }
 
 static void setup_fonts(ImGuiIO &io) {
-  const float text_size = 15.0f;
+  const float text_size = 16.0f;
   ImFontConfig base_cfg;
   base_cfg.OversampleH = 3;
   base_cfg.OversampleV = 2;
@@ -974,12 +1139,12 @@ static void setup_fonts(ImGuiIO &io) {
   icon_cfg.MergeMode = true;
   icon_cfg.FontDataOwnedByAtlas = false;
   icon_cfg.PixelSnapH = true;
-  icon_cfg.GlyphMinAdvanceX = 15.0f;
+  icon_cfg.GlyphMinAdvanceX = 16.0f;
   icon_cfg.GlyphOffset = ImVec2(0.0f, 1.0f);
   static const ImWchar icon_ranges[] = { 0xF000, 0xF8FF, 0 };
   io.Fonts->AddFontFromMemoryTTF(
       fa_solid_900, (int)fa_solid_900_len,
-      14.0f, &icon_cfg, icon_ranges);
+      15.0f, &icon_cfg, icon_ranges);
   io.Fonts->Build();
 }
 
@@ -996,6 +1161,7 @@ int run_frontend(int, char **argv) {
 #endif
   GLFWwindow *window = glfwCreateWindow(1400, 900, "MemDBG", nullptr, nullptr);
   if (!window) { glfwTerminate(); return 1; }
+  set_window_icon(window);
   glfwMakeContextCurrent(window); glfwSwapInterval(1);
 
   IMGUI_CHECKVERSION(); ImGui::CreateContext();

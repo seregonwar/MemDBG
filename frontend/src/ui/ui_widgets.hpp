@@ -18,23 +18,23 @@ namespace memdbg::frontend { struct HelloInfo; }
 namespace memdbg::frontend::ui {
 
 struct Palette {
-  ImVec4 bg0 = ImVec4(14.0f / 255.0f, 15.0f / 255.0f, 16.0f / 255.0f, 1.0f);
-  ImVec4 bg1 = ImVec4(22.0f / 255.0f, 23.0f / 255.0f, 25.0f / 255.0f, 1.0f);
-  ImVec4 bg2 = ImVec4(31.0f / 255.0f, 33.0f / 255.0f, 35.0f / 255.0f, 1.0f);
-  ImVec4 bg3 = ImVec4(43.0f / 255.0f, 46.0f / 255.0f, 49.0f / 255.0f, 1.0f);
-  ImVec4 panel = ImVec4(20.0f / 255.0f, 21.0f / 255.0f, 23.0f / 255.0f, 1.0f);
-  ImVec4 panel2 = ImVec4(25.0f / 255.0f, 27.0f / 255.0f, 29.0f / 255.0f, 1.0f);
-  ImVec4 border = ImVec4(62.0f / 255.0f, 66.0f / 255.0f, 70.0f / 255.0f, 0.95f);
-  ImVec4 border_hot = ImVec4(52.0f / 255.0f, 151.0f / 255.0f, 112.0f / 255.0f, 0.95f);
-  ImVec4 text = ImVec4(226.0f / 255.0f, 229.0f / 255.0f, 232.0f / 255.0f, 1.0f);
-  ImVec4 muted = ImVec4(166.0f / 255.0f, 172.0f / 255.0f, 177.0f / 255.0f, 1.0f);
-  ImVec4 dim = ImVec4(105.0f / 255.0f, 111.0f / 255.0f, 116.0f / 255.0f, 1.0f);
-  ImVec4 primary = ImVec4(38.0f / 255.0f, 139.0f / 255.0f, 96.0f / 255.0f, 1.0f);
-  ImVec4 primary2 = ImVec4(113.0f / 255.0f, 221.0f / 255.0f, 150.0f / 255.0f, 1.0f);
-  ImVec4 link = ImVec4(102.0f / 255.0f, 163.0f / 255.0f, 255.0f / 255.0f, 1.0f);
-  ImVec4 success = ImVec4(91.0f / 255.0f, 207.0f / 255.0f, 122.0f / 255.0f, 1.0f);
-  ImVec4 warning = ImVec4(230.0f / 255.0f, 178.0f / 255.0f, 77.0f / 255.0f, 1.0f);
-  ImVec4 danger = ImVec4(225.0f / 255.0f, 87.0f / 255.0f, 93.0f / 255.0f, 1.0f);
+  ImVec4 bg0 = ImVec4(16.0f / 255.0f, 17.0f / 255.0f, 18.0f / 255.0f, 1.0f);
+  ImVec4 bg1 = ImVec4(24.0f / 255.0f, 26.0f / 255.0f, 27.0f / 255.0f, 1.0f);
+  ImVec4 bg2 = ImVec4(32.0f / 255.0f, 35.0f / 255.0f, 36.0f / 255.0f, 1.0f);
+  ImVec4 bg3 = ImVec4(45.0f / 255.0f, 50.0f / 255.0f, 50.0f / 255.0f, 1.0f);
+  ImVec4 panel = ImVec4(22.0f / 255.0f, 24.0f / 255.0f, 25.0f / 255.0f, 1.0f);
+  ImVec4 panel2 = ImVec4(28.0f / 255.0f, 31.0f / 255.0f, 32.0f / 255.0f, 1.0f);
+  ImVec4 border = ImVec4(73.0f / 255.0f, 80.0f / 255.0f, 81.0f / 255.0f, 0.95f);
+  ImVec4 border_hot = ImVec4(79.0f / 255.0f, 220.0f / 255.0f, 145.0f / 255.0f, 0.95f);
+  ImVec4 text = ImVec4(252.0f / 255.0f, 254.0f / 255.0f, 253.0f / 255.0f, 1.0f);
+  ImVec4 muted = ImVec4(214.0f / 255.0f, 222.0f / 255.0f, 220.0f / 255.0f, 1.0f);
+  ImVec4 dim = ImVec4(156.0f / 255.0f, 168.0f / 255.0f, 166.0f / 255.0f, 1.0f);
+  ImVec4 primary = ImVec4(39.0f / 255.0f, 164.0f / 255.0f, 103.0f / 255.0f, 1.0f);
+  ImVec4 primary2 = ImVec4(119.0f / 255.0f, 244.0f / 255.0f, 166.0f / 255.0f, 1.0f);
+  ImVec4 link = ImVec4(154.0f / 255.0f, 202.0f / 255.0f, 255.0f / 255.0f, 1.0f);
+  ImVec4 success = ImVec4(104.0f / 255.0f, 238.0f / 255.0f, 148.0f / 255.0f, 1.0f);
+  ImVec4 warning = ImVec4(239.0f / 255.0f, 192.0f / 255.0f, 86.0f / 255.0f, 1.0f);
+  ImVec4 danger = ImVec4(241.0f / 255.0f, 95.0f / 255.0f, 100.0f / 255.0f, 1.0f);
 };
 
 const Palette &colors();
