@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,15 +25,21 @@
 #define MEMDBG_PROCESS_HOST_ENUMERATION 1
 #endif
 
-#if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE))
+#if defined(__FreeBSD__) || defined(MEMDBG_PROCESS_CONSOLE)
+#define MEMDBG_PROCESS_BSD_SYSCTL 1
+#endif
+
+#if defined(__APPLE__) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/user.h>
 #endif
 
+#define MEMDBG_SYSCTL_MAX_BYTES (4U * 1024U * 1024U)
+
 /* ---- Helpers shared across platforms ---- */
 
-#if defined(MEMDBG_PROCESS_HOST_ENUMERATION)
+#if defined(MEMDBG_PROCESS_HOST_ENUMERATION) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, const char *name) {
   size_t nc = list->count + 1U;
   pal_process_entry_t *next = (pal_process_entry_t *)realloc(list->entries, nc * sizeof(*list->entries));
@@ -47,7 +54,7 @@ static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, const
 }
 #endif
 
-#if defined(__linux__) || (defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE))
+#if defined(__linux__) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 static pal_map_entry_t *map_append(pal_map_list_t *list, uint64_t start, uint64_t end,
                                    uint32_t prot, uint32_t flags, const char *name) {
   size_t nc = list->count + 1U;
@@ -174,24 +181,86 @@ void pal_process_list_free(pal_process_list_t *l) { if (l) { free(l->entries); m
 void pal_process_maps_free(pal_map_list_t *l)    { if (l) { free(l->entries); memset(l, 0, sizeof(*l)); } }
 
 /* ========================================================================
- *  FreeBSD  —  sysctl KERN_PROC_PROC + KERN_PROC_VMMAP
+ *  FreeBSD / PS4 / PS5  —  sysctl KERN_PROC_PROC + KERN_PROC_VMMAP
  * ======================================================================== */
-#elif defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE)
+#elif defined(MEMDBG_PROCESS_BSD_SYSCTL)
+
+static bool bsd_record_has_field(size_t record_size, size_t field_offset,
+                                 size_t field_size) {
+  return record_size >= field_offset &&
+         record_size - field_offset >= field_size;
+}
+
+static size_t bsd_record_field_bytes(size_t record_size, size_t field_offset,
+                                     size_t field_size) {
+  if (record_size <= field_offset) return 0U;
+  size_t available = record_size - field_offset;
+  return available < field_size ? available : field_size;
+}
+
+static void copy_record_string(char *dst, size_t dst_size, const char *src,
+                               size_t src_size) {
+  if (dst == NULL || dst_size == 0U) return;
+  dst[0] = '\0';
+  if (src == NULL || src_size == 0U) return;
+
+  size_t len = 0U;
+  while (len < src_size && src[len] != '\0' && len + 1U < dst_size) {
+    dst[len] = src[len];
+    len++;
+  }
+  dst[len] = '\0';
+}
+
+static void bsd_copy_process_name(char *dst, size_t dst_size,
+                                  const struct kinfo_proc *proc,
+                                  size_t record_size) {
+  size_t bytes = bsd_record_field_bytes(
+      record_size, offsetof(struct kinfo_proc, ki_comm), sizeof(proc->ki_comm));
+  copy_record_string(dst, dst_size, bytes != 0U ? proc->ki_comm : NULL, bytes);
+  if (dst != NULL && dst[0] != '\0') {
+    return;
+  }
+
+  bytes = bsd_record_field_bytes(record_size,
+                                 offsetof(struct kinfo_proc, ki_tdname),
+                                 sizeof(proc->ki_tdname));
+  copy_record_string(dst, dst_size, bytes != 0U ? proc->ki_tdname : NULL,
+                     bytes);
+  if (dst != NULL && dst[0] == '\0') {
+    (void)snprintf(dst, dst_size, "%s", "unknown");
+  }
+}
 
 memdbg_status_t pal_process_list(pal_process_list_t *out) {
   memset(out, 0, sizeof(*out));
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return MEMDBG_ERR_IO;
-  struct kinfo_proc *procs = (struct kinfo_proc *)malloc(len);
-  if (!procs) return MEMDBG_ERR_NOMEM;
-  if (sysctl(mib, 4, procs, &len, NULL, 0) != 0) { free(procs); return MEMDBG_ERR_IO; }
-  size_t n = len / sizeof(procs[0]);
-  for (size_t i = 0; i < n; ++i) {
-    if (!proc_append(out, procs[i].ki_pid, procs[i].ki_comm))
-      { free(procs); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
+  if (len == 0U) return MEMDBG_OK;
+  if (len > MEMDBG_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
+  unsigned char *buf = (unsigned char *)malloc(len);
+  if (!buf) return MEMDBG_ERR_NOMEM;
+  if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return MEMDBG_ERR_IO; }
+  if (len > MEMDBG_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
+
+  for (size_t off = 0U; off + sizeof(int) <= len;) {
+    struct kinfo_proc *proc = (struct kinfo_proc *)(void *)(buf + off);
+    size_t record_size = proc->ki_structsize > 0
+                             ? (size_t)proc->ki_structsize
+                             : sizeof(*proc);
+    if (record_size < sizeof(int) || off + record_size > len) break;
+    if (bsd_record_has_field(record_size, offsetof(struct kinfo_proc, ki_pid),
+                             sizeof(proc->ki_pid)) &&
+        proc->ki_pid > 1) {
+      char name[64];
+      bsd_copy_process_name(name, sizeof(name), proc, record_size);
+      if (!proc_append(out, proc->ki_pid, name))
+        { free(buf); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
+    }
+    off += record_size;
   }
-  free(procs);
+  free(buf);
   return MEMDBG_OK;
 }
 
@@ -201,24 +270,56 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_VMMAP, pid};
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return MEMDBG_ERR_IO;
-  struct kinfo_vmentry *entries = (struct kinfo_vmentry *)malloc(len);
-  if (!entries) return MEMDBG_ERR_NOMEM;
-  if (sysctl(mib, 4, entries, &len, NULL, 0) != 0) { free(entries); return MEMDBG_ERR_IO; }
-  size_t n = len / sizeof(entries[0]);
-  for (size_t i = 0; i < n; ++i) {
+  if (len == 0U) return MEMDBG_OK;
+  if (len > MEMDBG_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
+  unsigned char *buf = (unsigned char *)malloc(len);
+  if (!buf) return MEMDBG_ERR_NOMEM;
+  if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return MEMDBG_ERR_IO; }
+  if (len > MEMDBG_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
+
+  for (size_t off = 0U; off + sizeof(int) <= len;) {
+    struct kinfo_vmentry *entry = (struct kinfo_vmentry *)(void *)(buf + off);
+    size_t record_size = entry->kve_structsize > 0
+                             ? (size_t)entry->kve_structsize
+                             : sizeof(*entry);
+    if (record_size < sizeof(int) || off + record_size > len) break;
+    if (!bsd_record_has_field(record_size, offsetof(struct kinfo_vmentry, kve_end),
+                              sizeof(entry->kve_end))) {
+      break;
+    }
+
     uint32_t prot = 0;
+    uint32_t flags = bsd_record_has_field(
+                         record_size, offsetof(struct kinfo_vmentry, kve_flags),
+                         sizeof(entry->kve_flags))
+                         ? (uint32_t)entry->kve_flags
+                         : 0U;
+    int protection =
+        bsd_record_has_field(record_size,
+                             offsetof(struct kinfo_vmentry, kve_protection),
+                             sizeof(entry->kve_protection))
+            ? entry->kve_protection
+            : 0;
 #  ifdef KVME_PROT_READ
-    if (entries[i].kve_protection & KVME_PROT_READ)  prot |= 1U;
-    if (entries[i].kve_protection & KVME_PROT_WRITE) prot |= 2U;
-    if (entries[i].kve_protection & KVME_PROT_EXEC)  prot |= 4U;
+    if (protection & KVME_PROT_READ)  prot |= 1U;
+    if (protection & KVME_PROT_WRITE) prot |= 2U;
+    if (protection & KVME_PROT_EXEC)  prot |= 4U;
 #  else
-    prot = (uint32_t)entries[i].kve_protection;
+    prot = (uint32_t)protection;
 #  endif
-    if (!map_append(out, (uint64_t)entries[i].kve_start, (uint64_t)entries[i].kve_end,
-                    prot, (uint32_t)entries[i].kve_flags, entries[i].kve_path))
-      { free(entries); pal_process_maps_free(out); return MEMDBG_ERR_NOMEM; }
+    char path[64];
+    size_t path_bytes = bsd_record_field_bytes(
+        record_size, offsetof(struct kinfo_vmentry, kve_path),
+        sizeof(entry->kve_path));
+    copy_record_string(path, sizeof(path),
+                       path_bytes != 0U ? entry->kve_path : NULL, path_bytes);
+    if (entry->kve_end > entry->kve_start &&
+        !map_append(out, (uint64_t)entry->kve_start, (uint64_t)entry->kve_end,
+                    prot, flags, path))
+      { free(buf); pal_process_maps_free(out); return MEMDBG_ERR_NOMEM; }
+    off += record_size;
   }
-  free(entries);
+  free(buf);
   return MEMDBG_OK;
 #else
   (void)pid; return MEMDBG_ERR_UNSUPPORTED;
@@ -235,29 +336,6 @@ memdbg_status_t pal_process_path(int pid, char *out, size_t out_size) {
   (void)pid;
 #endif
   return MEMDBG_OK;
-}
-
-void pal_process_list_free(pal_process_list_t *l) { if (l) { free(l->entries); memset(l, 0, sizeof(*l)); } }
-void pal_process_maps_free(pal_map_list_t *l)    { if (l) { free(l->entries); memset(l, 0, sizeof(*l)); } }
-
-/* ========================================================================
- *  PS4 (Orbis) / PS5 (Prospero)  —  stubs
- * ======================================================================== */
-#elif defined(MEMDBG_PROCESS_CONSOLE)
-
-memdbg_status_t pal_process_list(pal_process_list_t *out) {
-  memset(out, 0, sizeof(*out));
-  return MEMDBG_ERR_UNSUPPORTED; /* stub — implement with sceDbgProcessList */
-}
-
-memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
-  (void)pid; memset(out, 0, sizeof(*out));
-  return MEMDBG_ERR_UNSUPPORTED; /* stub — implement with sceDbgGetProcessMaps */
-}
-
-memdbg_status_t pal_process_path(int pid, char *out, size_t out_size) {
-  (void)pid; (void)out_size; if (out != NULL) out[0] = '\0';
-  return MEMDBG_ERR_UNSUPPORTED;
 }
 
 void pal_process_list_free(pal_process_list_t *l) { if (l) { free(l->entries); memset(l, 0, sizeof(*l)); } }

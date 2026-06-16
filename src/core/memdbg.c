@@ -26,7 +26,9 @@
 #include "memdbg/telemetry/udp_log.h"
 #include "memdbg/pal/lz4.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -45,7 +47,7 @@
 
 static atomic_bool g_stop_requested = ATOMIC_VAR_INIT(false);
 static atomic_uint g_active_connections = 0;
-static time_t      g_start_time = 0;
+static uint64_t    g_start_ticks = 0;
 
 /* ---- Config ---- */
 
@@ -121,6 +123,17 @@ static uint32_t memdbg_capabilities(const memdbg_config_t *cfg) {
 }
 
 #define MEMDBG_LZ4_THRESHOLD 4096U
+
+static uint64_t monotonic_seconds(void) {
+#if defined(CLOCK_MONOTONIC)
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+    return (uint64_t)ts.tv_sec;
+  }
+#endif
+  time_t now = time(NULL);
+  return now > 0 ? (uint64_t)now : 0U;
+}
 
 /* Forward declaration */
 static int send_response(socket_t fd, const memdbg_packet_header_t *req,
@@ -257,6 +270,11 @@ static memdbg_status_t handle_process_list(socket_t fd, const memdbg_packet_head
   memdbg_status_t status = memdbg_process_list(&list);
   if (status != MEMDBG_OK) return status;
 
+  if (list.count > (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
+                       sizeof(memdbg_process_entry_t)) {
+    memdbg_process_list_free(&list);
+    return MEMDBG_ERR_OVERFLOW;
+  }
   size_t payload_len = sizeof(uint32_t) + list.count * sizeof(memdbg_process_entry_t);
   if (payload_len > UINT32_MAX) { memdbg_process_list_free(&list); return MEMDBG_ERR_OVERFLOW; }
 
@@ -284,6 +302,11 @@ static memdbg_status_t handle_process_maps(socket_t fd, const memdbg_packet_head
   memdbg_status_t status = memdbg_process_maps_cached(maps_req->pid, &maps);
   if (status != MEMDBG_OK) return status;
 
+  if (maps.count > (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
+                       sizeof(memdbg_map_entry_t)) {
+    memdbg_process_maps_free(&maps);
+    return MEMDBG_ERR_OVERFLOW;
+  }
   size_t payload_len = sizeof(uint32_t) + maps.count * sizeof(memdbg_map_entry_t);
   if (payload_len > UINT32_MAX) { memdbg_process_maps_free(&maps); return MEMDBG_ERR_OVERFLOW; }
 
@@ -755,8 +778,8 @@ static memdbg_status_t handle_telemetry(socket_t fd, const memdbg_packet_header_
 
   memdbg_memory_telemetry(&telemetry);
 
-  time_t now = time(NULL);
-  telemetry.uptime_seconds     = (uint64_t)(now - g_start_time);
+  uint64_t now = monotonic_seconds();
+  telemetry.uptime_seconds     = now >= g_start_ticks ? now - g_start_ticks : 0U;
   telemetry.active_connections = atomic_load_explicit(&g_active_connections, memory_order_relaxed);
   telemetry.thread_pool_size   = MEMDBG_THREAD_POOL_SIZE;
 
@@ -869,6 +892,42 @@ static int wait_for_client(socket_t listen_fd) {
   return FD_ISSET(listen_fd, &rfds) ? 1 : 0;
 }
 
+static bool udp_log_should_follow_client(const memdbg_config_t *cfg) {
+  if (cfg == NULL || !cfg->enable_udp_log || cfg->udp_log_port == 0U) {
+    return false;
+  }
+  return strcmp(cfg->udp_log_host, MEMDBG_DEFAULT_UDP_LOG_HOST) == 0 ||
+         strcmp(cfg->udp_log_host, "255.255.255.255") == 0 ||
+         strcmp(cfg->udp_log_host, "0.0.0.0") == 0 ||
+         strcmp(cfg->udp_log_host, "*") == 0;
+}
+
+static void update_udp_log_peer_from_client(const memdbg_config_t *cfg,
+                                            const struct sockaddr_storage *ss) {
+  char host[INET_ADDRSTRLEN];
+  const struct sockaddr_in *sin;
+  memdbg_status_t status;
+
+  if (!udp_log_should_follow_client(cfg) || ss == NULL ||
+      ss->ss_family != AF_INET) {
+    return;
+  }
+
+  sin = (const struct sockaddr_in *)ss;
+  if (inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host)) == NULL) {
+    return;
+  }
+
+  status = memdbg_udp_log_set_destination(host, cfg->udp_log_port, false);
+  if (status == MEMDBG_OK) {
+    memdbg_log_write(MEMDBG_LOG_INFO, "udp_log: streaming to %s:%u", host,
+                     cfg->udp_log_port);
+  } else {
+    memdbg_log_write(MEMDBG_LOG_WARN, "udp_log: failed to follow client %s:%u: %s",
+                     host, cfg->udp_log_port, memdbg_strerror(status));
+  }
+}
+
 static void *worker_thread(void *arg) {
   worker_args_t *args = (worker_args_t *)arg;
   socket_t listen_fd  = args->listen_fd;
@@ -897,6 +956,7 @@ static void *worker_thread(void *arg) {
       continue;
     }
 
+    update_udp_log_peer_from_client(&cfg, &ss);
     handle_client(client_fd, &cfg);
   }
 
@@ -989,7 +1049,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   else                cfg = *cfg_in;
 
   atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
-  g_start_time = time(NULL);
+  g_start_ticks = monotonic_seconds();
 
   if (pal_network_init() != 0) return MEMDBG_ERR_NET;
 
@@ -1018,6 +1078,9 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                    cfg.enable_udp_log ? cfg.udp_log_host : "off",
                    cfg.enable_udp_log ? cfg.udp_log_port : 0U,
                    MEMDBG_THREAD_POOL_SIZE);
+  memdbg_log_write(MEMDBG_LOG_INFO, "logging: file=%s mirror=%s",
+                   memdbg_log_path()[0] ? memdbg_log_path() : "unavailable",
+                   memdbg_log_mirror_path()[0] ? memdbg_log_mirror_path() : "off");
 
   if (memdbg_privilege_supported() &&
       memdbg_privilege_jailbreak_self() != 0) {

@@ -29,6 +29,9 @@ typedef struct memdbg_udp_log_config {
 
 void memdbg_udp_log_config_defaults(memdbg_udp_log_config_t *cfg);
 memdbg_status_t memdbg_udp_log_start(const memdbg_udp_log_config_t *cfg);
+memdbg_status_t memdbg_udp_log_set_destination(const char *host,
+                                               uint16_t port,
+                                               bool broadcast);
 void memdbg_udp_log_stop(void);
 bool memdbg_udp_log_enabled(void);
 void memdbg_udp_log_send(const char *data, size_t len);

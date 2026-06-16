@@ -11,6 +11,7 @@
 #include "platform.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -144,6 +145,7 @@ private:
                std::vector<uint8_t> &response);
   bool read_exact(void *data, size_t size);
   bool write_all(const void *data, size_t size);
+  void disconnect_unlocked();
   void set_error_from_errno(const std::string &prefix);
   void set_error(const std::string &message);
 
@@ -151,6 +153,7 @@ private:
   bool socket_runtime_active_ = false;
   uint32_t next_request_id_ = 1;
   std::string last_error_;
+  mutable std::mutex io_mutex_;
 };
 
 std::string platform_name(uint16_t platform_id);

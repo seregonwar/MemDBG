@@ -36,9 +36,12 @@ static atomic_uint     g_cache_hits, g_cache_misses;
 static bool            g_cache_init = false;
 
 static void cache_init(void) {
-  if (g_cache_init) return;
-  memset(g_cache, 0, sizeof(g_cache));
-  g_cache_init = true;
+  pthread_mutex_lock(&g_cache_mtx);
+  if (!g_cache_init) {
+    memset(g_cache, 0, sizeof(g_cache));
+    g_cache_init = true;
+  }
+  pthread_mutex_unlock(&g_cache_mtx);
 }
 
 void memdbg_process_maps_cache_flush(int pid) {
@@ -92,11 +95,13 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
 
   /* Store */
   pthread_mutex_lock(&g_cache_mtx);
-  int slot = -1; time_t oldest = 0;
+  int slot = -1;
+  time_t oldest = now;
   for (int i = 0; i < CACHE_MAX; ++i) {
     if (!g_cache[i].valid) { slot = i; break; }
     if (slot < 0 || g_cache[i].timestamp < oldest) { oldest = g_cache[i].timestamp; slot = i; }
   }
+  if (slot < 0) slot = 0;
   if (g_cache[slot].valid) free(g_cache[slot].entries);
   g_cache[slot].pid = pid; g_cache[slot].count = out->count; g_cache[slot].timestamp = now;
   g_cache[slot].valid = true; g_cache[slot].entries = NULL;
