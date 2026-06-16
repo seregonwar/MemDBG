@@ -6,19 +6,16 @@
 
 #include "udp_log_listener.hpp"
 
-#include <arpa/inet.h>
+#include "platform.hpp"
+
 #include <chrono>
-#include <cerrno>
 #include <cstdio>
 #include <ctime>
 #include <cstring>
 #include <iomanip>
-#include <netinet/in.h>
+#include <memory>
 #include <sstream>
-#include <sys/socket.h>
-#include <sys/time.h>
 #include <thread>
-#include <unistd.h>
 
 namespace memdbg::frontend {
 
@@ -157,10 +154,25 @@ static std::string endpoint_text(const sockaddr_in &addr) {
 /* ---- Thread main ---- */
 
 void UdpLogListener::thread_main(uint16_t port) {
-  int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
-  if (fd < 0) {
+  std::string startup_error;
+  if (!platform::socket_startup(&startup_error)) {
     std::lock_guard<std::mutex> lock(mutex_);
-    last_error_ = std::string("socket: ") + std::strerror(errno);
+    last_error_ = startup_error;
+    startup_done_ = true;
+    startup_ok_   = false;
+    startup_cv_.notify_all();
+    return;
+  }
+
+  auto cleanup_runtime = [](void *) { platform::socket_cleanup(); };
+  std::unique_ptr<void, decltype(cleanup_runtime)> runtime_guard(
+      reinterpret_cast<void *>(1), cleanup_runtime);
+
+  platform::socket_handle_t fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (!platform::socket_valid(fd)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_error_ = "socket: " +
+                  platform::socket_error_text(platform::socket_last_error_code());
     startup_done_ = true;
     startup_ok_   = false;
     startup_cv_.notify_all();
@@ -168,20 +180,13 @@ void UdpLogListener::thread_main(uint16_t port) {
   }
 
   // Allow immediate reuse of the port after a crash / quick restart.
-  int one = 1;
-  (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  (void)platform::socket_set_reuse_addr(fd);
 
   // Increase receive buffer to reduce UDP packet loss under load.
-  {
-    int rcvbuf = 256 * 1024;  // 256 KiB
-    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
-  }
+  (void)platform::socket_set_recv_buffer(fd, 256 * 1024);
 
   // Short recv timeout so we can check stop_requested_ frequently.
-  timeval timeout{};
-  timeout.tv_sec  = 0;
-  timeout.tv_usec = 250000;  // 250 ms
-  (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  (void)platform::socket_set_recv_timeout(fd, 250U);
 
   // ---- Bind with exponential-backoff retry (up to 5 attempts) ----
   sockaddr_in addr{};
@@ -199,8 +204,9 @@ void UdpLogListener::thread_main(uint16_t port) {
       bound = true;
       break;
     }
+    const int bind_error = platform::socket_last_error_code();
     // Don't retry on permission errors (EACCES = privileged port).
-    if (errno == EACCES) break;
+    if (platform::socket_error_permission(bind_error)) break;
 
     // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms.
     int delay_ms = 50 * (1 << attempt);  // 100, 200, 400, 800, 1600
@@ -211,11 +217,12 @@ void UdpLogListener::thread_main(uint16_t port) {
     std::lock_guard<std::mutex> lock(mutex_);
     last_error_ = std::string("bind port ") + std::to_string(port) +
                   " failed after " + std::to_string(bind_attempts_) +
-                  " attempt(s): " + std::strerror(errno);
+                  " attempt(s): " +
+                  platform::socket_error_text(platform::socket_last_error_code());
     startup_done_ = true;
     startup_ok_   = false;
     startup_cv_.notify_all();
-    (void)::close(fd);
+    platform::socket_close(fd);
     return;
   }
 
@@ -235,17 +242,18 @@ void UdpLogListener::thread_main(uint16_t port) {
   while (!stop_requested_.load()) {
     char buffer[1500];
     sockaddr_in source{};
-    socklen_t source_len = sizeof(source);
-    ssize_t n = ::recvfrom(fd, buffer, sizeof(buffer) - 1U, 0,
-                           reinterpret_cast<sockaddr *>(&source),
-                           &source_len);
+    platform::socklen_type source_len = sizeof(source);
+    int n = platform::socket_recvfrom(fd, buffer, sizeof(buffer) - 1U,
+                                      reinterpret_cast<sockaddr *>(&source),
+                                      &source_len);
     if (n < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      const int recv_error = platform::socket_last_error_code();
+      if (platform::socket_error_would_block(recv_error)) {
         // Timeout — normal, just check stop_requested_.
         consecutive_recv_errors = 0;
         continue;
       }
-      if (errno == EINTR) {
+      if (platform::socket_error_interrupted(recv_error)) {
         continue;
       }
       // Real error — count as dropped, don't break the loop.
@@ -253,7 +261,7 @@ void UdpLogListener::thread_main(uint16_t port) {
       {
         std::lock_guard<std::mutex> lock(mutex_);
         dropped_++;
-        last_error_ = std::string("recv: ") + std::strerror(errno);
+        last_error_ = "recv: " + platform::socket_error_text(recv_error);
       }
       // If we get many consecutive errors the socket is probably dead.
       if (consecutive_recv_errors > 10) break;
@@ -294,7 +302,7 @@ void UdpLogListener::thread_main(uint16_t port) {
     }
   }
 
-  (void)::close(fd);
+  platform::socket_close(fd);
   running_.store(false);
 }
 

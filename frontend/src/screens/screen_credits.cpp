@@ -8,8 +8,8 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "github_profile.hpp"
+#include "platform.hpp"
 
-#include <cstdlib>
 #include <mutex>
 #include <string>
 
@@ -17,21 +17,10 @@ namespace memdbg::frontend {
 
 namespace {
 
-void open_url(const char *url) {
-#if defined(__APPLE__)
-  std::string command = "open '" + std::string(url) + "'";
-#elif defined(_WIN32)
-  std::string command = "start \"\" \"" + std::string(url) + "\"";
-#else
-  std::string command = "xdg-open '" + std::string(url) + "'";
-#endif
-  (void)std::system(command.c_str());
-}
-
 void link_button(const char *id, const char *icon, const char *label, const char *url) {
   ImGui::PushID(id);
   if (ui::soft_button((std::string(icon) + "  " + label).c_str(), ImVec2(260, 38))) {
-    open_url(url);
+    (void)platform::open_url(url);
   }
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", url);
   ImGui::PopID();

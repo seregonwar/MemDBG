@@ -6,6 +6,8 @@
 
 #include "github_profile.hpp"
 
+#include "platform.hpp"
+
 #include <GLFW/glfw3.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -20,14 +22,6 @@
 namespace memdbg::frontend {
 
 namespace {
-
-std::filesystem::path cache_dir() {
-  const char *home = std::getenv("HOME");
-  std::filesystem::path base =
-      home != nullptr && home[0] != '\0' ? std::filesystem::path(home)
-                                         : std::filesystem::temp_directory_path();
-  return base / ".cache" / "memdbg";
-}
 
 std::string read_text_file(const std::filesystem::path &path) {
   std::ifstream in(path, std::ios::binary);
@@ -74,17 +68,6 @@ std::string json_string_value(const std::string &json, const char *key) {
   return value;
 }
 
-bool run_curl_to_file(const std::string &url, const std::filesystem::path &out) {
-  std::string command = "curl -LfsS --max-time 8 ";
-  command += "-H 'Accept: application/vnd.github+json' ";
-  command += "'";
-  command += url;
-  command += "' -o '";
-  command += out.string();
-  command += "'";
-  return std::system(command.c_str()) == 0;
-}
-
 void worker_main(GitHubProfile *profile) {
   std::string error;
   std::string name;
@@ -95,12 +78,13 @@ void worker_main(GitHubProfile *profile) {
   int height = 0;
 
   try {
-    std::filesystem::create_directories(cache_dir());
-    const auto json_path = cache_dir() / "seregonwar.json";
-    const auto avatar_path = cache_dir() / "seregonwar-avatar";
+    const auto cache = platform::app_cache_dir();
+    std::filesystem::create_directories(cache);
+    const auto json_path = cache / "seregonwar.json";
+    const auto avatar_path = cache / "seregonwar-avatar";
 
-    if (!run_curl_to_file("https://api.github.com/users/seregonwar",
-                          json_path)) {
+    if (!platform::download_file("https://api.github.com/users/seregonwar",
+                                 json_path)) {
       error = "GitHub profile download failed";
     } else {
       const std::string json = read_text_file(json_path);
@@ -109,7 +93,7 @@ void worker_main(GitHubProfile *profile) {
       avatar_url = json_string_value(json, "avatar_url");
       if (avatar_url.empty()) {
         error = "GitHub avatar URL not found";
-      } else if (!run_curl_to_file(avatar_url, avatar_path)) {
+      } else if (!platform::download_file(avatar_url, avatar_path)) {
         error = "GitHub avatar download failed";
       } else {
         int channels = 0;

@@ -14,7 +14,17 @@
 #include <string.h>
 #include <unistd.h>
 
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
+    defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
+#define MEMDBG_PROCESS_CONSOLE 1
+#endif
+
+#if defined(__linux__) || defined(__APPLE__) ||                                  \
+    (defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE))
+#define MEMDBG_PROCESS_HOST_ENUMERATION 1
+#endif
+
+#if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE))
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/user.h>
@@ -22,6 +32,7 @@
 
 /* ---- Helpers shared across platforms ---- */
 
+#if defined(MEMDBG_PROCESS_HOST_ENUMERATION)
 static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, const char *name) {
   size_t nc = list->count + 1U;
   pal_process_entry_t *next = (pal_process_entry_t *)realloc(list->entries, nc * sizeof(*list->entries));
@@ -34,8 +45,9 @@ static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, const
   list->count = nc;
   return &list->entries[list->count - 1U];
 }
+#endif
 
-#if defined(__linux__) || defined(__FreeBSD__)
+#if defined(__linux__) || (defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE))
 static pal_map_entry_t *map_append(pal_map_list_t *list, uint64_t start, uint64_t end,
                                    uint32_t prot, uint32_t flags, const char *name) {
   size_t nc = list->count + 1U;
@@ -164,7 +176,7 @@ void pal_process_maps_free(pal_map_list_t *l)    { if (l) { free(l->entries); me
 /* ========================================================================
  *  FreeBSD  —  sysctl KERN_PROC_PROC + KERN_PROC_VMMAP
  * ======================================================================== */
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) && !defined(MEMDBG_PROCESS_CONSOLE)
 
 memdbg_status_t pal_process_list(pal_process_list_t *out) {
   memset(out, 0, sizeof(*out));
@@ -231,7 +243,7 @@ void pal_process_maps_free(pal_map_list_t *l)    { if (l) { free(l->entries); me
 /* ========================================================================
  *  PS4 (Orbis) / PS5 (Prospero)  —  stubs
  * ======================================================================== */
-#elif defined(__ORBIS__) || defined(__PROSPERO__)
+#elif defined(MEMDBG_PROCESS_CONSOLE)
 
 memdbg_status_t pal_process_list(pal_process_list_t *out) {
   memset(out, 0, sizeof(*out));

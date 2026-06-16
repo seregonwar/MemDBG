@@ -9,6 +9,7 @@
 #include "ui_icons.hpp"
 #include "icon_font.hpp"
 #include "github_profile.hpp"
+#include "platform.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -52,14 +53,7 @@ bool ensure_udp_listener(AppState &state, std::string &error) {
 /* ---- Persistent frontend settings ---- */
 
 static std::filesystem::path frontend_settings_path() {
-  if (const char *config_home = std::getenv("XDG_CONFIG_HOME");
-      config_home != nullptr && config_home[0] != '\0') {
-    return std::filesystem::path(config_home) / "MemDBG" / "frontend.conf";
-  }
-  if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-    return std::filesystem::path(home) / ".config" / "MemDBG" / "frontend.conf";
-  }
-  return std::filesystem::path("MemDBG_frontend.conf");
+  return platform::app_config_dir() / "frontend.conf";
 }
 
 bool load_frontend_settings(AppState &state, std::string *error) {

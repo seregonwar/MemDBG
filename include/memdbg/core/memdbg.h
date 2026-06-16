@@ -71,7 +71,7 @@ void memdbg_daemon_request_stop(void);
 bool memdbg_daemon_should_stop(void);
 
 #if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
-    defined(PS5)
+    defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
 int memdbg_main(void);
 #endif
 

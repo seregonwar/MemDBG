@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(__ORBIS__) || defined(PS4)
+#if defined(PLATFORM_PS4) || defined(__ORBIS__) || defined(PS4)
 
 /* ---- PS4 ---- */
 
@@ -58,7 +58,7 @@ void pal_notification_send(const char *message) {
     (void)sceKernelSendNotificationRequest(0, &req, sizeof(req), 0);
 }
 
-#elif defined(__PROSPERO__) || defined(PS5)
+#elif defined(PLATFORM_PS5) || defined(__PROSPERO__) || defined(PS5)
 
 /* ---- PS5 ---- */
 

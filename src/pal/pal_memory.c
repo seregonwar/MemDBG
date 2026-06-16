@@ -22,7 +22,19 @@
 #include <string.h>
 #include <unistd.h>
 
-#if defined(__FreeBSD__)
+#if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+#define MEMDBG_PAL_PS4 1
+#endif
+
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+#define MEMDBG_PAL_PS5 1
+#endif
+
+#if defined(MEMDBG_PAL_PS4) || defined(MEMDBG_PAL_PS5)
+#define MEMDBG_PAL_CONSOLE 1
+#endif
+
+#if defined(__FreeBSD__) && !defined(MEMDBG_PAL_CONSOLE)
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #endif
@@ -248,12 +260,10 @@ void pal_memory_batch_write_end(pal_memory_batch_write_t *batch) {
   free(batch);
 }
 
-void pal_memory_fd_cache_flush(int pid) { (void)pid; /* no-op on non-Linux */ }
-
 /* ========================================================================
  *  FreeBSD  —  ptrace(PT_IO)
  * ======================================================================== */
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) && !defined(MEMDBG_PAL_CONSOLE)
 
 memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
                                 size_t length, size_t *read_out) {
@@ -327,10 +337,12 @@ size_t pal_memory_batch_write_item(pal_memory_batch_write_t *batch,
 
 void pal_memory_batch_write_end(pal_memory_batch_write_t *batch) { free(batch); }
 
+void pal_memory_fd_cache_flush(int pid) { (void)pid; }
+
 /* ========================================================================
  *  PS4 (Orbis)  —  sceDbgMemoryRead / sceDbgMemoryWrite
  * ======================================================================== */
-#elif defined(__ORBIS__)
+#elif defined(MEMDBG_PAL_PS4)
 
 /* Stub — replace with actual sceDbg* calls when building with Orbis SDK. */
 memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
@@ -360,10 +372,12 @@ size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, cons
   (void)b; (void)a; (void)buf; (void)len; return 0U; }
 void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
 
+void pal_memory_fd_cache_flush(int pid) { (void)pid; }
+
 /* ========================================================================
  *  PS5 (Prospero)  —  sceDbgMemoryRead / sceDbgMemoryWrite (Prospero SDK)
  * ======================================================================== */
-#elif defined(__PROSPERO__)
+#elif defined(MEMDBG_PAL_PS5)
 
 /* Stub — replace with actual Prospero SDK calls. */
 memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
@@ -392,6 +406,8 @@ pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) { (void)pid; ret
 size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
   (void)b; (void)a; (void)buf; (void)len; return 0U; }
 void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }
+
+void pal_memory_fd_cache_flush(int pid) { (void)pid; }
 
 /* ========================================================================
  *  macOS / other  —  stub for now (mach_vm would go here)

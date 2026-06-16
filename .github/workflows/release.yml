@@ -1,0 +1,312 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create/update, for example v0.1.0"
+        required: false
+        type: string
+      draft:
+        description: "Create the GitHub release as draft"
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: "Mark the GitHub release as prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: host-linux
+            os: ubuntu-latest
+            kind: host
+            platform: linux
+            artifact: MemDBG-host-linux
+          - name: frontend-linux
+            os: ubuntu-latest
+            kind: frontend
+            platform: linux
+            artifact: MemDBG-frontend-linux
+          - name: host-macos
+            os: macos-latest
+            kind: host
+            platform: macos
+            artifact: MemDBG-host-macos
+          - name: frontend-macos
+            os: macos-latest
+            kind: frontend
+            platform: macos
+            artifact: MemDBG-frontend-macos
+          - name: frontend-windows
+            os: windows-latest
+            kind: frontend
+            platform: windows
+            artifact: MemDBG-frontend-windows
+          - name: payload-ps4
+            os: ubuntu-latest
+            kind: ps4
+            platform: ps4
+            artifact: MemDBG-payload-ps4
+          - name: payload-ps5
+            os: ubuntu-latest
+            kind: ps5
+            platform: ps5
+            artifact: MemDBG-payload-ps5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            cmake \
+            git \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrandr-dev \
+            lld \
+            llvm \
+            make \
+            ninja-build \
+            pkg-config \
+            python3 \
+            wayland-protocols \
+            xxd
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          brew update
+          brew install cmake llvm ninja pkg-config
+          if [ -d /opt/homebrew/opt/llvm/bin ]; then
+            echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+          fi
+          if [ -d /usr/local/opt/llvm/bin ]; then
+            echo "/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Validate vendored PS4 SDK
+        if: matrix.kind == 'ps4'
+        run: |
+          set -euo pipefail
+          sdk="$GITHUB_WORKSPACE/external/ps4-payload-sdk"
+          test -f "$sdk/toolchain/orbis.mk"
+          test -x "$sdk/bin/orbis-clang"
+          test -x "$sdk/bin/orbis-ar"
+          echo "PS4_PAYLOAD_SDK=$sdk" >> "$GITHUB_ENV"
+
+      - name: Validate vendored PS5 SDK
+        if: matrix.kind == 'ps5'
+        run: |
+          set -euo pipefail
+          sdk="$GITHUB_WORKSPACE/external/ps5-payload-sdk"
+          test -f "$sdk/toolchain/prospero.mk"
+          test -x "$sdk/bin/prospero-clang"
+          test -x "$sdk/bin/prospero-ar"
+          echo "PS5_PAYLOAD_SDK=$sdk" >> "$GITHUB_ENV"
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.kind }}" in
+            host)
+              make clean host
+              if [ "${{ runner.os }}" = "Linux" ]; then
+                make test
+              fi
+              ;;
+            frontend)
+              if [ "${{ runner.os }}" = "Windows" ]; then
+                cmake -S frontend -B build/frontend -DCMAKE_BUILD_TYPE=Release
+                cmake --build build/frontend --config Release --parallel 4
+              else
+                make clean frontend
+              fi
+              ;;
+            ps4)
+              make clean payload-ps4 payload-ps4-lib \
+                PS4_PAYLOAD_SDK="$PS4_PAYLOAD_SDK"
+              ;;
+            ps5)
+              make clean payload-ps5 payload-ps5-lib \
+                PS5_PAYLOAD_SDK="$PS5_PAYLOAD_SDK"
+              ;;
+            *)
+              echo "Unknown build kind: ${{ matrix.kind }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          case "${{ matrix.kind }}" in
+            host)
+              pkg="MemDBG-host-${{ matrix.platform }}"
+              mkdir -p "dist/$pkg"
+              cp build/MemDBG-host "dist/$pkg/MemDBG-host"
+              chmod +x "dist/$pkg/MemDBG-host"
+              cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          component=host
+          platform=${{ matrix.platform }}
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
+              tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+              rm -rf "dist/$pkg"
+              ;;
+            frontend)
+              pkg="MemDBG-frontend-${{ matrix.platform }}"
+              mkdir -p "dist/$pkg"
+              frontend_bin=$(find build/frontend -type f \( -name 'memdbg_frontend' -o -name 'memdbg_frontend.exe' \) | head -n 1)
+              probe_bin=$(find build/frontend -type f \( -name 'memdbg_probe' -o -name 'memdbg_probe.exe' \) | head -n 1)
+              if [ -z "$frontend_bin" ] || [ -z "$probe_bin" ]; then
+                echo "Frontend binaries not found" >&2
+                find build/frontend -maxdepth 4 -type f | sort
+                exit 1
+              fi
+              cp "$frontend_bin" "dist/$pkg/"
+              cp "$probe_bin" "dist/$pkg/"
+              chmod +x "dist/$pkg"/*
+              cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          component=frontend
+          platform=${{ matrix.platform }}
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
+              tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+              rm -rf "dist/$pkg"
+              ;;
+            ps4)
+              cp build/ps4/MemDBG-ps4.elf dist/MemDBG-ps4.elf
+              cp build/ps4/libmemdbg.a dist/libmemdbg-ps4.a
+              ;;
+            ps5)
+              cp build/ps5/MemDBG-ps5.elf dist/MemDBG-ps5.elf
+              cp build/ps5/libmemdbg.a dist/libmemdbg-ps5.a
+              ;;
+          esac
+
+          ls -lh dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find release-artifacts -type f \( -name '*.tar.gz' -o -name '*.elf' -o -name '*.a' \) \
+            -exec cp {} release-assets/ \;
+          cd release-assets
+          shopt -s nullglob
+          assets=( *.tar.gz *.elf *.a )
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets found" >&2
+            exit 1
+          fi
+          sha256sum "${assets[@]}" > SHA256SUMS.txt
+          ls -lh
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${INPUT_TAG}"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+              git tag "${tag}" "${GITHUB_SHA}"
+              git push origin "refs/tags/${tag}"
+            fi
+          fi
+
+          flags=(--title "MemDBG ${tag}" --generate-notes)
+          if [ "${INPUT_DRAFT:-false}" = "true" ]; then
+            flags+=(--draft)
+          fi
+          if [ "${INPUT_PRERELEASE:-false}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" release-assets/* --clobber
+          else
+            gh release create "${tag}" release-assets/* "${flags[@]}"
+          fi

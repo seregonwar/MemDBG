@@ -19,9 +19,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
+    defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
+#define MEMDBG_FILEIO_CONSOLE 1
+#endif
+
 #if defined(__linux__)
 #include <sys/sendfile.h>
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) && !defined(MEMDBG_FILEIO_CONSOLE)
 #include <sys/uio.h>
 #endif
 
@@ -247,7 +252,7 @@ ssize_t pal_sendfile(int sock_fd, int file_fd, off_t *offset, size_t count) {
       return -1;
     }
   }
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) && !defined(MEMDBG_FILEIO_CONSOLE)
   {
     off_t sent = 0;
     int rc;

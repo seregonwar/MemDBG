@@ -5,6 +5,10 @@ project(memdbg_frontend LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config} ${CMAKE_BINARY_DIR}/bin)
+endforeach()
 
 include(FetchContent)
 
@@ -61,6 +65,7 @@ add_executable(memdbg_frontend
   # core (backend clients)
   src/core/github_profile.cpp
   src/core/memdbg_client.cpp
+  src/core/platform.cpp
   src/core/udp_log_listener.cpp
 
   # ui (widgets, theme, fonts, icons)
@@ -107,6 +112,7 @@ target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
 add_executable(memdbg_probe
   src/proto/protocol_probe.cpp
   src/core/memdbg_client.cpp
+  src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 )
 
@@ -123,6 +129,13 @@ target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 
 if(APPLE)
   target_compile_definitions(memdbg_frontend PRIVATE GL_SILENCE_DEPRECATION)
+endif()
+
+if(WIN32)
+  target_compile_definitions(memdbg_frontend PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_definitions(memdbg_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
 endif()
 
 if(MSVC)

@@ -8,15 +8,10 @@
 
 #include "memdbg/core/memdbg.h"
 
-#include <arpa/inet.h>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <netinet/in.h>
 #include <sstream>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
 
 extern "C" {
 int lz4_decompress_safe(const char *src, char *dst, int compressed_size, int dst_capacity);
@@ -133,17 +128,22 @@ Client::~Client() { disconnect(); }
 bool Client::connect_to(const std::string &host, uint16_t port) {
   disconnect();
 
+  std::string startup_error;
+  if (!platform::socket_startup(&startup_error)) {
+    set_error(startup_error);
+    return false;
+  }
+  socket_runtime_active_ = true;
+
   fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (fd_ < 0) {
+  if (!platform::socket_valid(fd_)) {
     set_error_from_errno("socket");
+    disconnect();
     return false;
   }
 
-  timeval timeout{};
-  timeout.tv_sec = 10;
-  timeout.tv_usec = 0;
-  (void)::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-  (void)::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+  (void)platform::socket_set_recv_timeout(fd_, 10000U);
+  (void)platform::socket_set_send_timeout(fd_, 10000U);
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
@@ -165,27 +165,40 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
 }
 
 void Client::disconnect() {
-  if (fd_ >= 0) {
-    (void)::shutdown(fd_, SHUT_RDWR);
-    (void)::close(fd_);
-    fd_ = -1;
+  if (platform::socket_valid(fd_)) {
+    platform::socket_shutdown_both(fd_);
+    platform::socket_close(fd_);
+    fd_ = platform::invalid_socket();
+  }
+  if (socket_runtime_active_) {
+    platform::socket_cleanup();
+    socket_runtime_active_ = false;
   }
 }
 
-int Client::release_fd() {
-  int fd = fd_;
-  fd_ = -1;
+platform::socket_handle_t Client::release_fd() {
+  platform::socket_handle_t fd = fd_;
+  fd_ = platform::invalid_socket();
   last_error_.clear();
   return fd;
 }
 
-void Client::take_fd(int fd) {
-  if (fd_ >= 0) disconnect();
+void Client::take_fd(platform::socket_handle_t fd) {
+  if (platform::socket_valid(fd_)) disconnect();
+  if (platform::socket_valid(fd) && !socket_runtime_active_) {
+    std::string startup_error;
+    if (!platform::socket_startup(&startup_error)) {
+      platform::socket_close(fd);
+      set_error(startup_error);
+      return;
+    }
+    socket_runtime_active_ = true;
+  }
   fd_ = fd;
   last_error_.clear();
 }
 
-bool Client::connected() const { return fd_ >= 0; }
+bool Client::connected() const { return platform::socket_valid(fd_); }
 
 const std::string &Client::last_error() const { return last_error_; }
 
@@ -635,7 +648,7 @@ bool Client::process_continue(int32_t pid) {
 
 bool Client::request(uint16_t command, const void *payload,
                      uint32_t payload_len, std::vector<uint8_t> &response) {
-  if (fd_ < 0) {
+  if (!platform::socket_valid(fd_)) {
     set_error("not connected");
     return false;
   }
@@ -694,9 +707,10 @@ bool Client::read_exact(void *data, size_t size) {
   auto *cursor = static_cast<uint8_t *>(data);
   size_t total = 0;
   while (total < size) {
-    ssize_t n = ::recv(fd_, cursor + total, size - total, 0);
+    int n = platform::socket_recv(fd_, cursor + total, size - total);
     if (n < 0) {
-      if (errno == EINTR) {
+      int err = platform::socket_last_error_code();
+      if (platform::socket_error_interrupted(err)) {
         continue;
       }
       set_error_from_errno("recv");
@@ -715,9 +729,10 @@ bool Client::write_all(const void *data, size_t size) {
   const auto *cursor = static_cast<const uint8_t *>(data);
   size_t total = 0;
   while (total < size) {
-    ssize_t n = ::send(fd_, cursor + total, size - total, 0);
+    int n = platform::socket_send(fd_, cursor + total, size - total);
     if (n < 0) {
-      if (errno == EINTR) {
+      int err = platform::socket_last_error_code();
+      if (platform::socket_error_interrupted(err)) {
         continue;
       }
       set_error_from_errno("send");
@@ -733,7 +748,8 @@ bool Client::write_all(const void *data, size_t size) {
 }
 
 void Client::set_error_from_errno(const std::string &prefix) {
-  last_error_ = prefix + ": " + std::strerror(errno);
+  int err = platform::socket_last_error_code();
+  last_error_ = prefix + ": " + platform::socket_error_text(err);
 }
 
 void Client::set_error(const std::string &message) { last_error_ = message; }

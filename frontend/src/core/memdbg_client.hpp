@@ -8,6 +8,7 @@
 #define MEMDBG_FRONTEND_CLIENT_HPP
 
 #include "memdbg/core/memdbg_protocol.h"
+#include "platform.hpp"
 
 #include <cstdint>
 #include <string>
@@ -67,8 +68,8 @@ public:
 
   bool connect_to(const std::string &host, uint16_t port);
   void disconnect();
-  int  release_fd();      /* Release fd ownership for async transfer */
-  void take_fd(int fd);   /* Adopt a connected fd from async transfer */
+  platform::socket_handle_t release_fd();      /* Release fd ownership for async transfer */
+  void take_fd(platform::socket_handle_t fd);  /* Adopt a connected fd from async transfer */
   bool connected() const;
   const std::string &last_error() const;
 
@@ -146,7 +147,8 @@ private:
   void set_error_from_errno(const std::string &prefix);
   void set_error(const std::string &message);
 
-  int fd_ = -1;
+  platform::socket_handle_t fd_ = platform::invalid_socket();
+  bool socket_runtime_active_ = false;
   uint32_t next_request_id_ = 1;
   std::string last_error_;
 };

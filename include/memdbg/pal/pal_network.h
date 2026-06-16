@@ -23,9 +23,9 @@ extern "C" {
 #endif
 
 /* Platform auto-detection (used by all PAL modules). */
-#if defined(__ORBIS__) || defined(PS4)
+#if defined(PLATFORM_PS4) || defined(__ORBIS__) || defined(PS4)
 #  define MEMDBG_PLATFORM_PS4 1
-#elif defined(__PROSPERO__) || defined(PS5)
+#elif defined(PLATFORM_PS5) || defined(__PROSPERO__) || defined(PS5)
 #  define MEMDBG_PLATFORM_PS5 1
 #elif defined(__linux__)
 #  define MEMDBG_PLATFORM_LINUX 1
