@@ -11,6 +11,7 @@
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
 #include "memdbg/core/memdbg_protocol.h"
+#include "locale/locale.hpp"
 
 #include "imgui.h"
 
@@ -347,6 +348,9 @@ struct AppState {
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
   std::deque<Notification> notifications;
+
+  /* ---- Locale ---- */
+  int language = 0;  /* locale::Lang enum value; EN=0 by default */
 };
 
 /* ---- utility functions ---- */

@@ -167,27 +167,25 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   }
 
   if (!state.client.connected()) {
-    ui::begin_panel("TelemetryEmpty", "Payload Telemetry", avail);
-    ui::draw_empty_state("Payload Required",
-                         "Connect to a console running the MemDBG payload to see runtime telemetry.");
+    ui::begin_panel("TelemetryEmpty", locale::tr("telemetry.title"), avail);
+    ui::draw_empty_state(locale::tr("telemetry.require_payload"),
+                         locale::tr("telemetry.require_payload_desc"));
     ui::end_panel();
     return;
   }
 
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) {
-    ui::begin_panel("TelemetryUnsupported", "Payload Telemetry", avail);
-    ui::draw_empty_state("Not Supported",
-                         "The connected payload does not advertise the PERF_TELEMETRY capability.\n"
-                         "Update to a newer payload build to enable performance telemetry.");
+    ui::begin_panel("TelemetryUnsupported", locale::tr("telemetry.title"), avail);
+    ui::draw_empty_state(locale::tr("telemetry.not_supported"),
+                         locale::tr("telemetry.not_supported_desc"));
     ui::end_panel();
     return;
   }
 
   if (!state.telemetry_available) {
-    ui::begin_panel("TelemetryWaiting", "Payload Telemetry", avail);
-    ui::draw_empty_state("Polling...",
-                         "Waiting for the first telemetry response from the payload.\n"
-                         "Check the status bar for errors if this persists.");
+    ui::begin_panel("TelemetryWaiting", locale::tr("telemetry.title"), avail);
+    ui::draw_empty_state(locale::tr("telemetry.polling"),
+                         locale::tr("telemetry.polling_desc"));
     ui::end_panel();
     return;
   }
@@ -197,45 +195,45 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   const bool uptime_valid =
       t.uptime_seconds > 0U && t.uptime_seconds <= kMaxPlausibleUptimeSeconds;
 
-  ui::begin_panel("TelemetryPanel", "Payload Telemetry", avail);
+  ui::begin_panel("TelemetryPanel", locale::tr("telemetry.title"), avail);
 
   const float refresh_w = 172.0f;
-  ImGui::TextColored(ui::colors().primary2, "%s", "Runtime metrics");
+  ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("telemetry.runtime_metrics"));
   const float right_x = ImGui::GetWindowContentRegionMax().x - refresh_w;
   if (right_x > ImGui::GetCursorPosX() + 24.0f) {
     ImGui::SameLine();
     ImGui::SetCursorPosX(right_x);
   }
   ImGui::BeginDisabled(state.scan_async_pending);
-  if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Now").c_str(),
+  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("telemetry.refresh_now")).c_str(),
                       ImVec2(refresh_w, 36))) {
     if (!state.telemetry_pending) {
       request_telemetry_async(state);
-      set_status(state, "Telemetry refresh requested");
+      set_status(state, locale::tr("telemetry.refresh_requested"));
     }
   }
   ImGui::EndDisabled();
   if (state.scan_async_pending) {
     ImGui::TextColored(ui::colors().warning,
-                       "Telemetry polling is paused while a scan is running.");
+                       "%s", locale::tr("telemetry.paused_scan"));
   }
 
-  section_header("Runtime Overview");
+  section_header(locale::tr("telemetry.runtime_overview"));
   std::vector<MetricItem> runtime = {
-      {icons::kOnline, "Uptime",
-       uptime_valid ? format_uptime(t.uptime_seconds) : "unavailable",
-       uptime_valid ? "since payload start" : "payload reported an invalid clock",
+      {icons::kOnline, locale::tr("telemetry.uptime"),
+       uptime_valid ? format_uptime(t.uptime_seconds) : locale::tr("telemetry.unavailable"),
+       uptime_valid ? locale::tr("telemetry.since_start") : locale::tr("telemetry.invalid_clock"),
        uptime_valid ? ui::colors().text : ui::colors().warning},
-      {icons::kTerminal, "Active Conns", format_count(t.active_connections),
-       "pool size " + format_count(t.thread_pool_size), ui::colors().text},
-      {icons::kGauge, "Read Calls", format_count(t.total_read_calls),
-       "total reads", ui::colors().text},
-      {icons::kGauge, "Write Calls", format_count(t.total_write_calls),
-       "total writes", ui::colors().text},
+      {icons::kTerminal, locale::tr("telemetry.active_conns"), format_count(t.active_connections),
+       [&t]() { char b[64]; std::snprintf(b, sizeof(b), locale::tr("telemetry.pool_size"), format_count(t.thread_pool_size).c_str()); return std::string(b); }(), ui::colors().text},
+      {icons::kGauge, locale::tr("telemetry.read_calls"), format_count(t.total_read_calls),
+       locale::tr("telemetry.total_reads"), ui::colors().text},
+      {icons::kGauge, locale::tr("telemetry.write_calls"), format_count(t.total_write_calls),
+       locale::tr("telemetry.total_writes"), ui::colors().text},
   };
   draw_metric_grid(runtime, panel_w - 36.0f);
 
-  section_header("Data Throughput");
+  section_header(locale::tr("telemetry.data_throughput"));
   const double avg_read = t.total_read_calls > 0
       ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.total_read_calls)
       : 0.0;
@@ -243,36 +241,36 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
       ? static_cast<double>(t.total_bytes_written) / static_cast<double>(t.total_write_calls)
       : 0.0;
   std::vector<MetricItem> throughput = {
-      {icons::kImport, "Bytes Read", format_bytes(t.total_bytes_read),
-       "from target process", ui::colors().success},
-      {icons::kExport, "Bytes Written", format_bytes(t.total_bytes_written),
-       "to target process", ui::colors().primary2},
-      {icons::kMemory, "Avg Read", format_bytes(static_cast<uint64_t>(avg_read)),
-       "per read call", ui::colors().text},
-      {icons::kMemory, "Avg Write", format_bytes(static_cast<uint64_t>(avg_write)),
-       "per write call", ui::colors().text},
+      {icons::kImport, locale::tr("telemetry.bytes_read"), format_bytes(t.total_bytes_read),
+       locale::tr("telemetry.from_target"), ui::colors().success},
+      {icons::kExport, locale::tr("telemetry.bytes_written"), format_bytes(t.total_bytes_written),
+       locale::tr("telemetry.to_target"), ui::colors().primary2},
+      {icons::kMemory, locale::tr("telemetry.avg_read"), format_bytes(static_cast<uint64_t>(avg_read)),
+       locale::tr("telemetry.per_read_call"), ui::colors().text},
+      {icons::kMemory, locale::tr("telemetry.avg_write"), format_bytes(static_cast<uint64_t>(avg_write)),
+       locale::tr("telemetry.per_write_call"), ui::colors().text},
   };
   draw_metric_grid(throughput, panel_w - 36.0f);
 
-  section_header("Map Cache");
+  section_header(locale::tr("telemetry.map_cache"));
   const uint64_t total_cache = t.scan_cache_hits + t.scan_cache_misses;
   if (total_cache == 0U) {
     ImGui::TextColored(ui::colors().muted,
-                       "No process map cache activity yet.");
+                       "%s", locale::tr("telemetry.no_cache_activity"));
     ImGui::TextColored(ui::colors().dim,
-                       "Run a map refresh or process-wide scan to populate this section.");
+                       "%s", locale::tr("telemetry.cache_hint"));
   } else {
     const double hit_rate =
         static_cast<double>(t.scan_cache_hits) / static_cast<double>(total_cache);
-    draw_progress_row("Hit Rate", hit_rate, ui::colors().success);
-    draw_progress_row("Miss Rate", 1.0 - hit_rate, ui::colors().warning);
-    ImGui::TextColored(ui::colors().muted, "Hits %s    Misses %s",
+    draw_progress_row(locale::tr("telemetry.hit_rate"), hit_rate, ui::colors().success);
+    draw_progress_row(locale::tr("telemetry.miss_rate"), 1.0 - hit_rate, ui::colors().warning);
+    ImGui::TextColored(ui::colors().muted, locale::tr("telemetry.hits_misses"),
                        format_count(t.scan_cache_hits).c_str(),
                        format_count(t.scan_cache_misses).c_str());
-    ImGui::TextColored(ui::colors().dim, "LRU cache: 8 PID entries  |  TTL: 5 seconds");
+    ImGui::TextColored(ui::colors().dim, "%s", locale::tr("telemetry.lru_info"));
   }
 
-  section_header("Aggregate Performance");
+  section_header(locale::tr("telemetry.aggregate_perf"));
   const double read_mib_s = uptime_valid
       ? static_cast<double>(t.total_bytes_read) / static_cast<double>(t.uptime_seconds) /
             (1024.0 * 1024.0)
@@ -282,27 +280,27 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
             (1024.0 * 1024.0)
       : 0.0;
   if (uptime_valid) {
-    ImGui::TextColored(ui::colors().success, "Read   %.2f MiB/s   (%s total)",
+    ImGui::TextColored(ui::colors().success, locale::tr("telemetry.read_mibs"),
                        read_mib_s, format_bytes(t.total_bytes_read).c_str());
-    ImGui::TextColored(ui::colors().primary2, "Write  %.2f MiB/s   (%s total)",
+    ImGui::TextColored(ui::colors().primary2, locale::tr("telemetry.write_mibs"),
                        write_mib_s, format_bytes(t.total_bytes_written).c_str());
   } else {
     ImGui::TextColored(ui::colors().warning,
-                       "Throughput rate unavailable until the payload reports a valid monotonic uptime.");
-    ImGui::TextColored(ui::colors().muted, "Read %s total  |  Write %s total",
+                       "%s", locale::tr("telemetry.throughput_unavailable"));
+    ImGui::TextColored(ui::colors().muted, locale::tr("telemetry.read_write_total"),
                        format_bytes(t.total_bytes_read).c_str(),
                        format_bytes(t.total_bytes_written).c_str());
   }
   ImGui::Spacing();
-  ImGui::TextColored(ui::colors().muted, "Total call overhead: %s reads + %s writes",
+  ImGui::TextColored(ui::colors().muted, locale::tr("telemetry.total_overhead"),
                      format_count(t.total_read_calls).c_str(),
                      format_count(t.total_write_calls).c_str());
-  ImGui::TextColored(ui::colors().dim, "Thread pool: %u workers",
+  ImGui::TextColored(ui::colors().dim, locale::tr("telemetry.thread_pool"),
                      t.thread_pool_size);
-  ImGui::TextColored(ui::colors().dim, "Active sessions: %u client%s",
+  ImGui::TextColored(ui::colors().dim, locale::tr("telemetry.active_sessions"),
                      t.active_connections,
                      t.active_connections == 1 ? "" : "s");
-  ImGui::TextColored(ui::colors().muted, "Last poll: %.0f seconds ago",
+  ImGui::TextColored(ui::colors().muted, locale::tr("telemetry.last_poll"),
                      now - (state.next_telemetry_poll - 1.0));
 
   ui::end_panel();

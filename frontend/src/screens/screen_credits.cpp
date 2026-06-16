@@ -43,7 +43,7 @@ void draw_credits(AppState &state, ImVec2 avail) {
     profile_error = state.github_profile.error;
   }
 
-  ui::begin_panel("CreditsPanel", "MemDBG", avail);
+  ui::begin_panel("CreditsPanel", locale::tr("app.title"), avail);
   ImGui::BeginGroup();
   if (state.github_profile.texture != 0U) {
     ImGui::Image(github_profile_texture_id(state.github_profile), ImVec2(96, 96));
@@ -58,29 +58,29 @@ void draw_credits(AppState &state, ImVec2 avail) {
 
   ImGui::SameLine(0, 18);
   ImGui::BeginGroup();
-  ImGui::TextColored(ui::colors().primary2, "MemDBG");
-  ImGui::Text("Version 0.1.0");
+  ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("app.title"));
+  ImGui::Text("%s", locale::tr("credits.version"));
   if (!profile_name.empty())
-    ImGui::Text("Creator: %s (@%s)", profile_name.c_str(), profile_login.c_str());
+    ImGui::Text(locale::tr("credits.creator"), profile_name.c_str(), profile_login.c_str());
   else
-    ImGui::Text("Creator: SeregonWar (@seregonwar)");
+    ImGui::Text("%s", locale::tr("credits.creator_default"));
   if (!profile_bio.empty()) ImGui::TextWrapped("%s", profile_bio.c_str());
-  if (!profile_error.empty()) ImGui::TextColored(ui::colors().warning, "GitHub profile: %s", profile_error.c_str());
+  if (!profile_error.empty()) ImGui::TextColored(ui::colors().warning, locale::tr("credits.github_profile"), profile_error.c_str());
   ImGui::EndGroup();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ImGui::TextWrapped("MemDBG is a high-performance memory debugging suite designed for PlayStation 4 and PlayStation 5 homebrew research. It combines a precise memory scanning engine with a remote debugging frontend, providing a unified interface for process inspection, memory analysis, and runtime debugging workflows.");
+  ImGui::TextWrapped("%s", locale::tr("credits.description"));
   ImGui::Spacing();
   const bool inline_links = ImGui::GetContentRegionAvail().x >= 830.0f;
-  link_button("github", icons::kCode, "GitHub", "https://github.com/seregonwar/");
+  link_button("github", icons::kCode, locale::tr("credits.github"), "https://github.com/seregonwar/");
   if (inline_links) ImGui::SameLine();
-  link_button("donations", icons::kSuccess, "Donations", "https://www.seregonwar.com/donations");
+  link_button("donations", icons::kSuccess, locale::tr("credits.donations"), "https://www.seregonwar.com/donations");
   if (inline_links) ImGui::SameLine();
   link_button("x", icons::kInfo, "X / SeregonWar", "https://x.com/SeregonWar");
   ImGui::Spacing();
-  ImGui::TextWrapped("License: GNU General Public License v3.0 or later");
+  ImGui::TextWrapped("%s", locale::tr("credits.license"));
   ImGui::Spacing();
-  ImGui::Text("Current endpoint: %s:%d", state.host, state.debug_port);
+  ImGui::Text(locale::tr("credits.current_endpoint"), state.host, state.debug_port);
   ui::end_panel();
 }
 

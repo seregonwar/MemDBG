@@ -79,6 +79,10 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Validate locale files
+        if: matrix.kind == 'host' && matrix.platform == 'linux'
+        run: python3 tools/check_locales.py
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |

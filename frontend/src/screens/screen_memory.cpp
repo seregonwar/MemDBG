@@ -110,18 +110,18 @@ static ImVec4 byte_color(const AppState &state, uint64_t address,
 
 static void draw_overlay_hex_view(AppState &state) {
   if (state.memory.empty()) {
-    ui::draw_empty_state("No memory buffer",
-                         "Read memory from the selected process to populate this view.");
+    ui::draw_empty_state(locale::tr("memory.no_memory_buffer"),
+                         locale::tr("memory.no_memory_desc"));
     return;
   }
 
-  ImGui::Checkbox("Changes", &state.memory_overlay_changes);
+  ImGui::Checkbox(locale::tr("memory.changes"), &state.memory_overlay_changes);
   ImGui::SameLine();
-  ImGui::Checkbox("Watchpoints", &state.memory_overlay_watchpoints);
+  ImGui::Checkbox(locale::tr("memory.watchpoints_overlay"), &state.memory_overlay_watchpoints);
   ImGui::SameLine();
-  ImGui::Checkbox("Freed allocs", &state.memory_overlay_freed_allocs);
+  ImGui::Checkbox(locale::tr("memory.freed_allocs"), &state.memory_overlay_freed_allocs);
   ImGui::SameLine();
-  if (ui::soft_button((std::string(icons::kCopy) + "  Copy Hex").c_str(),
+  if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("memory.copy_hex")).c_str(),
                       ImVec2(130, 30))) {
     ImGui::SetClipboardText(bytes_hex(state.memory).c_str());
   }
@@ -131,9 +131,9 @@ static void draw_overlay_hex_view(AppState &state) {
         ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
             ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
         ImVec2(0, 0))) {
-    ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 132);
-    ImGui::TableSetupColumn("Hex");
-    ImGui::TableSetupColumn("ASCII", ImGuiTableColumnFlags_WidthFixed, 150);
+    ImGui::TableSetupColumn(locale::tr("memory.address_col"), ImGuiTableColumnFlags_WidthFixed, 132);
+    ImGui::TableSetupColumn(locale::tr("memory.hex_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.ascii_col"), ImGuiTableColumnFlags_WidthFixed, 150);
     ImGui::TableHeadersRow();
 
     for (size_t row = 0; row < state.memory.size(); row += 16U) {
@@ -147,7 +147,9 @@ static void draw_overlay_hex_view(AppState &state) {
                       addr.c_str());
         std::snprintf(state.watch_address, sizeof(state.watch_address), "%s",
                       addr.c_str());
-        set_status(state, "Selected " + addr);
+        char sel_buf[128];
+        std::snprintf(sel_buf, sizeof(sel_buf), locale::tr("memory.selected"), addr.c_str());
+        set_status(state, sel_buf);
       }
 
       ImGui::TableSetColumnIndex(1);
@@ -182,10 +184,10 @@ static void draw_overlay_hex_view(AppState &state) {
 }
 
 static void read_memory(AppState &state) {
-  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.connected()) {    set_status(state, locale::tr("memory.connect_first")); return; }
+  if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
   uint64_t address = 0;
-  if (!parse_u64(state.read_address, address)) { set_status(state, "Invalid read address"); return; }
+  if (!parse_u64(state.read_address, address)) { set_status(state, locale::tr("memory.invalid_read_addr")); return; }
   state.read_length = std::clamp(state.read_length, 1, static_cast<int>(MEMDBG_PROTOCOL_MAX_READ));
 
   std::vector<uint8_t> next;
@@ -200,21 +202,25 @@ static void read_memory(AppState &state) {
   state.memory_previous_base = state.memory_base;
   state.memory = std::move(next);
   state.memory_base = address;
-  set_status(state, "Read " + std::to_string(state.memory.size()) + " bytes");
+  char read_buf[64];
+  std::snprintf(read_buf, sizeof(read_buf), locale::tr("memory.read_n_bytes"), state.memory.size());
+  set_status(state, read_buf);
 }
 
 static void write_memory(AppState &state) {
-  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.connected()) {    set_status(state, locale::tr("memory.connect_first")); return; }
+  if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
   uint64_t address = 0;
   std::vector<uint8_t> data;
-  if (!parse_u64(state.write_address, address)) { set_status(state, "Invalid write address"); return; }
-  if (!parse_hex_bytes(state.write_bytes, data)) { set_status(state, "Invalid byte list"); return; }
+  if (!parse_u64(state.write_address, address)) { set_status(state, locale::tr("memory.invalid_write_addr")); return; }
+  if (!parse_hex_bytes(state.write_bytes, data)) { set_status(state, locale::tr("memory.invalid_byte_list")); return; }
   uint32_t written = 0;
   if (!state.client.memory_write(state.selected_pid, address, data, written)) {
     set_status(state, state.client.last_error()); return;
   }
-  set_status(state, "Wrote " + std::to_string(written) + " bytes");
+  char wrote_buf[64];
+  std::snprintf(wrote_buf, sizeof(wrote_buf), locale::tr("memory.wrote_n_bytes"), written);
+  set_status(state, wrote_buf);
 }
 
 static void add_watchpoint(AppState &state) {
@@ -235,8 +241,9 @@ static void add_watchpoint(AppState &state) {
   }
   watch.current_bytes = watch.last_bytes;
   watch.status = "armed";
-  state.watchpoints.push_back(std::move(watch));
-  set_status(state, "Watchpoint armed at " + hex_u64(address));
+  state.watchpoints.push_back(std::move(watch));    char wp_buf[128];
+    std::snprintf(wp_buf, sizeof(wp_buf), locale::tr("memory.watchpoints.armed_at"), hex_u64(address).c_str());
+    set_status(state, wp_buf);
 }
 
 static void poll_watchpoints(AppState &state, bool force) {
@@ -269,17 +276,17 @@ static void poll_watchpoints(AppState &state, bool force) {
 }
 
 static void draw_watchpoints(AppState &state) {
-  ImGui::InputText("Address", state.watch_address, sizeof(state.watch_address));
-  ImGui::InputInt("Length", &state.watch_length);
+  ImGui::InputText(locale::tr("memory.watchpoints.address"), state.watch_address, sizeof(state.watch_address));
+  ImGui::InputInt(locale::tr("memory.watchpoints.length"), &state.watch_length);
   state.watch_length = std::clamp(state.watch_length, 1, 256);
-  ImGui::SliderFloat("Poll", &state.watchpoint_interval, 0.1f, 5.0f, "%.2fs");
-  ImGui::Checkbox("Polling", &state.watchpoints_polling);
+  ImGui::SliderFloat(locale::tr("memory.watchpoints.poll_interval"), &state.watchpoint_interval, 0.1f, 5.0f, "%.2fs");
+  ImGui::Checkbox(locale::tr("memory.watchpoints.polling"), &state.watchpoints_polling);
   ImGui::SameLine();
-  if (ui::soft_button((std::string(icons::kRefresh) + "  Poll Now").c_str(),
+  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("memory.watchpoints.poll_now")).c_str(),
                       ImVec2(118, 34))) {
     poll_watchpoints(state, true);
   }
-  if (ui::primary_button((std::string(icons::kAdd) + "  Add Watchpoint").c_str(),
+  if (ui::primary_button((std::string(icons::kAdd) + "  " + locale::tr("memory.watchpoints.add")).c_str(),
                          ui::full_button(38))) {
     add_watchpoint(state);
   }
@@ -289,11 +296,11 @@ static void draw_watchpoints(AppState &state) {
       ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
       ImVec2(0, 190))) {
-    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 42);
-    ImGui::TableSetupColumn("Address");
-    ImGui::TableSetupColumn("Len", ImGuiTableColumnFlags_WidthFixed, 54);
-    ImGui::TableSetupColumn("Value");
-    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 86);
+    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.on_col"), ImGuiTableColumnFlags_WidthFixed, 42);
+    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.addr_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.len_col"), ImGuiTableColumnFlags_WidthFixed, 54);
+    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.value_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.state_col"), ImGuiTableColumnFlags_WidthFixed, 86);
     ImGui::TableHeadersRow();
     for (size_t i = 0; i < state.watchpoints.size(); ++i) {
       auto &watch = state.watchpoints[i];
@@ -314,7 +321,7 @@ static void draw_watchpoints(AppState &state) {
     }
     ImGui::EndTable();
   }
-  if (ui::danger_button((std::string(icons::kTrash) + "  Clear Watchpoints").c_str(),
+  if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("memory.watchpoints.clear")).c_str(),
                         ui::full_button(34))) {
     state.watchpoints.clear();
   }
@@ -420,13 +427,15 @@ static void parse_allocation_events(AppState &state) {
     }
   }
   refresh_allocation_findings(state);
-  set_status(state, "Imported " + std::to_string(parsed) + " allocation event(s)");
+  char alloc_buf[128];
+  std::snprintf(alloc_buf, sizeof(alloc_buf), locale::tr("memory.allocations.imported_n"), parsed);
+  set_status(state, alloc_buf);
 }
 
 static void draw_allocations(AppState &state) {
-  ImGui::InputText("Alloc addr", state.alloc_address, sizeof(state.alloc_address));
-  ImGui::InputText("Alloc size", state.alloc_size, sizeof(state.alloc_size));
-  if (ui::primary_button((std::string(icons::kAdd) + "  Track malloc").c_str(),
+  ImGui::InputText(locale::tr("memory.allocations.alloc_addr"), state.alloc_address, sizeof(state.alloc_address));
+  ImGui::InputText(locale::tr("memory.allocations.alloc_size"), state.alloc_size, sizeof(state.alloc_size));
+  if (ui::primary_button((std::string(icons::kAdd) + "  " + locale::tr("memory.allocations.track_malloc")).c_str(),
                          ui::full_button(36))) {
     uint64_t address = 0, size = 0;
     if (parse_u64(state.alloc_address, address) &&
@@ -434,24 +443,24 @@ static void draw_allocations(AppState &state) {
       track_alloc(state, address, size, "manual");
       refresh_allocation_findings(state);
     } else {
-      set_status(state, "Invalid allocation address or size");
+      set_status(state, locale::tr("memory.allocations.invalid_alloc"));
     }
   }
-  if (ui::soft_button((std::string(icons::kUnlock) + "  Track free").c_str(),
+  if (ui::soft_button((std::string(icons::kUnlock) + "  " + locale::tr("memory.allocations.track_free")).c_str(),
                       ui::full_button(34))) {
     uint64_t address = 0;
     if (parse_u64(state.alloc_address, address)) {
       track_free(state, address);
       refresh_allocation_findings(state);
     } else {
-      set_status(state, "Invalid free address");
+      set_status(state, locale::tr("memory.allocations.invalid_free"));
     }
   }
 
-  ImGui::InputTextMultiline("Events", state.alloc_events_text,
+  ImGui::InputTextMultiline(locale::tr("memory.allocations.events"), state.alloc_events_text,
                             sizeof(state.alloc_events_text),
                             ImVec2(0, 92));
-  if (ui::soft_button((std::string(icons::kImport) + "  Import Events").c_str(),
+  if (ui::soft_button((std::string(icons::kImport) + "  " + locale::tr("memory.allocations.import_events")).c_str(),
                       ui::full_button(34))) {
     parse_allocation_events(state);
   }
@@ -463,11 +472,11 @@ static void draw_allocations(AppState &state) {
       ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
       ImVec2(0, 190))) {
-    ImGui::TableSetupColumn("Address");
-    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 82);
-    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 72);
-    ImGui::TableSetupColumn("Events", ImGuiTableColumnFlags_WidthFixed, 92);
-    ImGui::TableSetupColumn("Note");
+    ImGui::TableSetupColumn(locale::tr("memory.allocations.addr_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.allocations.size_col"), ImGuiTableColumnFlags_WidthFixed, 82);
+    ImGui::TableSetupColumn(locale::tr("memory.allocations.state_col"), ImGuiTableColumnFlags_WidthFixed, 72);
+    ImGui::TableSetupColumn(locale::tr("memory.allocations.events_col"), ImGuiTableColumnFlags_WidthFixed, 92);
+    ImGui::TableSetupColumn(locale::tr("memory.allocations.note_col"));
     ImGui::TableHeadersRow();
     for (const auto &alloc : state.allocations) {
       ImGui::TableNextRow();
@@ -477,7 +486,7 @@ static void draw_allocations(AppState &state) {
       ImGui::Text("%llu", static_cast<unsigned long long>(alloc.size));
       ImGui::TableSetColumnIndex(2);
       ImGui::TextColored(alloc.freed ? ui::colors().danger : ui::colors().success,
-                         "%s", alloc.freed ? "freed" : "live");
+                         "%s", alloc.freed ? locale::tr("memory.allocations.freed") : locale::tr("memory.allocations.live"));
       ImGui::TableSetColumnIndex(3);
       ImGui::Text("%llu/%llu",
                   static_cast<unsigned long long>(alloc.alloc_event),
@@ -487,7 +496,7 @@ static void draw_allocations(AppState &state) {
     }
     ImGui::EndTable();
   }
-  if (ui::danger_button((std::string(icons::kTrash) + "  Clear Allocations").c_str(),
+  if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("memory.allocations.clear")).c_str(),
                         ui::full_button(34))) {
     state.allocations.clear();
     state.allocation_findings.clear();
@@ -572,7 +581,9 @@ static void find_gadgets(AppState &state) {
         break;
     }
   }
-  set_status(state, "Found " + std::to_string(state.gadget_results.size()) + " gadget(s)");
+  char gb_buf[128];
+  std::snprintf(gb_buf, sizeof(gb_buf), locale::tr("memory.exploit.found_n_gadgets"), state.gadget_results.size());
+  set_status(state, gb_buf);
 }
 
 static double shannon_entropy(const std::vector<uint8_t> &bytes,
@@ -659,12 +670,12 @@ static const GadgetMatch *find_gadget(const AppState &state, const char *name) {
 }
 
 static void draw_exploit_tools(AppState &state) {
-  ImGui::Checkbox("Selected map only", &state.gadget_selected_map_only);
+  ImGui::Checkbox(locale::tr("memory.exploit.selected_map"), &state.gadget_selected_map_only);
   ImGui::SameLine();
-  ImGui::Checkbox("Executable only", &state.gadget_exec_only);
-  ImGui::InputInt("Max gadgets", &state.gadget_max_results);
+  ImGui::Checkbox(locale::tr("memory.exploit.exec_only"), &state.gadget_exec_only);
+  ImGui::InputInt(locale::tr("memory.exploit.max_gadgets"), &state.gadget_max_results);
   state.gadget_max_results = std::clamp(state.gadget_max_results, 1, 4096);
-  if (ui::primary_button((std::string(icons::kSearch) + "  Find Gadgets").c_str(),
+  if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("memory.exploit.find_gadgets")).c_str(),
                          ui::full_button(36))) {
     find_gadgets(state);
   }
@@ -674,7 +685,7 @@ static void draw_exploit_tools(AppState &state) {
   const GadgetMatch *pop_rdx = find_gadget(state, "pop rdx; ret");
   const GadgetMatch *pop_rax = find_gadget(state, "pop rax; ret");
   const GadgetMatch *syscall = find_gadget(state, "syscall; ret");
-  ImGui::TextColored(ui::colors().muted, "ROP skeleton: rdi=%s rsi=%s rdx=%s rax=%s syscall=%s",
+  ImGui::TextColored(ui::colors().muted, locale::tr("memory.exploit.rop_skeleton"),
                      pop_rdi ? hex_u64(pop_rdi->address).c_str() : "-",
                      pop_rsi ? hex_u64(pop_rsi->address).c_str() : "-",
                      pop_rdx ? hex_u64(pop_rdx->address).c_str() : "-",
@@ -685,10 +696,10 @@ static void draw_exploit_tools(AppState &state) {
       ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
       ImVec2(0, 170))) {
-    ImGui::TableSetupColumn("Address");
-    ImGui::TableSetupColumn("Gadget");
-    ImGui::TableSetupColumn("Bytes", ImGuiTableColumnFlags_WidthFixed, 120);
-    ImGui::TableSetupColumn("Map");
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.gadget_addr_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.gadget_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.gadget_bytes_col"), ImGuiTableColumnFlags_WidthFixed, 120);
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.gadget_map_col"));
     ImGui::TableHeadersRow();
     for (const auto &gadget : state.gadget_results) {
       ImGui::TableNextRow();
@@ -705,9 +716,9 @@ static void draw_exploit_tools(AppState &state) {
   }
 
   ImGui::Separator();
-  ImGui::InputInt("Sample KB", &state.heap_sample_kb);
-  ImGui::InputInt("Max maps", &state.heap_max_maps);
-  if (ui::soft_button((std::string(icons::kBug) + "  Analyze Heap Spray").c_str(),
+  ImGui::InputInt(locale::tr("memory.exploit.sample_kb"), &state.heap_sample_kb);
+  ImGui::InputInt(locale::tr("memory.exploit.max_maps"), &state.heap_max_maps);
+  if (ui::soft_button((std::string(icons::kBug) + "  " + locale::tr("memory.exploit.analyze_heap")).c_str(),
                       ui::full_button(36))) {
     analyze_heap_spray(state);
   }
@@ -715,11 +726,11 @@ static void draw_exploit_tools(AppState &state) {
       ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
       ImVec2(0, 150))) {
-    ImGui::TableSetupColumn("Start");
-    ImGui::TableSetupColumn("End");
-    ImGui::TableSetupColumn("Entropy", ImGuiTableColumnFlags_WidthFixed, 72);
-    ImGui::TableSetupColumn("Dominant", ImGuiTableColumnFlags_WidthFixed, 82);
-    ImGui::TableSetupColumn("Finding");
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_start_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_end_col"));
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_entropy_col"), ImGuiTableColumnFlags_WidthFixed, 72);
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_dominant_col"), ImGuiTableColumnFlags_WidthFixed, 82);
+    ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_finding_col"));
     ImGui::TableHeadersRow();
     for (const auto &finding : state.heap_findings) {
       ImGui::TableNextRow();
@@ -746,47 +757,47 @@ void draw_memory(AppState &state, ImVec2 avail) {
   const float gap = 16.0f;
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
 
-  ui::begin_panel("MemoryTools", "Memory Tools", ImVec2(left_w, avail.y));
-  ImGui::Text("Active PID: %d", state.selected_pid);
+  ui::begin_panel("MemoryTools", locale::tr("memory.memory_tools"), ImVec2(left_w, avail.y));
+  ImGui::Text(locale::tr("memory.active_pid"), state.selected_pid);
   ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
   ImGui::Spacing();
 
   if (ImGui::BeginTabBar("MemoryToolTabs")) {
-    if (ImGui::BeginTabItem("I/O")) {
-      ImGui::InputText("Read address", state.read_address, sizeof(state.read_address));
-      ImGui::InputInt("Read length", &state.read_length);
+    if (ImGui::BeginTabItem(locale::tr("memory.tab_io"))) {
+      ImGui::InputText(locale::tr("memory.read_address"), state.read_address, sizeof(state.read_address));
+      ImGui::InputInt(locale::tr("memory.read_length"), &state.read_length);
       state.read_length = std::clamp(state.read_length, 1, static_cast<int>(MEMDBG_PROTOCOL_MAX_READ));
       bool can_read = state.client.connected() && state.selected_pid > 0;
       ImGui::BeginDisabled(!can_read);
-      if (ui::primary_button((std::string(icons::kPlay) + "  Read Memory").c_str(),
+      if (ui::primary_button((std::string(icons::kPlay) + "  " + locale::tr("memory.read_memory")).c_str(),
                              ui::full_button(40))) read_memory(state);
       ImGui::EndDisabled();
 
       ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-      ImGui::InputText("Write address", state.write_address, sizeof(state.write_address));
-      ImGui::InputText("Bytes", state.write_bytes, sizeof(state.write_bytes));
+      ImGui::InputText(locale::tr("memory.write_address"), state.write_address, sizeof(state.write_address));
+      ImGui::InputText(locale::tr("memory.bytes"), state.write_bytes, sizeof(state.write_bytes));
       bool can_write = state.client.connected() && state.selected_pid > 0;
       ImGui::BeginDisabled(!can_write);
-      if (ui::danger_button((std::string(icons::kEdit) + "  Write Memory").c_str(),
+      if (ui::danger_button((std::string(icons::kEdit) + "  " + locale::tr("memory.write_memory")).c_str(),
                             ui::full_button(40))) write_memory(state);
       ImGui::EndDisabled();
 
       ImGui::Spacing();
-      ui::text_dim("Accepted byte formats: DEADBEEF or DE AD BE EF");
+      ui::text_dim(locale::tr("memory.byte_format_hint"));
       ImGui::EndTabItem();
     }
 
-    if (ImGui::BeginTabItem("Watchpoints")) {
+    if (ImGui::BeginTabItem(locale::tr("memory.tab_watchpoints"))) {
       draw_watchpoints(state);
       ImGui::EndTabItem();
     }
 
-    if (ImGui::BeginTabItem("Allocations")) {
+    if (ImGui::BeginTabItem(locale::tr("memory.tab_allocations"))) {
       draw_allocations(state);
       ImGui::EndTabItem();
     }
 
-    if (ImGui::BeginTabItem("Exploit Lab")) {
+    if (ImGui::BeginTabItem(locale::tr("memory.tab_exploit"))) {
       draw_exploit_tools(state);
       ImGui::EndTabItem();
     }
@@ -795,7 +806,7 @@ void draw_memory(AppState &state, ImVec2 avail) {
   ui::end_panel();
 
   ImGui::SameLine(0, gap);
-  ui::begin_panel("MemoryHex", "Hex View", ImVec2(0, avail.y));
+  ui::begin_panel("MemoryHex", locale::tr("memory.hex_view"), ImVec2(0, avail.y));
   refresh_allocation_findings(state);
   draw_overlay_hex_view(state);
   ui::end_panel();

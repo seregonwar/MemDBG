@@ -1,0 +1,32 @@
+name: Locale Check
+
+on:
+  pull_request:
+    paths:
+      - "frontend/locales/*.json"
+      - "tools/check_locales.py"
+      - ".github/workflows/locale-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/locales/*.json"
+      - "tools/check_locales.py"
+      - ".github/workflows/locale-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: locale-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate locale files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run locale validator
+        run: python3 tools/check_locales.py

@@ -160,68 +160,68 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.36f);
   const char *type_names[] = {"Bytes","u8","u16","u32","u64","float","double","pointer"};
 
-  ui::begin_panel("TrainerBuilder", "Cheat Builder", ImVec2(left_w, avail.y));
-  ImGui::Text("Active PID: %d", state.selected_pid);
+  ui::begin_panel("TrainerBuilder", locale::tr("trainer.cheat_builder"), ImVec2(left_w, avail.y));
+  ImGui::Text(locale::tr("trainer.active_pid"), state.selected_pid);
   ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
   ImGui::Spacing();
 
-  if (ui::soft_button("Use Memory Address", ImVec2(185,36)))
+  if (ui::soft_button(locale::tr("trainer.use_memory_addr"), ImVec2(185,36)))
     std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", state.write_address);
   ImGui::SameLine();
-  if (!state.scan_result.addresses.empty() && ui::soft_button("Use First Scan Hit", ImVec2(190,36)))
+  if (!state.scan_result.addresses.empty() && ui::soft_button(locale::tr("trainer.use_first_hit"), ImVec2(190,36)))
     std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", hex_u64(state.scan_result.addresses.front()).c_str());
 
-  ImGui::TextColored(ui::colors().muted, "Name");
+  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.name_label"));
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputText("##CheatName", state.cheat_description, sizeof(state.cheat_description));
+  ImGui::InputText(locale::tr("trainer.name_input"), state.cheat_description, sizeof(state.cheat_description));
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputText("Address", state.cheat_address, sizeof(state.cheat_address));
-  ImGui::Combo("Value type", &state.cheat_type, type_names, IM_ARRAYSIZE(type_names));
+  ImGui::InputText(locale::tr("trainer.address"), state.cheat_address, sizeof(state.cheat_address));
+  ImGui::Combo(locale::tr("trainer.value_type"), &state.cheat_type, type_names, IM_ARRAYSIZE(type_names));
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputText("Value", state.cheat_value, sizeof(state.cheat_value));
-  ImGui::Checkbox("Lock value", &state.cheat_lock);
-  ImGui::SliderFloat("Lock interval", &state.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
+  ImGui::InputText(locale::tr("trainer.value"), state.cheat_value, sizeof(state.cheat_value));
+  ImGui::Checkbox(locale::tr("trainer.lock_value"), &state.cheat_lock);
+  ImGui::SliderFloat(locale::tr("trainer.lock_interval"), &state.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
   bool can_train = state.client.connected() && state.selected_pid > 0;
   ImGui::BeginDisabled(!can_train);
-  if (ui::primary_button((std::string(icons::kAdd) + "  Add To Trainer").c_str(), ui::full_button(40))) add_cheat_from_fields(state);
+  if (ui::primary_button((std::string(icons::kAdd) + "  " + locale::tr("trainer.add_to_trainer")).c_str(), ui::full_button(40))) add_cheat_from_fields(state);
   ImGui::EndDisabled();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ImGui::TextColored(ui::colors().muted, "Trainer File");
-  ImGui::InputText("Path", state.trainer_file_path, sizeof(state.trainer_file_path));
+  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.trainer_file"));
+  ImGui::InputText(locale::tr("trainer.path"), state.trainer_file_path, sizeof(state.trainer_file_path));
   ImGui::SameLine();
   if (ImGui::SmallButton((std::string(icons::kLoad) + "##trainerpath").c_str())) {
-    std::string picked = memdbg::frontend::ui::pickFile("Open Trainer File", "Trainer Files", "*.cht;*.shn;*.json");
+    std::string picked = memdbg::frontend::ui::pickFile(locale::tr("file_picker.open_trainer"), locale::tr("file_picker.trainer_files"), "*.cht;*.shn;*.json");
     if (!picked.empty())
       std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path), "%s", picked.c_str());
   }
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Browse for trainer file");
-  if (ui::soft_button((std::string(icons::kLoad) + "  Load").c_str(),
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("file_picker.open_trainer"));
+  if (ui::soft_button((std::string(icons::kLoad) + "  " + locale::tr("trainer.load")).c_str(),
       ImVec2((ImGui::GetContentRegionAvail().x-8.0f)*0.5f,38))) {
     if (load_trainer_file(state, state.trainer_file_path) < 0) {
       /* error already set by load_trainer_file */
     }
   }
   ImGui::SameLine();
-  if (ui::soft_button((std::string(icons::kSave) + "  Save").c_str(), ImVec2(0,38))) {
+  if (ui::soft_button((std::string(icons::kSave) + "  " + locale::tr("trainer.save")).c_str(), ImVec2(0,38))) {
     save_trainer_file(state, state.trainer_file_path);
   }
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ImGui::TextColored(ui::colors().muted, "Batchcode Import");
+  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.batchcode_import"));
   ImGui::InputTextMultiline("##Batchcode", state.batchcode_text, sizeof(state.batchcode_text), ImVec2(0,120));
-  if (ui::soft_button((std::string(icons::kImport) + "  Import Batchcode").c_str(), ui::full_button(38))) import_batchcode(state);
-  ui::text_dim("Tokens: offset:0x... value:0x... size:n, also AOB: pattern:??...");
+  if (ui::soft_button((std::string(icons::kImport) + "  " + locale::tr("trainer.import_batchcode")).c_str(), ui::full_button(38))) import_batchcode(state);
+  ui::text_dim(locale::tr("trainer.batchcode_hint"));
   ui::end_panel();
 
   ImGui::SameLine(0, gap);
-  ui::begin_panel("TrainerList", "Runtime Cheat List", ImVec2(0, avail.y));
+  ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"), ImVec2(0, avail.y));
 
   /* Apply locked cheats automatically */
   apply_locked_cheats(state);
 
   ImGui::BeginDisabled(!state.client.connected());
-  if (ui::soft_button((std::string(icons::kPlay) + "  Apply Enabled").c_str(), ImVec2(150,38))) {
+  if (ui::soft_button((std::string(icons::kPlay) + "  " + locale::tr("trainer.apply_enabled")).c_str(), ImVec2(150,38))) {
     int applied=0;
     for (auto &cheat : state.cheats) if (cheat.enabled && apply_cheat(state,cheat)) applied++;
     set_status(state, "Applied "+std::to_string(applied)+" trainer entries");
@@ -229,12 +229,12 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  if (ui::soft_button((std::string(icons::kTrash) + "  Clear Disabled").c_str(), ImVec2(150,38))) {
+  if (ui::soft_button((std::string(icons::kTrash) + "  " + locale::tr("trainer.clear_disabled")).c_str(), ImVec2(150,38))) {
     state.cheats.erase(std::remove_if(state.cheats.begin(), state.cheats.end(),
       [](const CheatEntry &c){ return !c.enabled; }), state.cheats.end());
   }
   ImGui::SameLine();
-  ImGui::TextColored(ui::colors().dim, "%zu entries", state.cheats.size());
+  ImGui::TextColored(ui::colors().dim, locale::tr("trainer.n_entries"), state.cheats.size());
   ImGui::Spacing();
 
   /* Copy All logic shared between button and keyboard shortcut */
@@ -244,35 +244,39 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     for (const auto &cheat : state.cheats)
       all += hex_u64(cheat.address) + "\n";
     ImGui::SetClipboardText(all.c_str());
-    set_status(state, "Copied " + std::to_string(state.cheats.size()) + " addresses");
-    push_notification(state, "Copied " + std::to_string(state.cheats.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+    char cp_buf[256];
+    std::snprintf(cp_buf, sizeof(cp_buf), locale::tr("trainer.copied_n"), state.cheats.size());
+    set_status(state, cp_buf);
+    push_notification(state, cp_buf + std::string(suffix ? suffix : ""));
   };
 
   if (!state.cheats.empty()) {
-    if (ui::soft_button((std::string(icons::kCopy) + "  Copy All Addresses").c_str(),
+    if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("trainer.copy_all")).c_str(),
                         ImVec2(200, 30)))
       copy_all();
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Copy all %zu addresses to clipboard, one per line",
-                        state.cheats.size());
+    if (ImGui::IsItemHovered()) {
+      char tip_buf[128];
+      std::snprintf(tip_buf, sizeof(tip_buf), locale::tr("trainer.copy_all_tooltip"), state.cheats.size());
+      ImGui::SetTooltip("%s", tip_buf);
+    }
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
       copy_all(" (Ctrl+C)");
   }
 
   if (state.cheats.empty()) {
-    ui::draw_empty_state("No trainer entries", "Add scan hits or manual addresses to build a runtime cheat list.");
+    ui::draw_empty_state(locale::tr("trainer.no_entries"), locale::tr("trainer.no_entries_desc"));
   } else if (ImGui::BeginTable("TrainerTable", 10,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable, ImVec2(0,0))) {
-    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed,44);
-    ImGui::TableSetupColumn("Lock", ImGuiTableColumnFlags_WidthFixed,54);
-    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed,74);
-    ImGui::TableSetupColumn("Name");
-    ImGui::TableSetupColumn("PID", ImGuiTableColumnFlags_WidthFixed,70);
-    ImGui::TableSetupColumn("Address");
-    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed,70);
-    ImGui::TableSetupColumn("Value");
-    ImGui::TableSetupColumn("OFF", ImGuiTableColumnFlags_WidthFixed,54);
-    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed,190);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_on"), ImGuiTableColumnFlags_WidthFixed,44);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_lock"), ImGuiTableColumnFlags_WidthFixed,54);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_state"), ImGuiTableColumnFlags_WidthFixed,74);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_name"));
+    ImGui::TableSetupColumn(locale::tr("trainer.col_pid"), ImGuiTableColumnFlags_WidthFixed,70);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_address"));
+    ImGui::TableSetupColumn(locale::tr("trainer.col_type"), ImGuiTableColumnFlags_WidthFixed,70);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_value"));
+    ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,54);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,190);
     ImGui::TableHeadersRow();
     for (int i=0; i<static_cast<int>(state.cheats.size()); ++i) {
       CheatEntry &cheat = state.cheats[i];
@@ -281,7 +285,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       ImGui::TableSetColumnIndex(0); ImGui::Checkbox("##enabled", &cheat.enabled);
       ImGui::TableSetColumnIndex(1); ImGui::Checkbox("##locked", &cheat.locked);
       ImGui::TableSetColumnIndex(2);
-      ImGui::TextColored(cheat.active?ui::colors().success:ui::colors().dim, "%s", cheat.active?"Active":"Idle");
+      ImGui::TextColored(cheat.active?ui::colors().success:ui::colors().dim, "%s", cheat.active?locale::tr("trainer.state_active"):locale::tr("trainer.state_idle"));
       ImGui::TableSetColumnIndex(3);
       ImGui::TextUnformatted(cheat.description.c_str());
       if (ImGui::IsItemHovered()) {
@@ -296,19 +300,19 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       ImGui::TableSetColumnIndex(7); ImGui::TextUnformatted(cheat.value_text.c_str());
       if (ImGui::IsItemHovered() && !cheat.value_text.empty()) ImGui::SetTooltip("%s", cheat.value_text.c_str());
       ImGui::TableSetColumnIndex(8);
-      ImGui::TextColored(cheat.has_off_bytes?ui::colors().success:ui::colors().warning, "%s", cheat.has_off_bytes?"Yes":"No");
+      ImGui::TextColored(cheat.has_off_bytes?ui::colors().success:ui::colors().warning, "%s", cheat.has_off_bytes?locale::tr("trainer.off_yes"):locale::tr("trainer.off_no"));
       ImGui::TableSetColumnIndex(9);
-      if (ImGui::SmallButton("On")) {
+      if (ImGui::SmallButton(locale::tr("trainer.btn_on"))) {
         if (apply_cheat(state,cheat)) { set_status(state, cheat.description+" applied"); push_notification(state, cheat.description + " applied"); }
         else set_status(state, cheat.status);
       }
       ImGui::SameLine();
-      if (ImGui::SmallButton("Off")) {
+      if (ImGui::SmallButton(locale::tr("trainer.btn_off"))) {
         if (deactivate_cheat(state,cheat)) { set_status(state, cheat.description+" restored"); push_notification(state, cheat.description + " restored"); }
         else set_status(state, cheat.status);
       }
       ImGui::SameLine();
-      if (ImGui::SmallButton("Cap")) {
+      if (ImGui::SmallButton(locale::tr("trainer.btn_cap"))) {
         if (capture_off_value(state,cheat)) set_status(state, cheat.description+" OFF captured");
         else set_status(state, cheat.status);
       }

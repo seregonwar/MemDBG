@@ -11,6 +11,7 @@
 #include "embedded_logo.hpp"
 #include "github_profile.hpp"
 #include "platform.hpp"
+#include "locale/locale.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -258,8 +259,10 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       state.debug_port = std::atoi(value.c_str());
     } else if (key == "udp_port") {
       state.udp_port = std::atoi(value.c_str());
-    } else if (key == "dump_path" && !value.empty()) {
+    } else    if (key == "dump_path" && !value.empty()) {
       std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", value.c_str());
+    } else if (key == "language") {
+      state.language = static_cast<int>(locale::lang_from_code(value.c_str()));
     }
   }
 
@@ -290,6 +293,7 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "debug_port=" << state.debug_port << "\n";
   out << "udp_port=" << state.udp_port << "\n";
   out << "dump_path=" << state.dump_path << "\n";
+  out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   if (!out) {
     if (error != nullptr) *error = "Failed while writing " + path.string();
     return false;
@@ -438,7 +442,7 @@ static void draw_connect_spinner(AppState &state) {
                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize);
 
-  ImGui::TextColored(ui::colors().primary2, "%s  Connecting...", icons::kConnect);
+  ImGui::TextColored(ui::colors().primary2, "%s  %s", icons::kConnect, locale::tr("connect.spinner"));
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "%s:%d", state.host, state.debug_port);
 
@@ -577,9 +581,9 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4,2));
   ImGui::BeginChild("Sidebar", size, true, ImGuiWindowFlags_NoScrollbar);
 
-  ImGui::TextColored(ui::colors().text, "TOOLBOX");
+  ImGui::TextColored(ui::colors().text, "%s", locale::tr("sidebar.brand"));
   ImGui::SameLine();
-  ImGui::TextColored(ui::colors().muted, "v0.1.0");
+  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("app.version"));
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg3);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8,6));
@@ -591,14 +595,14 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
   ui::status_dot(status_color);
   ImGui::SameLine();
   ImGui::BeginGroup();
-  ImGui::TextColored(status_color, "%s", state.connect_pending ? "Connecting" :
-                                          connected ? "Connected" : "Offline");
+  ImGui::TextColored(status_color, "%s", state.connect_pending ? locale::tr("status.connecting") :
+                                          connected ? locale::tr("status.connected") : locale::tr("status.offline"));
   ImGui::TextColored(ui::colors().dim, "%s:%d", state.host, state.debug_port);
   ImGui::EndGroup();
   ImGui::SameLine();
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 72.0f);
   ImGui::TextColored(state.udp_listener.running() ? ui::colors().success : ui::colors().dim,
-                     "%s", state.udp_listener.running() ? "UDP on" : "UDP off");
+                     "%s", state.udp_listener.running() ? locale::tr("sidebar.udp_on") : locale::tr("sidebar.udp_off"));
   ImGui::EndChild();
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 
@@ -614,28 +618,28 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     ImGui::BeginChild("SidebarNavList", ImVec2(0, nav_h), true);
 
     ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section("MAIN");
-    nav_item(state, Screen::Home, icons::kHome, "Command Center");
-    nav_item(state, Screen::Consoles, icons::kConsole, "Consoles");
+    sidebar_section(locale::tr("sidebar.section.main"));
+    nav_item(state, Screen::Home, icons::kHome, locale::tr("nav.home"));
+    nav_item(state, Screen::Consoles, icons::kConsole, locale::tr("nav.consoles"));
 
     ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section("TOOLS");
-    nav_item(state, Screen::Processes, icons::kProcess, "Processes");
-    nav_item(state, Screen::Memory, icons::kMemory, "Memory");
-    nav_item(state, Screen::Scanner, icons::kScanner, "Scanner");
-    nav_item(state, Screen::PointerScanner, icons::kPointer, "Pointer Scan");
-    nav_item(state, Screen::AOBScanner, icons::kCode, "AOB Scan");
-    nav_item(state, Screen::Trainer, icons::kTrainer, "Trainer");
+    sidebar_section(locale::tr("sidebar.section.tools"));
+    nav_item(state, Screen::Processes, icons::kProcess, locale::tr("nav.processes"));
+    nav_item(state, Screen::Memory, icons::kMemory, locale::tr("nav.memory"));
+    nav_item(state, Screen::Scanner, icons::kScanner, locale::tr("nav.scanner"));
+    nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
+    nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
+    nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
 
     ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section("OBSERVE");
-    nav_item(state, Screen::Logs, icons::kLogs, "UDP Logs");
-    nav_item(state, Screen::Telemetry, icons::kTelemetry, "Telemetry");
+    sidebar_section(locale::tr("sidebar.section.observe"));
+    nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
+    nav_item(state, Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
 
     ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section("SYSTEM");
-    nav_item(state, Screen::Settings, icons::kSettings, "Settings");
-    nav_item(state, Screen::Credits, icons::kCredits, "Credits");
+    sidebar_section(locale::tr("sidebar.section.system"));
+    nav_item(state, Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
+    nav_item(state, Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
 
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
@@ -770,14 +774,14 @@ static void topbar_chip(const char *id, const char *label, const char *value,
 static void draw_process_combo(AppState &state, float width) {
   std::string preview = state.selected_pid > 0
       ? (std::to_string(state.selected_pid) + "  " + selected_process_name(state))
-      : "Select target process";
+      : locale::tr("topbar.select_process");
   topbar_align();
   const float frame_pad_y = std::max(0.0f, (kTopbarControlH - ImGui::GetFontSize()) * 0.5f);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(9.0f, frame_pad_y));
   ImGui::SetNextItemWidth(width);
   if (ImGui::BeginCombo("##TopbarProcessCombo", preview.c_str())) {
     if (state.processes.empty()) {
-      ImGui::TextColored(ui::colors().dim, "No process list loaded");
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("topbar.no_process_list"));
     }
     for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
       const auto &process = state.processes[i];
@@ -819,14 +823,14 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   ImGui::SameLine(0.0f, 12.0f);
 
-  if (topbar_button("TopbarRefreshPids", icons::kRefresh, "PIDs", 76.0f))
+  if (topbar_button("TopbarRefreshPids", icons::kRefresh, locale::tr("topbar.pids"), 76.0f))
     topbar_refresh_processes(state);
   ImGui::SameLine();
   if (!state.client.connected()) ImGui::BeginDisabled();
   draw_process_combo(state, topbar_w > 1280.0f ? 300.0f : 230.0f);
   if (!state.client.connected()) ImGui::EndDisabled();
   ImGui::SameLine();
-  if (topbar_button("TopbarRefreshMaps", icons::kMemory, "Maps", 82.0f))
+  if (topbar_button("TopbarRefreshMaps", icons::kMemory, locale::tr("topbar.maps"), 82.0f))
     topbar_refresh_maps(state);
 
   const bool connected = state.client.connected();
@@ -834,45 +838,45 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
                                connected ? ui::colors().success : ui::colors().danger;
   if (topbar_w > 1120.0f) {
     ImGui::SameLine();
-    topbar_chip("TopbarSession", "SESSION", connected ? "online" : "offline", session_color, 116.0f);
+    topbar_chip("TopbarSession", locale::tr("topbar.chip_session"), connected ? locale::tr("topbar.online") : locale::tr("topbar.offline"), session_color, 116.0f);
   }
   if (topbar_w > 1260.0f) {
     ImGui::SameLine();
-    topbar_chip("TopbarMaps", "MAPS", std::to_string(state.maps.size()).c_str(), ui::colors().link, 86.0f);
+    topbar_chip("TopbarMaps", locale::tr("topbar.chip_maps"), std::to_string(state.maps.size()).c_str(), ui::colors().link, 86.0f);
   }
   if (topbar_w > 1370.0f) {
     ImGui::SameLine();
-    topbar_chip("TopbarHits", "HITS", std::to_string(state.scan_result.count).c_str(), ui::colors().primary2, 86.0f);
+    topbar_chip("TopbarHits", locale::tr("topbar.chip_hits"), std::to_string(state.scan_result.count).c_str(), ui::colors().primary2, 86.0f);
   }
   if (topbar_w > 1480.0f) {
     ImGui::SameLine();
-    topbar_chip("TopbarCheats", "CHEATS", std::to_string(state.cheats.size()).c_str(), ui::colors().warning, 104.0f);
+    topbar_chip("TopbarCheats", locale::tr("topbar.chip_cheats"), std::to_string(state.cheats.size()).c_str(), ui::colors().warning, 104.0f);
   }
 
   const float right_w = connected ? 390.0f : 340.0f;
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 8.0f, topbar_w - right_w));
   if (connected) {
-    if (topbar_button("TopbarPing", icons::kGauge, "Ping", 74.0f))
+    if (topbar_button("TopbarPing", icons::kGauge, locale::tr("topbar.ping"), 74.0f))
       set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
     ImGui::SameLine();
-    if (topbar_button("TopbarLogs", icons::kLogs, "Logs", 74.0f))
+    if (topbar_button("TopbarLogs", icons::kLogs, locale::tr("topbar.logs"), 74.0f))
       state.screen = Screen::Logs;
     ImGui::SameLine();
-    std::string label = std::string("Drop F5");
+    std::string label = std::string(locale::tr("topbar.drop"));
     if (topbar_button("TopbarDrop", icons::kDisconnect, label.c_str(), 112.0f))
       disconnect_console(state);
   } else {
-    if (topbar_button("TopbarConfigure", icons::kConsole, "Console", 96.0f))
+    if (topbar_button("TopbarConfigure", icons::kConsole, locale::tr("topbar.console"), 96.0f))
       state.screen = Screen::Consoles;
     ImGui::SameLine();
-    if (topbar_button("TopbarSettings", icons::kSettings, "Settings", 102.0f))
+    if (topbar_button("TopbarSettings", icons::kSettings, locale::tr("topbar.settings"), 102.0f))
       state.screen = Screen::Settings;
     ImGui::SameLine();
     if (state.connect_pending) {
       ImGui::SetCursorPosY(topbar_center_y(ImGui::GetFontSize()));
-      ImGui::TextColored(ui::colors().warning, "%s  Connecting...", icons::kConnect);
+      ImGui::TextColored(ui::colors().warning, "%s  %s", icons::kConnect, locale::tr("topbar.connecting"));
     } else {
-      if (topbar_button("TopbarConnect", icons::kConnect, "Connect F5", 124.0f, true))
+      if (topbar_button("TopbarConnect", icons::kConnect, locale::tr("topbar.connect"), 124.0f, true))
         connect_console(state);
     }
   }
@@ -899,7 +903,7 @@ static void draw_status_bar(AppState &state, ImVec2 size) {
   const auto log_stats = state.udp_listener.stats();
   ImGui::SameLine();
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - rhs_width));
-  ImGui::TextColored(ui::colors().dim, "%s", state.client.connected() ? "SESSION open" : "SESSION idle");
+  ImGui::TextColored(ui::colors().dim, "%s", state.client.connected() ? locale::tr("status.session_open") : locale::tr("status.session_idle"));
   ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
   ImGui::SameLine(0, 6);
   ImGui::TextColored(ui::colors().dim, "TARGET pid=%d", state.selected_pid);
@@ -908,7 +912,7 @@ static void draw_status_bar(AppState &state, ImVec2 size) {
   ImGui::TextColored(ui::colors().dim, "FPS %.0f", ImGui::GetIO().Framerate);
   ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
   ImGui::SameLine(0, 6);
-  ImGui::TextColored(ui::colors().dim, "UDP %s", state.udp_listener.running() ? "on" : "off");
+  ImGui::TextColored(ui::colors().dim, "UDP %s", state.udp_listener.running() ? locale::tr("status.udp_on") : locale::tr("status.udp_off"));
   ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
   ImGui::SameLine(0, 6);
 
@@ -1181,6 +1185,57 @@ int run_frontend(int, char **argv) {
     } else if (!config_error.empty()) {
       set_status(state, config_error);
     }
+  }
+
+  /* ---- Locale init ---- */
+  locale::Manager &loc = locale::Manager::instance();
+  {
+    const char *locale_names[] = {"en", "es", "it", "fr", "pt"};
+
+    // MEMDBG_LOCALE_DIR overrides all automatic discovery.
+    std::filesystem::path locales_dir;
+    const char *env_locale = std::getenv("MEMDBG_LOCALE_DIR");
+    if (env_locale && env_locale[0] != '\0') {
+      locales_dir = env_locale;
+    } else {
+      locales_dir = s_executable_dir / "locales";
+    }
+
+    // Fallback: look in the bundle Resources folder on macOS
+#if defined(__APPLE__)
+    {
+      std::error_code ec;
+      if (!std::filesystem::exists(locales_dir, ec)) {
+        std::filesystem::path bundle_res = s_executable_dir / ".." / "Resources" / "locales";
+        std::filesystem::path canonical = std::filesystem::weakly_canonical(bundle_res, ec);
+        if (!ec && std::filesystem::exists(canonical, ec))
+          locales_dir = canonical;
+      }
+    }
+#endif
+    // Fallback: try relative to current working directory
+    {
+      std::error_code ec;
+      if (!std::filesystem::exists(locales_dir, ec)) {
+        std::filesystem::path cwd_locales = std::filesystem::current_path(ec) / "locales";
+        if (!ec && std::filesystem::exists(cwd_locales, ec))
+          locales_dir = cwd_locales;
+      }
+    }
+
+    for (const char *lc : locale_names) {
+      std::filesystem::path p = locales_dir / (std::string(lc) + ".json");
+      (void)loc.load(p.string().c_str());  // Silently skip missing files.
+    }
+  }
+
+  // Set language from saved preference, or auto-detect from OS.
+  if (state.language > 0 && state.language < static_cast<int>(locale::Lang::COUNT)) {
+    loc.set_active(static_cast<locale::Lang>(state.language));
+  } else {
+    locale::Lang detected = locale::detect_system_lang();
+    loc.set_active(detected);
+    state.language = static_cast<int>(detected);
   }
   github_profile_start(state.github_profile);
   std::string udp_error;

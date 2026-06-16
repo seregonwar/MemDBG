@@ -6,6 +6,7 @@
 
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "locale/locale.hpp"
 
 #include "memdbg_client.hpp"
 #include "memdbg/core/memdbg_protocol.h"
@@ -163,14 +164,14 @@ ImVec2 full_button(float height) {
 
 void draw_empty_state(const char *title, const char *message) {
   ImGui::Spacing();
-  ImGui::TextColored(colors().muted, "%s", title);
-  ImGui::TextWrapped("%s", message);
+  ImGui::TextColored(colors().muted, "%s", locale::tr(title));
+  ImGui::TextWrapped("%s", locale::tr(message));
 }
 
 void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base,
                     const std::function<void(uint64_t)> &on_address_clicked) {
   if (data.empty()) {
-    draw_empty_state("No memory buffer", "Read memory from the selected process to populate this view.");
+    draw_empty_state("common.no_memory_buffer", "common.no_memory_desc");
     return;
   }
 
@@ -254,11 +255,11 @@ void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base,
 
 void draw_capabilities(const memdbg::frontend::HelloInfo &hello) {
   if (hello.protocol_version == 0) {
-    text_dim("Payload details will appear after HELLO.");
+    text_dim(locale::tr("common.payload_details_after_hello"));
     return;
   }
-  ImGui::Text("Payload: %s %s", hello.name.c_str(), hello.version.c_str());
-  ImGui::Text("Platform: %s", memdbg::frontend::platform_name(hello.platform_id).c_str());
+  ImGui::Text("%s %s %s", locale::tr("common.payload"), hello.name.c_str(), hello.version.c_str());
+  ImGui::Text("%s: %s", locale::tr("common.platform"), memdbg::frontend::platform_name(hello.platform_id).c_str());
   ImGui::Text("Debug port: %u", static_cast<unsigned>(hello.debug_port));
   ImGui::Text("UDP log port: %u", static_cast<unsigned>(hello.udp_log_port));
   ImGui::Spacing();

@@ -78,7 +78,7 @@ static bool add_saturating(uint64_t &total, uint64_t value) {
 }
 
 static void analyze_process(AppState &state) {
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
   if (state.maps.empty()) { set_status(state, "Refresh process maps first"); return; }
 
   uint64_t total_bytes = 0;
@@ -147,7 +147,7 @@ static void analyze_process(AppState &state) {
         << ") " << largest->name << '\n';
   }
   state.process_analysis_report = out.str();
-  set_status(state, "Process analysis updated");
+  set_status(state, locale::tr("processes.process_analysis_updated"));
 }
 
 static void set_scan_window_from_filtered_maps(AppState &state) {
@@ -159,12 +159,12 @@ static void set_scan_window_from_filtered_maps(AppState &state) {
     end = std::max(end, map.end);
   }
   if (start == UINT64_MAX || end <= start) {
-    set_status(state, "No filtered maps available");
+    set_status(state, locale::tr("processes.no_filtered_maps"));
     return;
   }
   std::snprintf(state.scan_start, sizeof(state.scan_start), "%s", hex_u64(start).c_str());
   std::snprintf(state.scan_end, sizeof(state.scan_end), "%s", hex_u64(end).c_str());
-  set_status(state, "Process scan window set from filtered maps");
+  set_status(state, locale::tr("processes.scan_window_set"));
 }
 
 /* ---- Dump ---- */
@@ -172,16 +172,16 @@ static void dump_selected_map(AppState &state) {
   if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
   if (state.selected_pid <= 0 || state.selected_map_row < 0 ||
       state.selected_map_row >= static_cast<int>(state.maps.size())) {
-    set_status(state, "Select a process map first"); return;
+    set_status(state, locale::tr("processes.select_map_first")); return;
   }
   const MapEntry &map = state.maps[state.selected_map_row];
-  if (map.end <= map.start) { set_status(state, "Selected map is empty"); return; }
+  if (map.end <= map.start) { set_status(state, locale::tr("processes.map_empty")); return; }
   std::string default_name = "pid_" + std::to_string(state.selected_pid) + "_" +
                              hex_u64(map.start).substr(2) + ".bin";
 
   /* Try native save dialog first; fall back to configured dump_path */
   std::string picked = memdbg::frontend::ui::pickSaveFile(
-      "Save Memory Dump", default_name, "Binary Files", "*.bin");
+      locale::tr("file_picker.save_memory_dump"), default_name, locale::tr("file_picker.binary_files"), "*.bin");
 
   std::filesystem::path out_path;
   if (!picked.empty()) {
@@ -204,9 +204,9 @@ static void dump_selected_map(AppState &state) {
   if (dump_dir.empty()) dump_dir = ".";
   std::error_code ec;
   std::filesystem::create_directories(dump_dir, ec);
-  if (ec) { set_status(state, "Failed to create dumps directory"); return; }
+  if (ec) { set_status(state, locale::tr("processes.create_dump_dir_failed")); return; }
   std::ofstream out(out_path, std::ios::binary);
-  if (!out) { set_status(state, "Failed to open dump file"); return; }
+  if (!out) { set_status(state, locale::tr("processes.open_dump_failed")); return; }
   uint64_t address = map.start;
   uint64_t remaining = map.end - map.start;
   uint64_t written_total = 0;
@@ -214,7 +214,7 @@ static void dump_selected_map(AppState &state) {
     uint32_t chunk = remaining > MEMDBG_PROTOCOL_MAX_READ ? MEMDBG_PROTOCOL_MAX_READ : static_cast<uint32_t>(remaining);
     std::vector<uint8_t> bytes;
     if (!state.client.memory_read(state.selected_pid, address, chunk, bytes)) {
-      set_status(state, "Dump failed: " + state.client.last_error()); return;
+      char df_buf[512]; std::snprintf(df_buf, sizeof(df_buf), locale::tr("processes.dump_failed"), state.client.last_error().c_str()); set_status(state, df_buf); return;
     }
     if (bytes.empty()) break;
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -229,7 +229,7 @@ static void dump_selected_map(AppState &state) {
 
 static void dump_filtered_maps(AppState &state) {
   if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
   if (state.maps.empty()) { set_status(state, "Refresh process maps first"); return; }
 
   state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
@@ -348,7 +348,9 @@ static void select_process(AppState &state, int row) {
   state.scan_is_unknown_session = false;
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
   state.has_process_info = false;
-  set_status(state, "Selected PID " + std::to_string(state.selected_pid));
+  char pid_buf[128];
+  std::snprintf(pid_buf, sizeof(pid_buf), locale::tr("processes.selected_pid"), state.selected_pid);
+  set_status(state, pid_buf);
 }
 
 static void ensure_process_info(AppState &state) {
@@ -368,20 +370,24 @@ static void select_map(AppState &state, int row) {
   std::snprintf(state.write_address, sizeof(state.write_address), "%s", hex_u64(map.start).c_str());
   std::snprintf(state.scan_start, sizeof(state.scan_start), "%s", hex_u64(map.start).c_str());
   std::snprintf(state.scan_length, sizeof(state.scan_length), "%s", hex_u64(map.end - map.start).c_str());
-  set_status(state, "Selected map " + hex_u64(map.start) + " - " + hex_u64(map.end));
+  char map_buf[128];
+  std::snprintf(map_buf, sizeof(map_buf), locale::tr("processes.selected_map"), hex_u64(map.start).c_str(), hex_u64(map.end).c_str());
+  set_status(state, map_buf);
 }
 
 static void refresh_processes(AppState &state) {
   if (!state.client.connected()) {
-    set_status(state, "Connect a console before refreshing processes");
-    push_notification(state, "Connect a console before loading processes", 4.0);
+    set_status(state, locale::tr("connect.no_console_before_processes"));
+    push_notification(state, locale::tr("connect.no_console_before_processes"), 4.0);
     return;
   }
   if (!state.client.process_list(state.processes)) {
     std::string error = state.client.last_error();
-    if (error.empty()) error = "Process refresh failed";
+    if (error.empty()) error = locale::tr("processes.process_refreshed");
     set_status(state, error);
-    push_notification(state, "Process refresh failed: " + error, 5.0);
+    char refr_buf[512];
+    std::snprintf(refr_buf, sizeof(refr_buf), locale::tr("connect.process_refresh_failed"), error.c_str());
+    push_notification(state, refr_buf, 5.0);
     return;
   }
   /* Reconcile selection: find previously selected PID in new list */
@@ -399,12 +405,12 @@ static void refresh_processes(AppState &state) {
     state.has_process_info = false;
     state.maps.clear();
   }
-  set_status(state, "Process list refreshed");
+  set_status(state, locale::tr("processes.process_refreshed"));
 }
 
 static void refresh_maps(AppState &state) {
   if (!state.client.connected()) { set_status(state, "Connect a console before refreshing maps"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
   if (!state.client.process_maps(state.selected_pid, state.maps)) { set_status(state, state.client.last_error()); return; }
   state.selected_map_row = -1;
   set_status(state, "Memory maps refreshed");
@@ -415,10 +421,10 @@ static void draw_process_table(AppState &state) {
   if (ImGui::BeginTable("ProcessTable", 4,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,
         ImVec2(0,0))) {
-    ImGui::TableSetupColumn("PID", ImGuiTableColumnFlags_WidthFixed, 82);
-    ImGui::TableSetupColumn("Name");
-    ImGui::TableSetupColumn("Title ID", ImGuiTableColumnFlags_WidthFixed, 100);
-    ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 78);
+    ImGui::TableSetupColumn(locale::tr("processes.pid_col"), ImGuiTableColumnFlags_WidthFixed, 82);
+    ImGui::TableSetupColumn(locale::tr("processes.name_col"));
+    ImGui::TableSetupColumn(locale::tr("processes.title_id_col"), ImGuiTableColumnFlags_WidthFixed, 100);
+    ImGui::TableSetupColumn(locale::tr("processes.state_col"), ImGuiTableColumnFlags_WidthFixed, 78);
     ImGui::TableHeadersRow();
     for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
       const auto &process = state.processes[i];
@@ -438,7 +444,7 @@ static void draw_process_table(AppState &state) {
         ensure_process_info(state);
       ImGui::TableSetColumnIndex(3);
       ImGui::TextColored(selected ? ui::colors().primary2 : ui::colors().dim,
-                         "%s", selected ? "Active" : "-");
+                         "%s", selected ? locale::tr("processes.active") : "-");
     }
     ImGui::EndTable();
   }
@@ -446,17 +452,17 @@ static void draw_process_table(AppState &state) {
 
 static void draw_maps_table(AppState &state) {
   if (state.selected_pid <= 0) {
-    ui::draw_empty_state("No process selected", "Select a process, then refresh maps to inspect memory ranges.");
+    ui::draw_empty_state(locale::tr("processes.no_process_selected"), locale::tr("processes.no_process_desc"));
     return;
   }
   if (ImGui::BeginTable("MapsTable", 5,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,
         ImVec2(0,0))) {
-    ImGui::TableSetupColumn("Start");
-    ImGui::TableSetupColumn("End");
-    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 90);
-    ImGui::TableSetupColumn("Prot", ImGuiTableColumnFlags_WidthFixed, 58);
-    ImGui::TableSetupColumn("Name");
+    ImGui::TableSetupColumn(locale::tr("processes.start_col"));
+    ImGui::TableSetupColumn(locale::tr("processes.end_col"));
+    ImGui::TableSetupColumn(locale::tr("processes.size_col"), ImGuiTableColumnFlags_WidthFixed, 90);
+    ImGui::TableSetupColumn(locale::tr("processes.prot_col"), ImGuiTableColumnFlags_WidthFixed, 58);
+    ImGui::TableSetupColumn(locale::tr("processes.name_col"));
     ImGui::TableHeadersRow();
     for (int i = 0; i < static_cast<int>(state.maps.size()); ++i) {
       const auto &map = state.maps[i];
@@ -486,71 +492,71 @@ void draw_processes(AppState &state, ImVec2 avail) {
   const float gap = 16.0f;
   const float left_w = std::max(360.0f, (avail.x - gap) * 0.42f);
 
-  ui::begin_panel("ProcessesPanel", "Console Processes", ImVec2(left_w, avail.y));
+  ui::begin_panel("ProcessesPanel", locale::tr("processes.console_processes"), ImVec2(left_w, avail.y));
   if (!state.client.connected()) {
-    if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Processes").c_str(), ImVec2(190, 38)))
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(190, 38)))
       refresh_processes(state);
     ImGui::Spacing();
-    ui::draw_empty_state("Connect a console", "Process enumeration is available after a payload session is open.");
+    ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
-    if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Processes").c_str(), ImVec2(180, 38))) refresh_processes(state);
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(180, 38))) refresh_processes(state);
     ImGui::SameLine();
-    ImGui::TextColored(ui::colors().dim, "%zu entries", state.processes.size());
+    ImGui::TextColored(ui::colors().dim, locale::tr("processes.entries"), state.processes.size());
     ImGui::Spacing();
     draw_process_table(state);
   }
   ui::end_panel();
 
   ImGui::SameLine(0, gap);
-  ui::begin_panel("MapsPanel", "Memory Maps", ImVec2(0, avail.y));
+  ui::begin_panel("MapsPanel", locale::tr("processes.memory_maps"), ImVec2(0, avail.y));
   if (!state.client.connected()) {
-    ui::draw_empty_state("Waiting for session", "Connect first, then choose a process to request maps.");
+    ui::draw_empty_state(locale::tr("processes.waiting_session"), locale::tr("processes.waiting_desc"));
   } else {
-    ImGui::Text("Active PID: %d", state.selected_pid);
+    ImGui::Text(locale::tr("processes.active_pid"), state.selected_pid);
     ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
     if (state.has_process_info) {
       if (!state.selected_process_info.title_id.empty())
-        ImGui::TextColored(ui::colors().primary2, "Title ID: %s", state.selected_process_info.title_id.c_str());
+        ImGui::TextColored(ui::colors().primary2, locale::tr("processes.title_id"), state.selected_process_info.title_id.c_str());
       if (!state.selected_process_info.content_id.empty())
-        ImGui::TextWrapped("Content ID: %s", state.selected_process_info.content_id.c_str());
+        ImGui::TextWrapped(locale::tr("processes.content_id"), state.selected_process_info.content_id.c_str());
       if (!state.selected_process_info.path.empty())
-        ImGui::TextWrapped("Path: %s", state.selected_process_info.path.c_str());
+        ImGui::TextWrapped(locale::tr("processes.path"), state.selected_process_info.path.c_str());
     }
     ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0);
-    if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Maps").c_str(), ImVec2(150, 38))) refresh_maps(state);
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 38))) refresh_maps(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kFilter) + "  Use Filtered Window").c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);
+    if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kDump) + "  Dump Selected Map").c_str(), ImVec2(170, 38))) dump_selected_map(state);
-    if (ui::soft_button((std::string(icons::kSearch) + "  Analyze Process").c_str(), ImVec2(170, 38))) analyze_process(state);
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_selected_map")).c_str(), ImVec2(170, 38))) dump_selected_map(state);
+    if (ui::soft_button((std::string(icons::kSearch) + "  " + locale::tr("processes.analyze_process")).c_str(), ImVec2(170, 38))) analyze_process(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kDump) + "  Dump Filtered Maps").c_str(), ImVec2(190, 38))) dump_filtered_maps(state);
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_filtered_maps")).c_str(), ImVec2(190, 38))) dump_filtered_maps(state);
     ImGui::EndDisabled();
     ImGui::Spacing();
-    ImGui::InputText("Dump output", state.dump_path, sizeof(state.dump_path));
+    ImGui::InputText(locale::tr("processes.dump_output"), state.dump_path, sizeof(state.dump_path));
     ImGui::SameLine();
     if (ImGui::SmallButton((std::string(icons::kLoad) + "##dumppath").c_str())) {
-      std::string picked = memdbg::frontend::ui::pickFile("Select Dump Directory");
+      std::string picked = memdbg::frontend::ui::pickFile(locale::tr("file_picker.select_dump_dir"));
       if (!picked.empty())
         std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", picked.c_str());
     }
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Fallback directory for dumps when the save dialog is unavailable (console) or cancelled");
+      ImGui::SetTooltip("%s", locale::tr("processes.dump_dir_tooltip"));
     ImGui::Spacing();
-    ImGui::InputText("Filter", state.map_filter, sizeof(state.map_filter));
-    ImGui::Checkbox("Readable", &state.map_filter_readable);
-    ImGui::SameLine(); ImGui::Checkbox("Writable", &state.map_filter_writable);
-    ImGui::SameLine(); ImGui::Checkbox("Executable", &state.map_filter_executable);
-    ImGui::Checkbox("Hide system maps", &state.map_filter_hide_system);
+    ImGui::InputText(locale::tr("processes.filter"), state.map_filter, sizeof(state.map_filter));
+    ImGui::Checkbox(locale::tr("processes.readable"), &state.map_filter_readable);
+    ImGui::SameLine(); ImGui::Checkbox(locale::tr("processes.writable"), &state.map_filter_writable);
+    ImGui::SameLine(); ImGui::Checkbox(locale::tr("processes.executable"), &state.map_filter_executable);
+    ImGui::Checkbox(locale::tr("processes.hide_system"), &state.map_filter_hide_system);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
-    ImGui::InputInt("Min KB", &state.map_filter_min_kb);
+    ImGui::InputInt(locale::tr("processes.min_kb"), &state.map_filter_min_kb);
     state.map_filter_min_kb = std::max(state.map_filter_min_kb, 0);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130.0f);
-    ImGui::InputInt("Dump cap MB", &state.process_dump_max_mb);
+    ImGui::InputInt(locale::tr("processes.dump_cap_mb"), &state.process_dump_max_mb);
     state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
-    ImGui::TextColored(ui::colors().dim, "%zu / %zu maps shown", filtered_map_count(state), state.maps.size());
+    ImGui::TextColored(ui::colors().dim, locale::tr("processes.maps_shown"), filtered_map_count(state), state.maps.size());
     if (!state.process_analysis_report.empty()) {
       ImGui::Spacing();
       if (ImGui::BeginChild("ProcessAnalysisReport", ImVec2(0, 118), true,

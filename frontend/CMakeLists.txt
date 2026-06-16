@@ -34,7 +34,13 @@ FetchContent_Declare(
   GIT_TAG master
 )
 
-FetchContent_MakeAvailable(glfw imgui stb)
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.11.3
+)
+
+FetchContent_MakeAvailable(glfw imgui stb nlohmann_json)
 
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
@@ -77,6 +83,9 @@ add_executable(memdbg_frontend
   src/ui/ui_widgets.cpp
   src/ui/file_picker.cpp
 
+  # locale (i18n / translations)
+  src/locale/locale.cpp
+
   # pal (LZ4 decompression for client)
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 
@@ -110,8 +119,10 @@ target_include_directories(memdbg_frontend PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/screens
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
   ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
   ${stb_SOURCE_DIR}
+  ${nlohmann_json_SOURCE_DIR}/include
 )
 
 target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
@@ -140,6 +151,22 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
             "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/assets/app-icon.png"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/en.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/en.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/es.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/es.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/it.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/it.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/fr.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/fr.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/pt.json"
+            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/pt.json"
   )
 else()
   add_custom_command(TARGET memdbg_frontend POST_BUILD
@@ -147,6 +174,22 @@ else()
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
             "$<TARGET_FILE_DIR:memdbg_frontend>/assets/app-icon.png"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:memdbg_frontend>/locales"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/en.json"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/en.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/es.json"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/es.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/it.json"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/it.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/fr.json"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/fr.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/locales/pt.json"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/pt.json"
   )
 endif()
 

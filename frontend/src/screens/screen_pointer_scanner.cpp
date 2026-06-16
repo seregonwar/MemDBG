@@ -109,17 +109,17 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   const float gap = 16.0f;
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
 
-  ui::begin_panel("PointerControl", "Pointer Scanner", ImVec2(left_w, avail.y));
-  ImGui::Text("Active PID: %d", state.selected_pid);
+  ui::begin_panel("PointerControl", locale::tr("pointer_scanner.title"), ImVec2(left_w, avail.y));
+  ImGui::Text(locale::tr("pointer_scanner.active_pid"), state.selected_pid);
   ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
   ImGui::Spacing();
 
-  ImGui::InputText("Target address", state.pointer_target_address,
+  ImGui::InputText(locale::tr("pointer_scanner.target_address"), state.pointer_target_address,
                    sizeof(state.pointer_target_address));
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("The address you want to find pointers to (e.g. a scan hit)");
+    ImGui::SetTooltip("%s", locale::tr("pointer_scanner.target_tooltip"));
 
-  if (ui::soft_button((std::string(icons::kCopy) + "  Use Last Scan Hit").c_str(),
+  if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("pointer_scanner.use_last_hit")).c_str(),
                       ImVec2(210, 32))) {
     if (!state.scan_result.addresses.empty())
       std::snprintf(state.pointer_target_address, sizeof(state.pointer_target_address),
@@ -127,24 +127,24 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   }
 
   ImGui::Spacing();
-  ImGui::InputInt("Max depth", &state.pointer_max_depth);
-  ImGui::InputInt("Max results", &state.pointer_max_results);
-  ImGui::InputInt("Alignment", &state.pointer_alignment);
+  ImGui::InputInt(locale::tr("pointer_scanner.max_depth"), &state.pointer_max_depth);
+  ImGui::InputInt(locale::tr("pointer_scanner.max_results"), &state.pointer_max_results);
+  ImGui::InputInt(locale::tr("pointer_scanner.alignment"), &state.pointer_alignment);
   state.pointer_max_depth   = std::max(state.pointer_max_depth, 1);
   state.pointer_max_results = std::max(state.pointer_max_results, 1);
   state.pointer_alignment   = std::max(state.pointer_alignment, 1);
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-  ImGui::InputText("Start", state.scan_start, sizeof(state.scan_start));
-  ImGui::InputText("Length", state.scan_length, sizeof(state.scan_length));
+  ImGui::InputText(locale::tr("pointer_scanner.start"), state.scan_start, sizeof(state.scan_start));
+  ImGui::InputText(locale::tr("pointer_scanner.length"), state.scan_length, sizeof(state.scan_length));
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Memory range to search for pointer candidates");
+    ImGui::SetTooltip("%s", locale::tr("pointer_scanner.range_tooltip"));
 
   ImGui::Spacing();
   bool can_scan = state.client.connected() && state.selected_pid > 0 && !state.scan_async_pending;
   ImGui::BeginDisabled(!can_scan);
-  if (ui::primary_button((std::string(icons::kPointer) + "  Scan Pointers").c_str(),
+  if (ui::primary_button((std::string(icons::kPointer) + "  " + locale::tr("pointer_scanner.scan_pointers")).c_str(),
                          ui::full_button(42)))
     run_pointer_scan(state);
   ImGui::EndDisabled();
@@ -156,23 +156,21 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
                            ImGui::GetContentRegionAvail().x);
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ui::text_dim("How it works");
-  ImGui::TextWrapped("The scanner finds values in the search range that, when "
-                     "dereferenced, point to the target address. Useful for "
-                     "finding stable base pointers.");
+  ui::text_dim(locale::tr("pointer_scanner.how_it_works"));
+  ImGui::TextWrapped("%s", locale::tr("pointer_scanner.desc"));
   ui::end_panel();
 
   ImGui::SameLine(0, gap);
-  ui::begin_panel("PointerResults", "Pointer Candidates", ImVec2(0, avail.y));
+  ui::begin_panel("PointerResults", locale::tr("pointer_scanner.candidates"), ImVec2(0, avail.y));
 
   auto &result = state.pointer_result;
-  ImGui::Text("Candidates: %u%s  |  Scanned: %.2f MiB",
-              result.count, result.truncated ? " (truncated)" : "",
+  ImGui::Text(locale::tr("pointer_scanner.candidates_count"),
+              result.count, result.truncated ? locale::tr("aob_scanner.truncated") : "",
               static_cast<double>(result.bytes_scanned) / (1024.0 * 1024.0));
-  ImGui::Text("Speed: %s  |  Regions: %u  |  Errors: %u",
+  ImGui::Text(locale::tr("pointer_scanner.candidates_speed"),
               bytes_per_second(result.bytes_scanned, result.elapsed_ns).c_str(),
               result.regions_scanned, result.read_errors);
-  ImGui::Text("Target: %s  |  Max depth: %d",
+  ImGui::Text(locale::tr("pointer_scanner.target_info"),
               state.pointer_target_address, state.pointer_max_depth);
   ImGui::Spacing();
 
@@ -188,29 +186,31 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   };
 
   if (!result.addresses.empty()) {
-    if (ui::soft_button((std::string(icons::kCopy) + "  Copy All Addresses").c_str(),
+    if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("pointer_scanner.copy_all")).c_str(),
                         ImVec2(200, 30)))
       copy_all();
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Copy all %u addresses to clipboard, one per line",
-                        result.count);
+    if (ImGui::IsItemHovered()) {
+      char tip_buf[128];
+      std::snprintf(tip_buf, sizeof(tip_buf), locale::tr("pointer_scanner.copy_all_tooltip"), result.count);
+      ImGui::SetTooltip("%s", tip_buf);
+    }
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
       copy_all(" (Ctrl+C)");
   }
 
   if (result.addresses.empty()) {
     if (result.count == 0 && result.bytes_scanned > 0)
-      ui::draw_empty_state("No pointers found",
-                           "No values in the search range point to the target address.");
+      ui::draw_empty_state(locale::tr("pointer_scanner.no_pointers"),
+                           locale::tr("pointer_scanner.no_pointers_desc"));
     else
-      ui::draw_empty_state("Ready",
-                           "Enter a target address and scan range, then press Scan.");
+      ui::draw_empty_state(locale::tr("pointer_scanner.ready"),
+                           locale::tr("pointer_scanner.ready_desc"));
   } else if (ImGui::BeginTable("PointerResultsTable", 3,
         ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
         ImVec2(0, 0))) {
-    ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 44);
-    ImGui::TableSetupColumn("Base Address");
-    ImGui::TableSetupColumn("Offset to Target");
+    ImGui::TableSetupColumn(locale::tr("pointer_scanner.col_num"), ImGuiTableColumnFlags_WidthFixed, 44);
+    ImGui::TableSetupColumn(locale::tr("pointer_scanner.col_base"));
+    ImGui::TableSetupColumn(locale::tr("pointer_scanner.col_offset"));
     ImGui::TableHeadersRow();
     uint64_t target = 0;
     (void)parse_u64(state.pointer_target_address, target);
@@ -229,7 +229,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
         state.screen = Screen::Memory;
       }
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Click to jump to %s", hex_u64(addr).c_str());
+        ImGui::SetTooltip("%s %s", locale::tr("memory.selected"), hex_u64(addr).c_str());
       ImGui::TableSetColumnIndex(2);
       if (target > 0 && addr < target)
         ImGui::TextColored(ui::colors().dim, "+0x%llX",

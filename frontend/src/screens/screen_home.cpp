@@ -71,68 +71,68 @@ void draw_home(AppState &state, ImVec2 avail) {
   const float col_w = (avail.x - gap) * 0.40f;
   const bool connected = state.client.connected();
 
-  ui::begin_panel("HomeStatus", "Session", ImVec2(col_w, avail.y));
+  ui::begin_panel("HomeStatus", locale::tr("home.session"), ImVec2(col_w, avail.y));
   ImGui::BeginGroup();
   ui::status_dot(state.connect_pending ? ui::colors().warning :
                  connected ? ui::colors().success : ui::colors().dim);
   ImGui::SameLine();
   ImGui::TextColored(state.connect_pending ? ui::colors().warning :
                      connected ? ui::colors().success : ui::colors().danger,
-                     "%s", state.connect_pending ? "CONNECTING" :
-                          connected ? "CONNECTED TO CONSOLE" : "NOT CONNECTED");
+                     "%s", state.connect_pending ? locale::tr("home.connecting_status") :
+                          connected ? locale::tr("home.connected_status") : locale::tr("home.not_connected"));
   ImGui::EndGroup();
 
   ImGui::Separator();
 
   char endpoint[96];
   std::snprintf(endpoint, sizeof(endpoint), "%s:%d", state.host, state.debug_port);
-  detail_row("Endpoint", endpoint, connected ? ui::colors().text : ui::colors().muted);
-  detail_row("UDP logs", state.udp_listener.running() ? "listening" : "stopped",
+  detail_row(locale::tr("home.endpoint"), endpoint, connected ? ui::colors().text : ui::colors().muted);
+  detail_row(locale::tr("home.udp_logs"), state.udp_listener.running() ? locale::tr("home.listening") : locale::tr("home.stopped"),
              state.udp_listener.running() ? ui::colors().success : ui::colors().dim);
-  detail_row("Process", selected_process_name(state).c_str(),
+  detail_row(locale::tr("home.process"), selected_process_name(state).c_str(),
              state.selected_pid != 0 ? ui::colors().text : ui::colors().muted);
-  detail_row("PID", std::to_string(state.selected_pid).c_str(),
+  detail_row(locale::tr("home.pid"), std::to_string(state.selected_pid).c_str(),
              state.selected_pid != 0 ? ui::colors().text : ui::colors().dim);
 
   ImGui::Separator();
 
   if (connected) {
     ui::draw_capabilities(state.hello);
-    if (ui::soft_button((std::string(icons::kGauge) + "  Ping").c_str(), ImVec2(120, 28))) {
-      set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
+    if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("home.ping")).c_str(), ImVec2(120, 28))) {
+      set_status(state, state.client.ping() ? locale::tr("home.ping_ok") : state.client.last_error());
     }
     ImGui::SameLine();
-    if (ui::danger_button((std::string(icons::kDisconnect) + "  Drop").c_str(), ImVec2(120, 28))) {
+    if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("home.drop")).c_str(), ImVec2(120, 28))) {
       disconnect_console(state);
     }
   } else {
-    ui::text_muted("No active payload session.");
-    if (ui::primary_button((std::string(icons::kConnect) + "  Configure").c_str(), ImVec2(180, 28))) {
+    ui::text_muted(locale::tr("home.no_active_session"));
+    if (ui::primary_button((std::string(icons::kConnect) + "  " + locale::tr("home.configure")).c_str(), ImVec2(180, 28))) {
       state.screen = Screen::Consoles;
     }
   }
   ui::end_panel();
 
   ImGui::SameLine(0, gap);
-  ui::begin_panel("HomeActions", "Command Palette", ImVec2(0, avail.y));
-  if (action_tile("Consoles", icons::kConsole, "Consoles", "Console setup", true))
+  ui::begin_panel("HomeActions", locale::tr("home.command_palette"), ImVec2(0, avail.y));
+  if (action_tile("Consoles", icons::kConsole, locale::tr("home.tile_consoles"), locale::tr("home.tile_consoles_meta"), true))
     state.screen = Screen::Consoles;
-  if (action_tile("Processes", icons::kProcess, "Processes", connected ? "PID selection" : "Needs console", connected))
-    { state.screen = Screen::Processes; if (!connected) set_status(state, "Connect a console before loading processes"); }
-  if (action_tile("Memory", icons::kMemory, "Memory", connected ? "Read / patch" : "Needs console", connected))
-    { state.screen = Screen::Memory; if (!connected) set_status(state, "Connect a console before reading memory"); }
-  if (action_tile("Scanner", icons::kScanner, "Scanner", connected ? "Value search" : "Needs console", connected))
-    { state.screen = Screen::Scanner; if (!connected) set_status(state, "Connect a console before scanning memory"); }
-  if (action_tile("Trainer", icons::kTrainer, "Trainer", connected ? "Runtime cheats" : "Needs console", connected))
-    { state.screen = Screen::Trainer; if (!connected) set_status(state, "Connect a console before using trainer locks"); }
-  if (action_tile("Logs", icons::kLogs, "UDP Logs", state.udp_listener.running() ? "Listening" : "Stopped", true))
+  if (action_tile("Processes", icons::kProcess, locale::tr("home.tile_processes"), connected ? locale::tr("home.tile_processes_meta_online") : locale::tr("home.tile_processes_meta_offline"), connected))
+    { state.screen = Screen::Processes; if (!connected) set_status(state, locale::tr("home.connect_first_for_processes")); }
+  if (action_tile("Memory", icons::kMemory, locale::tr("home.tile_memory"), connected ? locale::tr("home.tile_memory_meta_online") : locale::tr("home.tile_memory_meta_offline"), connected))
+    { state.screen = Screen::Memory; if (!connected) set_status(state, locale::tr("home.connect_first_for_memory")); }
+  if (action_tile("Scanner", icons::kScanner, locale::tr("home.tile_scanner"), connected ? locale::tr("home.tile_scanner_meta_online") : locale::tr("home.tile_scanner_meta_offline"), connected))
+    { state.screen = Screen::Scanner; if (!connected) set_status(state, locale::tr("home.connect_first_for_scan")); }
+  if (action_tile("Trainer", icons::kTrainer, locale::tr("home.tile_trainer"), connected ? locale::tr("home.tile_trainer_meta_online") : locale::tr("home.tile_trainer_meta_offline"), connected))
+    { state.screen = Screen::Trainer; if (!connected) set_status(state, locale::tr("home.connect_first_for_trainer")); }
+  if (action_tile("Logs", icons::kLogs, locale::tr("home.tile_logs"), state.udp_listener.running() ? locale::tr("home.tile_logs_meta_listening") : locale::tr("home.tile_logs_meta_stopped"), true))
     state.screen = Screen::Logs;
-  if (action_tile("Settings", icons::kSettings, "Settings", "Defaults", true))
+  if (action_tile("Settings", icons::kSettings, locale::tr("home.tile_settings"), locale::tr("home.tile_settings_meta"), true))
     state.screen = Screen::Settings;
   ImGui::Separator();
-  detail_row("Scan hits", std::to_string(state.scan_result.count).c_str(), ui::colors().muted);
-  detail_row("Maps", std::to_string(state.maps.size()).c_str(), ui::colors().muted);
-  detail_row("Trainer entries", std::to_string(state.cheats.size()).c_str(), ui::colors().muted);
+  detail_row(locale::tr("home.scan_hits"), std::to_string(state.scan_result.count).c_str(), ui::colors().muted);
+  detail_row(locale::tr("home.maps"), std::to_string(state.maps.size()).c_str(), ui::colors().muted);
+  detail_row(locale::tr("home.trainer_entries"), std::to_string(state.cheats.size()).c_str(), ui::colors().muted);
   ui::end_panel();
 }
 
