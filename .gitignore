@@ -60,3 +60,4 @@ dkms.conf
 .DS_Store
 /reference
 /make_all.sh
+/frontend/build
