@@ -23,10 +23,24 @@
 #include <string.h>
 #include <time.h>
 
-#define MEMDBG_SCAN_CHUNK (4U * 1024U * 1024U)  /* 4 MiB — fewer read() syscalls */
+#if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
+    defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
+#define MEMDBG_SCAN_CONSOLE 1
+#endif
+
+#if defined(MEMDBG_SCAN_CONSOLE)
+/* mdbg_copyout is much less forgiving than host /proc reads when a range
+   crosses a fragile page. Keep console reads small and serialized. */
+#define MEMDBG_SCAN_CHUNK (64U * 1024U)
+#define MEMDBG_SCAN_PARALLEL_THREADS 1U
+#else
+#define MEMDBG_SCAN_CHUNK MEMDBG_PROTOCOL_MAX_READ
+#define MEMDBG_SCAN_PARALLEL_THREADS 4U
+#endif
+
+#define MEMDBG_SCAN_MIN_READ_CHUNK 4096U
 #define MEMDBG_SCAN_INITIAL_CAPACITY 256U
 #define MEMDBG_MAP_PROT_READ 1U
-#define MEMDBG_SCAN_PARALLEL_THREADS 4U
 #define MEMDBG_SCAN_PARALLEL_MIN_MAPS  2U  /* minimum maps per thread */
 
 /* ---- Boyer-Moore-Horspool skip tables ---- */
@@ -183,6 +197,54 @@ static uint64_t monotonic_ns(void) {
   return 0U;
 }
 
+/* ---- Defensive memory reads ---- */
+
+static void scan_metric_inc(uint32_t *value) {
+  if (value != NULL && *value != UINT32_MAX) (*value)++;
+}
+
+static size_t scan_read_size(uint64_t remaining) {
+  return remaining > (uint64_t)MEMDBG_SCAN_CHUNK
+      ? (size_t)MEMDBG_SCAN_CHUNK
+      : (size_t)remaining;
+}
+
+static size_t scan_fault_skip_size(size_t requested) {
+  if (requested == 0U) return 0U;
+  return requested < MEMDBG_SCAN_MIN_READ_CHUNK
+      ? requested
+      : (size_t)MEMDBG_SCAN_MIN_READ_CHUNK;
+}
+
+static memdbg_status_t scan_memory_read_resilient(
+    int pid, uint64_t address, void *buffer, size_t requested,
+    memdbg_scan_result_t *metrics, size_t *read_out) {
+  if (read_out != NULL) *read_out = 0U;
+  if (requested == 0U) return MEMDBG_OK;
+
+  size_t attempt = requested;
+  while (attempt != 0U) {
+    scan_metric_inc(metrics != NULL ? &metrics->read_calls : NULL);
+
+    size_t read_len = 0U;
+    memdbg_status_t st = memdbg_memory_read(pid, address, buffer, attempt, &read_len);
+    if (st == MEMDBG_OK) {
+      if (read_out != NULL) *read_out = read_len;
+      return MEMDBG_OK;
+    }
+
+    scan_metric_inc(metrics != NULL ? &metrics->read_errors : NULL);
+    if (attempt <= MEMDBG_SCAN_MIN_READ_CHUNK) return st;
+
+    size_t next = attempt / 2U;
+    if (next < MEMDBG_SCAN_MIN_READ_CHUNK) next = MEMDBG_SCAN_MIN_READ_CHUNK;
+    if (next >= attempt) return st;
+    attempt = next;
+  }
+
+  return MEMDBG_ERR_IO;
+}
+
 /* ---- Value length helper ---- */
 
 static uint32_t expected_value_length(uint32_t value_type,
@@ -337,13 +399,18 @@ static memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
 
   while (scanned < range_len && !builder->result->truncated) {
     uint64_t remaining = range_len - scanned;
-    size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
+    size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
 
-    builder->result->read_calls++;
-    memdbg_status_t st = memdbg_memory_read(ctx->pid, range_start + scanned,
-        ctx->buffer + carry, to_read, &read_len);
-    if (st != MEMDBG_OK) { builder->result->read_errors++; return skip_read_errors ? MEMDBG_OK : st; }
+    memdbg_status_t st = scan_memory_read_resilient(ctx->pid,
+        range_start + scanned, ctx->buffer + carry, to_read,
+        builder->result, &read_len);
+    if (st != MEMDBG_OK) {
+      if (!skip_read_errors) return st;
+      scanned += scan_fault_skip_size(to_read);
+      carry = 0U;
+      continue;
+    }
     if (read_len == 0U) break;
     builder->result->bytes_scanned += (uint64_t)read_len;
 
@@ -734,7 +801,8 @@ memdbg_status_t memdbg_scan_exact(const memdbg_scan_exact_request_t *request,
   memset(&builder, 0, sizeof(builder));
   builder.result = out;
   builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
+  st = scan_builder_prealloc(&builder);
+  if (st != MEMDBG_OK) { scan_context_fini(&ctx); return st; }
 
   uint64_t start_ns = monotonic_ns();
   out->regions_scanned = 1U;
@@ -753,12 +821,11 @@ static memdbg_status_t scan_range_cb(void *ctx, int pid, uint64_t start,
                                      uint64_t len, unsigned char *buffer,
                                      scan_builder_t *builder) {
   scan_context_t *sctx = (scan_context_t *)ctx;
-  unsigned char *saved = sctx->buffer;
   (void)pid;
-  sctx->buffer = buffer;
-  memdbg_status_t st = scan_range(sctx, builder, start, len, start, true);
-  sctx->buffer = saved;
-  return st;
+  /* Each worker owns its buffer; never mutate the shared scan context. */
+  scan_context_t local = *sctx;
+  local.buffer = buffer;
+  return scan_range(&local, builder, start, len, start, true);
 }
 
 /* ---- Public API: process exact scan (uses cached maps, parallel) ---- */
@@ -817,13 +884,17 @@ static memdbg_status_t scan_aob_range(const bm_table_t *bm,
 
   while (scanned < range_len && !builder->result->truncated) {
     uint64_t remaining = range_len - scanned;
-    size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
+    size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
 
-    builder->result->read_calls++;
-    memdbg_status_t st = memdbg_memory_read(pid, range_start + scanned,
-        buffer + carry, to_read, &read_len);
-    if (st != MEMDBG_OK) { builder->result->read_errors++; break; }
+    memdbg_status_t st = scan_memory_read_resilient(pid,
+        range_start + scanned, buffer + carry, to_read,
+        builder->result, &read_len);
+    if (st != MEMDBG_OK) {
+      scanned += scan_fault_skip_size(to_read);
+      carry = 0U;
+      continue;
+    }
     if (read_len == 0U) break;
     builder->result->bytes_scanned += (uint64_t)read_len;
 
@@ -891,13 +962,14 @@ memdbg_status_t memdbg_scan_aob(const memdbg_scan_aob_request_t *request,
   memset(&builder, 0, sizeof(builder));
   builder.result = out;
   builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
+  memdbg_status_t st = scan_builder_prealloc(&builder);
+  if (st != MEMDBG_OK) { free(buffer); return st; }
 
   bm_table_t bm;
   bm_build_table(pattern, pat_len, mask, &bm);
 
   uint64_t start_ns = monotonic_ns();
-  memdbg_status_t st = scan_aob_range(&bm, pattern, mask, pat_len,
+  st = scan_aob_range(&bm, pattern, mask, pat_len,
       request->pid, request->start, request->length, buffer, &builder);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
@@ -990,13 +1062,17 @@ static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
 
   while (scanned < len && !builder->result->truncated) {
     uint64_t remaining = len - scanned;
-    size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
+    size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
 
-    builder->result->read_calls++;
-    memdbg_status_t st = memdbg_memory_read(pid, start + scanned,
-        buffer + carry, to_read, &read_len);
-    if (st != MEMDBG_OK) { builder->result->read_errors++; break; }
+    memdbg_status_t st = scan_memory_read_resilient(pid,
+        start + scanned, buffer + carry, to_read,
+        builder->result, &read_len);
+    if (st != MEMDBG_OK) {
+      scanned += scan_fault_skip_size(to_read);
+      carry = 0U;
+      continue;
+    }
     if (read_len == 0U) break;
     builder->result->bytes_scanned += (uint64_t)read_len;
 
@@ -1090,7 +1166,8 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
   memset(&builder, 0, sizeof(builder));
   builder.result = out;
   builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  scan_builder_prealloc(&builder);
+  memdbg_status_t st = scan_builder_prealloc(&builder);
+  if (st != MEMDBG_OK) { free(buffer); return st; }
 
   uint32_t alignment = request->alignment == 0U ? 8U : request->alignment;
   uint64_t scanned = 0U;
@@ -1099,13 +1176,16 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
 
   while (scanned < request->length && !out->truncated) {
     uint64_t remaining = request->length - scanned;
-    size_t to_read = remaining > MEMDBG_SCAN_CHUNK ? MEMDBG_SCAN_CHUNK : (size_t)remaining;
+    size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
 
-    out->read_calls++;
-    memdbg_status_t st = memdbg_memory_read(request->pid, request->start + scanned,
-        buffer + carry, to_read, &read_len);
-    if (st != MEMDBG_OK) { out->read_errors++; break; }
+    st = scan_memory_read_resilient(request->pid,
+        request->start + scanned, buffer + carry, to_read, out, &read_len);
+    if (st != MEMDBG_OK) {
+      scanned += scan_fault_skip_size(to_read);
+      carry = 0U;
+      continue;
+    }
     if (read_len == 0U) break;
     out->bytes_scanned += (uint64_t)read_len;
 
