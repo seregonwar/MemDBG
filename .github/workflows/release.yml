@@ -2,16 +2,13 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
-  pull_request:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag to create/update, for example v0.1.0"
-        required: false
+      version:
+        description: "Release version, for example 0.1.0 or v0.1.0"
+        required: true
         type: string
       draft:
         description: "Create the GitHub release as draft"
@@ -246,7 +243,7 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
@@ -280,7 +277,7 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRAFT: ${{ inputs.draft }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
@@ -288,7 +285,21 @@ jobs:
 
           tag="${GITHUB_REF_NAME}"
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            tag="${INPUT_TAG}"
+            version="${INPUT_VERSION}"
+            if [ -z "${version}" ]; then
+              echo "Release version is required" >&2
+              exit 1
+            fi
+            if [[ "${version}" == v* ]]; then
+              tag="${version}"
+            else
+              tag="v${version}"
+            fi
+            if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){1,3}([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+              echo "Invalid release version: ${INPUT_VERSION}" >&2
+              echo "Use a version like 0.1.0, 1.2.3-beta.1, or v1.2.3" >&2
+              exit 1
+            fi
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
