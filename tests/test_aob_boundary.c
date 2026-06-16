@@ -22,10 +22,32 @@
 
 static const unsigned char *g_mock_buffer = NULL;
 static size_t g_mock_size = 0;
+static uint64_t g_mock_fail_start = 0;
+static uint64_t g_mock_fail_end = 0;
+
+static void mock_read_fail_reset(void) {
+  g_mock_fail_start = 0;
+  g_mock_fail_end = 0;
+}
+
+static void mock_read_fail_range(uint64_t start, uint64_t end) {
+  g_mock_fail_start = start;
+  g_mock_fail_end = end;
+}
 
 memdbg_status_t memdbg_memory_read(int pid, uint64_t address, void *buffer,
                                    size_t length, size_t *read_out) {
   (void)pid;
+  uint64_t read_end = address > UINT64_MAX - (uint64_t)length
+      ? UINT64_MAX
+      : address + (uint64_t)length;
+  if (g_mock_fail_end > g_mock_fail_start &&
+      address < g_mock_fail_end &&
+      length > 0U &&
+      read_end > g_mock_fail_start) {
+    if (read_out != NULL) *read_out = 0U;
+    return MEMDBG_ERR_IO;
+  }
   size_t offset = (size_t)address;
   if (offset >= g_mock_size) {
     if (read_out != NULL) *read_out = 0U;
@@ -193,6 +215,50 @@ static int test_process_aob_scan(
         failures++;
       }
     }
+  }
+
+  memdbg_scan_result_free(&result);
+  return failures;
+}
+
+static int test_process_exact_scan(
+    const unsigned char *buf, size_t buf_size,
+    uint32_t needle, uint64_t expected_addr, const char *test_name) {
+  g_mock_buffer = buf;
+  g_mock_size   = buf_size;
+
+  memdbg_scan_process_exact_request_t request;
+  memset(&request, 0, sizeof(request));
+  request.pid             = 1;
+  request.value_type      = MEMDBG_VALUE_U32;
+  request.value_length    = sizeof(needle);
+  request.alignment       = 4U;
+  request.max_results     = 8U;
+  request.protection_mask = 0U;
+  memcpy(request.value, &needle, sizeof(needle));
+
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_process_exact(&request, &result);
+
+  if (status != MEMDBG_OK) {
+    printf("FAIL [%s]: scan returned status %d\n", test_name, (int)status);
+    return 1;
+  }
+
+  int found = 0;
+  for (size_t i = 0U; i < result.count; ++i) {
+    if (result.entries[i].address == expected_addr) { found = 1; break; }
+  }
+
+  int failures = 0;
+  if (!found) {
+    printf("FAIL [%s]: missing expected address 0x%llx\n",
+           test_name, (unsigned long long)expected_addr);
+    failures++;
+  }
+  if (result.read_errors == 0U) {
+    printf("FAIL [%s]: expected at least one read error\n", test_name);
+    failures++;
   }
 
   memdbg_scan_result_free(&result);
@@ -511,13 +577,33 @@ int main(void) {
         "PW: start/end range filter");
   }
 
+  /* Test 17 — Process exact scan: skip a failing page and continue.
+     A readable map starts with a 4 KiB faulting page. The scanner should
+     count the read error, drop chunk carry, and still find the value after
+     the hole. */
+  {
+    mock_maps_reset();
+    mock_maps_add(65536U, 131072U, 1U);
+    mock_read_fail_range(65536U, 69632U);
+
+    memset(buf, 0x00, buf_size);
+    uint32_t needle = 0x1234abcdU;
+    uint64_t pos = 70000U;
+    memcpy(buf + pos, &needle, sizeof(needle));
+
+    failures += test_process_exact_scan(buf, buf_size, needle, pos,
+                                        "PW exact: skip faulting page");
+    mock_read_fail_reset();
+  }
+
   /* ---- Summary ---- */
   mock_maps_reset();
+  mock_read_fail_reset();
 
   if (failures == 0) {
-    printf("\nAll AOB boundary tests PASSED (16/16).\n");
+    printf("\nAll AOB boundary tests PASSED (17/17).\n");
   } else {
-    printf("\n%d test(s) FAILED out of 16.\n", failures);
+    printf("\n%d test(s) FAILED out of 17.\n", failures);
   }
 
   free(buf);
