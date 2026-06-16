@@ -97,9 +97,9 @@ bool memdbg_daemon_should_stop(void) {
 /* ---- Helpers ---- */
 
 static uint16_t memdbg_platform_id(void) {
-#if defined(PLATFORM_PS4) || defined(PS4)
+#if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
   return (uint16_t)MEMDBG_PLATFORM_PS4;
-#elif defined(PLATFORM_PS5) || defined(PS5)
+#elif defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
   return (uint16_t)MEMDBG_PLATFORM_PS5;
 #else
   return (uint16_t)MEMDBG_PLATFORM_HOST;

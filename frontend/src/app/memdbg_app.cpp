@@ -152,6 +152,53 @@ void connect_console(AppState &state) {
   });
 }
 
+/* ---- Async telemetry ---- */
+
+void request_telemetry_async(AppState &state) {
+  if (state.telemetry_pending) return;
+  if (!state.client.connected()) return;
+  if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
+
+  state.telemetry_pending = true;
+  state.telemetry_future = std::async(std::launch::async, [&state]() -> bool {
+    Client::TelemetrySnapshot snap;
+    if (!state.client.telemetry(snap)) {
+      state.telemetry_temp_error = state.client.last_error();
+      return false;
+    }
+    state.telemetry_temp_snap = snap;
+    state.telemetry_temp_error.clear();
+    return true;
+  });
+}
+
+static void poll_telemetry(AppState &state) {
+  if (!state.telemetry_pending) return;
+  if (!state.telemetry_future.valid()) return;
+
+  auto status = state.telemetry_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) return;
+
+  state.telemetry_pending = false;
+  bool ok = false;
+  try {
+    ok = state.telemetry_future.get();
+  } catch (const std::exception &ex) {
+    state.telemetry_temp_error = ex.what();
+  } catch (...) {
+    state.telemetry_temp_error = "Unknown telemetry error";
+  }
+
+  if (!ok) {
+    set_status(state, "Telemetry: " + state.telemetry_temp_error);
+    state.telemetry_available = false;
+    return;
+  }
+
+  state.telemetry_snap = state.telemetry_temp_snap;
+  state.telemetry_available = true;
+}
+
 /* Poll async connect result. Called at start of every frame. */
 static void poll_connect(AppState &state) {
   if (!state.connect_pending) return;
@@ -238,6 +285,7 @@ static void draw_connect_spinner(AppState &state) {
 void disconnect_console(AppState &state) {
   state.connect_pending = false;  /* cancel any in-flight async connect */
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
+  state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.client.disconnect();
   state.has_hello = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
@@ -588,6 +636,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
 
 static void draw_app(AppState &state) {
   poll_connect(state);
+  poll_telemetry(state);
 
   ImGuiViewport *viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -600,8 +649,15 @@ static void draw_app(AppState &state) {
   ImVec2 win_pos = ImGui::GetWindowPos(), win_size = ImGui::GetWindowSize();
   ui::draw_background(ImGui::GetWindowDrawList(), win_pos, win_size);
 
-  const float sidebar_w = std::clamp(win_size.x * 0.21f, 250.0f, 310.0f);
-  const float top_h = 88.0f, status_h = 42.0f, gap = 16.0f;
+  /* Responsive scaling: base reference is 1400 px width */
+  float scale = win_size.x / 1400.0f;
+  if (scale < 0.42f) scale = 0.42f;
+  if (scale > 2.2f) scale = 2.2f;
+
+  const float sidebar_w = std::clamp(win_size.x * 0.21f, 190.0f * scale, 320.0f * scale);
+  const float top_h = std::max(56.0f, 88.0f * scale);
+  const float status_h = std::max(28.0f, 42.0f * scale);
+  const float gap = std::max(8.0f, 16.0f * scale);
   const float content_w = win_size.x - sidebar_w;
 
   ImGui::SetCursorPos(ImVec2(0,0));
@@ -717,22 +773,54 @@ int run_frontend(int, char **) {
   if (!ensure_udp_listener(state, udp_error)) set_status(state, "UDP: "+udp_error);
   push_notification(state, "MemDBG by seregonwar started", 6.0);
 
-  while (!glfwWindowShouldClose(window)) {
-    glfwPollEvents();
-    ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
-    draw_app(state);
+  /* Store pointers for the refresh callback (window-refresh fires during live resize on macOS).
+   * Must be static so the non-capturing lambda below can access them. */
+  static AppState *s_render_state = nullptr;
+  static GLFWwindow *s_render_window = nullptr;
+  s_render_state = &state;
+  s_render_window = window;
+
+  /* Render a single frame. Callable from the main loop and from the window-refresh
+   * callback (which fires during live resize on macOS).  The re-entrancy guard
+   * wraps only glfwPollEvents() so the callback CAN produce a real frame — if the
+   * callback fires while the main loop is inside PollEvents, it skips PollEvents
+   * but still draws, matching the reference pattern for smooth live resize. */
+  static const auto render_frame = []() {
+    static bool in_poll = false;
+    if (!in_poll) {
+      in_poll = true;
+      glfwPollEvents();
+      in_poll = false;
+    }
+
+    if (glfwWindowShouldClose(s_render_window)) return;
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    draw_app(*s_render_state);
     ImGui::Render();
-    int dw, dh; glfwGetFramebufferSize(window, &dw, &dh);
-    glViewport(0,0,dw,dh);
-    glClearColor(11.0f/255.0f,11.0f/255.0f,14.0f/255.0f,1.0f); glClear(GL_COLOR_BUFFER_BIT);
+
+    int dw, dh;
+    glfwGetFramebufferSize(s_render_window, &dw, &dh);
+    glViewport(0, 0, dw, dh);
+    glClearColor(11.0f / 255.0f, 11.0f / 255.0f, 14.0f / 255.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    glfwSwapBuffers(window);
-  }
+    glfwSwapBuffers(s_render_window);
+  };
+
+  glfwSetWindowRefreshCallback(window, [](GLFWwindow *) { render_frame(); });
+
+  while (!glfwWindowShouldClose(window))
+    render_frame();
 
   state.udp_listener.stop(); state.client.disconnect();
   github_profile_shutdown(state.github_profile);
   ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext(); glfwDestroyWindow(window); glfwTerminate();
+  s_render_state = nullptr;
+  s_render_window = nullptr;
   return 0;
 }
 

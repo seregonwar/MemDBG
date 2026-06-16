@@ -141,6 +141,12 @@ struct AppState {
   double next_telemetry_poll = 0.0;
   bool telemetry_available = false;
 
+  /* ---- Async telemetry ---- */
+  bool telemetry_pending = false;
+  std::future<bool> telemetry_future;
+  Client::TelemetrySnapshot telemetry_temp_snap;
+  std::string telemetry_temp_error;
+
   /* ---- AOB Scanner ---- */
   char aob_pattern[512] = "";
   ScanResult aob_result;
@@ -350,6 +356,7 @@ void normalize_ports(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
 void disconnect_console(AppState &state);
+void request_telemetry_async(AppState &state);
 bool load_frontend_settings(AppState &state, std::string *error = nullptr);
 bool save_frontend_settings(const AppState &state, std::string *error = nullptr);
 

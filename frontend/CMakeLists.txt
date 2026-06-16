@@ -68,9 +68,10 @@ add_executable(memdbg_frontend
   src/core/platform.cpp
   src/core/udp_log_listener.cpp
 
-  # ui (widgets, theme, fonts, icons)
+  # ui (widgets, theme, fonts, icons, file picker)
   src/ui/icon_font.cpp
   src/ui/ui_widgets.cpp
+  src/ui/file_picker.cpp
 
   # pal (LZ4 decompression for client)
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c

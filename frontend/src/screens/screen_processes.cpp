@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "file_picker.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -64,13 +65,27 @@ static void dump_selected_map(AppState &state) {
   if (map.end <= map.start) { set_status(state, "Selected map is empty"); return; }
   std::string default_name = "pid_" + std::to_string(state.selected_pid) + "_" +
                              hex_u64(map.start).substr(2) + ".bin";
-  std::filesystem::path configured = trim_copy(state.dump_path);
-  if (configured.empty()) configured = "dumps";
+
+  /* Try native save dialog first; fall back to configured dump_path */
+  std::string picked = memdbg::frontend::ui::pickSaveFile(
+      "Save Memory Dump", default_name, "Binary Files", "*.bin");
 
   std::filesystem::path out_path;
-  const bool looks_like_file = configured.has_extension();
-  if (looks_like_file) out_path = configured;
-  else                 out_path = configured / default_name;
+  if (!picked.empty()) {
+    out_path = picked;
+    /* Update dump_path so subsequent dumps default here */
+    std::filesystem::path parent = out_path.parent_path();
+    if (!parent.empty())
+      std::snprintf(state.dump_path, sizeof(state.dump_path), "%s",
+                    parent.string().c_str());
+  } else {
+    /* No native picker (console) or user cancelled — use configured path */
+    std::filesystem::path configured = trim_copy(state.dump_path);
+    if (configured.empty()) configured = "dumps";
+    const bool looks_like_file = configured.has_extension();
+    if (looks_like_file) out_path = configured;
+    else                 out_path = configured / default_name;
+  }
 
   std::filesystem::path dump_dir = out_path.parent_path();
   if (dump_dir.empty()) dump_dir = ".";
@@ -113,9 +128,16 @@ static void select_process(AppState &state, int row) {
   state.scan_is_unknown_session = false;
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
   state.has_process_info = false;
-  if (state.client.connected() && state.client.process_info(state.selected_pid, state.selected_process_info))
-    state.has_process_info = true;
   set_status(state, "Selected PID " + std::to_string(state.selected_pid));
+}
+
+static void ensure_process_info(AppState &state) {
+  if (state.has_process_info) return;
+  if (!state.client.connected() || state.selected_pid <= 0) return;
+  /* Skip if payload is busy with an async operation */
+  if (state.telemetry_pending || state.scan_async_pending) return;
+  if (state.client.process_info(state.selected_pid, state.selected_process_info))
+    state.has_process_info = true;
 }
 
 static void select_map(AppState &state, int row) {
@@ -142,9 +164,20 @@ static void refresh_processes(AppState &state) {
     push_notification(state, "Process refresh failed: " + error, 5.0);
     return;
   }
-  if (state.processes.empty()) {
-    state.selected_pid = 0; state.selected_process_row = -1;
-    state.has_process_info = false; state.maps.clear();
+  /* Reconcile selection: find previously selected PID in new list */
+  int new_row = -1;
+  if (state.selected_pid > 0) {
+    for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+      if (state.processes[i].pid == state.selected_pid) { new_row = i; break; }
+    }
+  }
+  if (new_row >= 0) {
+    state.selected_process_row = new_row;
+  } else {
+    state.selected_pid = 0;
+    state.selected_process_row = -1;
+    state.has_process_info = false;
+    state.maps.clear();
   }
   set_status(state, "Process list refreshed");
 }
@@ -180,8 +213,8 @@ static void draw_process_table(AppState &state) {
       ImGui::TableSetColumnIndex(2);
       if (state.has_process_info && state.selected_pid == process.pid)
         ImGui::TextColored(ui::colors().primary2, "%s", state.selected_process_info.title_id.c_str());
-      else
-        ImGui::TextUnformatted("");
+      else if (ImGui::IsItemVisible() && i == state.selected_process_row && state.client.connected())
+        ensure_process_info(state);
       ImGui::TableSetColumnIndex(3);
       ImGui::TextColored(selected ? ui::colors().primary2 : ui::colors().dim,
                          "%s", selected ? "Active" : "-");
@@ -270,8 +303,14 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ImGui::EndDisabled();
     ImGui::Spacing();
     ImGui::InputText("Dump output", state.dump_path, sizeof(state.dump_path));
+    ImGui::SameLine();
+    if (ImGui::SmallButton((std::string(icons::kLoad) + "##dumppath").c_str())) {
+      std::string picked = memdbg::frontend::ui::pickFile("Select Dump Directory");
+      if (!picked.empty())
+        std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", picked.c_str());
+    }
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Directory or full .bin file path for Dump Selected Map");
+      ImGui::SetTooltip("Fallback directory for dumps when the save dialog is unavailable (console) or cancelled");
     ImGui::Spacing();
     ImGui::InputText("Filter", state.map_filter, sizeof(state.map_filter));
     ImGui::Checkbox("Readable", &state.map_filter_readable);
