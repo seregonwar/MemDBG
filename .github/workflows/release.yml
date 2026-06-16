@@ -198,26 +198,71 @@ jobs:
               ;;
             frontend)
               pkg="MemDBG-frontend-${{ matrix.platform }}"
-              mkdir -p "dist/$pkg"
-              frontend_bin=$(find build/frontend -type f \( -name 'memdbg_frontend' -o -name 'memdbg_frontend.exe' \) | head -n 1)
-              probe_bin=$(find build/frontend -type f \( -name 'memdbg_probe' -o -name 'memdbg_probe.exe' \) | head -n 1)
-              if [ -z "$frontend_bin" ] || [ -z "$probe_bin" ]; then
-                echo "Frontend binaries not found" >&2
-                find build/frontend -maxdepth 4 -type f | sort
-                exit 1
-              fi
-              cp "$frontend_bin" "dist/$pkg/"
-              cp "$probe_bin" "dist/$pkg/"
-              chmod +x "dist/$pkg"/*
-              cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
+
+              if [ "${{ matrix.platform }}" = "macos" ]; then
+                app_bundle=$(find build/frontend -type d -name 'MemDBG.app' -print -quit)
+                if [ -z "$app_bundle" ]; then
+                  echo "MemDBG.app bundle not found" >&2
+                  find build/frontend -maxdepth 6 -print | sort
+                  exit 1
+                fi
+
+                mkdir -p "dist/$pkg"
+                cp -R "$app_bundle" "dist/$pkg/MemDBG.app"
+                chmod +x "dist/$pkg/MemDBG.app/Contents/MacOS/"*
+                cat > "dist/$pkg/MemDBG.app/Contents/Resources/BUILD_INFO.txt" <<EOF
           project=MemDBG
           component=frontend
           platform=${{ matrix.platform }}
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
-              tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
-              rm -rf "dist/$pkg"
+                (cd "dist/$pkg" && ditto -c -k --sequesterRsrc --keepParent "MemDBG.app" "../$pkg.app.zip")
+                rm -rf "dist/$pkg"
+              else
+                mkdir -p "dist/$pkg/assets"
+                frontend_bin=$(find build/frontend -type f \( -name 'memdbg_frontend' -o -name 'memdbg_frontend.exe' \) | head -n 1)
+                probe_bin=$(find build/frontend -type f \( -name 'memdbg_probe' -o -name 'memdbg_probe.exe' \) | head -n 1)
+                if [ -z "$frontend_bin" ] || [ -z "$probe_bin" ]; then
+                  echo "Frontend binaries not found" >&2
+                  find build/frontend -maxdepth 4 -type f | sort
+                  exit 1
+                fi
+                cp "$frontend_bin" "dist/$pkg/"
+                cp "$probe_bin" "dist/$pkg/"
+                chmod +x "dist/$pkg/$(basename "$frontend_bin")" "dist/$pkg/$(basename "$probe_bin")"
+                cp assets/app-icon.png "dist/$pkg/assets/app-icon.png"
+                if [ "${{ matrix.platform }}" = "windows" ]; then
+                  cp assets/app-icon.ico "dist/$pkg/assets/app-icon.ico"
+                fi
+                if [ "${{ matrix.platform }}" = "linux" ]; then
+                  mkdir -p "dist/$pkg/share/applications" "dist/$pkg/share/icons/hicolor/1024x1024/apps"
+                  cp assets/app-icon.png "dist/$pkg/share/icons/hicolor/1024x1024/apps/app-icon.png"
+                  if [ -f "$(dirname "$frontend_bin")/MemDBG.desktop" ]; then
+                    cp "$(dirname "$frontend_bin")/MemDBG.desktop" "dist/$pkg/share/applications/MemDBG.desktop"
+                  else
+                    cat > "dist/$pkg/share/applications/MemDBG.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=MemDBG
+          Comment=Native memory debugger frontend
+          Exec=memdbg_frontend
+          Icon=app-icon
+          Terminal=false
+          Categories=Development;Debugger;
+          EOF
+                  fi
+                fi
+                cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          component=frontend
+          platform=${{ matrix.platform }}
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
+                tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+                rm -rf "dist/$pkg"
+              fi
               ;;
             ps4)
               cp build/ps4/MemDBG-ps4.elf dist/MemDBG-ps4.elf
@@ -262,11 +307,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          find release-artifacts -type f \( -name '*.tar.gz' -o -name '*.elf' -o -name '*.a' \) \
+          find release-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.elf' -o -name '*.a' \) \
             -exec cp {} release-assets/ \;
           cd release-assets
           shopt -s nullglob
-          assets=( *.tar.gz *.elf *.a )
+          assets=( *.tar.gz *.zip *.elf *.a )
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "No release assets found" >&2
             exit 1

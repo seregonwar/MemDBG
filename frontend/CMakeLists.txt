@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(memdbg_frontend LANGUAGES C CXX)
+project(memdbg_frontend VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,6 +57,10 @@ target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
 # ---- memdbg_frontend ----
 
+set(MEMDBG_APP_ICON_PNG ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.png)
+set(MEMDBG_APP_ICON_ICO ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.ico)
+set(MEMDBG_APP_ICON_ICNS ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.icns)
+
 add_executable(memdbg_frontend
   # app (entry point, shell, shared state)
   src/app/main.cpp
@@ -112,12 +116,65 @@ target_include_directories(memdbg_frontend PRIVATE
 
 target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
 
-add_custom_command(TARGET memdbg_frontend POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:memdbg_frontend>/assets"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${CMAKE_CURRENT_SOURCE_DIR}/../assets/logo-nobg.png"
-          "$<TARGET_FILE_DIR:memdbg_frontend>/assets/logo-nobg.png"
-)
+if(APPLE)
+  target_sources(memdbg_frontend PRIVATE ${MEMDBG_APP_ICON_ICNS})
+  set_source_files_properties(${MEMDBG_APP_ICON_ICNS}
+    PROPERTIES MACOSX_PACKAGE_LOCATION "Resources"
+  )
+  set_target_properties(memdbg_frontend PROPERTIES
+    OUTPUT_NAME "MemDBG"
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_BUNDLE_NAME "MemDBG"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.seregonwar.memdbg"
+    MACOSX_BUNDLE_ICON_FILE "app-icon.icns"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_COPYRIGHT "Copyright (C) 2026 SeregonWar"
+  )
+  add_custom_command(TARGET memdbg_frontend POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:memdbg_frontend>/assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MEMDBG_APP_ICON_PNG}"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/assets/app-icon.png"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MEMDBG_APP_ICON_PNG}"
+            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/assets/app-icon.png"
+  )
+else()
+  add_custom_command(TARGET memdbg_frontend POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:memdbg_frontend>/assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MEMDBG_APP_ICON_PNG}"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/assets/app-icon.png"
+  )
+endif()
+
+if(WIN32)
+  file(TO_CMAKE_PATH "${MEMDBG_APP_ICON_ICO}" MEMDBG_APP_ICON_ICO_CMAKE)
+  set(MEMDBG_WINDOWS_RC "${CMAKE_CURRENT_BINARY_DIR}/memdbg_frontend.rc")
+  file(WRITE "${MEMDBG_WINDOWS_RC}" "IDI_MEMDBG_ICON ICON \"${MEMDBG_APP_ICON_ICO_CMAKE}\"\n")
+  target_sources(memdbg_frontend PRIVATE "${MEMDBG_WINDOWS_RC}")
+endif()
+
+if(UNIX AND NOT APPLE)
+  set(MEMDBG_DESKTOP_FILE "${CMAKE_CURRENT_BINARY_DIR}/MemDBG.desktop")
+  file(WRITE "${MEMDBG_DESKTOP_FILE}"
+"[Desktop Entry]\n"
+"Type=Application\n"
+"Name=MemDBG\n"
+"Comment=Native memory debugger frontend\n"
+"Exec=memdbg_frontend\n"
+"Icon=app-icon\n"
+"Terminal=false\n"
+"Categories=Development;Debugger;\n"
+  )
+  add_custom_command(TARGET memdbg_frontend POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MEMDBG_DESKTOP_FILE}"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/MemDBG.desktop"
+  )
+endif()
 
 # ---- memdbg_probe (standalone protocol tester) ----
 

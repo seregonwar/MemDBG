@@ -69,7 +69,7 @@ void draw_credits(AppState &state, ImVec2 avail) {
   ImGui::EndGroup();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ImGui::TextWrapped("Console-first frontend for connecting to the MemDBG payload, browsing processes, reading and writing memory, scanning values (exact, AOB, pointer), building trainers (.cht, SHN, SHNEXT, MC4, JSON), and watching UDP telemetry.");
+  ImGui::TextWrapped("MemDBG is a high-performance memory debugging suite designed for PlayStation 4 and PlayStation 5 homebrew research. It combines a precise memory scanning engine with a remote debugging frontend, providing a unified interface for process inspection, memory analysis, and runtime debugging workflows.");
   ImGui::Spacing();
   const bool inline_links = ImGui::GetContentRegionAvail().x >= 830.0f;
   link_button("github", icons::kCode, "GitHub", "https://github.com/seregonwar/");
