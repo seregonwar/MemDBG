@@ -43,7 +43,17 @@ using memdbg::frontend::GitHubProfile;
 
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
-  Trainer, Logs, Settings, Telemetry, Credits,
+  Trainer, Logs, Settings, Telemetry, TaskMgr, Credits,
+};
+
+struct ProcessMapSummary {
+  size_t map_count = 0;
+  uint64_t total_mapped = 0;
+  uint64_t readable_bytes = 0;
+  uint64_t writable_bytes = 0;
+  uint64_t executable_bytes = 0;
+  uint64_t rw_heap_bytes = 0;
+  bool loaded = false;
 };
 
 struct CheatEntry {
@@ -349,6 +359,14 @@ struct AppState {
   std::vector<AutoSearchCandidate> auto_search_candidates;  /* top scored results */
   std::vector<AutoSearchCandidate> auto_search_temp_candidates;  /* async temp */
 
+  /* ---- Task Manager ---- */
+  int taskmgr_selected_row = -1;
+  int32_t taskmgr_selected_pid = 0;
+  ProcessMapSummary taskmgr_map_summary;
+  ProcessInfo taskmgr_process_info;
+  bool taskmgr_has_process_info = false;
+  double taskmgr_next_telemetry = 0.0;
+
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
   std::deque<Notification> notifications;
@@ -528,6 +546,7 @@ inline const char *screen_title(Screen s) {
   case Screen::Trainer: return "Trainer";
   case Screen::Logs: return "Logs"; case Screen::Settings: return "Settings";
   case Screen::Telemetry: return "Telemetry";
+  case Screen::TaskMgr: return "Task Manager";
   case Screen::Credits: return "Credits";
   } return "MemDBG";
 }
@@ -545,6 +564,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::Logs: return "Watch UDP telemetry and on-console file logging";
   case Screen::Settings: return "Configure frontend connection defaults";
   case Screen::Telemetry: return "Payload performance and runtime metrics";
+  case Screen::TaskMgr: return "Real-time console process and resource monitor";
   case Screen::Credits: return "Project information";
   } return "";
 }
@@ -582,6 +602,7 @@ void draw_logs(AppState &state, struct ImVec2 avail);
 void draw_settings(AppState &state, struct ImVec2 avail);
 void draw_credits(AppState &state, struct ImVec2 avail);
 void draw_telemetry(AppState &state, struct ImVec2 avail);
+void draw_taskmgr(AppState &state, struct ImVec2 avail);
 void draw_screen(AppState &state, struct ImVec2 avail);
 
 } // namespace memdbg::frontend
