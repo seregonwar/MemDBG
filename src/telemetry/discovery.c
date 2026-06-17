@@ -30,7 +30,7 @@
 
 static socket_t      g_disc_fd      = PAL_INVALID_SOCKET;
 static pthread_t     g_disc_thread;
-static atomic_bool   g_disc_running = ATOMIC_VAR_INIT(false);
+static atomic_bool   g_disc_running = false;
 
 /* ---- Platform-id helper (mirrors memdbg.c) ---- */
 

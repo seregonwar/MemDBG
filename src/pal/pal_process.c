@@ -103,6 +103,7 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
   while ((ent = readdir(d))) {
     if (!str_is_digits(ent->d_name)) continue;
     int pid = atoi(ent->d_name);
+    if (pid <= 1) continue;
     char name[64];
     read_comm(pid, name, sizeof(name));
     if (!proc_append(out, pid, name)) { closedir(d); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }

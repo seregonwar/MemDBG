@@ -262,7 +262,6 @@ static void poll_scanner_async(AppState &state) {
 
   auto status = state.scan_async_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
-  if (state.scan_async_owner != Screen::Scanner) return;
 
   state.scan_async_pending = false;
   bool ok = false;
@@ -273,6 +272,9 @@ static void poll_scanner_async(AppState &state) {
   } catch (...) {
     state.scan_async_error = "Unknown scanner error";
   }
+
+  if (state.scan_async_owner != Screen::Scanner) return;
+
 
   if (!ok) {
     std::string error_local;

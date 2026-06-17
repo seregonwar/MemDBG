@@ -1095,70 +1095,98 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
                                     memdbg_scan_result_t *out) {
   if (request == NULL || out == NULL) return MEMDBG_ERR_PARAM;
   if (request->length == 0U || request->max_depth == 0U) return MEMDBG_ERR_PARAM;
+  if (request->pid <= 0) return MEMDBG_ERR_PARAM;
 
   memset(out, 0, sizeof(*out));
 
-  /* Buffer: chunk size + sizeof(uint64_t)-1 so pointers crossing chunk
-     boundaries are never missed. */
+  /* Validate PID is still alive before touching its memory. */
+  {
+    memdbg_process_list_t plist;
+    memdbg_status_t check = memdbg_process_list(&plist);
+    if (check == MEMDBG_OK) {
+      bool alive = false;
+      for (size_t i = 0U; i < plist.count; ++i)
+        if (plist.entries[i].pid == request->pid) { alive = true; break; }
+      memdbg_process_list_free(&plist);
+      if (!alive) return MEMDBG_ERR_NOT_FOUND;
+    }
+  }
+
+  /* Restrict scan to mapped regions so we don't hit unmapped/guarded pages
+   * that trigger data aborts on console. */
+  memdbg_map_list_t maps;
+  memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
+  if (st != MEMDBG_OK) return st;
+
   static const size_t kPtrOverlap = sizeof(uint64_t) - 1U;
   unsigned char *buffer = (unsigned char *)malloc(MEMDBG_SCAN_CHUNK + kPtrOverlap);
-  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
+  if (buffer == NULL) { memdbg_process_maps_free(&maps); return MEMDBG_ERR_NOMEM; }
 
   scan_builder_t builder;
   memset(&builder, 0, sizeof(builder));
   builder.result = out;
   builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  memdbg_status_t st = scan_builder_prealloc(&builder);
-  if (st != MEMDBG_OK) { free(buffer); return st; }
+  st = scan_builder_prealloc(&builder);
+  if (st != MEMDBG_OK) { free(buffer); memdbg_process_maps_free(&maps); return st; }
 
   uint32_t alignment = request->alignment == 0U ? 8U : request->alignment;
-  uint64_t scanned = 0U;
-  size_t carry = 0U;
+  uint64_t scan_end = request->start + request->length;
   uint64_t start_ns = monotonic_ns();
 
-  while (scanned < request->length && !out->truncated) {
-    uint64_t remaining = request->length - scanned;
-    size_t to_read = scan_read_size(remaining);
-    size_t read_len = 0U;
+  for (size_t mi = 0U; mi < maps.count && !out->truncated; ++mi) {
+    const memdbg_map_entry_t *map = &maps.entries[mi];
+    if (map->end <= map->start) continue;
+    if (map->start >= scan_end || map->end <= request->start) continue;
 
-    st = scan_memory_read_resilient(request->pid,
-        request->start + scanned, buffer + carry, to_read, out, &read_len);
-    if (st != MEMDBG_OK) {
-      scanned += scan_fault_skip_size(to_read);
-      carry = 0U;
-      continue;
-    }
-    if (read_len == 0U) break;
-    out->bytes_scanned += (uint64_t)read_len;
+    uint64_t mstart = map->start > request->start ? map->start : request->start;
+    uint64_t mend   = map->end < scan_end ? map->end : scan_end;
+    if (mend <= mstart) continue;
 
-    /* window = carry from previous chunk + freshly read data.
-       base_addr is shifted back by carry bytes so absolute addresses
-       are computed correctly. */
-    size_t window = carry + read_len;
-    uint64_t base_addr = request->start + scanned - (uint64_t)carry;
+    size_t carry = 0U;
+    uint64_t scanned = 0U;
+    uint64_t map_len = mend - mstart;
 
-    for (size_t i = 0U; i + sizeof(uint64_t) <= window && !out->truncated; i += alignment) {
-      uint64_t candidate;
-      memcpy(&candidate, buffer + i, sizeof(candidate));
-      if (candidate == request->target_address) {
-        uint64_t addr = base_addr + i;
-        memdbg_status_t as = scan_builder_append(&builder, addr);
-        if (as != MEMDBG_OK) { free(buffer); return as; }
+    while (scanned < map_len && !out->truncated) {
+      uint64_t remaining = map_len - scanned;
+      size_t to_read = scan_read_size(remaining);
+      size_t read_len = 0U;
+
+      st = scan_memory_read_resilient(request->pid,
+          mstart + scanned, buffer + carry, to_read, out, &read_len);
+      if (st != MEMDBG_OK) {
+        scanned += scan_fault_skip_size(to_read);
+        carry = 0U;
+        continue;
       }
+      if (read_len == 0U) break;
+      out->bytes_scanned += (uint64_t)read_len;
+
+      size_t window = carry + read_len;
+      uint64_t base_addr = mstart + scanned - (uint64_t)carry;
+
+      for (size_t i = 0U; i + sizeof(uint64_t) <= window && !out->truncated; i += alignment) {
+        uint64_t candidate;
+        memcpy(&candidate, buffer + i, sizeof(candidate));
+        if (candidate == request->target_address) {
+          uint64_t addr = base_addr + i;
+          memdbg_status_t as = scan_builder_append(&builder, addr);
+          if (as != MEMDBG_OK) { free(buffer); memdbg_process_maps_free(&maps); return as; }
+        }
+      }
+
+      carry = window < kPtrOverlap ? window : kPtrOverlap;
+      if (carry > 0U)
+        memmove(buffer, buffer + window - carry, carry);
+
+      scanned += read_len;
     }
-
-    /* Preserve tail for cross-chunk continuity. */
-    carry = window < kPtrOverlap ? window : kPtrOverlap;
-    if (carry > 0U)
-      memmove(buffer, buffer + window - carry, carry);
-
-    scanned += read_len;
   }
 
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
-  out->regions_scanned = 1U;
+  out->regions_scanned = (uint32_t)maps.count;
   free(buffer);
+  memdbg_process_maps_free(&maps);
   return MEMDBG_OK;
 }
 

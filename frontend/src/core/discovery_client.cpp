@@ -41,6 +41,7 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
   }
 
   platform::socket_set_reuse_addr(fd);
+  (void)platform::socket_set_nosigpipe(fd);
   if (!platform::socket_set_broadcast(fd)) {
     error = "discovery: broadcast not available: " +
             platform::socket_error_text(platform::socket_last_error_code());
@@ -77,7 +78,7 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
   broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
   broadcast_addr.sin_port = htons(discovery_port);
 
-  if (sendto(fd, reinterpret_cast<const char *>(&ping), sizeof(ping), 0,
+  if (sendto(fd, reinterpret_cast<const char *>(&ping), sizeof(ping), MSG_NOSIGNAL,
              reinterpret_cast<const sockaddr *>(&broadcast_addr),
              sizeof(broadcast_addr)) < 0) {
     error = "discovery: sendto failed: " +

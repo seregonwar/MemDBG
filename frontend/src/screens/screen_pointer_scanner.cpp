@@ -23,7 +23,6 @@ static void poll_pointer_async(AppState &state) {
 
   auto status = state.scan_async_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
-  if (state.scan_async_owner != Screen::PointerScanner) return;
 
   state.scan_async_pending = false;
   bool ok = false;
@@ -34,6 +33,9 @@ static void poll_pointer_async(AppState &state) {
   } catch (...) {
     state.scan_async_error = "Unknown pointer scanner error";
   }
+
+  if (state.scan_async_owner != Screen::PointerScanner) return;
+
 
   if (!ok) {
     std::string error_local;

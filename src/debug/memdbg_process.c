@@ -104,10 +104,15 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
   if (slot < 0) slot = 0;
   if (g_cache[slot].valid) free(g_cache[slot].entries);
   g_cache[slot].pid = pid; g_cache[slot].count = out->count; g_cache[slot].timestamp = now;
-  g_cache[slot].valid = true; g_cache[slot].entries = NULL;
+  g_cache[slot].entries = NULL;
   if (out->count) {
     g_cache[slot].entries = (memdbg_map_entry_t *)malloc(out->count * sizeof(memdbg_map_entry_t));
-    if (g_cache[slot].entries) memcpy(g_cache[slot].entries, out->entries, out->count * sizeof(memdbg_map_entry_t));
+    if (g_cache[slot].entries) {
+      memcpy(g_cache[slot].entries, out->entries, out->count * sizeof(memdbg_map_entry_t));
+      g_cache[slot].valid = true;
+    }
+  } else {
+    g_cache[slot].valid = true;
   }
   pthread_mutex_unlock(&g_cache_mtx);
   return MEMDBG_OK;

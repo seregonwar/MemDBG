@@ -407,13 +407,20 @@ bool Client::memory_write(int32_t pid, uint64_t address,
 template <typename EntryT>
 static bool parse_scan_response(const std::vector<uint8_t> &response,
                                 ScanResult &out,
+                                std::string &error,
                                 size_t entry_addr_offset = offsetof(EntryT, address)) {
   memdbg_scan_response_prefix_t prefix{};
-  if (response.size() < sizeof(prefix)) return false;
+  if (response.size() < sizeof(prefix)) {
+    error = "short scan response";
+    return false;
+  }
   std::memcpy(&prefix, response.data(), sizeof(prefix));
   size_t expected = sizeof(prefix) + static_cast<size_t>(prefix.count) *
                                         sizeof(EntryT);
-  if (response.size() < expected) return false;
+  if (response.size() < expected) {
+    error = "truncated scan response";
+    return false;
+  }
   out.count = prefix.count;
   out.truncated = prefix.truncated != 0;
   out.bytes_scanned = prefix.bytes_scanned;
@@ -442,7 +449,7 @@ bool Client::scan_exact(const memdbg_scan_exact_request_t &request_body,
                response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
+  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
 }
 
 bool Client::scan_process_exact(
@@ -452,7 +459,7 @@ bool Client::scan_process_exact(
                sizeof(request_body), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
+  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
 }
 
 bool Client::scan_aob(const memdbg_scan_aob_request_t &request_body,
@@ -473,7 +480,7 @@ bool Client::scan_aob(const memdbg_scan_aob_request_t &request_body,
                static_cast<uint32_t>(body.size()), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
+  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
 }
 
 bool Client::scan_process_aob(
@@ -495,7 +502,7 @@ bool Client::scan_process_aob(
                static_cast<uint32_t>(body.size()), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
+  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
 }
 
 bool Client::scan_pointer(const memdbg_scan_pointer_request_t &request_body,
@@ -508,7 +515,7 @@ bool Client::scan_pointer(const memdbg_scan_pointer_request_t &request_body,
   /* Pointer scan returns memdbg_pointer_chain_entry_t (16 bytes),
    * extracting base_address at offset 0. */
   return parse_scan_response<memdbg_pointer_chain_entry_t>(
-      response, out, offsetof(memdbg_pointer_chain_entry_t, base_address));
+      response, out, last_error_, offsetof(memdbg_pointer_chain_entry_t, base_address));
 }
 
 bool Client::telemetry(TelemetrySnapshot &out) {
@@ -641,7 +648,7 @@ bool Client::scan_unknown(const memdbg_scan_process_exact_request_t &request_bod
                sizeof(request_body), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out);
+  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
 }
 
 bool Client::foreground_app(int32_t pid, char *title_id, size_t title_id_size,
@@ -1026,7 +1033,7 @@ bool Client::read_exact(void *data, size_t size) {
       return false;
     }
     if (n == 0) {
-      set_error("connection closed");
+      set_error("connection closed by console — disconnect and reconnect");
       return false;
     }
     total += static_cast<size_t>(n);
@@ -1048,7 +1055,7 @@ bool Client::write_all(const void *data, size_t size) {
       return false;
     }
     if (n == 0) {
-      set_error("socket write returned zero");
+      set_error("send: connection lost — disconnect and reconnect");
       return false;
     }
     total += static_cast<size_t>(n);
@@ -1058,7 +1065,17 @@ bool Client::write_all(const void *data, size_t size) {
 
 void Client::set_error_from_errno(const std::string &prefix) {
   int err = platform::socket_last_error_code();
-  last_error_ = prefix + ": " + platform::socket_error_text(err);
+#if EPIPE
+  if (err == EPIPE)
+    last_error_ = prefix + ": connection lost — the console disconnected abruptly";
+  else
+#endif
+#if ECONNRESET
+  if (err == ECONNRESET)
+    last_error_ = prefix + ": connection reset by console";
+  else
+#endif
+    last_error_ = prefix + ": " + platform::socket_error_text(err);
 }
 
 void Client::set_error(const std::string &message) { last_error_ = message; }

@@ -25,6 +25,8 @@ typedef struct memdbg_ucred_backup {
   gid_t rgid;
   gid_t svgid;
   uint32_t ngroups;
+  bool     ngroups_valid;
+  bool     fd_modified;
   intptr_t proc_rootdir;
   intptr_t proc_jaildir;
   intptr_t fd_rdir;
