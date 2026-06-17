@@ -720,8 +720,6 @@
   "taskmgr.process_continued": "プロセス再開:",
   "taskmgr.kill_process": "プロセス強制終了",
   "taskmgr.process_killed": "プロセス強制終了:",
-"taskmgr.kill_process": "placeholder",
-"taskmgr.process_killed": "placeholder"
   "taskmgr.processes_refreshed": "プロセスリスト更新済み",
   "taskmgr.col_pid": "PID",
   "taskmgr.col_name": "名前",
@@ -754,5 +752,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "すべてのブレークポイントを削除しますか？元に戻せません。",
-  "debugger.confirm_clear_wp": "すべてのウォッチポイントを削除しますか？元に戻せません。"
+  "debugger.confirm_clear_wp": "すべてのウォッチポイントを削除しますか？元に戻せません。",
+  "debugger.confirm_detach": "デタッチするとすべてのブレークポイントとウォッチポイントがクリアされます。続行しますか？",
+  "debugger.confirm_remove_bp": "このブレークポイントを削除しますか？",
+  "debugger.confirm_remove_wp": "このウォッチポイントを削除しますか？"
 }

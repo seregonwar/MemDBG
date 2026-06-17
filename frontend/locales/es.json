@@ -690,8 +690,6 @@
   "taskmgr.process_continued": "Proceso reanudado:",
   "taskmgr.kill_process": "Matar Proceso",
   "taskmgr.process_killed": "Proceso matado:",
-"taskmgr.kill_process": "placeholder",
-"taskmgr.process_killed": "placeholder"
   "taskmgr.processes_refreshed": "Lista de procesos actualizada",
   "taskmgr.col_pid": "PID",
   "taskmgr.col_name": "Nombre",
@@ -724,5 +722,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "¿Eliminar todos los breakpoints? No se puede deshacer.",
-  "debugger.confirm_clear_wp": "¿Eliminar todos los watchpoints? No se puede deshacer."
+  "debugger.confirm_clear_wp": "¿Eliminar todos los watchpoints? No se puede deshacer.",
+  "debugger.confirm_detach": "Desconectar eliminará todos los breakpoints y watchpoints. ¿Continuar?",
+  "debugger.confirm_remove_bp": "¿Eliminar este breakpoint?",
+  "debugger.confirm_remove_wp": "¿Eliminar este watchpoint?"
 }

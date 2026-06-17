@@ -691,8 +691,6 @@
   "taskmgr.process_continued": "Processus repris :",
   "taskmgr.kill_process": "Tuer le processus",
   "taskmgr.process_killed": "Processus tué :",
-"taskmgr.kill_process": "placeholder",
-"taskmgr.process_killed": "placeholder"
   "taskmgr.processes_refreshed": "Liste processus actualisée",
   "taskmgr.col_pid": "PID",
   "taskmgr.col_name": "Nom",
@@ -725,5 +723,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "Supprimer tous les breakpoints ? Cette action est irréversible.",
-  "debugger.confirm_clear_wp": "Supprimer tous les watchpoints ? Cette action est irréversible."
+  "debugger.confirm_clear_wp": "Supprimer tous les watchpoints ? Cette action est irréversible.",
+  "debugger.confirm_detach": "Le détachement effacera tous les points d'arrêt et watchpoints. Continuer ?",
+  "debugger.confirm_remove_bp": "Supprimer ce point d'arrêt ?",
+  "debugger.confirm_remove_wp": "Supprimer ce watchpoint ?"
 }

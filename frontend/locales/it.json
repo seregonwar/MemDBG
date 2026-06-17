@@ -690,8 +690,6 @@
   "taskmgr.process_continued": "Processo ripreso:",
   "taskmgr.kill_process": "Termina Processo",
   "taskmgr.process_killed": "Processo terminato:",
-"taskmgr.kill_process": "placeholder",
-"taskmgr.process_killed": "placeholder"
   "taskmgr.processes_refreshed": "Lista processi aggiornata",
   "taskmgr.col_pid": "PID",
   "taskmgr.col_name": "Nome",
@@ -724,5 +722,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "Cancellare tutti i breakpoint? Non può essere annullato.",
-  "debugger.confirm_clear_wp": "Cancellare tutti i watchpoint? Non può essere annullato."
+  "debugger.confirm_clear_wp": "Cancellare tutti i watchpoint? Non può essere annullato.",
+  "debugger.confirm_detach": "Il detach cancellerà tutti i breakpoint e watchpoint. Continuare?",
+  "debugger.confirm_remove_bp": "Rimuovere questo breakpoint?",
+  "debugger.confirm_remove_wp": "Rimuovere questo watchpoint?"
 }

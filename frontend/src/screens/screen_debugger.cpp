@@ -192,16 +192,30 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       }
     } else {
       if (ui::danger_button(locale::tr("debugger.detach"), ImVec2(100, 0))) {
-        if (state.client.debug_detach()) {
-          ds.attached = false;
-          ds.stopped = false;
-          ds.pid = 0;
-          ds.selected_lwp = 0;
-          ds.threads.clear();
-          set_status(state, locale::tr("debugger.detached"));
-        } else {
-          set_status(state, "Detach: " + state.client.last_error());
+        ImGui::OpenPopup("ConfirmDetach");
+      }
+      if (ImGui::BeginPopupModal("ConfirmDetach", nullptr,
+                                 ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("%s", locale::tr("debugger.confirm_detach"));
+        ImGui::Spacing();
+        if (ui::danger_button(locale::tr("common.yes"), ImVec2(80, 0))) {
+          if (state.client.debug_detach()) {
+            ds.attached = false;
+            ds.stopped = false;
+            ds.pid = 0;
+            ds.selected_lwp = 0;
+            ds.threads.clear();
+            set_status(state, locale::tr("debugger.detached"));
+          } else {
+            set_status(state, "Detach: " + state.client.last_error());
+          }
+          ImGui::CloseCurrentPopup();
         }
+        ImGui::SameLine();
+        if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
       }
       ImGui::SameLine();
       ImGui::TextColored(ui::colors().dim, "PID %d", ds.pid);
@@ -436,11 +450,26 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           ImGui::TableSetColumnIndex(3);
           ImGui::PushID((int)i);
           if (ui::danger_button(locale::tr("debugger.remove_bp"), ImVec2(50, 0))) {
-            if (state.client.debug_clear_breakpoint(bp.address)) {
-              refresh_breakpoints(state);
-            } else {
-              set_status(state, "Clear BP: " + state.client.last_error());
+            ImGui::OpenPopup("ConfirmRemoveBP");
+          }
+          if (ImGui::BeginPopupModal("ConfirmRemoveBP", nullptr,
+                                     ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s\n0x%016" PRIX64,
+                       locale::tr("debugger.confirm_remove_bp"), bp.address);
+            ImGui::Spacing();
+            if (ui::danger_button(locale::tr("common.yes"), ImVec2(80, 0))) {
+              if (state.client.debug_clear_breakpoint(bp.address)) {
+                refresh_breakpoints(state);
+              } else {
+                set_status(state, "Clear BP: " + state.client.last_error());
+              }
+              ImGui::CloseCurrentPopup();
             }
+            ImGui::SameLine();
+            if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
+              ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
           }
           ImGui::PopID();
         }
@@ -530,11 +559,26 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           ImGui::TableSetColumnIndex(4);
           ImGui::PushID((int)i);
           if (ui::danger_button(locale::tr("debugger.remove_wp"), ImVec2(50, 0))) {
-            if (state.client.debug_clear_watchpoint(wp.address)) {
-              refresh_watchpoints(state);
-            } else {
-              set_status(state, "Clear WP: " + state.client.last_error());
+            ImGui::OpenPopup("ConfirmRemoveWP");
+          }
+          if (ImGui::BeginPopupModal("ConfirmRemoveWP", nullptr,
+                                     ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s\n0x%016" PRIX64,
+                       locale::tr("debugger.confirm_remove_wp"), wp.address);
+            ImGui::Spacing();
+            if (ui::danger_button(locale::tr("common.yes"), ImVec2(80, 0))) {
+              if (state.client.debug_clear_watchpoint(wp.address)) {
+                refresh_watchpoints(state);
+              } else {
+                set_status(state, "Clear WP: " + state.client.last_error());
+              }
+              ImGui::CloseCurrentPopup();
             }
+            ImGui::SameLine();
+            if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
+              ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
           }
           ImGui::PopID();
         }

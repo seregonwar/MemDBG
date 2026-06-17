@@ -15,6 +15,7 @@
 #include "memdbg/core/memdbg_instance.h"
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/core/memdbg_protocol.h"
+#include "memdbg/core/memdbg_protocol_debug_handlers.h"
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
@@ -806,324 +807,6 @@ static memdbg_status_t handle_process_control(socket_t fd, const memdbg_packet_h
   return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
-/* ---- DEBUGGER ---- */
-
-static memdbg_status_t handle_debug_attach(socket_t fd,
-                                           const memdbg_packet_header_t *req,
-                                           const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_attach_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_attach_request_t *ar =
-      (const memdbg_debug_attach_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_attach(ar->pid);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_detach(socket_t fd,
-                                           const memdbg_packet_header_t *req) {
-  memdbg_status_t st = memdbg_debugger_detach();
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_stop(socket_t fd,
-                                         const memdbg_packet_header_t *req) {
-  memdbg_status_t st = memdbg_debugger_stop();
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_continue(socket_t fd,
-                                             const memdbg_packet_header_t *req) {
-  memdbg_status_t st = memdbg_debugger_continue();
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_step(socket_t fd,
-                                         const memdbg_packet_header_t *req,
-                                         const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_thread_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_thread_request_t *tr =
-      (const memdbg_debug_thread_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_step(tr->lwp);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_get_threads(socket_t fd,
-                                                const memdbg_packet_header_t *req) {
-  int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
-  char names[MEMDBG_DEBUGGER_MAX_THREADS][24];
-  uint32_t count = 0;
-  memdbg_status_t st = memdbg_debugger_get_threads(lwps, names, &count,
-                                                   MEMDBG_DEBUGGER_MAX_THREADS);
-  if (st != MEMDBG_OK)
-    return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-
-  uint32_t payload_len = (uint32_t)(sizeof(memdbg_debug_threads_response_prefix_t) +
-                         count * sizeof(memdbg_debug_thread_entry_t));
-  uint8_t *payload = (uint8_t *)malloc(payload_len);
-  if (payload == NULL) return MEMDBG_ERR_NOMEM;
-
-  memdbg_debug_threads_response_prefix_t *prefix =
-      (memdbg_debug_threads_response_prefix_t *)payload;
-  prefix->count = count;
-  prefix->reserved = 0;
-
-  memdbg_debug_thread_entry_t *entries =
-      (memdbg_debug_thread_entry_t *)(payload + sizeof(*prefix));
-  for (uint32_t i = 0; i < count; ++i) {
-    entries[i].lwp = lwps[i];
-    memcpy(entries[i].name, names[i], sizeof(entries[i].name));
-  }
-
-  int rc = send_response(fd, req, MEMDBG_OK, payload, payload_len);
-  free(payload);
-  return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_get_regs(socket_t fd,
-                                             const memdbg_packet_header_t *req,
-                                             const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_thread_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_thread_request_t *tr =
-      (const memdbg_debug_thread_request_t *)body;
-  memdbg_debug_regs_t regs;
-  memset(&regs, 0, sizeof(regs));
-  memdbg_status_t st = memdbg_debugger_get_regs(tr->lwp, &regs);
-  return send_response(fd, req, st, &regs, sizeof(regs)) == 0 ? MEMDBG_OK
-                                                               : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_set_regs(socket_t fd,
-                                             const memdbg_packet_header_t *req,
-                                             const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_thread_request_t) + sizeof(memdbg_debug_regs_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_thread_request_t *tr =
-      (const memdbg_debug_thread_request_t *)body;
-  const memdbg_debug_regs_t *regs =
-      (const memdbg_debug_regs_t *)((const uint8_t *)body + sizeof(*tr));
-  memdbg_status_t st = memdbg_debugger_set_regs(tr->lwp, regs);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_get_dbregs(socket_t fd,
-                                               const memdbg_packet_header_t *req,
-                                               const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_thread_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_thread_request_t *tr =
-      (const memdbg_debug_thread_request_t *)body;
-  memdbg_debug_dbregs_t dbregs;
-  memset(&dbregs, 0, sizeof(dbregs));
-  memdbg_status_t st = memdbg_debugger_get_dbregs(tr->lwp, &dbregs);
-  return send_response(fd, req, st, &dbregs, sizeof(dbregs)) == 0 ? MEMDBG_OK
-                                                                  : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_set_dbregs(socket_t fd,
-                                               const memdbg_packet_header_t *req,
-                                               const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_thread_request_t) + sizeof(memdbg_debug_dbregs_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_thread_request_t *tr =
-      (const memdbg_debug_thread_request_t *)body;
-  const memdbg_debug_dbregs_t *dbregs =
-      (const memdbg_debug_dbregs_t *)((const uint8_t *)body + sizeof(*tr));
-  memdbg_status_t st = memdbg_debugger_set_dbregs(tr->lwp, dbregs);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_set_breakpoint(socket_t fd,
-                                                   const memdbg_packet_header_t *req,
-                                                   const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_breakpoint_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_breakpoint_request_t *bp =
-      (const memdbg_debug_breakpoint_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_set_breakpoint(bp->address, bp->kind);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_set_breakpoint_cond(
-    socket_t fd, const memdbg_packet_header_t *req,
-    const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_breakpoint_cond_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_breakpoint_cond_request_t *bp =
-      (const memdbg_debug_breakpoint_cond_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_set_breakpoint_cond(
-      bp->address, bp->kind, bp->cond_reg, bp->cond_op, bp->cond_value);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_clear_breakpoint(socket_t fd,
-                                                     const memdbg_packet_header_t *req,
-                                                     const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_breakpoint_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_breakpoint_request_t *bp =
-      (const memdbg_debug_breakpoint_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_clear_breakpoint(bp->address);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_set_watchpoint(socket_t fd,
-                                                   const memdbg_packet_header_t *req,
-                                                   const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_watchpoint_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_watchpoint_request_t *wp =
-      (const memdbg_debug_watchpoint_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_set_watchpoint(wp->address, wp->length,
-                                                      wp->type);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_clear_watchpoint(socket_t fd,
-                                                     const memdbg_packet_header_t *req,
-                                                     const void *body, uint32_t body_len) {
-  if (body_len != sizeof(memdbg_debug_watchpoint_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_watchpoint_request_t *wp =
-      (const memdbg_debug_watchpoint_request_t *)body;
-  memdbg_status_t st = memdbg_debugger_clear_watchpoint(wp->address);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_thread_control(socket_t fd,
-                                                   const memdbg_packet_header_t *req,
-                                                   const void *body, uint32_t body_len,
-                                                   bool suspend) {
-  if (body_len != sizeof(memdbg_debug_thread_request_t))
-    return MEMDBG_ERR_PROTOCOL;
-  const memdbg_debug_thread_request_t *tr =
-      (const memdbg_debug_thread_request_t *)body;
-  memdbg_status_t st = suspend
-                           ? memdbg_debugger_suspend_thread(tr->lwp)
-                           : memdbg_debugger_resume_thread(tr->lwp);
-  return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_poll_events(socket_t fd,
-                                                const memdbg_packet_header_t *req) {
-  memdbg_status_t st = memdbg_debugger_poll_events();
-  memdbg_debug_poll_response_t resp;
-  memset(&resp, 0, sizeof(resp));
-  resp.stopped = memdbg_debugger_is_stopped() ? 1 : 0;
-  resp.stop_lwp = memdbg_debugger_is_stopped() ? memdbg_debugger_get_stop_lwp() : 0;
-  return send_response(fd, req, st, &resp, sizeof(resp)) == 0 ? MEMDBG_OK
-                                                               : MEMDBG_ERR_NET;
-}
-
-/* ---- Debugger breakpoint / watchpoint list queries ---- */
-
-static memdbg_status_t handle_debug_get_breakpoints(socket_t fd,
-                                                     const memdbg_packet_header_t *req) {
-  uint32_t count = 0;
-  const memdbg_breakpoint_t *bps = memdbg_debugger_breakpoints(&count);
-
-  /* Count active breakpoints. */
-  uint32_t active = 0;
-  for (uint32_t i = 0; i < count; ++i) {
-    if (bps[i].active) ++active;
-  }
-
-  uint32_t payload_len = (uint32_t)(sizeof(memdbg_debug_breakpoint_list_prefix_t) +
-                         active * sizeof(memdbg_debug_breakpoint_list_entry_t));
-  uint8_t *payload = (uint8_t *)malloc(payload_len);
-  if (payload == NULL) return MEMDBG_ERR_NOMEM;
-
-  memdbg_debug_breakpoint_list_prefix_t *prefix =
-      (memdbg_debug_breakpoint_list_prefix_t *)payload;
-  prefix->count = active;
-  prefix->reserved = 0;
-
-  memdbg_debug_breakpoint_list_entry_t *entries =
-      (memdbg_debug_breakpoint_list_entry_t *)(payload + sizeof(*prefix));
-  uint32_t w = 0;
-  for (uint32_t i = 0; i < count && w < active; ++i) {
-    if (!bps[i].active) continue;
-    entries[w].address = bps[i].address;
-    entries[w].kind = bps[i].kind;
-    entries[w].flags = 0;
-    if (bps[i].installed) entries[w].flags |= 1U;  /* bit 0 = installed */
-    if (bps[i].active)    entries[w].flags |= 2U;  /* bit 1 = active */
-    entries[w].cond_reg   = bps[i].cond_reg;
-    entries[w].cond_op    = bps[i].cond_op;
-    entries[w].cond_value = bps[i].cond_value;
-    ++w;
-  }
-
-  int rc = send_response(fd, req, MEMDBG_OK, payload, payload_len);
-  free(payload);
-  return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_get_watchpoints(socket_t fd,
-                                                     const memdbg_packet_header_t *req) {
-  uint32_t count = 0;
-  const memdbg_watchpoint_t *wps = memdbg_debugger_watchpoints(&count);
-
-  /* Count installed watchpoints. */
-  uint32_t active = 0;
-  for (uint32_t i = 0; i < count; ++i) {
-    if (wps[i].installed) ++active;
-  }
-
-  uint32_t payload_len =
-      (uint32_t)(sizeof(memdbg_debug_watchpoint_list_prefix_t) +
-                 active * sizeof(memdbg_debug_watchpoint_list_entry_t));
-  uint8_t *payload = (uint8_t *)malloc(payload_len);
-  if (payload == NULL) return MEMDBG_ERR_NOMEM;
-
-  memdbg_debug_watchpoint_list_prefix_t *prefix =
-      (memdbg_debug_watchpoint_list_prefix_t *)payload;
-  prefix->count = active;
-  prefix->reserved = 0;
-
-  memdbg_debug_watchpoint_list_entry_t *entries =
-      (memdbg_debug_watchpoint_list_entry_t *)(payload + sizeof(*prefix));
-  uint32_t w = 0;
-  for (uint32_t i = 0; i < count && w < active; ++i) {
-    if (!wps[i].installed) continue;
-    entries[w].address = wps[i].address;
-    entries[w].length  = wps[i].length;
-    entries[w].type    = wps[i].type;
-    entries[w].slot    = wps[i].slot;
-    entries[w].flags   = 1U;  /* installed */
-    ++w;
-  }
-
-  int rc = send_response(fd, req, MEMDBG_OK, payload, payload_len);
-  free(payload);
-  return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-}
-
-/* ---- Debugger batch clear ---- */
-
-static memdbg_status_t handle_debug_clear_all_breakpoints(
-    socket_t fd, const memdbg_packet_header_t *req) {
-  uint32_t cleared = 0;
-  memdbg_status_t st = memdbg_debugger_clear_all_breakpoints(&cleared);
-  memdbg_debug_clear_all_response_t resp;
-  resp.cleared = cleared;
-  resp.reserved = 0;
-  return send_response(fd, req, st, &resp, sizeof(resp)) == 0 ? MEMDBG_OK
-                                                               : MEMDBG_ERR_NET;
-}
-
-static memdbg_status_t handle_debug_clear_all_watchpoints(
-    socket_t fd, const memdbg_packet_header_t *req) {
-  uint32_t cleared = 0;
-  memdbg_status_t st = memdbg_debugger_clear_all_watchpoints(&cleared);
-  memdbg_debug_clear_all_response_t resp;
-  resp.cleared = cleared;
-  resp.reserved = 0;
-  return send_response(fd, req, st, &resp, sizeof(resp)) == 0 ? MEMDBG_OK
-                                                               : MEMDBG_ERR_NET;
-}
-
 /* ---- TELEMETRY ---- */
 
 static memdbg_status_t handle_telemetry(socket_t fd, const memdbg_packet_header_t *req) {
@@ -1176,28 +859,28 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PROCESS_STOP:       return handle_process_control(fd, req, body, req->length, 1U);
   case MEMDBG_CMD_PROCESS_CONTINUE:   return handle_process_control(fd, req, body, req->length, 2U);
   case MEMDBG_CMD_PROCESS_KILL:       return handle_process_control(fd, req, body, req->length, 3U);
-  case MEMDBG_CMD_DEBUG_ATTACH:       return handle_debug_attach(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_DETACH:       return handle_debug_detach(fd, req);
-  case MEMDBG_CMD_DEBUG_STOP:         return handle_debug_stop(fd, req);
-  case MEMDBG_CMD_DEBUG_CONTINUE:     return handle_debug_continue(fd, req);
-  case MEMDBG_CMD_DEBUG_STEP:         return handle_debug_step(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_GET_THREADS:  return handle_debug_get_threads(fd, req);
-  case MEMDBG_CMD_DEBUG_GET_REGS:     return handle_debug_get_regs(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_SET_REGS:     return handle_debug_set_regs(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_GET_DBREGS:   return handle_debug_get_dbregs(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_SET_DBREGS:   return handle_debug_set_dbregs(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_SET_BREAKPOINT: return handle_debug_set_breakpoint(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_SET_BREAKPOINT_COND: return handle_debug_set_breakpoint_cond(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_CLEAR_BREAKPOINT: return handle_debug_clear_breakpoint(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_SET_WATCHPOINT: return handle_debug_set_watchpoint(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_CLEAR_WATCHPOINT: return handle_debug_clear_watchpoint(fd, req, body, req->length);
-  case MEMDBG_CMD_DEBUG_SUSPEND_THREAD: return handle_debug_thread_control(fd, req, body, req->length, true);
-  case MEMDBG_CMD_DEBUG_RESUME_THREAD:  return handle_debug_thread_control(fd, req, body, req->length, false);
-  case MEMDBG_CMD_DEBUG_POLL_EVENTS:    return handle_debug_poll_events(fd, req);
-  case MEMDBG_CMD_DEBUG_GET_BREAKPOINTS: return handle_debug_get_breakpoints(fd, req);
-  case MEMDBG_CMD_DEBUG_GET_WATCHPOINTS: return handle_debug_get_watchpoints(fd, req);
-  case MEMDBG_CMD_DEBUG_CLEAR_ALL_BREAKPOINTS: return handle_debug_clear_all_breakpoints(fd, req);
-  case MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS:  return handle_debug_clear_all_watchpoints(fd, req);
+  case MEMDBG_CMD_DEBUG_ATTACH:       return handle_debug_attach(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_DETACH:       return handle_debug_detach(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_STOP:         return handle_debug_stop(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_CONTINUE:     return handle_debug_continue(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_STEP:         return handle_debug_step(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_GET_THREADS:  return handle_debug_get_threads(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_GET_REGS:     return handle_debug_get_regs(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_SET_REGS:     return handle_debug_set_regs(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_GET_DBREGS:   return handle_debug_get_dbregs(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_SET_DBREGS:   return handle_debug_set_dbregs(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_SET_BREAKPOINT: return handle_debug_set_breakpoint(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_SET_BREAKPOINT_COND: return handle_debug_set_breakpoint_cond(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_CLEAR_BREAKPOINT: return handle_debug_clear_breakpoint(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_SET_WATCHPOINT: return handle_debug_set_watchpoint(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_CLEAR_WATCHPOINT: return handle_debug_clear_watchpoint(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_SUSPEND_THREAD: return handle_debug_thread_control(fd, req, body, req->length, true, send_response);
+  case MEMDBG_CMD_DEBUG_RESUME_THREAD:  return handle_debug_thread_control(fd, req, body, req->length, false, send_response);
+  case MEMDBG_CMD_DEBUG_POLL_EVENTS:    return handle_debug_poll_events(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_GET_BREAKPOINTS: return handle_debug_get_breakpoints(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_GET_WATCHPOINTS: return handle_debug_get_watchpoints(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_CLEAR_ALL_BREAKPOINTS: return handle_debug_clear_all_breakpoints(fd, req, send_response);
+  case MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS:  return handle_debug_clear_all_watchpoints(fd, req, send_response);
   case MEMDBG_CMD_TELEMETRY:          return handle_telemetry(fd, req);
   case MEMDBG_CMD_SHUTDOWN:
     memdbg_daemon_request_stop();

@@ -145,7 +145,20 @@ void CrashLogger::capture_console_lines(const std::vector<std::string> &lines,
   ring_flush();
 }
 
-/* ---- Signal handler (async-signal-safe) ---- */
+/* ---- Signal handler (async-signal-safe) ----
+ *
+ * This handler is carefully written to use only async-signal-safe functions:
+ *   - std::snprintf() — POSIX-safe (no malloc)
+ *   - std::time()     — POSIX-safe, returns epoch seconds
+ *   - ::write()       — POSIX async-signal-safe
+ *   - ::fsync()       — POSIX async-signal-safe
+ *   - ::close()       — POSIX async-signal-safe
+ *   - _exit()          — POSIX async-signal-safe
+ *
+ * std::localtime IS avoided because it may call malloc internally.
+ * The ring buffer is always empty when the signal fires because log()
+ * flushes entries immediately, so no ring_flush() call is needed here.
+ * SA_RESETHAND ensures the default handler runs if we somehow return. */
 
 void CrashLogger::signal_handler(int signum) {
   CrashLogger *instance = s_instance;

@@ -691,8 +691,6 @@
   "taskmgr.process_continued": "Processo continuado:",
   "taskmgr.kill_process": "Matar Processo",
   "taskmgr.process_killed": "Processo morto:",
-"taskmgr.kill_process": "placeholder",
-"taskmgr.process_killed": "placeholder"
   "taskmgr.processes_refreshed": "Lista de processos atualizada",
   "taskmgr.col_pid": "PID",
   "taskmgr.col_name": "Nome",
@@ -725,5 +723,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "Limpar todos os breakpoints? Isso não pode ser desfeito.",
-  "debugger.confirm_clear_wp": "Limpar todos os watchpoints? Isso não pode ser desfeito."
+  "debugger.confirm_clear_wp": "Limpar todos os watchpoints? Isso não pode ser desfeito.",
+  "debugger.confirm_detach": "Desanexar irá limpar todos os breakpoints e watchpoints. Continuar?",
+  "debugger.confirm_remove_bp": "Remover este breakpoint?",
+  "debugger.confirm_remove_wp": "Remover este watchpoint?"
 }

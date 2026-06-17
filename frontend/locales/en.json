@@ -752,5 +752,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "Clear all breakpoints? This cannot be undone.",
-  "debugger.confirm_clear_wp": "Clear all watchpoints? This cannot be undone."
+  "debugger.confirm_clear_wp": "Clear all watchpoints? This cannot be undone.",
+  "debugger.confirm_detach": "Detach will clear all breakpoints and watchpoints. Continue?",
+  "debugger.confirm_remove_bp": "Remove this breakpoint?",
+  "debugger.confirm_remove_wp": "Remove this watchpoint?"
 }

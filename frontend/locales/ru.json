@@ -718,8 +718,6 @@
   "taskmgr.process_continued": "Процесс продолжен:",
   "taskmgr.kill_process": "Завершить процесс",
   "taskmgr.process_killed": "Процесс завершён:",
-"taskmgr.kill_process": "placeholder",
-"taskmgr.process_killed": "placeholder"
   "taskmgr.processes_refreshed": "Список процессов обновлён",
   "taskmgr.col_pid": "PID",
   "taskmgr.col_name": "Имя",
@@ -752,5 +750,8 @@
   "debugger.cond_op": "Op",
   "debugger.cond_val": "Val",
   "debugger.confirm_clear_bp": "Удалить все точки останова? Это необратимо.",
-  "debugger.confirm_clear_wp": "Удалить все точки наблюдения? Это необратимо."
+  "debugger.confirm_clear_wp": "Удалить все точки наблюдения? Это необратимо.",
+  "debugger.confirm_detach": "Отсоединение очистит все точки останова и наблюдения. Продолжить?",
+  "debugger.confirm_remove_bp": "Удалить эту точку останова?",
+  "debugger.confirm_remove_wp": "Удалить эту точку наблюдения?"
 }
