@@ -67,15 +67,17 @@ static ImTextureID texture_id(GLuint texture) {
 static void init_executable_dir(const char *argv0) {
   if (argv0 == nullptr || argv0[0] == '\0') return;
 
-  std::error_code ec;
-  std::filesystem::path path(argv0);
-  if (path.is_relative()) {
-    path = std::filesystem::current_path(ec) / path;
-    ec.clear();
-  }
-  const std::filesystem::path canonical = std::filesystem::weakly_canonical(path, ec);
-  if (!ec && !canonical.empty()) path = canonical;
-  if (path.has_parent_path()) s_executable_dir = path.parent_path();
+  try {
+    std::error_code ec;
+    std::filesystem::path path(argv0);
+    if (path.is_relative()) {
+      path = std::filesystem::current_path(ec) / path;
+      if (ec) { path = std::filesystem::path(argv0); ec.clear(); }
+    }
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(path, ec);
+    if (!ec && !canonical.empty()) path = canonical;
+    if (path.has_parent_path()) s_executable_dir = path.parent_path();
+  } catch (...) { /* argv0 parsing is best-effort */ }
 }
 
 #if !defined(__APPLE__)
@@ -199,20 +201,23 @@ static void set_window_icon(GLFWwindow *window) {
 #else
   if (window == nullptr) return;
 
-  const std::filesystem::path path = find_asset_path("assets/app-icon.png");
-  int width = 0, height = 0, channels = 0;
-  unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
-  if (pixels == nullptr || width <= 0 || height <= 0) {
-    stbi_image_free(pixels);
-    return;
-  }
+  try {
+    const std::filesystem::path path = find_asset_path("assets/app-icon.png");
+    if (path.empty()) return;
+    int width = 0, height = 0, channels = 0;
+    unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
+    if (pixels == nullptr || width <= 0 || height <= 0) {
+      stbi_image_free(pixels);
+      return;
+    }
 
-  GLFWimage image{};
-  image.width = width;
-  image.height = height;
-  image.pixels = pixels;
-  glfwSetWindowIcon(window, 1, &image);
-  stbi_image_free(pixels);
+    GLFWimage image{};
+    image.width = width;
+    image.height = height;
+    image.pixels = pixels;
+    glfwSetWindowIcon(window, 1, &image);
+    stbi_image_free(pixels);
+  } catch (...) { /* icon load is non-fatal */ }
 #endif
 }
 
@@ -1337,9 +1342,13 @@ int run_frontend(int, char **argv) {
   AppState state;
 
   // Open crash logger in the executable directory
-  {
-    std::filesystem::path log_path = s_executable_dir / "memdbg_crash.log";
+  try {
+    std::filesystem::path log_path = s_executable_dir.empty()
+        ? std::filesystem::path("memdbg_crash.log")
+        : s_executable_dir / "memdbg_crash.log";
     state.crash_logger.open(log_path.string().c_str());
+  } catch (...) {
+    // crash logger failure is non-fatal
   }
 
   {
@@ -1383,8 +1392,11 @@ int run_frontend(int, char **argv) {
     state.language = static_cast<int>(detected);
   }
   github_profile_start(state.github_profile);
-  std::string udp_error;
-  if (!ensure_udp_listener(state, udp_error)) set_status(state, "UDP: "+udp_error);
+  {
+    std::string udp_error;
+    if (!ensure_udp_listener(state, udp_error))
+      set_status(state, "UDP: " + udp_error);
+  }
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("startup", "MemDBG frontend started");
