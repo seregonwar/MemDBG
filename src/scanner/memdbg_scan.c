@@ -515,17 +515,12 @@ static void *parallel_worker_thread(void *arg) {
     return NULL;
   }
 
-  /* Per-thread result builder */
+  /* Per-thread result builder — start small and let scan_builder_append
+     grow via incremental realloc (avoids worst-case N*max_results pre-alloc). */
   scan_builder_t builder;
   builder.result       = &w->result;
   builder.max_results  = w->max_results;
-  builder.capacity     = 0U;
-
-  if (scan_builder_prealloc(&builder) != MEMDBG_OK) {
-    free(buffer);
-    w->status = MEMDBG_ERR_NOMEM;
-    return NULL;
-  }
+  builder.capacity     = 0U;  /* first append allocates MEMDBG_SCAN_INITIAL_CAPACITY */
 
   for (size_t i = w->map_start; i < w->map_end && !w->result.truncated; ++i) {
     const memdbg_map_entry_t *map = &w->maps[i];
@@ -564,12 +559,13 @@ static void *parallel_worker_thread(void *arg) {
 
 /* ---- Result merge helper ----
  *
- * Copies entries from per-thread result buffers into `out`, respecting
- * max_results.  Sets `out->truncated` if any thread was truncated. */
+ * Copies entries from per-thread result buffers directly into `out`,
+ * which is already pre-allocated at max_results.  Sets `out->truncated`
+ * if any thread was truncated.  No intermediate allocation. */
 
 static memdbg_status_t merge_scan_results(
     parallel_worker_t *workers, size_t num_workers,
-    memdbg_scan_result_t *out) {
+    memdbg_scan_result_t *out, size_t max_results) {
   size_t total_count = 0U;
   bool any_truncated = false;
 
@@ -582,34 +578,25 @@ static memdbg_status_t merge_scan_results(
     out->regions_scanned += workers[w].regions_scanned;
   }
 
-  /* Clamp to max_results */
-  if (total_count > out->count) {
-    total_count = out->count;
+  /* Clamp to max_results. */
+  if (total_count > max_results) {
+    total_count = max_results;
     any_truncated = true;
   }
 
   if (total_count == 0U) { out->count = 0U; return MEMDBG_OK; }
 
-  /* Allocate merge buffer */
-  memdbg_scan_result_entry_t *merged =
-      (memdbg_scan_result_entry_t *)malloc(
-          total_count * sizeof(memdbg_scan_result_entry_t));
-  if (merged == NULL) return MEMDBG_ERR_NOMEM;
-
+  /* Copy directly into out->entries (already pre-allocated at max_results). */
   size_t pos = 0U;
   for (size_t w = 0U; w < num_workers && pos < total_count; ++w) {
     size_t wc = workers[w].result.count;
     if (wc == 0U) continue;
     if (pos + wc > total_count) wc = total_count - pos;
-    memcpy(merged + pos, workers[w].result.entries,
+    memcpy(out->entries + pos, workers[w].result.entries,
            wc * sizeof(memdbg_scan_result_entry_t));
     pos += wc;
   }
 
-  /* Replace out->entries with merged buffer.  out was pre-allocated
-     by scan_builder_prealloc, so we free that allocation first. */
-  free(out->entries);
-  out->entries   = merged;
   out->count     = total_count;
   out->truncated = any_truncated;
   return MEMDBG_OK;
@@ -667,19 +654,27 @@ static memdbg_status_t scan_maps_parallel(
     free(workers);
     return MEMDBG_ERR_NOMEM;
   }
-  out->count = max_results; /* capacity marker for merge_scan_results */
+  out->count = 0U;
 
-  /* Partition: collect qualifying map indices, then slice. */
-  size_t *eff_indices = (size_t *)malloc(
-      effective_maps * sizeof(size_t));
-  if (eff_indices == NULL) {
-    free(out->entries);
-    free(workers);
-    return MEMDBG_ERR_NOMEM;
-  }
+  /* Partition: collect qualifying map indices + byte sizes for
+     size-weighted distribution.  Each thread gets ~equal scan bytes
+     instead of ~equal map count, so large maps don't starve workers.
+     Skip allocation for single-thread (the worker re-filters anyway). */
+  if (num_threads > 1U) {
+    size_t *eff_indices = (size_t *)malloc(
+        effective_maps * sizeof(size_t));
+    uint64_t *eff_bytes = (uint64_t *)malloc(
+        effective_maps * sizeof(uint64_t));
+    if (eff_indices == NULL || eff_bytes == NULL) {
+      free(eff_indices);
+      free(eff_bytes);
+      free(out->entries);
+      free(workers);
+      return MEMDBG_ERR_NOMEM;
+    }
 
-  {
     size_t ei = 0U;
+    uint64_t total_bytes = 0U;
     for (size_t i = 0U; i < map_count; ++i) {
       const memdbg_map_entry_t *map = &maps[i];
       if ((map->protection & prot_mask) != prot_mask ||
@@ -689,28 +684,42 @@ static memdbg_status_t scan_maps_parallel(
       if (start_filter != 0U && ms < start_filter) ms = start_filter;
       if (end_filter   != 0U && me > end_filter)   me = end_filter;
       if (me <= ms) continue;
-      if ((uint64_t)(me - ms) < (uint64_t)min_map_len) continue;
-      eff_indices[ei++] = i;
+      uint64_t mbytes = me - ms;
+      if (mbytes < (uint64_t)min_map_len) continue;
+      eff_indices[ei] = i;
+      eff_bytes[ei]   = mbytes;
+      total_bytes    += mbytes;
+      ++ei;
     }
-  }
 
-  for (size_t t = 0U; t < num_threads; ++t) {
-    size_t chunk = effective_maps / num_threads;
-    size_t rem   = (effective_maps % num_threads);
-    size_t start_idx = t * chunk + (t < rem ? t : rem);
-    size_t extra     = (t < rem ? 1U : 0U);
-    workers[t].map_start = (start_idx < effective_maps)
-        ? eff_indices[start_idx] : map_count;
-    workers[t].map_end   = (start_idx + chunk + extra <= effective_maps)
-        ? ((start_idx + chunk + extra < effective_maps)
-           ? eff_indices[start_idx + chunk + extra] : map_count)
-        : workers[t].map_start;
-  }
+    uint64_t bytes_per_thread = total_bytes / (uint64_t)num_threads;
+    if (bytes_per_thread == 0U) bytes_per_thread = 1U;
 
-  free(eff_indices);
+    size_t t = 0U;
+    uint64_t t_bytes = 0U;
+    workers[0].map_start = eff_indices[0];
 
-  /* Ensure at least one map per thread and fill gaps for single-thread. */
-  if (num_threads == 1U) {
+    for (size_t i = 0U; i < effective_maps; ++i) {
+      if (t + 1U < num_threads &&
+          t_bytes + eff_bytes[i] > bytes_per_thread && t_bytes > 0U) {
+        workers[t].map_end = eff_indices[i];
+        ++t;
+        workers[t].map_start = eff_indices[i];
+        t_bytes = 0U;
+      }
+      t_bytes += eff_bytes[i];
+    }
+    workers[t].map_end = map_count;
+
+    /* Fill any unused workers with empty ranges. */
+    for (size_t u = t + 1U; u < num_threads; ++u) {
+      workers[u].map_start = map_count;
+      workers[u].map_end   = map_count;
+    }
+
+    free(eff_bytes);
+    free(eff_indices);
+  } else {
     workers[0].map_start = 0U;
     workers[0].map_end   = map_count;
   }
@@ -756,7 +765,7 @@ static memdbg_status_t scan_maps_parallel(
   /* Merge results */
   {
     memdbg_status_t merge_st =
-        merge_scan_results(workers, num_threads, out);
+        merge_scan_results(workers, num_threads, out, max_results);
     memdbg_status_t first_err = MEMDBG_OK;
 
     for (size_t t = 0U; t < num_threads; ++t) {

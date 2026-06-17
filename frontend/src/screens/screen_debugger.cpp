@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -191,31 +192,23 @@ void draw_debugger(AppState &state, ImVec2 avail) {
         }
       }
     } else {
+      static bool skip_detach = false;
       if (ui::danger_button(locale::tr("debugger.detach"), ImVec2(100, 0))) {
         ImGui::OpenPopup("ConfirmDetach");
       }
-      if (ImGui::BeginPopupModal("ConfirmDetach", nullptr,
-                                 ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("%s", locale::tr("debugger.confirm_detach"));
-        ImGui::Spacing();
-        if (ui::danger_button(locale::tr("common.yes"), ImVec2(80, 0))) {
-          if (state.client.debug_detach()) {
-            ds.attached = false;
-            ds.stopped = false;
-            ds.pid = 0;
-            ds.selected_lwp = 0;
-            ds.threads.clear();
-            set_status(state, locale::tr("debugger.detached"));
-          } else {
-            set_status(state, "Detach: " + state.client.last_error());
-          }
-          ImGui::CloseCurrentPopup();
+      if (ui::confirm_modal("ConfirmDetach",
+                            locale::tr("debugger.confirm_detach"), nullptr,
+                            &skip_detach, true)) {
+        if (state.client.debug_detach()) {
+          ds.attached = false;
+          ds.stopped = false;
+          ds.pid = 0;
+          ds.selected_lwp = 0;
+          ds.threads.clear();
+          set_status(state, locale::tr("debugger.detached"));
+        } else {
+          set_status(state, "Detach: " + state.client.last_error());
         }
-        ImGui::SameLine();
-        if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
       }
       ImGui::SameLine();
       ImGui::TextColored(ui::colors().dim, "PID %d", ds.pid);
@@ -400,28 +393,20 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::TextColored(ui::colors().muted, "%s (%zu)",
                          locale::tr("debugger.bp_list"), ds.breakpoints.size());
       ImGui::SameLine();
+      static bool skip_clear_bp = false;
       if (ui::danger_button(locale::tr("debugger.clear_all_bp"), ImVec2(80, 0))) {
         ImGui::OpenPopup("ConfirmClearBP");
       }
-      if (ImGui::BeginPopupModal("ConfirmClearBP", nullptr,
-                                 ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("%s", locale::tr("debugger.confirm_clear_bp"));
-        ImGui::Spacing();
-        if (ui::primary_button(locale::tr("common.yes"), ImVec2(80, 0))) {
-          uint32_t cleared = 0;
-          if (state.client.debug_clear_all_breakpoints(cleared)) {
-            refresh_breakpoints(state);
-            set_status(state, "Cleared " + std::to_string(cleared) + " breakpoint(s)");
-          } else {
-            set_status(state, "Clear All BP: " + state.client.last_error());
-          }
-          ImGui::CloseCurrentPopup();
+      if (ui::confirm_modal("ConfirmClearBP",
+                            locale::tr("debugger.confirm_clear_bp"), nullptr,
+                            &skip_clear_bp, true)) {
+        uint32_t cleared = 0;
+        if (state.client.debug_clear_all_breakpoints(cleared)) {
+          refresh_breakpoints(state);
+          set_status(state, "Cleared " + std::to_string(cleared) + " breakpoint(s)");
+        } else {
+          set_status(state, "Clear All BP: " + state.client.last_error());
         }
-        ImGui::SameLine();
-        if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
       }
       if (ImGui::BeginTable("##bptable", 4,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
@@ -449,27 +434,20 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           }
           ImGui::TableSetColumnIndex(3);
           ImGui::PushID((int)i);
+          static bool skip_remove_bp = false;
           if (ui::danger_button(locale::tr("debugger.remove_bp"), ImVec2(50, 0))) {
             ImGui::OpenPopup("ConfirmRemoveBP");
           }
-          if (ImGui::BeginPopupModal("ConfirmRemoveBP", nullptr,
-                                     ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("%s\n0x%016" PRIX64,
-                       locale::tr("debugger.confirm_remove_bp"), bp.address);
-            ImGui::Spacing();
-            if (ui::danger_button(locale::tr("common.yes"), ImVec2(80, 0))) {
-              if (state.client.debug_clear_breakpoint(bp.address)) {
-                refresh_breakpoints(state);
-              } else {
-                set_status(state, "Clear BP: " + state.client.last_error());
-              }
-              ImGui::CloseCurrentPopup();
+          char bp_detail[64];
+          std::snprintf(bp_detail, sizeof(bp_detail), "0x%016" PRIX64, bp.address);
+          if (ui::confirm_modal("ConfirmRemoveBP",
+                                locale::tr("debugger.confirm_remove_bp"),
+                                bp_detail, &skip_remove_bp, true)) {
+            if (state.client.debug_clear_breakpoint(bp.address)) {
+              refresh_breakpoints(state);
+            } else {
+              set_status(state, "Clear BP: " + state.client.last_error());
             }
-            ImGui::SameLine();
-            if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
-              ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
           }
           ImGui::PopID();
         }
@@ -512,28 +490,20 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::TextColored(ui::colors().muted, "%s (%zu)",
                          locale::tr("debugger.wp_list"), ds.watchpoints.size());
       ImGui::SameLine();
+      static bool skip_clear_wp = false;
       if (ui::danger_button(locale::tr("debugger.clear_all_wp"), ImVec2(80, 0))) {
         ImGui::OpenPopup("ConfirmClearWP");
       }
-      if (ImGui::BeginPopupModal("ConfirmClearWP", nullptr,
-                                 ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("%s", locale::tr("debugger.confirm_clear_wp"));
-        ImGui::Spacing();
-        if (ui::primary_button(locale::tr("common.yes"), ImVec2(80, 0))) {
-          uint32_t cleared = 0;
-          if (state.client.debug_clear_all_watchpoints(cleared)) {
-            refresh_watchpoints(state);
-            set_status(state, "Cleared " + std::to_string(cleared) + " watchpoint(s)");
-          } else {
-            set_status(state, "Clear All WP: " + state.client.last_error());
-          }
-          ImGui::CloseCurrentPopup();
+      if (ui::confirm_modal("ConfirmClearWP",
+                            locale::tr("debugger.confirm_clear_wp"), nullptr,
+                            &skip_clear_wp, true)) {
+        uint32_t cleared = 0;
+        if (state.client.debug_clear_all_watchpoints(cleared)) {
+          refresh_watchpoints(state);
+          set_status(state, "Cleared " + std::to_string(cleared) + " watchpoint(s)");
+        } else {
+          set_status(state, "Clear All WP: " + state.client.last_error());
         }
-        ImGui::SameLine();
-        if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
       }
       if (ImGui::BeginTable("##wptable", 5,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
@@ -558,27 +528,20 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           ImGui::Text("%u", wp.slot);
           ImGui::TableSetColumnIndex(4);
           ImGui::PushID((int)i);
+          static bool skip_remove_wp = false;
           if (ui::danger_button(locale::tr("debugger.remove_wp"), ImVec2(50, 0))) {
             ImGui::OpenPopup("ConfirmRemoveWP");
           }
-          if (ImGui::BeginPopupModal("ConfirmRemoveWP", nullptr,
-                                     ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("%s\n0x%016" PRIX64,
-                       locale::tr("debugger.confirm_remove_wp"), wp.address);
-            ImGui::Spacing();
-            if (ui::danger_button(locale::tr("common.yes"), ImVec2(80, 0))) {
-              if (state.client.debug_clear_watchpoint(wp.address)) {
-                refresh_watchpoints(state);
-              } else {
-                set_status(state, "Clear WP: " + state.client.last_error());
-              }
-              ImGui::CloseCurrentPopup();
+          char wp_detail[64];
+          std::snprintf(wp_detail, sizeof(wp_detail), "0x%016" PRIX64, wp.address);
+          if (ui::confirm_modal("ConfirmRemoveWP",
+                                locale::tr("debugger.confirm_remove_wp"),
+                                wp_detail, &skip_remove_wp, true)) {
+            if (state.client.debug_clear_watchpoint(wp.address)) {
+              refresh_watchpoints(state);
+            } else {
+              set_status(state, "Clear WP: " + state.client.last_error());
             }
-            ImGui::SameLine();
-            if (ui::soft_button(locale::tr("common.no"), ImVec2(80, 0))) {
-              ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
           }
           ImGui::PopID();
         }

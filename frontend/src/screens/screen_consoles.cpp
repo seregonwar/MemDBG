@@ -6,6 +6,7 @@
 
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
+#include "confirm_modal.hpp"
 
 namespace memdbg::frontend {
 
@@ -26,6 +27,12 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     }
   } else {
     if (ui::danger_button(locale::tr("consoles.disconnect"), ui::full_button(42))) {
+      ImGui::OpenPopup("ConfirmDisconnectConsoles");
+    }
+    static bool skip_disconnect_c = false;
+    if (ui::confirm_modal("ConfirmDisconnectConsoles",
+                          locale::tr("consoles.confirm_disconnect"), nullptr,
+                          &skip_disconnect_c, true)) {
       disconnect_console(state);
     }
   }
@@ -35,6 +42,12 @@ void draw_consoles(AppState &state, ImVec2 avail) {
       set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
     }
     if (ui::danger_button(locale::tr("consoles.shutdown_payload"), ui::full_button(40))) {
+      ImGui::OpenPopup("ConfirmShutdownPayload");
+    }
+    static bool skip_shutdown = false;
+    if (ui::confirm_modal("ConfirmShutdownPayload",
+                          locale::tr("consoles.confirm_shutdown"), nullptr,
+                          &skip_shutdown, true)) {
       set_status(state, state.client.shutdown_payload() ? "Shutdown sent" : state.client.last_error());
     }
   }

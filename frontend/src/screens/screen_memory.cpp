@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -321,8 +322,14 @@ static void draw_watchpoints(AppState &state) {
     }
     ImGui::EndTable();
   }
+  static bool skip_clear_wp = false;
   if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("memory.watchpoints.clear")).c_str(),
                         ui::full_button(34))) {
+    ImGui::OpenPopup("ConfirmClearMemWP");
+  }
+  if (ui::confirm_modal("ConfirmClearMemWP",
+                        locale::tr("memory.watchpoints.confirm_clear"), nullptr,
+                        &skip_clear_wp, true)) {
     state.watchpoints.clear();
   }
 }
@@ -496,8 +503,14 @@ static void draw_allocations(AppState &state) {
     }
     ImGui::EndTable();
   }
+  static bool skip_clear_alloc = false;
   if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("memory.allocations.clear")).c_str(),
                         ui::full_button(34))) {
+    ImGui::OpenPopup("ConfirmClearAlloc");
+  }
+  if (ui::confirm_modal("ConfirmClearAlloc",
+                        locale::tr("memory.allocations.confirm_clear"), nullptr,
+                        &skip_clear_alloc, true)) {
     state.allocations.clear();
     state.allocation_findings.clear();
     state.allocation_alerts.clear();
