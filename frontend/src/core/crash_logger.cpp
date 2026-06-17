@@ -161,11 +161,13 @@ void CrashLogger::capture_console_lines(const std::vector<std::string> &lines,
  * SA_RESETHAND ensures the default handler runs if we somehow return. */
 
 void CrashLogger::signal_handler(int signum) {
+#if defined(_WIN32)
+  (void)signum;
+  return;
+#else
   CrashLogger *instance = s_instance;
   if (instance == nullptr) return;
 
-  // Access file_ without mutex — safe in signal context since
-  // log() flushes every entry immediately, so ring is always empty.
   auto *fp = static_cast<std::FILE *>(instance->file_);
   if (fp == nullptr) return;
 
@@ -212,6 +214,7 @@ void CrashLogger::signal_handler(int signum) {
   // SA_RESETHAND ensures if we return, the default handler runs.
   // _exit() is async-signal-safe and terminates immediately.
   _exit(128 + signum);
+#endif
 }
 
 /* ---- Ring buffer internals ---- */

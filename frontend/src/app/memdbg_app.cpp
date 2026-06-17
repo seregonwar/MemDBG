@@ -1284,7 +1284,9 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
 
 int run_frontend(int, char **argv) {
   init_executable_dir(argv != nullptr ? argv[0] : nullptr);
+#if !defined(_WIN32)
   signal(SIGPIPE, SIG_IGN);
+#endif
   if (!glfwInit()) return 1;
 
   glfwWindowHintString(GLFW_COCOA_FRAME_NAME, "MemDBG");

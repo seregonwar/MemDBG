@@ -129,8 +129,8 @@ static void refresh_bpwp_lists(AppState &state) {
   refresh_watchpoints(state);
 }
 
-static void reg_input(AppState &state, const char *label, int64_t &value,
-                      bool hex = true) {
+static int64_t reg_input(AppState &state, const char *label, int64_t value,
+                        bool hex = true) {
   (void)state;
   char buf[32];
   if (hex)
@@ -146,6 +146,7 @@ static void reg_input(AppState &state, const char *label, int64_t &value,
     } catch (...) {
     }
   }
+  return value;
 }
 
 } // namespace
@@ -327,41 +328,41 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::SetTooltip("%s", locale::tr("debugger.auto_refresh_on_stop_tip"));
 
     auto &r = ds.regs.regs;
-    reg_input(state, "RAX", r.r_rax);
+    r.r_rax = reg_input(state, "RAX", r.r_rax);
     ImGui::SameLine();
-    reg_input(state, "RBX", r.r_rbx);
+    r.r_rbx = reg_input(state, "RBX", r.r_rbx);
     ImGui::SameLine();
-    reg_input(state, "RCX", r.r_rcx);
+    r.r_rcx = reg_input(state, "RCX", r.r_rcx);
     ImGui::SameLine();
-    reg_input(state, "RDX", r.r_rdx);
+    r.r_rdx = reg_input(state, "RDX", r.r_rdx);
 
-    reg_input(state, "RSI", r.r_rsi);
+    r.r_rsi = reg_input(state, "RSI", r.r_rsi);
     ImGui::SameLine();
-    reg_input(state, "RDI", r.r_rdi);
+    r.r_rdi = reg_input(state, "RDI", r.r_rdi);
     ImGui::SameLine();
-    reg_input(state, "RBP", r.r_rbp);
+    r.r_rbp = reg_input(state, "RBP", r.r_rbp);
     ImGui::SameLine();
-    reg_input(state, "RSP", r.r_rsp);
+    r.r_rsp = reg_input(state, "RSP", r.r_rsp);
 
-    reg_input(state, "R8 ", r.r_r8);
+    r.r_r8  = reg_input(state, "R8 ", r.r_r8);
     ImGui::SameLine();
-    reg_input(state, "R9 ", r.r_r9);
+    r.r_r9  = reg_input(state, "R9 ", r.r_r9);
     ImGui::SameLine();
-    reg_input(state, "R10", r.r_r10);
+    r.r_r10 = reg_input(state, "R10", r.r_r10);
     ImGui::SameLine();
-    reg_input(state, "R11", r.r_r11);
+    r.r_r11 = reg_input(state, "R11", r.r_r11);
 
-    reg_input(state, "R12", r.r_r12);
+    r.r_r12 = reg_input(state, "R12", r.r_r12);
     ImGui::SameLine();
-    reg_input(state, "R13", r.r_r13);
+    r.r_r13 = reg_input(state, "R13", r.r_r13);
     ImGui::SameLine();
-    reg_input(state, "R14", r.r_r14);
+    r.r_r14 = reg_input(state, "R14", r.r_r14);
     ImGui::SameLine();
-    reg_input(state, "R15", r.r_r15);
+    r.r_r15 = reg_input(state, "R15", r.r_r15);
 
-    reg_input(state, "RIP", r.r_rip);
+    r.r_rip = reg_input(state, "RIP", r.r_rip);
     ImGui::SameLine();
-    reg_input(state, "RFLAGS", r.r_rflags);
+    r.r_rflags = reg_input(state, "RFLAGS", r.r_rflags);
 
     static const char *cond_reg_names[] = {
       "None", "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
