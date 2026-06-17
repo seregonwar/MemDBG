@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 #include <cstdio>
 #include <string>
@@ -105,6 +106,12 @@ void draw_home(AppState &state, ImVec2 avail) {
     }
     ImGui::SameLine();
     if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("home.drop")).c_str(), ImVec2(120.0f * scl, 28.0f * scl))) {
+      ImGui::OpenPopup("ConfirmDisconnectHome");
+    }
+    static bool skip_disconnect_h = false;
+    if (ui::confirm_modal("ConfirmDisconnectHome",
+                          locale::tr("consoles.confirm_disconnect"), nullptr,
+                          &skip_disconnect_h, true)) {
       disconnect_console(state);
     }
   } else {

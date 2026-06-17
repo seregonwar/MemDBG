@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -403,7 +404,17 @@ static void draw_detail_panel(AppState &state, float width) {
       }
     }
     ImGui::SameLine();
+    static bool skip_kill = false;
     if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("taskmgr.kill_process")).c_str(), ImVec2(130.0f * scl, 30.0f * scl))) {
+      ImGui::OpenPopup("ConfirmKill");
+    }
+    char kill_detail[64];
+    std::snprintf(kill_detail, sizeof(kill_detail), "PID %d — %s",
+                  state.taskmgr_selected_pid,
+                  locale::tr("taskmgr.caution"));
+    if (ui::confirm_modal("ConfirmKill",
+                          locale::tr("taskmgr.confirm_kill"),
+                          kill_detail, &skip_kill, true)) {
       if (state.client.process_kill(state.taskmgr_selected_pid)) {
         set_status(state, std::string(locale::tr("taskmgr.process_killed")) + " PID " + std::to_string(state.taskmgr_selected_pid));
       } else {
