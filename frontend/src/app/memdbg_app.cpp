@@ -1286,10 +1286,20 @@ int run_frontend(int, char **argv) {
   if (monitor) glfwGetMonitorContentScale(monitor, &xscale, &yscale);
   float raw_scale = std::max(xscale, yscale);
   if (raw_scale < 1.0f) raw_scale = 1.0f;
-  // Use a gentler curve so HiDPI/Retina monitors don't blow up the UI.
-  // e.g. 2.0 monitor scale -> ~1.5 UI scale, 1.5 -> ~1.29.
-  float dpi_scale = 1.0f + (raw_scale - 1.0f) * 0.5f;
-  if (dpi_scale > 2.5f) dpi_scale = 2.5f;
+
+  // Keep the compact reference look by default (1.0x) and only nudge the
+  // scale up gently for HiDPI monitors. Large high-res screens get a small
+  // extra boost so the UI remains usable without becoming oversized.
+  float dpi_scale = 1.0f + (raw_scale - 1.0f) * 0.15f;
+  const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+  if (mode) {
+    float diag = std::sqrt(static_cast<float>(mode->width * mode->width +
+                                              mode->height * mode->height));
+    if (diag > 2200.0f) {
+      dpi_scale *= 1.0f + (diag - 2200.0f) * 0.0001f;
+    }
+  }
+  if (dpi_scale > 1.5f) dpi_scale = 1.5f;
   ui::set_dpi_scale(dpi_scale);
 #if defined(__APPLE__)
   const char *glsl_version = "#version 150";
