@@ -45,7 +45,7 @@ using memdbg::frontend::GitHubProfile;
 
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
-  Trainer, Logs, Settings, Telemetry, TaskMgr, Credits,
+  Trainer, Logs, Settings, Telemetry, TaskMgr, Debugger, Credits,
 };
 
 struct ProcessMapSummary {
@@ -575,6 +575,7 @@ inline const char *screen_title(Screen s) {
   case Screen::Logs: return "Logs"; case Screen::Settings: return "Settings";
   case Screen::Telemetry: return "Telemetry";
   case Screen::TaskMgr: return "Task Manager";
+  case Screen::Debugger: return "Debugger";
   case Screen::Credits: return "Credits";
   } return "MemDBG";
 }
@@ -593,6 +594,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::Settings: return "Configure frontend connection defaults";
   case Screen::Telemetry: return "Payload performance and runtime metrics";
   case Screen::TaskMgr: return "Real-time console process and resource monitor";
+  case Screen::Debugger: return "Attach, stop, step and manage breakpoints/watchpoints";
   case Screen::Credits: return "Project information";
   } return "";
 }
@@ -633,6 +635,7 @@ void draw_settings(AppState &state, struct ImVec2 avail);
 void draw_credits(AppState &state, struct ImVec2 avail);
 void draw_telemetry(AppState &state, struct ImVec2 avail);
 void draw_taskmgr(AppState &state, struct ImVec2 avail);
+void draw_debugger(AppState &state, struct ImVec2 avail);
 void draw_screen(AppState &state, struct ImVec2 avail);
 
 } // namespace memdbg::frontend

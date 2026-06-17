@@ -139,6 +139,60 @@ public:
                       size_t app_ver_size);
   bool process_stop(int32_t pid);
   bool process_continue(int32_t pid);
+  bool process_kill(int32_t pid);
+
+  /* ---- Debugger ---- */
+  struct DebugThreadEntry {
+    int32_t lwp = 0;
+    std::string name;
+  };
+  struct DebugRegs {
+    memdbg_debug_regs_t regs{};
+  };
+  struct DebugDbregs {
+    memdbg_debug_dbregs_t dbregs{};
+  };
+  struct DebugBreakpointEntry {
+    uint64_t address = 0;
+    uint32_t kind = 0;          /* 0 = sw, 1 = hw */
+    bool installed = false;
+    bool active = false;
+    uint32_t cond_reg = 0;      /* memdbg_bp_cond_reg_t, 0 = none */
+    uint32_t cond_op = 0;       /* memdbg_bp_cond_op_t */
+    uint64_t cond_value = 0;
+  };
+  struct DebugWatchpointEntry {
+    uint64_t address = 0;
+    uint32_t length = 0;
+    uint32_t type = 0;    /* 0=exec, 1=write, 2=read, 3=rw */
+    uint32_t slot = 0;
+    bool installed = false;
+  };
+
+  bool debug_attach(int32_t pid);
+  bool debug_detach();
+  bool debug_stop();
+  bool debug_continue();
+  bool debug_step(int32_t lwp);
+  bool debug_get_threads(std::vector<DebugThreadEntry> &out);
+  bool debug_get_regs(int32_t lwp, DebugRegs &out);
+  bool debug_set_regs(int32_t lwp, const DebugRegs &in);
+  bool debug_get_dbregs(int32_t lwp, DebugDbregs &out);
+  bool debug_set_dbregs(int32_t lwp, const DebugDbregs &in);
+  bool debug_set_breakpoint(uint64_t address, uint32_t kind);
+  bool debug_set_breakpoint_cond(uint64_t address, uint32_t kind,
+                                 uint32_t cond_reg, uint32_t cond_op,
+                                 uint64_t cond_value);
+  bool debug_clear_breakpoint(uint64_t address);
+  bool debug_set_watchpoint(uint64_t address, uint32_t length, uint32_t type);
+  bool debug_clear_watchpoint(uint64_t address);
+  bool debug_suspend_thread(int32_t lwp);
+  bool debug_resume_thread(int32_t lwp);
+  bool debug_clear_all_breakpoints(uint32_t &cleared);
+  bool debug_clear_all_watchpoints(uint32_t &cleared);
+  bool debug_get_breakpoints(std::vector<DebugBreakpointEntry> &out);
+  bool debug_get_watchpoints(std::vector<DebugWatchpointEntry> &out);
+  bool debug_poll_events(bool &stopped, int32_t &stop_lwp);
 
 private:
   bool request(uint16_t command, const void *payload, uint32_t payload_len,

@@ -403,6 +403,14 @@ static void draw_detail_panel(AppState &state, float width) {
       }
     }
     ImGui::SameLine();
+    if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("taskmgr.kill_process")).c_str(), ImVec2(130.0f * scl, 30.0f * scl))) {
+      if (state.client.process_kill(state.taskmgr_selected_pid)) {
+        set_status(state, std::string(locale::tr("taskmgr.process_killed")) + " PID " + std::to_string(state.taskmgr_selected_pid));
+      } else {
+        set_status(state, state.client.last_error());
+      }
+    }
+    ImGui::SameLine();
     ImGui::TextColored(ui::colors().warning, " ⚠ %s", locale::tr("taskmgr.caution"));
   }
 }

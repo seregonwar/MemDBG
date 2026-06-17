@@ -665,6 +665,7 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
     nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
     nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
+    nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
 
     ImGui::Dummy(ImVec2(0, 3));
     sidebar_section(locale::tr("sidebar.section.observe"));
@@ -1089,6 +1090,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
   case Screen::Logs:      draw_logs(state, avail); break;
   case Screen::Telemetry: draw_telemetry(state, avail); break;
   case Screen::TaskMgr:   draw_taskmgr(state, avail); break;
+  case Screen::Debugger:  draw_debugger(state, avail); break;
   case Screen::Settings:  draw_settings(state, avail); break;
   case Screen::Credits:   draw_credits(state, avail); break;
   }

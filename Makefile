@@ -42,7 +42,7 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e check-locales
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger check-locales
 
 all: host
 
@@ -66,7 +66,31 @@ test-process-aob-e2e: host tests/test_process_aob_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_process_aob_e2e 127.0.0.1 $$port
 
-test: test-aob-boundary test-process-aob-e2e
+test-debugger: $(BUILD_DIR)/host/debug/memdbg_debugger.o tests/test_debugger.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $< -lpthread -o $(BUILD_DIR)/test_debugger
+	@echo "--- Running Debugger test ---"
+	$(BUILD_DIR)/test_debugger
+
+test-debugger-e2e: host tests/test_debugger_e2e.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_e2e.c -o $(BUILD_DIR)/test_debugger_e2e
+	@echo "--- Running Debugger E2E test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-dbg.XXXXXX); \
+	port=19121; \
+	$(HOST_TARGET) --bind=127.0.0.1 --debug-port=$$port --udp-port=19124 --data-root=$$tmpdir --no-udp-log --no-replace-existing >$$tmpdir/payload.log 2>&1 & \
+	pid=$$!; \
+	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
+	sleep 0.6; \
+	$(BUILD_DIR)/test_debugger_e2e 127.0.0.1 $$port
+
+test-debugger-protocol: tests/test_debugger_protocol.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_protocol.c -o $(BUILD_DIR)/test_debugger_protocol
+	@echo "--- Running Debugger Protocol test ---"
+	$(BUILD_DIR)/test_debugger_protocol
+
+test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)

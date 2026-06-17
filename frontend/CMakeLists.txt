@@ -135,6 +135,7 @@ add_executable(memdbg_frontend
   src/screens/screen_taskmgr.cpp
   src/screens/screen_settings.cpp
   src/screens/screen_credits.cpp
+  src/screens/screen_debugger.cpp
 
   # trainer
   src/trainer/batchcode_parser.cpp

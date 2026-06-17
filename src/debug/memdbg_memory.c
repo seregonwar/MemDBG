@@ -11,6 +11,7 @@
 #include "memdbg/debug/memdbg_memory.h"
 
 #include "memdbg/core/memdbg_log.h"
+#include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/pal/pal_memory.h"
 #include "memdbg/privilege/privilege.h"
 
@@ -57,6 +58,10 @@ static void privilege_scope_begin(memdbg_memory_privilege_scope_t *scope,
   scope->pid = (pid_t)pid;
 
   if (!memdbg_privilege_supported()) return;
+
+  /* The debugger already elevates the target for the whole attach session;
+   * do not nest privilege changes because that would overwrite its backup. */
+  if (memdbg_debugger_is_elevated((int32_t)pid)) return;
 
   if (memdbg_privilege_elevate_target((pid_t)pid, &scope->backup) == 0) {
     scope->active = true;
