@@ -679,6 +679,279 @@ bool Client::process_continue(int32_t pid) {
   return request(MEMDBG_CMD_PROCESS_CONTINUE, &body, sizeof(body), response);
 }
 
+bool Client::process_kill(int32_t pid) {
+  memdbg_process_control_request_t body;
+  body.pid = pid;
+  body.action = 3U;
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_PROCESS_KILL, &body, sizeof(body), response);
+}
+
+bool Client::debug_attach(int32_t pid) {
+  memdbg_debug_attach_request_t body{pid, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_ATTACH, &body, sizeof(body), response);
+}
+
+bool Client::debug_detach() {
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_DETACH, nullptr, 0, response);
+}
+
+bool Client::debug_stop() {
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_STOP, nullptr, 0, response);
+}
+
+bool Client::debug_continue() {
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_CONTINUE, nullptr, 0, response);
+}
+
+bool Client::debug_step(int32_t lwp) {
+  memdbg_debug_thread_request_t body{lwp, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_STEP, &body, sizeof(body), response);
+}
+
+bool Client::debug_get_threads(std::vector<DebugThreadEntry> &out) {
+  out.clear();
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_THREADS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_threads_response_prefix_t)) {
+    set_error("short thread list response");
+    return false;
+  }
+  auto *prefix = reinterpret_cast<const memdbg_debug_threads_response_prefix_t *>(
+      response.data());
+  size_t expected = sizeof(*prefix) +
+                    prefix->count * sizeof(memdbg_debug_thread_entry_t);
+  if (response.size() < expected) {
+    set_error("truncated thread list response");
+    return false;
+  }
+  auto *entries = reinterpret_cast<const memdbg_debug_thread_entry_t *>(
+      response.data() + sizeof(*prefix));
+  out.reserve(prefix->count);
+  for (uint32_t i = 0; i < prefix->count; ++i) {
+    DebugThreadEntry e;
+    e.lwp = entries[i].lwp;
+    e.name.assign(entries[i].name, strnlen(entries[i].name, sizeof(entries[i].name)));
+    out.push_back(std::move(e));
+  }
+  return true;
+}
+
+bool Client::debug_get_regs(int32_t lwp, DebugRegs &out) {
+  memdbg_debug_thread_request_t body{lwp, 0};
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_REGS, &body, sizeof(body), response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_regs_t)) {
+    set_error("short regs response");
+    return false;
+  }
+  std::memcpy(&out.regs, response.data(), sizeof(out.regs));
+  return true;
+}
+
+bool Client::debug_set_regs(int32_t lwp, const DebugRegs &in) {
+  std::vector<uint8_t> payload(sizeof(memdbg_debug_thread_request_t) +
+                               sizeof(memdbg_debug_regs_t));
+  auto *body = reinterpret_cast<memdbg_debug_thread_request_t *>(payload.data());
+  body->pid = lwp;
+  body->lwp = lwp;
+  std::memcpy(payload.data() + sizeof(*body), &in.regs, sizeof(in.regs));
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_REGS, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::debug_get_dbregs(int32_t lwp, DebugDbregs &out) {
+  memdbg_debug_thread_request_t body{lwp, 0};
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_DBREGS, &body, sizeof(body), response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_dbregs_t)) {
+    set_error("short dbregs response");
+    return false;
+  }
+  std::memcpy(&out.dbregs, response.data(), sizeof(out.dbregs));
+  return true;
+}
+
+bool Client::debug_set_dbregs(int32_t lwp, const DebugDbregs &in) {
+  std::vector<uint8_t> payload(sizeof(memdbg_debug_thread_request_t) +
+                               sizeof(memdbg_debug_dbregs_t));
+  auto *body = reinterpret_cast<memdbg_debug_thread_request_t *>(payload.data());
+  body->pid = lwp;
+  body->lwp = lwp;
+  std::memcpy(payload.data() + sizeof(*body), &in.dbregs, sizeof(in.dbregs));
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_DBREGS, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::debug_set_breakpoint(uint64_t address, uint32_t kind) {
+  memdbg_debug_breakpoint_request_t body{address, kind, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_BREAKPOINT, &body, sizeof(body), response);
+}
+
+bool Client::debug_set_breakpoint_cond(uint64_t address, uint32_t kind,
+                                       uint32_t cond_reg, uint32_t cond_op,
+                                       uint64_t cond_value) {
+  memdbg_debug_breakpoint_cond_request_t body{address, kind, cond_reg,
+                                               cond_op, 0, cond_value};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_BREAKPOINT_COND, &body, sizeof(body),
+                 response);
+}
+
+bool Client::debug_clear_breakpoint(uint64_t address) {
+  memdbg_debug_breakpoint_request_t body{address, 0, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_CLEAR_BREAKPOINT, &body, sizeof(body), response);
+}
+
+bool Client::debug_set_watchpoint(uint64_t address, uint32_t length,
+                                  uint32_t type) {
+  memdbg_debug_watchpoint_request_t body{address, length, type};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_WATCHPOINT, &body, sizeof(body), response);
+}
+
+bool Client::debug_clear_watchpoint(uint64_t address) {
+  memdbg_debug_watchpoint_request_t body{address, 0, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_CLEAR_WATCHPOINT, &body, sizeof(body), response);
+}
+
+bool Client::debug_clear_all_breakpoints(uint32_t &cleared) {
+  cleared = 0;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_CLEAR_ALL_BREAKPOINTS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_clear_all_response_t)) {
+    set_error("short clear-all-bp response");
+    return false;
+  }
+  auto *resp = reinterpret_cast<const memdbg_debug_clear_all_response_t *>(
+      response.data());
+  cleared = resp->cleared;
+  return true;
+}
+
+bool Client::debug_clear_all_watchpoints(uint32_t &cleared) {
+  cleared = 0;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_clear_all_response_t)) {
+    set_error("short clear-all-wp response");
+    return false;
+  }
+  auto *resp = reinterpret_cast<const memdbg_debug_clear_all_response_t *>(
+      response.data());
+  cleared = resp->cleared;
+  return true;
+}
+
+bool Client::debug_suspend_thread(int32_t lwp) {
+  memdbg_debug_thread_request_t body{lwp, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SUSPEND_THREAD, &body, sizeof(body), response);
+}
+
+bool Client::debug_resume_thread(int32_t lwp) {
+  memdbg_debug_thread_request_t body{lwp, 0};
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_RESUME_THREAD, &body, sizeof(body), response);
+}
+
+bool Client::debug_get_breakpoints(std::vector<DebugBreakpointEntry> &out) {
+  out.clear();
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_BREAKPOINTS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_breakpoint_list_prefix_t)) {
+    set_error("short breakpoint list response");
+    return false;
+  }
+  auto *prefix = reinterpret_cast<const memdbg_debug_breakpoint_list_prefix_t *>(
+      response.data());
+  size_t expected = sizeof(*prefix) +
+                    prefix->count * sizeof(memdbg_debug_breakpoint_list_entry_t);
+  if (response.size() < expected) {
+    set_error("truncated breakpoint list response");
+    return false;
+  }
+  auto *entries = reinterpret_cast<const memdbg_debug_breakpoint_list_entry_t *>(
+      response.data() + sizeof(*prefix));
+  out.reserve(prefix->count);
+  for (uint32_t i = 0; i < prefix->count; ++i) {
+    DebugBreakpointEntry e;
+    e.address    = entries[i].address;
+    e.kind       = entries[i].kind;
+    e.installed  = (entries[i].flags & 1U) != 0;
+    e.active     = (entries[i].flags & 2U) != 0;
+    e.cond_reg   = entries[i].cond_reg;
+    e.cond_op    = entries[i].cond_op;
+    e.cond_value = entries[i].cond_value;
+    out.push_back(e);
+  }
+  return true;
+}
+
+bool Client::debug_get_watchpoints(std::vector<DebugWatchpointEntry> &out) {
+  out.clear();
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_WATCHPOINTS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_watchpoint_list_prefix_t)) {
+    set_error("short watchpoint list response");
+    return false;
+  }
+  auto *prefix = reinterpret_cast<const memdbg_debug_watchpoint_list_prefix_t *>(
+      response.data());
+  size_t expected = sizeof(*prefix) +
+                    prefix->count * sizeof(memdbg_debug_watchpoint_list_entry_t);
+  if (response.size() < expected) {
+    set_error("truncated watchpoint list response");
+    return false;
+  }
+  auto *entries = reinterpret_cast<const memdbg_debug_watchpoint_list_entry_t *>(
+      response.data() + sizeof(*prefix));
+  out.reserve(prefix->count);
+  for (uint32_t i = 0; i < prefix->count; ++i) {
+    DebugWatchpointEntry e;
+    e.address   = entries[i].address;
+    e.length    = entries[i].length;
+    e.type      = entries[i].type;
+    e.slot      = entries[i].slot;
+    e.installed = (entries[i].flags != 0);
+    out.push_back(e);
+  }
+  return true;
+}
+
+bool Client::debug_poll_events(bool &stopped, int32_t &stop_lwp) {
+  stopped = false;
+  stop_lwp = 0;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_POLL_EVENTS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_poll_response_t)) {
+    set_error("short poll response");
+    return false;
+  }
+  auto *resp = reinterpret_cast<const memdbg_debug_poll_response_t *>(response.data());
+  stopped = resp->stopped != 0;
+  stop_lwp = resp->stop_lwp;
+  return true;
+}
+
 bool Client::request(uint16_t command, const void *payload,
                      uint32_t payload_len, std::vector<uint8_t> &response) {
   std::lock_guard<std::mutex> lock(io_mutex_);
