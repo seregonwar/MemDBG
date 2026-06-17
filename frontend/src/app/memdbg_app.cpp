@@ -1284,9 +1284,12 @@ int run_frontend(int, char **argv) {
   float xscale = 1.0f, yscale = 1.0f;
   GLFWmonitor *monitor = glfwGetPrimaryMonitor();
   if (monitor) glfwGetMonitorContentScale(monitor, &xscale, &yscale);
-  float dpi_scale = std::max(xscale, yscale);
-  if (dpi_scale < 1.0f) dpi_scale = 1.0f;
-  if (dpi_scale > 4.0f) dpi_scale = 4.0f;
+  float raw_scale = std::max(xscale, yscale);
+  if (raw_scale < 1.0f) raw_scale = 1.0f;
+  // Use a gentler curve so HiDPI/Retina monitors don't blow up the UI.
+  // e.g. 2.0 monitor scale -> ~1.5 UI scale, 1.5 -> ~1.29.
+  float dpi_scale = 1.0f + (raw_scale - 1.0f) * 0.5f;
+  if (dpi_scale > 2.5f) dpi_scale = 2.5f;
   ui::set_dpi_scale(dpi_scale);
 #if defined(__APPLE__)
   const char *glsl_version = "#version 150";
