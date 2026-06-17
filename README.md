@@ -58,6 +58,8 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 - **Full localization** out of the box (8 languages), with a CI check that enforces locale completeness on every build.
 - **Embeddable library target** (`libmemdbg.a`) for integrating the payload core into other tools.
 - **Zero-config discovery** — payloads respond to UDP broadcasts so the frontend can auto-populate the console list without hardcoding a debug port.
+- **Crash-resilient logging** — ring-buffered event log with signal-safe crash handlers; survives `SIGSEGV`/`SIGABRT`/`SIGFPE`/`SIGILL` and flushes to disk immediately. Captures frontend status, notifications, and UDP console logs.
+- **DPI-aware UI** — auto-detects monitor content scale on startup and scales every widget, font, and layout proportionally for HiDPI / Retina displays.
 
 <br/>
 
@@ -127,6 +129,8 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 - Status bar showing FPS, session state, target PID, and UDP listener stats.
 - File picker for dump directory and trainer file save/load.
 - Embedded logo, native window icon (`.icns` macOS · `.ico` Windows · `.desktop` Linux), and a `ResizeToFit`-friendly layout that handles live window resize.
+- Full Unicode font stack: base Latin + Cyrillic ranges in the primary font, with OS-specific CJK fallback chains (Apple SD Gothic Neo / Hiragino Sans GB on macOS, Malgun Gothic / Arial Unicode MS on Windows) for Japanese, Korean, and Chinese glyphs.
+- DPI-aware rendering — monitor content scale is auto-detected via GLFW; all sizes, fonts, spacings, and rounding radii scale proportionally for crisp rendering on HiDPI displays.
 
 <br/>
 
@@ -188,7 +192,7 @@ The frontend connects to the payload over TCP (default port `9020`). Telemetry a
 
 ## Localization
 
-The UI is driven entirely by JSON locale files in [`frontend/locales/`](frontend/locales). On first run the frontend selects a language based on the OS locale and persists the choice. Adding a new language is as simple as dropping a `<code>.json` file and opening a PR — `make check-locales` will flag any missing keys before the build ships.
+The UI is driven entirely by JSON locale files in [`frontend/locales/`](frontend/locales). On first run the frontend selects a language based on the OS locale and persists the choice. All translation files and `imgui.ini` are **embedded directly into the executable** at build time via `tools/embed_assets.py` — no external locale files are needed at runtime, making the binary fully self-contained on every platform. Adding a new language is as simple as dropping a `<code>.json` file and opening a PR — `make check-locales` will flag any missing keys before the build ships.
 
 | Code | Language | File |
 |---|---|---|
@@ -353,7 +357,7 @@ Every tag (`v*`) or manual `workflow_dispatch` triggers a matrix build of seven 
 | `host-macos` | `MemDBG-host-macos` |
 | `frontend-linux` | `MemDBG-frontend-linux` |
 | `frontend-macos` | `MemDBG-frontend-macos.app.zip` |
-| `frontend-windows` | `MemDBG-frontend-windows` |
+| `frontend-windows` | `MemDBG-frontend-windows.zip` |
 | `payload-ps4` | `MemDBG-ps4.elf` + `libmemdbg-ps4.a` |
 | `payload-ps5` | `MemDBG-ps5.elf` + `libmemdbg-ps5.a` |
 

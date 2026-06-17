@@ -157,7 +157,7 @@ static void apply_locked_cheats(AppState &state) {
 /* ---- Main draw ---- */
 void draw_trainer(AppState &state, ImVec2 avail) {
   const float gap = 16.0f;
-  const float left_w = std::max(420.0f, (avail.x - gap) * 0.36f);
+  const float left_w = std::max(440.0f, (avail.x - gap) * 0.40f);
   const char *type_names[] = {"Bytes","u8","u16","u32","u64","float","double","pointer"};
 
   ui::begin_panel("TrainerBuilder", locale::tr("trainer.cheat_builder"), ImVec2(left_w, avail.y));
@@ -165,10 +165,11 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
   ImGui::Spacing();
 
-  if (ui::soft_button(locale::tr("trainer.use_memory_addr"), ImVec2(185,36)))
+  const float addr_btn_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
+  if (ui::soft_button(locale::tr("trainer.use_memory_addr"), ImVec2(addr_btn_w, 36)))
     std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", state.write_address);
   ImGui::SameLine();
-  if (!state.scan_result.addresses.empty() && ui::soft_button(locale::tr("trainer.use_first_hit"), ImVec2(190,36)))
+  if (!state.scan_result.addresses.empty() && ui::soft_button(locale::tr("trainer.use_first_hit"), ImVec2(0, 36)))
     std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", hex_u64(state.scan_result.addresses.front()).c_str());
 
   ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.name_label"));
@@ -221,7 +222,8 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   apply_locked_cheats(state);
 
   ImGui::BeginDisabled(!state.client.connected());
-  if (ui::soft_button((std::string(icons::kPlay) + "  " + locale::tr("trainer.apply_enabled")).c_str(), ImVec2(150,38))) {
+  const float action_btn_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
+  if (ui::soft_button((std::string(icons::kPlay) + "  " + locale::tr("trainer.apply_enabled")).c_str(), ImVec2(action_btn_w, 38))) {
     int applied=0;
     for (auto &cheat : state.cheats) if (cheat.enabled && apply_cheat(state,cheat)) applied++;
     set_status(state, "Applied "+std::to_string(applied)+" trainer entries");
@@ -229,7 +231,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  if (ui::soft_button((std::string(icons::kTrash) + "  " + locale::tr("trainer.clear_disabled")).c_str(), ImVec2(150,38))) {
+  if (ui::soft_button((std::string(icons::kTrash) + "  " + locale::tr("trainer.clear_disabled")).c_str(), ImVec2(0, 38))) {
     state.cheats.erase(std::remove_if(state.cheats.begin(), state.cheats.end(),
       [](const CheatEntry &c){ return !c.enabled; }), state.cheats.end());
   }
@@ -276,7 +278,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     ImGui::TableSetupColumn(locale::tr("trainer.col_type"), ImGuiTableColumnFlags_WidthFixed,70);
     ImGui::TableSetupColumn(locale::tr("trainer.col_value"));
     ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,54);
-    ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,190);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,215);
     ImGui::TableHeadersRow();
     for (int i=0; i<static_cast<int>(state.cheats.size()); ++i) {
       CheatEntry &cheat = state.cheats[i];

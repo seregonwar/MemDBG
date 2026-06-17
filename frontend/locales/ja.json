@@ -111,8 +111,11 @@
   "settings.protocol_version": "プロトコル ver: %u",
   "settings.max_read": "最大読取: %u bytes",
   "settings.max_packet": "最大パケット: %u bytes",
-  "settings.console_log_path": "コンソールログパス: /data/memdbg/memdbg.log",
-  "settings.language": "言語",
+  "settings.console_log_path": "コンソールログパス: /data/memdbg/memdbg.log",    "settings.crash_logging": "クラッシュログ",
+    "settings.crash_logging_on": "クラッシュログ有効",
+    "settings.crash_logging_off": "クラッシュログ無効",
+    "settings.crash_logging_hint": "ステータスと通知をログファイルに書き込みます。クラッシュ後もデータは保持されます。",
+    "settings.language": "言語",
   "settings.language_hint": "表示言語を選択。即時反映されます。",
 
   "home.session": "セッション",

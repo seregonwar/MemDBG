@@ -8,6 +8,7 @@
 #define MEMDBG_FRONTEND_APP_STATE_HPP
 
 #include "memdbg_client.hpp"
+#include "crash_logger.hpp"
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
 #include "memdbg/core/memdbg_protocol.h"
@@ -202,6 +203,9 @@ struct AutoSearchCandidate {
 
 struct AppState {
   Client client;
+  CrashLogger crash_logger;
+  bool crash_logging_enabled = true;
+  uint64_t crash_udp_last_received = 0;
   UdpLogListener udp_listener;
   GitHubProfile github_profile;
 

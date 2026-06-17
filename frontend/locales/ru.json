@@ -109,8 +109,11 @@
   "settings.protocol_version": "Версия протокола: %u",
   "settings.max_read": "Макс. чтение: %u байт",
   "settings.max_packet": "Макс. пакет: %u байт",
-  "settings.console_log_path": "Путь лога: /data/memdbg/memdbg.log",
-  "settings.language": "Язык",
+  "settings.console_log_path": "Путь лога: /data/memdbg/memdbg.log",    "settings.crash_logging": "Журнал сбоев",
+    "settings.crash_logging_on": "Журнал сбоев включён",
+    "settings.crash_logging_off": "Журнал сбоев выключен",
+    "settings.crash_logging_hint": "Записывает статус и уведомления в файл журнала. Данные сохраняются при сбоях.",
+    "settings.language": "Язык",
   "settings.language_hint": "Выберите язык интерфейса. Применяется сразу.",
 
   "home.session": "Сессия",

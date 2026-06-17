@@ -206,7 +206,7 @@ static void dump_selected_map(AppState &state) {
   std::filesystem::create_directories(dump_dir, ec);
   if (ec) { set_status(state, locale::tr("processes.create_dump_dir_failed")); return; }
   std::ofstream out(out_path, std::ios::binary);
-  if (!out) { set_status(state, locale::tr("processes.open_dump_failed")); return; }
+  if (!out) { if (state.crash_logging_enabled) state.crash_logger.log("error", "Dump failed: cannot open output file"); set_status(state, locale::tr("processes.open_dump_failed")); return; }
   uint64_t address = map.start;
   uint64_t remaining = map.end - map.start;
   uint64_t written_total = 0;
@@ -214,6 +214,7 @@ static void dump_selected_map(AppState &state) {
     uint32_t chunk = remaining > MEMDBG_PROTOCOL_MAX_READ ? MEMDBG_PROTOCOL_MAX_READ : static_cast<uint32_t>(remaining);
     std::vector<uint8_t> bytes;
     if (!state.client.memory_read(state.selected_pid, address, chunk, bytes)) {
+      if (state.crash_logging_enabled) state.crash_logger.log("error", ("Dump failed: " + std::string(state.client.last_error())).c_str());
       char df_buf[512]; std::snprintf(df_buf, sizeof(df_buf), locale::tr("processes.dump_failed"), state.client.last_error().c_str()); set_status(state, df_buf); return;
     }
     if (bytes.empty()) break;

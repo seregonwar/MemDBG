@@ -37,6 +37,8 @@ static void poll_pointer_async(AppState &state) {
   if (!ok) {
     if (state.scan_async_error.empty()) state.scan_async_error = "Pointer scanner request failed";
     set_status(state, state.scan_async_error);
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Pointer scan failed: " + state.scan_async_error).c_str());
     push_notification(state, "Pointer scan failed: " + state.scan_async_error, 5.0);
     return;
   }

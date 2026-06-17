@@ -323,6 +323,10 @@ void connect_console(AppState &state) {
   state.has_process_info = false;
   s_temp_client.disconnect();
   state.connect_pending = true;
+
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("connect", ("Connecting to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
+
   set_status(state, "Connecting to " + std::string(state.host) + "...");
 
   std::string host = state.host;
@@ -380,6 +384,8 @@ static void poll_telemetry(AppState &state) {
   }
 
   if (!ok) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Telemetry failed: " + state.telemetry_temp_error).c_str());
     set_status(state, "Telemetry: " + state.telemetry_temp_error);
     state.telemetry_available = false;
     return;
@@ -408,6 +414,8 @@ static void poll_connect(AppState &state) {
   }
 
   if (!ok) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Connection failed: " + s_temp_error).c_str());
     set_status(state, s_temp_error);
     push_notification(state, "Connection failed: " + s_temp_error, 5.0);
     return;
@@ -420,6 +428,10 @@ static void poll_connect(AppState &state) {
   std::string udp_error;
   std::string message = "Connected to console " + std::string(state.host) + ":" + std::to_string(state.debug_port);
   if (!ensure_udp_listener(state, udp_error)) message += " (UDP: " + udp_error + ")";
+
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("connect", ("Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
+
   set_status(state, message);
   push_notification(state, "Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port));
 }
@@ -487,6 +499,10 @@ void disconnect_console(AppState &state) {
   state.has_process_info = false;
   state.telemetry_available = false;
   state.next_telemetry_poll = 0.0;
+
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("connect", "Disconnected from console");
+
   set_status(state, "Console disconnected");
   push_notification(state, "Disconnected from console");
 }
@@ -715,6 +731,8 @@ static void topbar_select_process(AppState &state, int row) {
 
 static void topbar_refresh_processes(AppState &state) {
   if (!state.client.connected()) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", "Process refresh failed: not connected");
     set_status(state, "Connect a console before refreshing processes");
     push_notification(state, "Connect a console before loading processes", 4.0);
     return;
@@ -722,6 +740,8 @@ static void topbar_refresh_processes(AppState &state) {
   if (!state.client.process_list(state.processes)) {
     std::string error = state.client.last_error();
     if (error.empty()) error = "Process refresh failed";
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Process refresh failed: " + error).c_str());
     set_status(state, error);
     push_notification(state, "Process refresh failed: " + error, 5.0);
     return;
@@ -743,17 +763,33 @@ static void topbar_refresh_processes(AppState &state) {
     state.selected_map_row = -1;
   }
   set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("refresh", ("Process list: " + std::to_string(state.processes.size()) + " entries").c_str());
 }
 
 static void topbar_refresh_maps(AppState &state) {
-  if (!state.client.connected()) { set_status(state, "Connect a console before refreshing maps"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.connected()) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", "Maps refresh failed: not connected");
+    set_status(state, "Connect a console before refreshing maps");
+    return;
+  }
+  if (state.selected_pid <= 0) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", "Maps refresh failed: no process selected");
+    set_status(state, "Select a process first");
+    return;
+  }
   if (!state.client.process_maps(state.selected_pid, state.maps)) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Maps refresh failed: " + std::string(state.client.last_error())).c_str());
     set_status(state, state.client.last_error());
     return;
   }
   state.selected_map_row = -1;
   set_status(state, "Memory maps refreshed (" + std::to_string(state.maps.size()) + " maps)");
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("refresh", ("Memory maps: " + std::to_string(state.maps.size()) + " maps").c_str());
 }
 
 static bool topbar_button(const char *id, const char *icon, const char *label,
@@ -1116,6 +1152,14 @@ static void draw_app(AppState &state) {
   draw_notifications(state);
   draw_connect_spinner(state);
 
+  // Capture console-side UDP logs into the crash logger
+  if (state.crash_logging_enabled && state.udp_listener.running()) {
+    state.crash_logger.capture_console_lines(
+        state.udp_listener.snapshot(),
+        state.crash_udp_last_received,
+        state.udp_listener.stats().received);
+  }
+
   ImGui::End();
 }
 
@@ -1131,10 +1175,19 @@ static bool readable_file(const char *path) {
 static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   const float base_text_size = 16.0f;
   const float text_size = std::roundf(base_text_size * dpi_scale);
+
+  // Build comprehensive glyph ranges: Default + Cyrillic
+  ImFontGlyphRangesBuilder ranges_builder;
+  ranges_builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+  ranges_builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+  ImVector<ImWchar> glyph_ranges;
+  ranges_builder.BuildRanges(&glyph_ranges);
+
   ImFontConfig base_cfg;
   base_cfg.OversampleH = 3;
   base_cfg.OversampleV = 2;
   base_cfg.PixelSnapH = false;
+  base_cfg.GlyphRanges = glyph_ranges.Data;
 
   bool loaded_base = false;
   static const char *font_candidates[] = {
@@ -1165,7 +1218,45 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
     fallback_cfg.SizePixels = text_size;
     fallback_cfg.OversampleH = 3;
     fallback_cfg.OversampleV = 2;
+    fallback_cfg.GlyphRanges = glyph_ranges.Data;
     io.Fonts->AddFontDefault(&fallback_cfg);
+  }
+
+  // CJK fallback font for Japanese (Hiragana, Katakana, common Kanji)
+  {
+    ImFontConfig cjk_cfg;
+    cjk_cfg.MergeMode = true;
+    cjk_cfg.OversampleH = 2;
+    cjk_cfg.OversampleV = 1;
+    cjk_cfg.PixelSnapH = true;
+    cjk_cfg.GlyphRanges = io.Fonts->GetGlyphRangesJapanese();
+
+    static const char *cjk_candidates[] = {
+#if defined(__APPLE__)
+      "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+      "/System/Library/Fonts/Hiragino Sans GB.ttc",
+      "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+#elif defined(_WIN32)
+      "C:\\Windows\\Fonts\\msgothic.ttc",
+      "C:\\Windows\\Fonts\\yugothib.ttf",
+      "C:\\Windows\\Fonts\\malgun.ttf",
+      "C:\\Windows\\Fonts\\arialuni.ttf",
+#else
+      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+#endif
+    };
+
+    bool loaded_cjk = false;
+    for (const char *path : cjk_candidates) {
+      if (!readable_file(path)) continue;
+      if (io.Fonts->AddFontFromFileTTF(path, text_size, &cjk_cfg)) {
+        loaded_cjk = true;
+        break;
+      }
+    }
+    (void)loaded_cjk;  // best-effort; UI degrades gracefully without CJK font
   }
 
   const float icon_size = std::roundf(15.0f * dpi_scale);
@@ -1219,11 +1310,20 @@ int run_frontend(int, char **argv) {
   ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
   AppState state;
+
+  // Open crash logger in the executable directory
+  {
+    std::filesystem::path log_path = s_executable_dir / "memdbg_crash.log";
+    state.crash_logger.open(log_path.string().c_str());
+  }
+
   {
     std::string config_error;
     if (load_frontend_settings(state, &config_error) && config_error.empty()) {
       set_status(state, "Settings loaded");
     } else if (!config_error.empty()) {
+      if (state.crash_logging_enabled)
+        state.crash_logger.log("error", ("Config load error: " + config_error).c_str());
       set_status(state, config_error);
     }
   }
@@ -1260,6 +1360,10 @@ int run_frontend(int, char **argv) {
   github_profile_start(state.github_profile);
   std::string udp_error;
   if (!ensure_udp_listener(state, udp_error)) set_status(state, "UDP: "+udp_error);
+
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("startup", "MemDBG frontend started");
+
   push_notification(state, "MemDBG by seregonwar started", 6.0);
 
   /* Store pointers for the refresh callback (window-refresh fires during live resize on macOS).
@@ -1307,6 +1411,7 @@ int run_frontend(int, char **argv) {
   state.udp_listener.stop(); state.client.disconnect();
   github_profile_shutdown(state.github_profile);
   shutdown_texture(s_logo_texture);
+  state.crash_logger.close();
   ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext(); glfwDestroyWindow(window); glfwTerminate();
   s_render_state = nullptr;

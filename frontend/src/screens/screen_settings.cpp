@@ -34,6 +34,18 @@ void draw_settings(AppState &state, ImVec2 avail) {
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
+  // Crash logging toggle
+  if (ImGui::Checkbox(locale::tr("settings.crash_logging"), &state.crash_logging_enabled)) {
+    state.crash_logger.set_enabled(state.crash_logging_enabled);
+    set_status(state, state.crash_logging_enabled
+        ? locale::tr("settings.crash_logging_on")
+        : locale::tr("settings.crash_logging_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.crash_logging_hint"));
+
+  ImGui::Spacing();
+
   // Language selector
   ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.language"));
   ImGui::Spacing();

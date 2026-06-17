@@ -110,8 +110,11 @@
   "settings.protocol_version": "Protocol version: %u",
   "settings.max_read": "Max read: %u bytes",
   "settings.max_packet": "Max packet: %u bytes",
-  "settings.console_log_path": "Console file log path: /data/memdbg/memdbg.log",
-  "settings.language": "Language",
+  "settings.console_log_path": "Console file log path: /data/memdbg/memdbg.log",    "settings.crash_logging": "Crash logging",
+    "settings.crash_logging_on": "Crash logging enabled",
+    "settings.crash_logging_off": "Crash logging disabled",
+    "settings.crash_logging_hint": "Write status and notification logs to a crash-log file. Data survives application crashes.",
+    "settings.language": "Language",
   "settings.language_hint": "Select the display language. Changes apply immediately.",
 
   "home.session": "Session",

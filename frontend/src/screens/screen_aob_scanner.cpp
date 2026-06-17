@@ -81,6 +81,8 @@ static void poll_aob_async(AppState &state) {
   if (!ok) {
     if (state.scan_async_error.empty()) state.scan_async_error = "AOB scanner request failed";
     set_status(state, state.scan_async_error);
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("AOB scan failed: " + state.scan_async_error).c_str());
     push_notification(state, "AOB scan failed: " + state.scan_async_error, 5.0);
     return;
   }

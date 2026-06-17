@@ -275,6 +275,8 @@ static void poll_scanner_async(AppState &state) {
 
   if (!ok) {
     if (state.scan_async_error.empty()) state.scan_async_error = "Scanner request failed";
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Scan failed: " + state.scan_async_error).c_str());
     set_status(state, state.scan_async_error);
     char sf_buf[512];
     std::snprintf(sf_buf, sizeof(sf_buf), locale::tr("scanner.scan_failed"), state.scan_async_error.c_str());

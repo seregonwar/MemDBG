@@ -103,6 +103,7 @@ add_executable(memdbg_frontend
   src/app/memdbg_app.cpp
 
   # core (backend clients)
+  src/core/crash_logger.cpp
   src/core/github_profile.cpp
   src/core/memdbg_client.cpp
   src/core/platform.cpp
