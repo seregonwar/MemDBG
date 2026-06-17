@@ -5,6 +5,7 @@
  */
 
 #include "locale.hpp"
+#include "ui/embedded_assets.inc"
 
 #include <nlohmann/json.hpp>
 
@@ -95,6 +96,42 @@ bool Manager::load(const char *json_path) {
 
   // Determine language from file name: en.json -> EN, es.json -> ES, etc.
   std::string path(json_path);
+  Lang detected = Lang::EN;
+  for (int i = 0; i < static_cast<int>(Lang::COUNT); ++i) {
+    Lang l = static_cast<Lang>(i);
+    std::string suffix = std::string(lang_code(l)) + ".json";
+    if (path.size() >= suffix.size() &&
+        path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      detected = l;
+      break;
+    }
+  }
+
+  std::unordered_map<std::string, std::string> kv;
+  for (auto it = doc.begin(); it != doc.end(); ++it) {
+    if (it.value().is_string())
+      kv[it.key()] = it.value().get<std::string>();
+  }
+
+  strings_[detected] = std::move(kv);
+  return true;
+}
+
+bool Manager::load_mem(const char *filename, const unsigned char *data, size_t size) {
+  if (!data || size == 0) return false;
+
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(reinterpret_cast<const char *>(data),
+                                 reinterpret_cast<const char *>(data) + size);
+  } catch (const nlohmann::json::parse_error &) {
+    return false;
+  }
+
+  if (!doc.is_object()) return false;
+
+  // Determine language from filename: en.json -> EN, es.json -> ES, etc.
+  std::string path(filename);
   Lang detected = Lang::EN;
   for (int i = 0; i < static_cast<int>(Lang::COUNT); ++i) {
     Lang l = static_cast<Lang>(i);

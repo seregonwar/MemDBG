@@ -264,7 +264,11 @@ jobs:
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
-                tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+                if [ "${{ matrix.platform }}" = "windows" ]; then
+                  python3 -c "import shutil; shutil.make_archive('dist/$pkg', 'zip', 'dist', '$pkg')"
+                else
+                  tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+                fi
                 rm -rf "dist/$pkg"
               fi
               ;;

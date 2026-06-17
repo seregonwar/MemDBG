@@ -61,3 +61,4 @@ dkms.conf
 /reference
 /make_all.sh
 /frontend/build
+/.commandcode

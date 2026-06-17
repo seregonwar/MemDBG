@@ -51,6 +51,10 @@ public:
   // Must be called before set_active() for the corresponding language.
   bool load(const char *json_path);
 
+  // Load translations from a memory buffer (embedded locale data).
+  // `filename` is used only for language detection (e.g. "en.json").
+  bool load_mem(const char *filename, const unsigned char *data, size_t size);
+
   // Switch active language. Returns false if that language was not loaded.
   bool set_active(Lang lang);
   Lang active() const { return active_.load(std::memory_order_relaxed); }

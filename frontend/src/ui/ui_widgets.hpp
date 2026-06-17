@@ -40,6 +40,8 @@ struct Palette {
 const Palette &colors();
 ImU32 color_u32(const ImVec4 &color);
 void apply_theme();
+float dpi_scale();
+void set_dpi_scale(float scale);
 
 void draw_background(ImDrawList *draw_list, ImVec2 pos, ImVec2 size);
 

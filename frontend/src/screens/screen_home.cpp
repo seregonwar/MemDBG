@@ -28,8 +28,9 @@ void detail_row(const char *label, const char *value, ImVec4 value_color) {
 
 bool action_tile(const char *id, const char *icon, const char *title,
                  const char *meta, bool available) {
+  const float scl = ui::dpi_scale();
   ImGui::PushID(id);
-  const float h = 36.0f;
+  const float h = 36.0f * scl;
   const float w = ImGui::GetContentRegionAvail().x;
   ImVec2 pos = ImGui::GetCursorScreenPos();
   ImGui::InvisibleButton("##tile", ImVec2(w, h));
@@ -44,19 +45,19 @@ bool action_tile(const char *id, const char *icon, const char *title,
     border = with_alpha(border, 0.45f);
   }
 
-  dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), ui::color_u32(bg), 1.0f);
-  dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), ui::color_u32(border), 1.0f);
+  dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), ui::color_u32(bg), 1.0f * scl);
+  dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), ui::color_u32(border), 1.0f * scl);
 
   const ImVec4 icon_color = available ? ui::colors().primary2 : ui::colors().dim;
   const ImVec4 title_color = available ? ui::colors().text : ui::colors().muted;
   const ImVec4 meta_color = available ? ui::colors().muted : ui::colors().dim;
-  dl->AddText(ImVec2(pos.x + 12.0f, pos.y + 10.0f), ui::color_u32(icon_color), icon);
-  dl->AddText(ImVec2(pos.x + 38.0f, pos.y + 9.0f), ui::color_u32(title_color), title);
+  dl->AddText(ImVec2(pos.x + 12.0f * scl, pos.y + 10.0f * scl), ui::color_u32(icon_color), icon);
+  dl->AddText(ImVec2(pos.x + 38.0f * scl, pos.y + 9.0f * scl), ui::color_u32(title_color), title);
   const ImVec2 meta_size = ImGui::CalcTextSize(meta);
-  dl->AddText(ImVec2(pos.x + w - meta_size.x - 30.0f, pos.y + 9.0f),
+  dl->AddText(ImVec2(pos.x + w - meta_size.x - 30.0f * scl, pos.y + 9.0f * scl),
               ui::color_u32(meta_color), meta);
   if (!available) {
-    dl->AddText(ImVec2(pos.x + w - 20.0f, pos.y + 9.0f),
+    dl->AddText(ImVec2(pos.x + w - 20.0f * scl, pos.y + 9.0f * scl),
                 ui::color_u32(ui::colors().dim), icons::kLock);
   }
 
@@ -67,7 +68,8 @@ bool action_tile(const char *id, const char *icon, const char *title,
 } // namespace
 
 void draw_home(AppState &state, ImVec2 avail) {
-  const float gap = 6.0f;
+  const float scl = ui::dpi_scale();
+  const float gap = 6.0f * scl;
   const float col_w = (avail.x - gap) * 0.40f;
   const bool connected = state.client.connected();
 
@@ -98,16 +100,16 @@ void draw_home(AppState &state, ImVec2 avail) {
 
   if (connected) {
     ui::draw_capabilities(state.hello);
-    if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("home.ping")).c_str(), ImVec2(120, 28))) {
+    if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("home.ping")).c_str(), ImVec2(120.0f * scl, 28.0f * scl))) {
       set_status(state, state.client.ping() ? locale::tr("home.ping_ok") : state.client.last_error());
     }
     ImGui::SameLine();
-    if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("home.drop")).c_str(), ImVec2(120, 28))) {
+    if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("home.drop")).c_str(), ImVec2(120.0f * scl, 28.0f * scl))) {
       disconnect_console(state);
     }
   } else {
     ui::text_muted(locale::tr("home.no_active_session"));
-    if (ui::primary_button((std::string(icons::kConnect) + "  " + locale::tr("home.configure")).c_str(), ImVec2(180, 28))) {
+    if (ui::primary_button((std::string(icons::kConnect) + "  " + locale::tr("home.configure")).c_str(), ImVec2(180.0f * scl, 28.0f * scl))) {
       state.screen = Screen::Consoles;
     }
   }

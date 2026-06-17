@@ -67,6 +67,36 @@ set(MEMDBG_APP_ICON_PNG ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.png)
 set(MEMDBG_APP_ICON_ICO ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.ico)
 set(MEMDBG_APP_ICON_ICNS ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.icns)
 
+# ---- Embedded assets (locales + imgui.ini) ----
+# Generated at build time by tools/embed_assets.py.
+set(MEMDBG_EMBEDDED_ASSETS_INC ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/embedded_assets.inc)
+add_custom_command(
+  OUTPUT ${MEMDBG_EMBEDDED_ASSETS_INC}
+  COMMAND python3
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tools/embed_assets.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/locales"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../imgui.ini"
+    "${MEMDBG_EMBEDDED_ASSETS_INC}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tools/embed_assets.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../imgui.ini"
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/de.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/en.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/es.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/fr.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/it.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/ja.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/pt.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/locales/ru.json
+  COMMENT "Generating embedded assets (locales + imgui.ini)"
+)
+set_source_files_properties(${MEMDBG_EMBEDDED_ASSETS_INC} PROPERTIES GENERATED TRUE)
+set_source_files_properties(
+  src/locale/locale.cpp
+  src/app/memdbg_app.cpp
+  PROPERTIES OBJECT_DEPENDS ${MEMDBG_EMBEDDED_ASSETS_INC}
+)
+
 add_executable(memdbg_frontend
   # app (entry point, shell, shared state)
   src/app/main.cpp
@@ -151,22 +181,6 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
             "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/assets/app-icon.png"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/en.json"
-            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/en.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/es.json"
-            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/es.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/it.json"
-            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/it.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/fr.json"
-            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/fr.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/pt.json"
-            "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/locales/pt.json"
   )
 else()
   add_custom_command(TARGET memdbg_frontend POST_BUILD
@@ -174,22 +188,6 @@ else()
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
             "$<TARGET_FILE_DIR:memdbg_frontend>/assets/app-icon.png"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:memdbg_frontend>/locales"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/en.json"
-            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/en.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/es.json"
-            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/es.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/it.json"
-            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/it.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/fr.json"
-            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/fr.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/locales/pt.json"
-            "$<TARGET_FILE_DIR:memdbg_frontend>/locales/pt.json"
   )
 endif()
 

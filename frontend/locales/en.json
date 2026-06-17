@@ -56,10 +56,10 @@
   "topbar.offline": "offline",
   "topbar.ping": "Ping",
   "topbar.logs": "Logs",
-  "topbar.drop": "Drop F5",
+  "topbar.drop": "Drop",
   "topbar.console": "Console",
   "topbar.settings": "Settings",
-  "topbar.connect": "Connect F5",
+  "topbar.connect": "Connect",
   "topbar.connecting": "Connecting...",
 
   "connect.spinner": "Connecting...",

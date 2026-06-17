@@ -19,6 +19,8 @@
 
 namespace memdbg::frontend::ui {
 
+static float s_dpi_scale = 1.0f;
+
 const Palette &colors() {
   static Palette palette;
   return palette;
@@ -26,6 +28,16 @@ const Palette &colors() {
 
 ImU32 color_u32(const ImVec4 &color) {
   return ImGui::ColorConvertFloat4ToU32(color);
+}
+
+float dpi_scale() {
+  return s_dpi_scale;
+}
+
+void set_dpi_scale(float scale) {
+  if (scale < 0.25f) scale = 0.25f;
+  if (scale > 4.0f) scale = 4.0f;
+  s_dpi_scale = scale;
 }
 
 void apply_theme() {
@@ -96,7 +108,7 @@ void draw_background(ImDrawList *draw_list, ImVec2 pos, ImVec2 size) {
   const auto &p = colors();
   const ImVec2 max(pos.x + size.x, pos.y + size.y);
   draw_list->AddRectFilled(pos, max, color_u32(p.bg0));
-  draw_list->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(max.x, pos.y + 1.0f),
+  draw_list->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(max.x, pos.y + 1.0f * dpi_scale()),
                            color_u32(p.border_hot));
 }
 
@@ -123,10 +135,11 @@ void end_panel() {
 }
 
 void status_dot(ImVec4 color) {
+  const float scl = dpi_scale();
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   ImVec2 cursor = ImGui::GetCursorScreenPos();
-  draw_list->AddCircleFilled(ImVec2(cursor.x+6.0f, cursor.y+8.0f), 5.0f, color_u32(color));
-  ImGui::Dummy(ImVec2(16.0f, 16.0f));
+  draw_list->AddCircleFilled(ImVec2(cursor.x + 6.0f * scl, cursor.y + 8.0f * scl), 5.0f * scl, color_u32(color));
+  ImGui::Dummy(ImVec2(16.0f * scl, 16.0f * scl));
 }
 
 bool styled_button(const char *label, ImVec2 size, ImVec4 base, ImVec4 hover, ImVec4 active) {
@@ -159,7 +172,7 @@ bool danger_button(const char *label, ImVec2 size) {
 }
 
 ImVec2 full_button(float height) {
-  return ImVec2(ImGui::GetContentRegionAvail().x, height);
+  return ImVec2(ImGui::GetContentRegionAvail().x, height * dpi_scale());
 }
 
 void draw_empty_state(const char *title, const char *message) {
@@ -177,7 +190,7 @@ void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base,
 
   /* Copy entire buffer as pure hex */
   if (soft_button((std::string(icons::kCopy) + "  Copy Hex").c_str(),
-                      ImVec2(140, 30))) {
+                      ImVec2(140.0f * dpi_scale(), 30.0f * dpi_scale()))) {
     std::ostringstream oss;
     oss << std::hex << std::uppercase << std::setfill('0');
     for (size_t i = 0; i < data.size(); ++i) {
