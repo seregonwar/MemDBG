@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -79,7 +80,7 @@ private:
     char message[kMaxLine];
   };
 
-  Entry   ring_[kRingCapacity];
+  Entry  *ring_ = nullptr;
   size_t  ring_head_  = 0;
   size_t  ring_count_ = 0;
 

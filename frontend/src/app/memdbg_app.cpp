@@ -1339,26 +1339,26 @@ int run_frontend(int, char **argv) {
   setup_fonts(io, dpi_scale);
   ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
-  AppState state;
+  auto state = std::make_unique<AppState>();
 
   // Open crash logger in the executable directory
   try {
     std::filesystem::path log_path = s_executable_dir.empty()
         ? std::filesystem::path("memdbg_crash.log")
         : s_executable_dir / "memdbg_crash.log";
-    state.crash_logger.open(log_path.string().c_str());
+    state->crash_logger.open(log_path.string().c_str());
   } catch (...) {
     // crash logger failure is non-fatal
   }
 
   {
     std::string config_error;
-    if (load_frontend_settings(state, &config_error) && config_error.empty()) {
-      set_status(state, "Settings loaded");
+    if (load_frontend_settings(*state, &config_error) && config_error.empty()) {
+      set_status(*state, "Settings loaded");
     } else if (!config_error.empty()) {
-      if (state.crash_logging_enabled)
-        state.crash_logger.log("error", ("Config load error: " + config_error).c_str());
-      set_status(state, config_error);
+      if (state->crash_logging_enabled)
+        state->crash_logger.log("error", ("Config load error: " + config_error).c_str());
+      set_status(*state, config_error);
     }
   }
 
@@ -1384,30 +1384,30 @@ int run_frontend(int, char **argv) {
   }
 
   // Set language from saved preference, or auto-detect from OS.
-  if (state.language >= 0 && state.language < static_cast<int>(locale::Lang::COUNT)) {
-    loc.set_active(static_cast<locale::Lang>(state.language));
+  if (state->language >= 0 && state->language < static_cast<int>(locale::Lang::COUNT)) {
+    loc.set_active(static_cast<locale::Lang>(state->language));
   } else {
     locale::Lang detected = locale::detect_system_lang();
     loc.set_active(detected);
-    state.language = static_cast<int>(detected);
+    state->language = static_cast<int>(detected);
   }
-  github_profile_start(state.github_profile);
+  github_profile_start(state->github_profile);
   {
     std::string udp_error;
-    if (!ensure_udp_listener(state, udp_error))
-      set_status(state, "UDP: " + udp_error);
+    if (!ensure_udp_listener(*state, udp_error))
+      set_status(*state, "UDP: " + udp_error);
   }
 
-  if (state.crash_logging_enabled)
-    state.crash_logger.log("startup", "MemDBG frontend started");
+  if (state->crash_logging_enabled)
+    state->crash_logger.log("startup", "MemDBG frontend started");
 
-  push_notification(state, "MemDBG by seregonwar started", 6.0);
+  push_notification(*state, "MemDBG by seregonwar started", 6.0);
 
   /* Store pointers for the refresh callback (window-refresh fires during live resize on macOS).
    * Must be static so the non-capturing lambda below can access them. */
   static AppState *s_render_state = nullptr;
   static GLFWwindow *s_render_window = nullptr;
-  s_render_state = &state;
+  s_render_state = state.get();
   s_render_window = window;
 
   /* Render a single frame. Callable from the main loop and from the window-refresh
@@ -1445,10 +1445,10 @@ int run_frontend(int, char **argv) {
   while (!glfwWindowShouldClose(window))
     render_frame();
 
-  state.udp_listener.stop(); state.client.disconnect();
-  github_profile_shutdown(state.github_profile);
+  state->udp_listener.stop(); state->client.disconnect();
+  github_profile_shutdown(state->github_profile);
   shutdown_texture(s_logo_texture);
-  state.crash_logger.close();
+  state->crash_logger.close();
   ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext(); glfwDestroyWindow(window); glfwTerminate();
   s_render_state = nullptr;
