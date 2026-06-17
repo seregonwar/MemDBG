@@ -104,6 +104,7 @@ add_executable(memdbg_frontend
 
   # core (backend clients)
   src/core/crash_logger.cpp
+  src/core/discovery_client.cpp
   src/core/github_profile.cpp
   src/core/memdbg_client.cpp
   src/core/platform.cpp
@@ -136,6 +137,7 @@ add_executable(memdbg_frontend
   src/screens/screen_credits.cpp
 
   # trainer
+  src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
 
   # scanner (auto-search heuristic engine)
@@ -253,6 +255,45 @@ target_include_directories(memdbg_auto_search_test PRIVATE
   ${imgui_SOURCE_DIR}
 )
 
+# ---- memdbg_app_state_parsing_test ----
+
+add_executable(memdbg_app_state_parsing_test
+  tests/test_app_state_parsing.cpp
+)
+
+target_include_directories(memdbg_app_state_parsing_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${imgui_SOURCE_DIR}
+)
+
+# ---- memdbg_trainer_formats_test ----
+
+add_executable(memdbg_trainer_formats_test
+  tests/test_trainer_formats.cpp
+  src/trainer/batchcode_parser.cpp
+  src/trainer/trainer_format.cpp
+  src/core/memdbg_client.cpp
+  src/core/crash_logger.cpp
+  src/core/udp_log_listener.cpp
+  src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+)
+
+target_link_libraries(memdbg_trainer_formats_test PRIVATE imgui Threads::Threads)
+
+target_include_directories(memdbg_trainer_formats_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
+  ${imgui_SOURCE_DIR}
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+
 # ---- platform specific ----
 
 if(APPLE)
@@ -270,8 +311,12 @@ if(MSVC)
   target_compile_options(memdbg_frontend PRIVATE /W4)
   target_compile_options(memdbg_probe PRIVATE /W4)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4)
+  target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
+  target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
 else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()

@@ -219,10 +219,6 @@ static void set_window_icon(GLFWwindow *window) {
 
 /* ---- State helpers ---- */
 
-void set_status(AppState &state, const std::string &message) {
-  std::snprintf(state.status, sizeof(state.status), "%s", message.c_str());
-}
-
 void normalize_ports(AppState &state) {
   state.debug_port = std::clamp(state.debug_port, 1, 65535);
   state.udp_port    = std::clamp(state.udp_port, 1, 65535);

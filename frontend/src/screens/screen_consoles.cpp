@@ -45,6 +45,27 @@ void draw_consoles(AppState &state, ImVec2 avail) {
   ui::draw_capabilities(state.hello);
   ui::end_panel();
 
+  /* Poll async discovery result. */
+  if (state.discovery_pending && state.discovery_future.valid()) {
+    auto fstatus = state.discovery_future.wait_for(std::chrono::milliseconds(0));
+    if (fstatus == std::future_status::ready) {
+      state.discovery_pending = false;
+      bool ok = false;
+      try {
+        ok = state.discovery_future.get();
+      } catch (...) {
+        ok = false;
+      }
+      if (!ok && !state.discovery_error.empty()) {
+        set_status(state, state.discovery_error);
+      } else if (ok && state.discovered_consoles.empty()) {
+        set_status(state, "No MemDBG payloads found on the local network.");
+      } else if (ok) {
+        set_status(state, "Found " + std::to_string(state.discovered_consoles.size()) + " payload(s).");
+      }
+    }
+  }
+
   ImGui::SameLine(0, gap);
   ui::begin_panel("ConsoleRuntime", locale::tr("consoles.runtime"), ImVec2(0, avail.y));
   ImGui::TextColored(state.client.connected() ? ui::colors().success : ui::colors().danger,
@@ -79,6 +100,43 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     if (ui::soft_button(locale::tr("consoles.stop_udp"), ui::full_button(40))) {
       state.udp_listener.stop();
       set_status(state, locale::tr("connect.udp_stopped"));
+    }
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  ImGui::Text("Auto-Discovery");
+  ImGui::TextWrapped("Broadcast a UDP ping to find MemDBG payloads on the LAN.");
+  ImGui::Spacing();
+
+  if (state.discovery_pending) {
+    ImGui::Text("Searching...");
+  } else if (ui::soft_button("Discover Consoles", ui::full_button(40))) {
+    state.discovery_pending = true;
+    state.discovery_error.clear();
+    state.discovered_consoles.clear();
+    state.discovery_future = std::async(std::launch::async, [&state]() -> bool {
+      return state.discovery_client.discover(
+          MEMDBG_DEFAULT_DISCOVERY_PORT, 1.5, state.discovered_consoles,
+          state.discovery_error);
+    });
+  }
+
+  if (!state.discovered_consoles.empty()) {
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("Discovered payloads");
+    for (const auto &console : state.discovered_consoles) {
+      std::string label = console.ip + ":" + std::to_string(console.debug_port);
+      if (ImGui::Button(label.c_str(), ui::full_button(32))) {
+        std::snprintf(state.host, sizeof(state.host), "%s", console.ip.c_str());
+        state.debug_port = console.debug_port;
+        state.udp_port = console.udp_log_port ? console.udp_log_port : state.udp_port;
+        normalize_ports(state);
+        set_status(state, "Selected " + console.ip);
+      }
     }
   }
   ui::end_panel();

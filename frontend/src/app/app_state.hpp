@@ -9,8 +9,10 @@
 
 #include "memdbg_client.hpp"
 #include "crash_logger.hpp"
+#include "discovery_client.hpp"
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
+#include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "locale/locale.hpp"
 
@@ -337,6 +339,7 @@ struct AppState {
   bool connect_pending = false;
 
   /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
+  std::mutex scan_async_mtx;
   bool scan_async_pending = false;
   std::future<bool> scan_async_future;
   std::string scan_async_label;
@@ -371,6 +374,13 @@ struct AppState {
   static constexpr size_t kMaxNotifications = 8;
   std::deque<Notification> notifications;
 
+  /* ---- UDP discovery ---- */
+  DiscoveryClient discovery_client;
+  bool discovery_pending = false;
+  std::future<bool> discovery_future;
+  std::vector<DiscoveryConsole> discovered_consoles;
+  std::string discovery_error;
+
   /* ---- Locale ---- */
   int language = 0;  /* locale::Lang enum value; EN=0 by default */
 };
@@ -378,6 +388,13 @@ struct AppState {
 /* ---- utility functions ---- */
 
 template <typename T> inline T read_scalar(const std::vector<uint8_t> &bytes) {
+  T value{};
+  if (bytes.size() >= sizeof(T))
+    std::memcpy(&value, bytes.data(), sizeof(T));
+  return value;
+}
+
+template <typename T, size_t N> inline T read_scalar(const std::array<uint8_t, N> &bytes) {
   T value{};
   if (bytes.size() >= sizeof(T))
     std::memcpy(&value, bytes.data(), sizeof(T));
@@ -421,8 +438,12 @@ inline std::string hex_u64(uint64_t value, int width = 0) {
 
 inline bool parse_u64(const char *text, uint64_t &out) {
   if (!text) return false;
+  while (*text && std::isspace(static_cast<unsigned char>(*text))) ++text;
+  if (*text == '\0') return false;
   char *end = nullptr; errno = 0;
-  unsigned long long value = std::strtoull(text, &end, 0);
+  int base = 10;
+  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) base = 16;
+  unsigned long long value = std::strtoull(text, &end, base);
   if (errno != 0 || end == text) return false;
   while (*end != '\0') { if (!std::isspace(static_cast<unsigned char>(*end))) return false; ++end; }
   out = static_cast<uint64_t>(value);
@@ -471,13 +492,15 @@ template <typename T> inline void append_value(std::vector<uint8_t> &out, T valu
 inline bool build_scan_value(int type, const char *text, std::array<uint8_t, 16> &value, uint32_t &value_len) {
   std::vector<uint8_t> bytes;
   value.fill(0);
+  int base = 10;
+  if (text != nullptr && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) base = 16;
   try {
     switch (type) {
     case MEMDBG_VALUE_BYTES: if (!parse_hex_bytes(text, bytes) || bytes.size() > value.size()) return false; break;
-    case MEMDBG_VALUE_U8:  append_value<uint8_t>(bytes, static_cast<uint8_t>(std::stoull(text,nullptr,0))); break;
-    case MEMDBG_VALUE_U16: append_value<uint16_t>(bytes, static_cast<uint16_t>(std::stoull(text,nullptr,0))); break;
-    case MEMDBG_VALUE_U32: append_value<uint32_t>(bytes, static_cast<uint32_t>(std::stoull(text,nullptr,0))); break;
-    case MEMDBG_VALUE_U64: case MEMDBG_VALUE_POINTER: append_value<uint64_t>(bytes, static_cast<uint64_t>(std::stoull(text,nullptr,0))); break;
+    case MEMDBG_VALUE_U8:  append_value<uint8_t>(bytes, static_cast<uint8_t>(std::stoull(text,nullptr,base))); break;
+    case MEMDBG_VALUE_U16: append_value<uint16_t>(bytes, static_cast<uint16_t>(std::stoull(text,nullptr,base))); break;
+    case MEMDBG_VALUE_U32: append_value<uint32_t>(bytes, static_cast<uint32_t>(std::stoull(text,nullptr,base))); break;
+    case MEMDBG_VALUE_U64: case MEMDBG_VALUE_POINTER: append_value<uint64_t>(bytes, static_cast<uint64_t>(std::stoull(text,nullptr,base))); break;
     case MEMDBG_VALUE_F32: append_value<float>(bytes, std::stof(text)); break;
     case MEMDBG_VALUE_F64: append_value<double>(bytes, std::stod(text)); break;
     default: return false;
@@ -536,6 +559,11 @@ inline std::string selected_process_name(const AppState &state) {
   return "No process selected";
 }
 
+inline bool payload_supports(const AppState &state, uint32_t capability) {
+  return state.client.connected() && state.has_hello &&
+         (state.hello.capabilities & capability) != 0U;
+}
+
 inline const char *screen_title(Screen s) {
   switch (s) {
   case Screen::Home: return "Command Center"; case Screen::Consoles: return "Consoles";
@@ -580,7 +608,9 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 }
 
 /* ---- shared state helpers ---- */
-void set_status(AppState &state, const std::string &message);
+inline void set_status(AppState &state, const std::string &message) {
+  std::snprintf(state.status, sizeof(state.status), "%s", message.c_str());
+}
 void normalize_ports(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);

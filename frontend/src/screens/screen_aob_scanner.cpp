@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <exception>
 #include <future>
+#include <mutex>
 #include <sstream>
 #include <vector>
 
@@ -79,18 +80,30 @@ static void poll_aob_async(AppState &state) {
   }
 
   if (!ok) {
-    if (state.scan_async_error.empty()) state.scan_async_error = "AOB scanner request failed";
-    set_status(state, state.scan_async_error);
+    std::string error_local;
+    {
+      std::lock_guard<std::mutex> lock(state.scan_async_mtx);
+      error_local = state.scan_async_error.empty() ? "AOB scanner request failed" : state.scan_async_error;
+      state.scan_async_error.clear();
+    }
+    set_status(state, error_local);
     if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("AOB scan failed: " + state.scan_async_error).c_str());
-    push_notification(state, "AOB scan failed: " + state.scan_async_error, 5.0);
+      state.crash_logger.log("error", ("AOB scan failed: " + error_local).c_str());
+    push_notification(state, "AOB scan failed: " + error_local, 5.0);
     return;
   }
 
-  /* Apply results from temp storage */
-  state.aob_result = std::move(state.scan_async_temp_result);
+  /* Apply results from temp storage under lock */
+  ScanResult result_local;
+  char status_local[256] = {};
+  {
+    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
+    result_local = std::move(state.scan_async_temp_result);
+    std::memcpy(status_local, state.scan_async_temp_session_status, sizeof(status_local));
+  }
+  state.aob_result = std::move(result_local);
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
-                "%s", state.scan_async_temp_session_status);
+                "%s", status_local);
   set_status(state, state.scan_session_status);
 }
 
@@ -136,7 +149,9 @@ static void run_aob_scan(AppState &state) {
     auto &error_out = state.scan_async_error;
 
     state.scan_async_future = std::async(std::launch::async,
-      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out]() -> bool {
+      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out,
+       &mtx = state.scan_async_mtx]() -> bool {
+        std::lock_guard<std::mutex> lock(mtx);
         ScanResult res;
         if (!client.scan_process_aob(request, pattern, mask, res)) {
           error_out = client.last_error();
@@ -174,7 +189,9 @@ static void run_aob_scan(AppState &state) {
     request.pattern_length = static_cast<uint32_t>(pattern.size());
 
     state.scan_async_future = std::async(std::launch::async,
-      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out]() -> bool {
+      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out,
+       &mtx = state.scan_async_mtx]() -> bool {
+        std::lock_guard<std::mutex> lock(mtx);
         ScanResult res;
         if (!client.scan_aob(request, pattern, mask, res)) {
           error_out = client.last_error();
@@ -252,7 +269,11 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
   std::string scan_label = state.aob_process_wide
       ? std::string(icons::kSearch) + "  " + std::string(locale::tr("aob_scanner.scan_process_aob"))
       : std::string(icons::kSearch) + "  " + std::string(locale::tr("aob_scanner.scan_aob"));
-  bool can_scan = state.client.connected() && state.selected_pid > 0 && !state.scan_async_pending;
+  bool can_scan = state.client.connected() && state.selected_pid > 0 &&
+                  !state.scan_async_pending &&
+                  payload_supports(state, state.aob_process_wide
+                                          ? MEMDBG_CAP_SCAN_PROCESS_AOB
+                                          : MEMDBG_CAP_SCAN_AOB);
   ImGui::BeginDisabled(!can_scan);
   if (ui::primary_button(scan_label.c_str(), ui::full_button(42)))
     run_aob_scan(state);

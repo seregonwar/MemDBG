@@ -197,6 +197,12 @@ bool socket_set_reuse_addr(socket_handle_t fd) {
                     reinterpret_cast<const char *>(&one), sizeof(one)) == 0;
 }
 
+bool socket_set_broadcast(socket_handle_t fd) {
+  int one = 1;
+  return setsockopt(fd, SOL_SOCKET, SO_BROADCAST,
+                    reinterpret_cast<const char *>(&one), sizeof(one)) == 0;
+}
+
 bool socket_set_recv_buffer(socket_handle_t fd, int bytes) {
   return setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
                     reinterpret_cast<const char *>(&bytes), sizeof(bytes)) == 0;

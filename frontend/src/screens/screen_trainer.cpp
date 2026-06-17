@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "trainer_format.hpp"
+#include "batchcode_parser.hpp"
 #include "file_picker.hpp"
 
 #include <algorithm>
@@ -65,40 +66,32 @@ static void add_cheat_from_fields(AppState &state) {
 /* ---- load/save now in trainer_format.cpp ---- */
 
 /* ---- Batchcode ---- */
-static std::string batch_value_after(const std::string &text, const char *key, size_t start_pos) {
-  size_t pos=text.find(key, start_pos);
-  if (pos==std::string::npos) return {};
-  pos+=std::strlen(key);
-  while (pos<text.size()&&std::isspace(static_cast<unsigned char>(text[pos]))!=0) ++pos;
-  size_t end=pos;
-  while (end<text.size()&&text[end]!=';'&&text[end]!='|'&&std::isspace(static_cast<unsigned char>(text[end]))==0) ++end;
-  return text.substr(pos, end-pos);
-}
-
 static void import_batchcode(AppState &state) {
-  if (state.selected_pid<=0) { set_status(state,"Select a process before importing batchcode"); return; }
-  std::string text = state.batchcode_text;
-  size_t pos=0;
-  int imported=0;
-  while ((pos=text.find("offset:", pos))!=std::string::npos) {
-    std::string offset_text=batch_value_after(text,"offset:",pos);
-    std::string value_text=batch_value_after(text,"value:",pos);
-    std::string size_text=batch_value_after(text,"size:",pos);
-    pos+=7;
-    uint64_t address=0, size=0;
-    std::vector<uint8_t> bytes;
-    if (!parse_u64(offset_text.c_str(),address)||!parse_hex_bytes(value_text.c_str(),bytes)) continue;
-    if (!size_text.empty()&&parse_u64(size_text.c_str(),size)&&size>0) {
-      if (bytes.size()>size) bytes.resize(static_cast<size_t>(size));
-      else bytes.resize(static_cast<size_t>(size), 0);
-    }
-    CheatEntry cheat;
-    cheat.description="Batchcode "+std::to_string(imported+1);
-    cheat.pid=state.selected_pid; cheat.address=address; cheat.value_type=MEMDBG_VALUE_BYTES;
-    cheat.value_text=value_text; cheat.bytes=std::move(bytes);
-    state.cheats.push_back(std::move(cheat)); imported++;
+  if (state.selected_pid <= 0) {
+    set_status(state, "Select a process before importing batchcode");
+    return;
   }
-  set_status(state, imported>0?"Imported "+std::to_string(imported)+" batchcode entries":"No batchcode entries imported");
+  std::string error;
+  std::vector<BatchcodeEntry> entries;
+  int imported = parse_batchcode(state.batchcode_text, entries, error);
+  if (imported < 0) {
+    set_status(state, "Batchcode error: " + error);
+    return;
+  }
+  for (size_t i = 0; i < entries.size(); ++i) {
+    CheatEntry cheat;
+    cheat.description = "Batchcode " + std::to_string(i + 1);
+    cheat.pid = state.selected_pid;
+    cheat.address = entries[i].offset;
+    cheat.value_type = MEMDBG_VALUE_BYTES;
+    cheat.value_text = bytes_to_hex(entries[i].bytes);
+    cheat.bytes = std::move(entries[i].bytes);
+    cheat.enabled = true;
+    state.cheats.push_back(std::move(cheat));
+  }
+  set_status(state, imported > 0
+                        ? "Imported " + std::to_string(imported) + " batchcode entries"
+                        : "No batchcode entries imported");
 }
 
 /* ---- Locked cheats timer ---- */
@@ -182,7 +175,8 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   ImGui::InputText(locale::tr("trainer.value"), state.cheat_value, sizeof(state.cheat_value));
   ImGui::Checkbox(locale::tr("trainer.lock_value"), &state.cheat_lock);
   ImGui::SliderFloat(locale::tr("trainer.lock_interval"), &state.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
-  bool can_train = state.client.connected() && state.selected_pid > 0;
+  bool can_train = state.client.connected() && state.selected_pid > 0 &&
+                   payload_supports(state, MEMDBG_CAP_MEMORY_WRITE);
   ImGui::BeginDisabled(!can_train);
   if (ui::primary_button((std::string(icons::kAdd) + "  " + locale::tr("trainer.add_to_trainer")).c_str(), ui::full_button(40))) add_cheat_from_fields(state);
   ImGui::EndDisabled();

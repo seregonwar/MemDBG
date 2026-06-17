@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <sstream>
 
 namespace memdbg::frontend {
@@ -32,44 +33,6 @@ std::string read_text_file(const std::filesystem::path &path) {
   std::ostringstream out;
   out << in.rdbuf();
   return out.str();
-}
-
-std::string json_string_value(const std::string &json, const char *key) {
-  std::string marker = "\"";
-  marker += key;
-  marker += "\"";
-  size_t pos = json.find(marker);
-  if (pos == std::string::npos) {
-    return {};
-  }
-  pos = json.find(':', pos + marker.size());
-  if (pos == std::string::npos) {
-    return {};
-  }
-  pos = json.find('"', pos);
-  if (pos == std::string::npos) {
-    return {};
-  }
-
-  std::string value;
-  bool escape = false;
-  for (size_t i = pos + 1; i < json.size(); ++i) {
-    char c = json[i];
-    if (escape) {
-      value.push_back(c);
-      escape = false;
-      continue;
-    }
-    if (c == '\\') {
-      escape = true;
-      continue;
-    }
-    if (c == '"') {
-      break;
-    }
-    value.push_back(c);
-  }
-  return value;
 }
 
 void worker_main(GitHubProfile *profile) {
@@ -91,11 +54,22 @@ void worker_main(GitHubProfile *profile) {
                                  json_path)) {
       error = "GitHub profile download failed";
     } else {
-      const std::string json = read_text_file(json_path);
-      name = json_string_value(json, "name");
-      bio = json_string_value(json, "bio");
-      avatar_url = json_string_value(json, "avatar_url");
-      if (avatar_url.empty()) {
+      try {
+        const auto json = nlohmann::json::parse(read_text_file(json_path), nullptr, false);
+        if (json.is_discarded()) {
+          error = "GitHub profile JSON parse failed";
+        } else {
+          if (json.contains("name") && json["name"].is_string())
+            name = json["name"].get<std::string>();
+          if (json.contains("bio") && json["bio"].is_string())
+            bio = json["bio"].get<std::string>();
+          if (json.contains("avatar_url") && json["avatar_url"].is_string())
+            avatar_url = json["avatar_url"].get<std::string>();
+        }
+      } catch (const std::exception &ex) {
+        error = ex.what();
+      }
+      if (error.empty() && avatar_url.empty()) {
         error = "GitHub avatar URL not found";
       } else if (!platform::download_file(avatar_url, avatar_path)) {
         error = "GitHub avatar download failed";

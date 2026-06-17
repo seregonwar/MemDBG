@@ -767,7 +767,8 @@ void draw_memory(AppState &state, ImVec2 avail) {
       ImGui::InputText(locale::tr("memory.read_address"), state.read_address, sizeof(state.read_address));
       ImGui::InputInt(locale::tr("memory.read_length"), &state.read_length);
       state.read_length = std::clamp(state.read_length, 1, static_cast<int>(MEMDBG_PROTOCOL_MAX_READ));
-      bool can_read = state.client.connected() && state.selected_pid > 0;
+      bool can_read = state.client.connected() && state.selected_pid > 0 &&
+                      payload_supports(state, MEMDBG_CAP_MEMORY_READ);
       ImGui::BeginDisabled(!can_read);
       if (ui::primary_button((std::string(icons::kPlay) + "  " + locale::tr("memory.read_memory")).c_str(),
                              ui::full_button(40))) read_memory(state);
@@ -776,7 +777,8 @@ void draw_memory(AppState &state, ImVec2 avail) {
       ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
       ImGui::InputText(locale::tr("memory.write_address"), state.write_address, sizeof(state.write_address));
       ImGui::InputText(locale::tr("memory.bytes"), state.write_bytes, sizeof(state.write_bytes));
-      bool can_write = state.client.connected() && state.selected_pid > 0;
+      bool can_write = state.client.connected() && state.selected_pid > 0 &&
+                       payload_supports(state, MEMDBG_CAP_MEMORY_WRITE);
       ImGui::BeginDisabled(!can_write);
       if (ui::danger_button((std::string(icons::kEdit) + "  " + locale::tr("memory.write_memory")).c_str(),
                             ui::full_button(40))) write_memory(state);

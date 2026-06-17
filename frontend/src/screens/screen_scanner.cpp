@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <exception>
 #include <future>
+#include <mutex>
 
 namespace memdbg::frontend {
 
@@ -274,26 +275,48 @@ static void poll_scanner_async(AppState &state) {
   }
 
   if (!ok) {
-    if (state.scan_async_error.empty()) state.scan_async_error = "Scanner request failed";
+    std::string error_local;
+    {
+      std::lock_guard<std::mutex> lock(state.scan_async_mtx);
+      error_local = state.scan_async_error.empty() ? "Scanner request failed" : state.scan_async_error;
+      state.scan_async_error.clear();
+    }
     if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("Scan failed: " + state.scan_async_error).c_str());
-    set_status(state, state.scan_async_error);
+      state.crash_logger.log("error", ("Scan failed: " + error_local).c_str());
+    set_status(state, error_local);
     char sf_buf[512];
-    std::snprintf(sf_buf, sizeof(sf_buf), locale::tr("scanner.scan_failed"), state.scan_async_error.c_str());
+    std::snprintf(sf_buf, sizeof(sf_buf), locale::tr("scanner.scan_failed"), error_local.c_str());
     push_notification(state, sf_buf, 5.0);
     return;
   }
 
-  /* Apply scan results from temp storage */
-  state.scan_result = std::move(state.scan_async_temp_result);
-  state.scan_snapshot = std::move(state.scan_async_temp_snapshot);
-  state.scan_snapshot_value_len = state.scan_async_temp_snapshot_value_len;
-  state.scan_snapshot_type = state.scan_async_temp_snapshot_type;
-  state.scan_is_unknown_session = state.scan_async_temp_is_unknown;
+  /* Apply scan results from temp storage under lock */
+  ScanResult result_local;
+  std::vector<ScanSnapshotEntry> snapshot_local;
+  uint32_t snap_val_len = 0;
+  int snap_type = MEMDBG_VALUE_U32;
+  bool is_unknown = false;
+  char status_local[256] = {};
+  std::vector<AutoSearchCandidate> auto_search_local;
+  {
+    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
+    result_local = std::move(state.scan_async_temp_result);
+    snapshot_local = std::move(state.scan_async_temp_snapshot);
+    snap_val_len = state.scan_async_temp_snapshot_value_len;
+    snap_type = state.scan_async_temp_snapshot_type;
+    is_unknown = state.scan_async_temp_is_unknown;
+    auto_search_local = std::move(state.auto_search_temp_candidates);
+    std::memcpy(status_local, state.scan_async_temp_session_status, sizeof(status_local));
+  }
+  state.scan_result = std::move(result_local);
+  state.scan_snapshot = std::move(snapshot_local);
+  state.scan_snapshot_value_len = snap_val_len;
+  state.scan_snapshot_type = snap_type;
+  state.scan_is_unknown_session = is_unknown;
 
   /* Post-scan: capture snapshot on the UI thread */
   // snapshot was already captured by the async worker via temp storage
-  set_status(state, state.scan_async_temp_session_status);
+  set_status(state, status_local);
   push_notification(state, std::string(state.scan_async_label) + " complete: " +
                     std::to_string(state.scan_result.count) + " results");  /* If auto-search is enabled and this was a scan, track pass progression.
    * Only the auto-search Next Scan lambda populates temp_candidates;
@@ -307,10 +330,10 @@ static void poll_scanner_async(AppState &state) {
       char auto_buf[256];
       std::snprintf(auto_buf, sizeof(auto_buf), locale::tr("notify.auto_baseline"), state.scan_snapshot.size());
       push_notification(state, auto_buf);
-    } else if (!state.auto_search_temp_candidates.empty()) {
+    } else if (!auto_search_local.empty()) {
       /* Next Scan just completed (only these populate temp_candidates) */
       state.auto_search_pass++;
-      state.auto_search_candidates = std::move(state.auto_search_temp_candidates);
+      state.auto_search_candidates = std::move(auto_search_local);
       char pass_buf[256];
       std::snprintf(pass_buf, sizeof(pass_buf), locale::tr("notify.auto_pass"), state.auto_search_pass, state.scan_result.count);
       push_notification(state, pass_buf);
@@ -360,7 +383,9 @@ static void scan_range(AppState &state) {
   state.scan_async_future = std::async(std::launch::async,
     [&client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
-     &temp_snap_type, &temp_is_unknown, &temp_status, &error_out]() -> bool {
+     &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
+     &mtx = state.scan_async_mtx]() -> bool {
+      std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
       if (!client.scan_exact(request, scan_res)) {
         error_out = client.last_error();
@@ -488,7 +513,9 @@ static void scan_process(AppState &state) {
   state.scan_async_future = std::async(std::launch::async,
     [&client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
-     &temp_snap_type, &temp_is_unknown, &temp_status, &error_out]() -> bool {
+     &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
+     &mtx = state.scan_async_mtx]() -> bool {
+      std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
       if (!client.scan_process_exact(request, scan_res)) {
         error_out = client.last_error();
@@ -616,7 +643,9 @@ static void scan_unknown_process(AppState &state) {
   state.scan_async_future = std::async(std::launch::async,
     [&client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
-     &temp_snap_type, &temp_is_unknown, &temp_status, &error_out]() -> bool {
+     &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
+     &mtx = state.scan_async_mtx]() -> bool {
+      std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
       if (!client.scan_unknown(request, scan_res)) {
         error_out = client.last_error();
@@ -725,22 +754,30 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::InputText(locale::tr("scanner.start"), state.scan_start, sizeof(state.scan_start));
   ImGui::InputText(locale::tr("scanner.length"), state.scan_length, sizeof(state.scan_length));
-  bool can_launch_scan = !state.scan_async_pending;
-  ImGui::BeginDisabled(!can_launch_scan);
+  bool can_launch_range = !state.scan_async_pending && state.client.connected() &&
+                          state.selected_pid > 0 &&
+                          payload_supports(state, MEMDBG_CAP_SCAN_EXACT);
+  ImGui::BeginDisabled(!can_launch_range);
   if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("scanner.scan_range")).c_str(), ui::full_button(40))) scan_range(state);
   ImGui::EndDisabled();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::InputText(locale::tr("scanner.end_filter"), state.scan_end, sizeof(state.scan_end));
   ImGui::Checkbox(locale::tr("scanner.readable_only"), &state.scan_readable_only);
-  ImGui::BeginDisabled(!can_launch_scan);
+  bool can_launch_process = !state.scan_async_pending && state.client.connected() &&
+                            state.selected_pid > 0 &&
+                            payload_supports(state, MEMDBG_CAP_SCAN_PROCESS_EXACT);
+  ImGui::BeginDisabled(!can_launch_process);
   if (ui::soft_button((std::string(icons::kTarget) + "  " + locale::tr("scanner.scan_process")).c_str(), ui::full_button(40))) scan_process(state);
   ImGui::EndDisabled();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::TextColored(ui::colors().warning, "%s", locale::tr("scanner.unknown_value"));
   ImGui::TextWrapped("%s", locale::tr("scanner.unknown_desc"));
-  ImGui::BeginDisabled(!can_launch_scan);
+  bool can_launch_unknown = !state.scan_async_pending && state.client.connected() &&
+                            state.selected_pid > 0 &&
+                            payload_supports(state, MEMDBG_CAP_SCAN_UNKNOWN);
+  ImGui::BeginDisabled(!can_launch_unknown);
   if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("scanner.unknown_scan")).c_str(), ui::full_button(40))) scan_unknown_process(state);
   ImGui::EndDisabled();
 
@@ -759,7 +796,9 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                        state.scan_snapshot.size(), state.scan_snapshot_value_len);
   ImGui::Spacing();
 
-  bool can_refine = state.client.connected() && state.selected_pid > 0 && !state.scan_snapshot.empty() && !state.scan_async_pending;
+  bool can_refine = state.client.connected() && state.selected_pid > 0 &&
+                    payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
+                    !state.scan_snapshot.empty() && !state.scan_async_pending;
   const float half_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
   ImGui::BeginDisabled(!can_refine);
   if (ui::soft_button(locale::tr("scanner.changed"), ImVec2(half_w, 38))) refine_scan(state, RefineMode::Changed);
@@ -769,7 +808,9 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::SameLine();
   if (ui::soft_button(locale::tr("scanner.decreased"), ImVec2(0, 38))) refine_scan(state, RefineMode::Decreased);
   ImGui::EndDisabled();
-  bool can_refresh = state.client.connected() && !state.scan_snapshot.empty() && !state.scan_async_pending;
+  bool can_refresh = state.client.connected() &&
+                     payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
+                     !state.scan_snapshot.empty() && !state.scan_async_pending;
   ImGui::BeginDisabled(!can_refresh);
   std::string next_label = std::string(icons::kRefresh) + "  " +
       std::string(state.scan_is_unknown_session ? locale::tr("scanner.next_scan_refresh_all") : locale::tr("scanner.refresh_baseline"));
@@ -802,7 +843,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                        auto_search_target_hint(hint_tgt));
 
     /* Baseline capture: auto-search piggybacks on the Unknown Value Scan */
-    bool can_baseline = can_launch_scan;
+    bool can_baseline = can_launch_unknown;
     ImGui::BeginDisabled(!can_baseline);
     if (ui::soft_button((std::string(icons::kTarget) + "  " + locale::tr("scanner.capture_baseline")).c_str(),
                         ui::full_button(38))) {
@@ -815,7 +856,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     ImGui::EndDisabled();
 
     /* Next Scan: re-read and score candidates */
-    bool can_next = state.auto_search_has_baseline && can_launch_scan &&
+    bool can_next = state.auto_search_has_baseline && can_launch_unknown &&
                     !state.scan_snapshot.empty();
     ImGui::BeginDisabled(!can_next);    char ns_buf[128];
     std::snprintf(ns_buf, sizeof(ns_buf), locale::tr("scanner.next_scan_pass"), state.auto_search_pass + 1);
@@ -848,7 +889,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
         [&client, pid, val_len, snap_type, tgt, has_batch,
          &snap, &temp_result, &temp_snapshot, &temp_snap_val_len,
          &temp_snap_type, &temp_is_unknown, &temp_status,
-         &temp_candidates]() -> bool {
+         &temp_candidates, &mtx = state.scan_async_mtx]() -> bool {
           /* Re-read all baseline addresses */
           const auto &old_snap = snap;
           std::vector<ScanSnapshotEntry> current_snap;
@@ -919,11 +960,13 @@ void draw_scanner(AppState &state, ImVec2 avail) {
           engine.set_baseline(old_snap, snap_type, val_len);
           auto candidates = engine.score_candidates(current_snap, 100);
 
-          /* Store scored candidates for UI display */
-          temp_candidates = std::move(candidates);
+          /* Store scored candidates and build new snapshot under lock */
+          {
+            std::lock_guard<std::mutex> lock(mtx);
+            temp_candidates = std::move(candidates);
 
-          /* Build new snapshot from the top candidates (keep them for next pass) */
-          temp_snapshot.clear();
+            /* Build new snapshot from the top candidates (keep them for next pass) */
+            temp_snapshot.clear();
           temp_snapshot.reserve(candidates.size());
           temp_result.addresses.clear();
           temp_result.addresses.reserve(candidates.size());
@@ -956,6 +999,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                         "Auto-search: %u candidates scored (%s)",
                         temp_result.count,
                         bytes_per_second(bytes_read, elapsed_ns).c_str());
+          }
           return true;
         });
     }

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <exception>
 #include <future>
+#include <mutex>
 
 namespace memdbg::frontend {
 
@@ -35,18 +36,30 @@ static void poll_pointer_async(AppState &state) {
   }
 
   if (!ok) {
-    if (state.scan_async_error.empty()) state.scan_async_error = "Pointer scanner request failed";
-    set_status(state, state.scan_async_error);
+    std::string error_local;
+    {
+      std::lock_guard<std::mutex> lock(state.scan_async_mtx);
+      error_local = state.scan_async_error.empty() ? "Pointer scanner request failed" : state.scan_async_error;
+      state.scan_async_error.clear();
+    }
+    set_status(state, error_local);
     if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("Pointer scan failed: " + state.scan_async_error).c_str());
-    push_notification(state, "Pointer scan failed: " + state.scan_async_error, 5.0);
+      state.crash_logger.log("error", ("Pointer scan failed: " + error_local).c_str());
+    push_notification(state, "Pointer scan failed: " + error_local, 5.0);
     return;
   }
 
-  /* Apply results from temp storage */
-  state.pointer_result = std::move(state.scan_async_temp_result);
+  /* Apply results from temp storage under lock */
+  ScanResult result_local;
+  char status_local[256] = {};
+  {
+    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
+    result_local = std::move(state.scan_async_temp_result);
+    std::memcpy(status_local, state.scan_async_temp_session_status, sizeof(status_local));
+  }
+  state.pointer_result = std::move(result_local);
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
-                "%s", state.scan_async_temp_session_status);
+                "%s", status_local);
   set_status(state, state.scan_session_status);
 }
 
@@ -89,7 +102,9 @@ static void run_pointer_scan(AppState &state) {
   auto &error_out = state.scan_async_error;
 
   state.scan_async_future = std::async(std::launch::async,
-    [&client, request, &temp_result, &temp_status, &error_out]() -> bool {
+    [&client, request, &temp_result, &temp_status, &error_out,
+     &mtx = state.scan_async_mtx]() -> bool {
+      std::lock_guard<std::mutex> lock(mtx);
       ScanResult res;
       if (!client.scan_pointer(request, res)) {
         error_out = client.last_error();
@@ -144,7 +159,9 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
     ImGui::SetTooltip("%s", locale::tr("pointer_scanner.range_tooltip"));
 
   ImGui::Spacing();
-  bool can_scan = state.client.connected() && state.selected_pid > 0 && !state.scan_async_pending;
+  bool can_scan = state.client.connected() && state.selected_pid > 0 &&
+                  !state.scan_async_pending &&
+                  payload_supports(state, MEMDBG_CAP_SCAN_POINTER);
   ImGui::BeginDisabled(!can_scan);
   if (ui::primary_button((std::string(icons::kPointer) + "  " + locale::tr("pointer_scanner.scan_pointers")).c_str(),
                          ui::full_button(42)))

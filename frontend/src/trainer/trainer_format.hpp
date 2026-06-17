@@ -19,6 +19,9 @@
 
 namespace memdbg::frontend {
 
+/* Shared helper: serialize bytes to an uppercase hex string. */
+std::string bytes_to_hex(const std::vector<uint8_t> &bytes);
+
 enum class TrainerFormat {
   CHT,       /* MemDBG native .cht */
   SHN,       /* Reaper MultiTrainer .shn (pipe-delimited, same structure) */

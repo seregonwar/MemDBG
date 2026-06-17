@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <vector>
 
@@ -61,7 +62,7 @@ bool trainer_format_supports_save(TrainerFormat fmt) {
 
 /* ---- shared helpers ---- */
 
-static std::string bytes_to_hex(const std::vector<uint8_t> &bytes) {
+std::string bytes_to_hex(const std::vector<uint8_t> &bytes) {
   std::ostringstream out;
   out << std::hex << std::uppercase << std::setfill('0');
   for (uint8_t b : bytes) out << std::setw(2) << static_cast<unsigned>(b);
@@ -240,94 +241,111 @@ static bool save_pipe_delimited(AppState &state, const std::string &path) {
 }
 
 /* ================================================================
-   GoldHEN JSON
+   GoldHEN JSON (formal nlohmann/json parser)
    ================================================================ */
 
-static std::string json_str_value(const std::string &json, const char *key, size_t start) {
-  std::string marker = "\"" + std::string(key) + "\"";
-  size_t pos = json.find(marker, start);
-  if (pos == std::string::npos) return {};
-  pos = json.find(':', pos + marker.size());
-  if (pos == std::string::npos) return {};
-  pos = json.find('"', pos);
-  if (pos == std::string::npos) return {};
-  std::string value;
-  bool escape = false;
-  for (size_t i = pos + 1; i < json.size(); ++i) {
-    char c = json[i];
-    if (escape) { value.push_back(c); escape = false; continue; }
-    if (c == '\\') { escape = true; continue; }
-    if (c == '"') break;
-    value.push_back(c);
-  }
-  return value;
+static std::string json_string_or_number(const nlohmann::json &node) {
+  if (node.is_string()) return node.get<std::string>();
+  if (node.is_number_unsigned()) return std::to_string(node.get<uint64_t>());
+  if (node.is_number_integer()) return std::to_string(node.get<int64_t>());
+  if (node.is_number_float()) return std::to_string(node.get<double>());
+  return {};
+}
+
+static bool memory_entry_is_off_note(const nlohmann::json &mem) {
+  if (!mem.is_object() || !mem.contains("note")) return false;
+  std::string note = lower_copy(json_string_or_number(mem["note"]));
+  return note.find("off") != std::string::npos;
 }
 
 static int load_goldhen_json(AppState &state, const std::string &path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return -1;
-  std::ostringstream ss;
-  ss << in.rdbuf();
-  std::string json = ss.str();
-  int imported = 0;
-  size_t pos = 0;
-  while ((pos = json.find("\"name\"", pos)) != std::string::npos) {
-    std::string name = json_str_value(json, "name", pos);
-    /* find the memory array for this cheat */
-    size_t mem_start = json.find("\"memory\"", pos);
-    if (mem_start == std::string::npos) { pos += 6; continue; }
-    size_t mem_arr_start = json.find('[', mem_start);
-    if (mem_arr_start == std::string::npos) { pos += 6; continue; }
-    size_t mem_arr_end = json.find(']', mem_arr_start);
-    if (mem_arr_end == std::string::npos) { pos += 6; continue; }
 
-    /* iterate over all memory entries within this cheat */
-    size_t entry_pos = mem_arr_start;
-    while ((entry_pos = json.find("\"address\"", entry_pos)) != std::string::npos &&
-           entry_pos < mem_arr_end) {
-      std::string addr_str = json_str_value(json, "address", entry_pos);
-      std::string val_str  = json_str_value(json, "value", entry_pos);
-      std::string type_str = json_str_value(json, "type", entry_pos);
-      std::string note_str = json_str_value(json, "note", entry_pos);
-      uint64_t address = 0;
-      std::vector<uint8_t> bytes;
-      if (addr_str.empty() || val_str.empty() || !parse_u64(addr_str.c_str(), address)) {
-        entry_pos += 9; continue;
-      }
-      if (!parse_hex_bytes(val_str.c_str(), bytes) || bytes.empty()) {
-        entry_pos += 9; continue;
-      }
-      int vtype = MEMDBG_VALUE_BYTES;
-      if (!type_str.empty()) vtype = cht_type_from_string(type_str);
+  nlohmann::json json;
+  try {
+    in >> json;
+  } catch (const std::exception &) {
+    return -1;
+  }
 
-      bool is_off_entry = !note_str.empty() &&
-          (note_str.find("OFF") != std::string::npos ||
-           note_str.find("off") != std::string::npos);
-
-      if (is_off_entry) {
-        /* this is an OFF value — attach to the last imported cheat */
-        if (!state.cheats.empty()) {
-          auto &last = state.cheats.back();
-          last.off_bytes = std::move(bytes);
-          last.has_off_bytes = true;
-        }
-      } else {
-        CheatEntry cheat;
-        cheat.description = name.empty() ? ("JSON cheat " + std::to_string(imported + 1)) : name;
-        cheat.pid = state.selected_pid;
-        cheat.address = address;
-        cheat.value_type = vtype;
-        cheat.value_text = val_str;
-        cheat.bytes = std::move(bytes);
-        cheat.locked = false;
-        cheat.enabled = true;
-        if (state.client.connected()) (void)capture_off_value(state, cheat);
-        state.cheats.push_back(std::move(cheat));
-        imported++;
-      }
-      entry_pos += 9;
+  std::vector<nlohmann::json> mods;
+  if (json.is_object()) {
+    if (json.contains("mods") && json["mods"].is_array()) {
+      for (const auto &mod : json["mods"])
+        mods.push_back(mod);
+    } else if (json.contains("memory") && json["memory"].is_array()) {
+      mods.push_back(json); /* single-mod object */
     }
-    pos = mem_arr_end + 1;
+  } else if (json.is_array()) {
+    for (const auto &mod : json)
+      mods.push_back(mod);
+  }
+
+  int imported = 0;
+  for (const auto &mod : mods) {
+    if (!mod.is_object() || !mod.contains("name") || !mod["name"].is_string())
+      continue;
+    const std::string mod_name = mod["name"].get<std::string>();
+
+    if (!mod.contains("memory") || !mod["memory"].is_array()) continue;
+    for (const auto &mem : mod["memory"]) {
+      if (!mem.is_object()) continue;
+      if (!mem.contains("offset")) continue;
+
+      std::string offset_str = json_string_or_number(mem["offset"]);
+      std::string on_str;
+      if (mem.contains("on")) on_str = json_string_or_number(mem["on"]);
+      else if (mem.contains("value")) on_str = json_string_or_number(mem["value"]);
+
+      std::string off_str;
+      if (mem.contains("off")) off_str = json_string_or_number(mem["off"]);
+
+      uint64_t address = 0;
+      if (offset_str.empty() || !parse_hex_or_int(offset_str, address)) continue;
+
+      /* OFF-only entry with a note attaches to the previous cheat. */
+      if (on_str.empty() && mem.contains("value") && memory_entry_is_off_note(mem)) {
+        std::vector<uint8_t> off_bytes;
+        if (!state.cheats.empty() && parse_hex_bytes(mem["value"].get<std::string>().c_str(), off_bytes)) {
+          state.cheats.back().off_bytes = std::move(off_bytes);
+          state.cheats.back().has_off_bytes = true;
+        }
+        continue;
+      }
+
+      std::vector<uint8_t> bytes;
+      if (on_str.empty() || !parse_hex_bytes(on_str.c_str(), bytes) || bytes.empty()) continue;
+
+      CheatEntry cheat;
+      cheat.description = mod_name.empty()
+                              ? ("JSON cheat " + std::to_string(imported + 1))
+                              : mod_name;
+      cheat.pid = state.selected_pid;
+      cheat.address = address;
+      cheat.value_text = on_str;
+      cheat.bytes = std::move(bytes);
+      cheat.locked = false;
+      cheat.enabled = true;
+
+      if (mem.contains("type") && mem["type"].is_string()) {
+        cheat.value_type = cht_type_from_string(mem["type"].get<std::string>());
+      } else {
+        cheat.value_type = MEMDBG_VALUE_BYTES;
+      }
+
+      if (!off_str.empty()) {
+        std::vector<uint8_t> off_bytes;
+        if (parse_hex_bytes(off_str.c_str(), off_bytes) && !off_bytes.empty()) {
+          cheat.off_bytes = std::move(off_bytes);
+          cheat.has_off_bytes = true;
+        }
+      }
+
+      if (state.client.connected()) (void)capture_off_value(state, cheat);
+      state.cheats.push_back(std::move(cheat));
+      imported++;
+    }
   }
   return imported;
 }
@@ -337,35 +355,37 @@ static bool save_goldhen_json(const AppState &state, const std::string &path) {
   std::error_code ec;
   if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
   if (ec) return false;
+
+  nlohmann::json root = nlohmann::json::object();
+  root["name"] = state.has_process_info && !state.selected_process_info.title_id.empty()
+                     ? state.selected_process_info.title_id
+                     : selected_process_name(state);
+  root["id"] = state.has_process_info ? state.selected_process_info.title_id : "unknown";
+  root["version"] = "01.00";
+  root["process"] = "eboot.bin";
+  root["credits"] = nlohmann::json::array();
+
+  nlohmann::json mods = nlohmann::json::array();
+  for (const auto &cheat : state.cheats) {
+    nlohmann::json mem_entry = nlohmann::json::object();
+    mem_entry["offset"] = hex_u64(cheat.address);
+    mem_entry["on"] = bytes_to_hex(cheat.bytes);
+    mem_entry["type"] = cht_type_name(cheat.value_type);
+    if (cheat.has_off_bytes && !cheat.off_bytes.empty())
+      mem_entry["off"] = bytes_to_hex(cheat.off_bytes);
+
+    nlohmann::json mod = nlohmann::json::object();
+    mod["name"] = cheat.description;
+    mod["type"] = "checkbox";
+    mod["memory"] = nlohmann::json::array({ mem_entry });
+    mods.push_back(mod);
+  }
+  root["mods"] = mods;
+
   std::ofstream out(p, std::ios::binary);
   if (!out) return false;
-  out << "[\n";
-  for (size_t i = 0; i < state.cheats.size(); ++i) {
-    const auto &cheat = state.cheats[i];
-    out << "  {\n";
-    out << "    \"name\": \"" << cheat.description << "\",\n";
-    out << "    \"type\": \"checkbox\",\n";
-    out << "    \"memory\": [\n";
-    out << "      {\n";
-    out << "        \"address\": \"0x" << std::hex << std::uppercase << cheat.address << std::dec << "\",\n";
-    out << "        \"value\": \"" << bytes_to_hex(cheat.bytes) << "\",\n";
-    out << "        \"type\": \"bytes\"\n";
-    if (cheat.has_off_bytes && !cheat.off_bytes.empty()) {
-      out << "      },\n";
-      out << "      {\n";
-      out << "        \"address\": \"0x" << std::hex << std::uppercase << cheat.address << std::dec << "\",\n";
-      out << "        \"value\": \"" << bytes_to_hex(cheat.off_bytes) << "\",\n";
-      out << "        \"type\": \"bytes\",\n";
-      out << "        \"note\": \"OFF value\"\n";
-    }
-    out << "      }\n";
-    out << "    ]\n";
-    out << "  }";
-    if (i + 1 < state.cheats.size()) out << ",";
-    out << "\n";
-  }
-  out << "]\n";
-  return true;
+  out << root.dump(2);
+  return !out.fail();
 }
 
 /* ================================================================
