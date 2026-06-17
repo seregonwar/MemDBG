@@ -167,6 +167,7 @@ static bool is_alnum_upper(char c) { return (c >= 'A' && c <= 'Z') || (c >= '0' 
 
 static bool match_title_id(const char *s) {
   if (!s) return false;
+  if (strnlen(s, 9) < 9U) return false;
   bool pfx = !strncmp(s, "CUSA", 4) || !strncmp(s, "PPSA", 4) || !strncmp(s, "PCSA", 4);
   if (!pfx) return false;
   for (int i = 4; i < 9; ++i) if (s[i] < '0' || s[i] > '9') return false;
@@ -181,7 +182,8 @@ static void extract_title_id(const char *text, char *out, size_t out_size) {
 }
 
 static bool match_content_id(const char *s) {
-  if (!s || !is_alnum_upper(s[0]) || !is_alnum_upper(s[1])) return false;
+  if (!s || strnlen(s, 36) < 36U) return false;
+  if (!is_alnum_upper(s[0]) || !is_alnum_upper(s[1])) return false;
   for (int i = 2; i < 6; ++i) if (s[i] < '0' || s[i] > '9') return false;
   if (s[6] != '-' || !match_title_id(s + 7) || s[16] != '_' ||
       s[17] < '0' || s[17] > '9' || s[18] < '0' || s[18] > '9' || s[19] != '-') return false;

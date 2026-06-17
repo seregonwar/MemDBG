@@ -66,6 +66,7 @@ typedef struct memdbg_config {
 
 void memdbg_config_defaults(memdbg_config_t *cfg);
 const char *memdbg_strerror(memdbg_status_t status);
+uint32_t memdbg_capabilities(const memdbg_config_t *cfg);
 int memdbg_daemon_run(const memdbg_config_t *cfg);
 void memdbg_daemon_request_stop(void);
 bool memdbg_daemon_should_stop(void);

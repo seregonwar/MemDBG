@@ -17,6 +17,7 @@
 #include "memdbg/telemetry/udp_log.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -28,6 +29,7 @@ static FILE *g_mirror_log_file = NULL;
 static bool g_log_stderr = true;
 static char g_data_log_path[MEMDBG_PATH_MAX] = "";
 static char g_mirror_log_path[MEMDBG_PATH_MAX] = "";
+static pthread_mutex_t g_log_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *level_name(memdbg_log_level_t level) {
   switch (level) {
@@ -144,6 +146,7 @@ void memdbg_log_vwrite(memdbg_log_level_t level, const char *fmt, va_list ap) {
                  tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
                  tmv.tm_min, tmv.tm_sec, level_name(level), body);
 
+  pthread_mutex_lock(&g_log_mtx);
   if (g_data_log_file != NULL) {
     (void)fputs(line, g_data_log_file);
     (void)fflush(g_data_log_file);
@@ -152,6 +155,8 @@ void memdbg_log_vwrite(memdbg_log_level_t level, const char *fmt, va_list ap) {
     (void)fputs(line, g_mirror_log_file);
     (void)fflush(g_mirror_log_file);
   }
+  pthread_mutex_unlock(&g_log_mtx);
+
   memdbg_udp_log_send(line, strlen(line));
   if (g_log_stderr) {
     (void)fputs(line, stderr);

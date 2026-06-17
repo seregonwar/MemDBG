@@ -43,6 +43,8 @@ static int build_pid_path(const memdbg_config_t *cfg,
 
 static int read_pid_file(const char *path) {
   FILE *fp;
+  char buf[64];
+  char *end;
   long pid;
 
   if (path == NULL || path[0] == '\0') return -1;
@@ -50,12 +52,18 @@ static int read_pid_file(const char *path) {
   fp = fopen(path, "r");
   if (fp == NULL) return -1;   /* file doesn't exist — not an error */
 
-  pid = -1L;
-  if (fscanf(fp, "%ld", &pid) != 1 || pid <= 0L || pid > (long)INT32_MAX) {
+  if (fgets(buf, sizeof(buf), fp) == NULL) {
     (void)fclose(fp);
-    return -1;                 /* corrupt file — ignore */
+    return -1;
   }
   (void)fclose(fp);
+
+  errno = 0;
+  pid = strtol(buf, &end, 10);
+  if (end == buf || (*end != '\0' && *end != '\n' && *end != '\r') ||
+      pid <= 0L || pid > (long)INT32_MAX || errno != 0) {
+    return -1;                 /* corrupt file — ignore */
+  }
   return (int)pid;
 }
 
@@ -64,6 +72,38 @@ static int read_pid_file(const char *path) {
 static bool process_exists(int pid) {
   if (pid <= 0) return false;
   return kill((pid_t)pid, 0) == 0 || errno != ESRCH;
+}
+
+/* ---- Verify the target PID actually belongs to a MemDBG instance.
+ *      On systems with /proc/<pid>/comm we require the name to contain
+ *      "memdbg" (case-insensitive).  On other platforms we accept any
+ *      process that exists, because we cannot safely inspect it. ---- */
+
+static bool process_name_contains_memdbg(int pid) {
+  char path[256];
+  char comm[64];
+  FILE *fp;
+  size_t len;
+  bool found = false;
+
+  (void)snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+  fp = fopen(path, "r");
+  if (fp == NULL) return true;  /* cannot verify — be conservative */
+
+  if (fgets(comm, sizeof(comm), fp) != NULL) {
+    len = strlen(comm);
+    if (len > 0U && comm[len - 1U] == '\n') comm[len - 1U] = '\0';
+    for (size_t i = 0; comm[i]; ++i) {
+      char c = comm[i];
+      if ((c >= 'A' && c <= 'Z')) c = (char)(c + ('a' - 'A'));
+      if (c == 'm' && strstr(&comm[i], "memdbg") == &comm[i]) {
+        found = true;
+        break;
+      }
+    }
+  }
+  (void)fclose(fp);
+  return found;
 }
 
 /* ---- Terminate a process: SIGTERM → wait → SIGKILL ---- */
@@ -134,6 +174,13 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
                      "instance: stale pid file for pid %d; removing",
                      prev_pid);
     (void)unlink(path);
+    return MEMDBG_OK;
+  }
+
+  if (!process_name_contains_memdbg(prev_pid)) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "instance: pid %d does not appear to be a MemDBG process; refusing to terminate",
+                     prev_pid);
     return MEMDBG_OK;
   }
 

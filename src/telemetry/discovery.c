@@ -11,6 +11,7 @@
 
 #include "memdbg/telemetry/discovery.h"
 
+#include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_network.h"
@@ -55,7 +56,7 @@ static void *discovery_thread_main(void *arg) {
   resp.magic            = MEMDBG_PACKET_MAGIC;
   resp.protocol_version = MEMDBG_PROTOCOL_VERSION;
   resp.platform_id      = discovery_platform_id();
-  resp.capabilities     = 0xFFFFFFFFU; /* optimistic — client verifies via HELLO */
+  resp.capabilities     = memdbg_capabilities(cfg);
   resp.debug_port       = cfg->debug_port;
   resp.udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
   (void)snprintf(resp.version, sizeof(resp.version), "%s",
