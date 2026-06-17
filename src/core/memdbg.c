@@ -48,7 +48,7 @@
 
 /* ---- Globals ---- */
 
-static atomic_bool g_stop_requested = ATOMIC_VAR_INIT(false);
+static atomic_bool g_stop_requested = false;
 static atomic_uint g_active_connections = 0;
 static uint64_t    g_start_ticks = 0;
 
@@ -750,6 +750,8 @@ static memdbg_status_t handle_scan_pointer(socket_t fd, const memdbg_packet_head
   if (body_len != sizeof(memdbg_scan_pointer_request_t)) return MEMDBG_ERR_PROTOCOL;
   memdbg_scan_pointer_request_t scan_req;
   memcpy(&scan_req, body, sizeof(scan_req));
+  if (scan_req.length == 0U || scan_req.length > UINT64_MAX - scan_req.start)
+    return MEMDBG_ERR_PARAM;
   if (scan_req.max_results == 0U || scan_req.max_results > cfg->max_scan_results)
     scan_req.max_results = cfg->max_scan_results;
   memdbg_scan_result_t result;

@@ -345,7 +345,7 @@ struct AppState {
   /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
   std::mutex scan_async_mtx;
   bool scan_async_pending = false;
-  std::future<bool> scan_async_future;
+  std::shared_future<bool> scan_async_future;
   std::string scan_async_label;
   double scan_async_start_time = 0.0;
   Screen scan_async_owner = Screen::Home;  /* prevents cross-screen result contamination */
@@ -621,6 +621,7 @@ void normalize_ports(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
 void disconnect_console(AppState &state);
+void reset_debugger_state();
 void request_telemetry_async(AppState &state);
 bool load_frontend_settings(AppState &state, std::string *error = nullptr);
 bool save_frontend_settings(const AppState &state, std::string *error = nullptr);

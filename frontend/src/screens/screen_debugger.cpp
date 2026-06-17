@@ -44,10 +44,11 @@ struct DebuggerState {
   std::vector<Client::DebugWatchpointEntry> watchpoints;
 };
 
+static DebuggerState s_dbg_state;
+
 static DebuggerState &dstate(AppState &state) {
-  static DebuggerState s;
   (void)state;
-  return s;
+  return s_dbg_state;
 }
 
 static bool parse_input_u64(const char *text, uint64_t &out) {
@@ -148,6 +149,8 @@ static void reg_input(AppState &state, const char *label, int64_t &value,
 }
 
 } // namespace
+
+void reset_debugger_state() { s_dbg_state = DebuggerState{}; }
 
 void draw_debugger(AppState &state, ImVec2 avail) {
   auto &ds = dstate(state);

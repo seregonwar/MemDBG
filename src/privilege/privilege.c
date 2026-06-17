@@ -30,19 +30,38 @@ bool memdbg_privilege_supported(void) {
 
 #if MEMDBG_PRIVILEGE_HAS_PS5
 
+#include <signal.h>
+
 static const uint8_t k_full_caps[16] = {
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 };
 
+static bool pid_alive(pid_t pid) { return kill(pid, 0) == 0; }
+
 int memdbg_privilege_jailbreak_self(void) {
   pid_t pid = getpid();
   uint8_t caps[16];
   int failures = 0;
-  intptr_t rootv;
+  intptr_t rootv, fd;
+  memdbg_ucred_backup_t backup;
 
   memset(caps, 0xff, sizeof(caps));
+  memset(&backup, 0, sizeof(backup));
 
+  /* Capture current state for rollback on partial failure */
+  backup.authid = kernel_get_ucred_authid(pid);
+  if (kernel_get_ucred_caps(pid, backup.caps) != 0) return -1;
+  backup.attrs = kernel_get_ucred_attrs(pid);
+  backup.uid   = kernel_get_ucred_uid(pid);
+  backup.ruid  = kernel_get_ucred_ruid(pid);
+  backup.svuid = kernel_get_ucred_svuid(pid);
+  backup.rgid  = kernel_get_ucred_rgid(pid);
+  backup.svgid = kernel_get_ucred_svgid(pid);
+  backup.proc_rootdir = kernel_get_proc_rootdir(pid);
+  backup.proc_jaildir = kernel_get_proc_jaildir(pid);
+
+  /* Apply changes */
   failures += kernel_set_ucred_uid(pid, 0) != 0;
   failures += kernel_set_ucred_ruid(pid, 0) != 0;
   failures += kernel_set_ucred_svuid(pid, 0) != 0;
@@ -53,22 +72,26 @@ int memdbg_privilege_jailbreak_self(void) {
 
   rootv = kernel_get_root_vnode();
   if (rootv != 0) {
-    intptr_t fd;
-
     failures += kernel_set_proc_rootdir(pid, rootv) != 0;
     failures += kernel_set_proc_jaildir(pid, rootv) != 0;
-    fd = kernel_get_proc_filedesc(pid);
+    if (pid_alive(pid))
+      fd = kernel_get_proc_filedesc(pid);
+    else { fd = 0; failures++; }
     if (fd != 0) {
-      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, rootv);
-      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, rootv);
+      backup.fd_rdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR);
+      backup.fd_jdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR);
+      backup.fd_modified = true;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, rootv) != 0;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, rootv) != 0;
     }
   } else {
     failures++;
   }
 
   if (failures != 0) {
+    memdbg_privilege_restore_target(pid, &backup);
     memdbg_log_write(MEMDBG_LOG_WARN,
-                     "privilege: self escalation incomplete pid=%d failures=%d",
+                     "privilege: self escalation incomplete pid=%d failures=%d (rolled back)",
                      (int)pid, failures);
     return -1;
   }
@@ -90,20 +113,24 @@ int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
   backup->authid = kernel_get_ucred_authid(pid);
   if (kernel_get_ucred_caps(pid, backup->caps) != 0) return -1;
   backup->attrs = kernel_get_ucred_attrs(pid);
-  backup->uid = kernel_get_ucred_uid(pid);
-  backup->ruid = kernel_get_ucred_ruid(pid);
+  backup->uid   = kernel_get_ucred_uid(pid);
+  backup->ruid  = kernel_get_ucred_ruid(pid);
   backup->svuid = kernel_get_ucred_svuid(pid);
-  backup->rgid = kernel_get_ucred_rgid(pid);
+  backup->rgid  = kernel_get_ucred_rgid(pid);
   backup->svgid = kernel_get_ucred_svgid(pid);
   backup->proc_rootdir = kernel_get_proc_rootdir(pid);
   backup->proc_jaildir = kernel_get_proc_jaildir(pid);
   backup->fd_rdir = 0;
   backup->fd_jdir = 0;
 
-  ucred = kernel_get_proc_ucred(pid);
-  if (ucred != 0)
-    (void)kernel_copyout(ucred + 0x10, &backup->ngroups,
-                         sizeof(backup->ngroups));
+  if (pid_alive(pid))
+    ucred = kernel_get_proc_ucred(pid);
+  else { ucred = 0; failures++; }
+  if (ucred != 0) {
+    if (kernel_copyout(ucred + 0x10, &backup->ngroups,
+                       sizeof(backup->ngroups)) == 0)
+      backup->ngroups_valid = true;
+  }
 
   failures += kernel_set_ucred_uid(pid, 0) != 0;
   failures += kernel_set_ucred_ruid(pid, 0) != 0;
@@ -126,12 +153,15 @@ int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
 
     failures += kernel_set_proc_rootdir(pid, rootv) != 0;
     failures += kernel_set_proc_jaildir(pid, rootv) != 0;
-    fd = kernel_get_proc_filedesc(pid);
+    if (pid_alive(pid))
+      fd = kernel_get_proc_filedesc(pid);
+    else { fd = 0; failures++; }
     if (fd != 0) {
       backup->fd_rdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR);
       backup->fd_jdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR);
-      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, rootv);
-      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, rootv);
+      backup->fd_modified = true;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, rootv) != 0;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, rootv) != 0;
     }
   } else {
     failures++;
@@ -166,20 +196,22 @@ void memdbg_privilege_restore_target(pid_t pid,
     (void)kernel_set_proc_rootdir(pid, backup->proc_rootdir);
   if (backup->proc_jaildir != 0)
     (void)kernel_set_proc_jaildir(pid, backup->proc_jaildir);
-  if (backup->fd_rdir != 0 || backup->fd_jdir != 0) {
-    intptr_t fd = kernel_get_proc_filedesc(pid);
+  if (backup->fd_modified) {
+    intptr_t fd = 0;
+    if (pid_alive(pid))
+      fd = kernel_get_proc_filedesc(pid);
     if (fd != 0) {
-      if (backup->fd_rdir != 0)
-        kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, backup->fd_rdir);
-      if (backup->fd_jdir != 0)
-        kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, backup->fd_jdir);
+      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, backup->fd_rdir);
+      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, backup->fd_jdir);
     }
   }
 
-  ucred = kernel_get_proc_ucred(pid);
-  if (ucred != 0)
-    (void)kernel_copyin(&backup->ngroups, ucred + 0x10,
-                        sizeof(backup->ngroups));
+  if (backup->ngroups_valid && pid_alive(pid)) {
+    ucred = kernel_get_proc_ucred(pid);
+    if (ucred != 0)
+      (void)kernel_copyin(&backup->ngroups, ucred + 0x10,
+                          sizeof(backup->ngroups));
+  }
 }
 
 #else

@@ -484,6 +484,12 @@ static void draw_connect_spinner(AppState &state) {
 
 void disconnect_console(AppState &state) {
   state.connect_pending = false;  /* cancel any in-flight async connect */
+
+  /* Drain async futures before clearing flags (std::future blocks on destructor). */
+  if (state.scan_async_future.valid()) state.scan_async_future.wait();
+  if (state.telemetry_future.valid()) state.telemetry_future.wait();
+  if (s_connect_future.valid()) s_connect_future.wait();
+
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.client.disconnect();
@@ -496,6 +502,7 @@ void disconnect_console(AppState &state) {
   state.has_process_info = false;
   state.telemetry_available = false;
   state.next_telemetry_poll = 0.0;
+  reset_debugger_state();
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");

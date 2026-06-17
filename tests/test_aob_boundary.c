@@ -115,6 +115,16 @@ void memdbg_process_maps_free(memdbg_map_list_t *maps) {
   memset(maps, 0, sizeof(*maps));
 }
 
+memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
+  if (out == NULL) return MEMDBG_ERR_PARAM;
+  memset(out, 0, sizeof(*out));
+  return MEMDBG_OK;
+}
+
+void memdbg_process_list_free(memdbg_process_list_t *list) {
+  if (list != NULL) { free(list->entries); memset(list, 0, sizeof(*list)); }
+}
+
 /* ---- Helpers ---- */
 
 static int test_aob_scan(const unsigned char *buf, size_t buf_size,

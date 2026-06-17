@@ -28,7 +28,7 @@
 
 static socket_t g_udp_fd = PAL_INVALID_SOCKET;
 static struct sockaddr_in g_udp_addr;
-static atomic_bool g_udp_enabled = ATOMIC_VAR_INIT(false);
+static atomic_bool g_udp_enabled = false;
 static pthread_mutex_t g_udp_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static memdbg_status_t set_destination_locked(const char *host, uint16_t port,

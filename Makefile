@@ -96,7 +96,7 @@ test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_
 	@echo "--- Running Scan Partition test ---"
 	$(BUILD_DIR)/test_scan_partition
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol
+test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-scan-partition
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)

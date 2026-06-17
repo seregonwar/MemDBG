@@ -25,7 +25,8 @@ static atomic_ullong g_total_bytes_read    = 0;
 static atomic_ullong g_total_bytes_written = 0;
 static atomic_ullong g_total_read_calls    = 0;
 static atomic_ullong g_total_write_calls   = 0;
-static atomic_bool g_privilege_warning_logged = ATOMIC_VAR_INIT(false);
+static atomic_bool g_privilege_warning_logged = false;
+static atomic_flag g_priv_elevating = ATOMIC_FLAG_INIT;
 
 typedef struct memdbg_memory_privilege_scope {
   pid_t pid;
@@ -59,14 +60,16 @@ static void privilege_scope_begin(memdbg_memory_privilege_scope_t *scope,
 
   if (!memdbg_privilege_supported()) return;
 
-  /* The debugger already elevates the target for the whole attach session;
-   * do not nest privilege changes because that would overwrite its backup. */
   if (memdbg_debugger_is_elevated((int32_t)pid)) return;
+
+  if (atomic_flag_test_and_set(&g_priv_elevating)) return;
 
   if (memdbg_privilege_elevate_target((pid_t)pid, &scope->backup) == 0) {
     scope->active = true;
     return;
   }
+
+  atomic_flag_clear(&g_priv_elevating);
 
   if (!atomic_exchange_explicit(&g_privilege_warning_logged, true,
                                 memory_order_relaxed)) {
@@ -79,6 +82,7 @@ static void privilege_scope_end(memdbg_memory_privilege_scope_t *scope) {
   if (scope == NULL || !scope->active) return;
   memdbg_privilege_restore_target(scope->pid, &scope->backup);
   scope->active = false;
+  atomic_flag_clear(&g_priv_elevating);
 }
 
 /* ---- Single read ---- */

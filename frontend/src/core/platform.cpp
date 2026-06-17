@@ -232,7 +232,7 @@ int socket_send(socket_handle_t fd, const void *buffer, size_t size) {
 #if defined(_WIN32)
   return send(fd, static_cast<const char *>(buffer), chunk, 0);
 #else
-  return static_cast<int>(send(fd, buffer, static_cast<size_t>(chunk), 0));
+  return static_cast<int>(send(fd, buffer, static_cast<size_t>(chunk), MSG_NOSIGNAL));
 #endif
 }
 
