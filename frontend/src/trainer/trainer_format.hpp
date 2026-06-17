@@ -14,6 +14,7 @@
 #ifndef MEMDBG_FRONTEND_TRAINER_FORMAT_HPP
 #define MEMDBG_FRONTEND_TRAINER_FORMAT_HPP
 
+#include <cstdint>
 #include <string>
 #include <vector>
 

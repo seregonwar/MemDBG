@@ -78,7 +78,12 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
   broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
   broadcast_addr.sin_port = htons(discovery_port);
 
-  if (sendto(fd, reinterpret_cast<const char *>(&ping), sizeof(ping), MSG_NOSIGNAL,
+  if (sendto(fd, reinterpret_cast<const char *>(&ping), sizeof(ping),
+#if defined(_WIN32)
+             0,
+#else
+             MSG_NOSIGNAL,
+#endif
              reinterpret_cast<const sockaddr *>(&broadcast_addr),
              sizeof(broadcast_addr)) < 0) {
     error = "discovery: sendto failed: " +
