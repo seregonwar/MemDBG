@@ -26,11 +26,14 @@ CrashLogger *CrashLogger::s_instance = nullptr;
 /* ---- Construction / destruction ---- */
 
 CrashLogger::CrashLogger() {
+  ring_ = new Entry[kRingCapacity];
   ring_clear();
 }
 
 CrashLogger::~CrashLogger() {
   close();
+  delete[] ring_;
+  ring_ = nullptr;
 }
 
 /* ---- Public API ---- */
