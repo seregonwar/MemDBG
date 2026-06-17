@@ -3,422 +3,176 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MemDBG - Complete guide</title>
-  <meta name="description" content="Complete guide to using MemDBG: payload, frontend, scanner, memory, trainer, telemetry, and troubleshooting.">
+  <title>MemDBG — Operational Guide</title>
+  <meta name="description" content="Complete operational guide to MemDBG: payload, frontend, scanner, memory, trainer, telemetry, and troubleshooting.">
   <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <nav class="topbar" aria-label="Primary navigation">
-      <a class="brand" href="#top" aria-label="MemDBG home">
+  <!-- Mobile overlay for sidebar toggle -->
+  <input type="checkbox" id="sidebar-toggle" class="sidebar-toggle" aria-hidden="true">
+  <label for="sidebar-toggle" class="sidebar-overlay" aria-hidden="true"></label>
+
+  <!-- Sidebar -->
+  <nav class="sidebar" aria-label="Documentation navigation">
+    <div class="sidebar-header">
+      <a class="brand" href="#top">
         <span class="brand-mark">M</span>
         <span>MemDBG</span>
       </a>
-      <div class="nav-links">
-        <a href="#setup">Setup</a>
-        <a href="#workflow">Workflow</a>
-        <a href="#scanner">Scanner</a>
-        <a href="#trainer">Trainer</a>
-        <a href="#troubleshooting">Errors</a>
-      </div>
-    </nav>
-  </header>
+      <label for="sidebar-toggle" class="sidebar-close" aria-label="Close sidebar">&times;</label>
+    </div>
 
-  <main id="top">
-    <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Memory debugger payload + native frontend</p>
-        <h1>MemDBG</h1>
-        <p class="lead">
-          A practical guide for connecting the payload, reading and writing
-          memory, using scanners, creating reusable trainers, and diagnosing
-          common errors on jailbroken consoles and development builds.
-        </p>
-        <div class="hero-actions">
-          <a class="button primary" href="#quick-start">Start now</a>
-          <a class="button secondary" href="#trainer">Build a trainer</a>
-        </div>
-      </div>
-      <aside class="status-panel" aria-label="Port summary">
-        <div class="panel-title">Default ports</div>
-        <dl class="port-list">
-          <div><dt>TCP</dt><dd>9020</dd></div>
-          <div><dt>UDP log</dt><dd>9023</dd></div>
-          <div><dt>Discovery</dt><dd>9022</dd></div>
-        </dl>
-        <p>
-          If a port is already in use, change the frontend configuration or
-          start the payload with the dedicated command-line arguments.
-        </p>
-      </aside>
+    <div class="sidebar-nav">
+      <p class="nav-section">Getting Started</p>
+      <a href="#quick-start" class="nav-link">Quick start</a>
+      <a href="#setup" class="nav-link">Payload setup</a>
+      <a href="#frontend" class="nav-link">Frontend connection</a>
+
+      <p class="nav-section">Core Workflow</p>
+      <a href="#workflow" class="nav-link">Processes &amp; maps</a>
+      <a href="#memory" class="nav-link">Read, write &amp; batch</a>
+      <a href="#dump" class="nav-link">Memory dumps</a>
+
+      <p class="nav-section">Scanning</p>
+      <a href="#scanner" class="nav-link">Exact &amp; AOB scanning</a>
+      <a href="#trainer" class="nav-link">Building trainers</a>
+      <a href="#batchcode" class="nav-link">Batchcode reference</a>
+
+      <p class="nav-section">Reference</p>
+      <a href="#troubleshooting" class="nav-link">Common errors</a>
+      <a href="#best-practices" class="nav-link">Best practices</a>
+      <a href="#ports" class="nav-link">Port reference</a>
+      <a href="#credits" class="nav-link">Credits</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="content" id="top">
+
+    <!-- Mobile hamburger -->
+    <label for="sidebar-toggle" class="hamburger" aria-label="Open sidebar">☰</label>
+
+    <!-- Hero -->
+    <section class="doc-hero">
+      <p class="eyebrow">Memory debugger payload + native frontend</p>
+      <h1>MemDBG Operational Guide</h1>
+      <p class="lead">
+        A practical guide for connecting the payload, reading and writing
+        memory, using scanners, creating reusable trainers, and diagnosing
+        common errors on jailbroken consoles and development builds.
+      </p>
     </section>
 
-    <section id="quick-start" class="section">
-      <div class="section-heading">
-        <p class="eyebrow">Quick start</p>
-        <h2>Fast setup</h2>
-      </div>
-      <div class="steps">
-        <article class="step">
-          <span class="step-number">1</span>
-          <h3>Build the payload</h3>
-          <p>Build the payload for the target platform, or the host build for local testing.</p>
-          <pre><code>make host
-make payload-ps5 PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk</code></pre>
-        </article>
-        <article class="step">
-          <span class="step-number">2</span>
-          <h3>Start MemDBG</h3>
-          <p>On host builds, you can pass the port, bind address, and log destination from the command line.</p>
-          <pre><code>./build/memdbg-host --bind=0.0.0.0 --debug-port=9020 --udp-port=9023</code></pre>
-        </article>
-        <article class="step">
-          <span class="step-number">3</span>
-          <h3>Open the frontend</h3>
-          <p>Build and launch the native interface, then connect to the console or host IP address.</p>
-          <pre><code>make frontend
-./build/frontend/memdbg_frontend</code></pre>
-        </article>
-      </div>
+    <!-- Sections loaded from markdown -->
+    <section id="quick-start" class="doc-section" data-md="docs/quick-start.md">
+      <h2>Quick start</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="setup" class="section split">
-      <div>
-        <p class="eyebrow">Setup</p>
-        <h2>Payload preparation</h2>
-        <p>
-          MemDBG exposes a TCP server for commands and a UDP channel for logs.
-          The payload must be running before you use processes, maps, memory
-          reads, scanners, or trainers.
-        </p>
-        <h3>Useful arguments</h3>
-        <table>
-          <thead>
-            <tr><th>Argument</th><th>Purpose</th></tr>
-          </thead>
-          <tbody>
-            <tr><td><code>--bind=0.0.0.0</code></td><td>Address the payload listens on.</td></tr>
-            <tr><td><code>--debug-port=9020</code></td><td>TCP port used by the frontend.</td></tr>
-            <tr><td><code>--udp-host=255.255.255.255</code></td><td>UDP host or broadcast address for logs.</td></tr>
-            <tr><td><code>--udp-port=9023</code></td><td>UDP port for live console logs.</td></tr>
-            <tr><td><code>--data-root=/data/memdbg</code></td><td>Payload data and log directory.</td></tr>
-            <tr><td><code>--no-udp-log</code></td><td>Disable UDP log delivery.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="note">
-        <h3>Console permissions</h3>
-        <p>
-          On supported platforms, the privilege module tries to elevate the
-          payload at startup and temporarily elevate the target process during
-          read/write/batch operations. Look for a log line similar to
-          <code>privilege: payload escaped sandbox</code>. If that line is
-          missing or the operation fails, many actions can return
-          <code>payload status -3</code> or <code>payload status -8</code>.
-        </p>
-      </div>
+    <section id="setup" class="doc-section" data-md="docs/setup.md">
+      <h2>Payload setup</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="frontend" class="section">
-      <div class="section-heading">
-        <p class="eyebrow">Frontend</p>
-        <h2>Connection and settings</h2>
-      </div>
-      <div class="grid two">
-        <article class="card">
-          <h3>Connection</h3>
-          <p>
-            Enter the console or host IP address, confirm the TCP port, and
-            press Connect. After the HELLO response, the sidebar shows the
-            connection state, IP, port, and UDP listening status.
-          </p>
-        </article>
-        <article class="card">
-          <h3>Saved IP</h3>
-          <p>
-            In Settings, you can save the IP address you use most often. This
-            is useful when the console has a static address or a DHCP reservation
-            on your router.
-          </p>
-        </article>
-        <article class="card">
-          <h3>Console log</h3>
-          <p>
-            The Logs screen shows UDP messages from the payload. If messages do
-            not arrive, verify that the frontend is listening on the same UDP
-            port configured in the payload, and that the firewall or network is
-            not blocking broadcast traffic.
-          </p>
-        </article>
-        <article class="card">
-          <h3>Telemetry</h3>
-          <p>
-            The Telemetry screen summarizes uptime, active connections, total
-            reads/writes, and scanner cache performance. Use it to understand
-            whether a trainer is writing too often or a scan is producing many
-            read errors.
-          </p>
-        </article>
-      </div>
+    <section id="frontend" class="doc-section" data-md="docs/frontend.md">
+      <h2>Frontend — connection &amp; settings</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="workflow" class="section split">
-      <div>
-        <p class="eyebrow">Workflow</p>
-        <h2>Processes, maps, and memory</h2>
-        <ol class="ordered">
-          <li>Connect to the payload and open the Processes section.</li>
-          <li>Refresh the process list and select the game or application process.</li>
-          <li>Load the memory maps for the selected process.</li>
-          <li>Prefer maps with read permission for scans and memory reads.</li>
-          <li>Use Dump selected map to save a region to a chosen location.</li>
-        </ol>
-      </div>
-      <div class="note">
-        <h3>Rule of thumb</h3>
-        <p>
-          Before reading or scanning, you need a valid process and, for range
-          scans, a range that matches the process maps. Bad ranges, terminated
-          processes, or unreadable pages can produce I/O errors even when the
-          TCP connection is still alive.
-        </p>
-      </div>
+    <section id="workflow" class="doc-section" data-md="docs/workflow.md">
+      <h2>Processes, maps, and memory</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="memory" class="section">
-      <div class="section-heading">
-        <p class="eyebrow">Memory</p>
-        <h2>Read, write, and batch</h2>
-      </div>
-      <div class="grid three">
-        <article class="card">
-          <h3>Read Memory</h3>
-          <p>
-            Reads bytes from an absolute address in the selected process. Use
-            small lengths while validating an address, then increase the length
-            only when the range is stable.
-          </p>
-        </article>
-        <article class="card">
-          <h3>Write Memory</h3>
-          <p>
-            Writes bytes into the target process. Before writing, always capture
-            the original value: you will need it to restore the state or build a
-            safe trainer toggle.
-          </p>
-        </article>
-        <article class="card">
-          <h3>Batch</h3>
-          <p>
-            Batch operations read or write multiple addresses in a single
-            request. They are ideal for trainers with several active cheats and
-            reduce TCP traffic compared with many separate requests.
-          </p>
-        </article>
-      </div>
+    <section id="memory" class="doc-section" data-md="docs/memory.md">
+      <h2>Read, write, and batch</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="scanner" class="section">
-      <div class="section-heading">
-        <p class="eyebrow">Scanner</p>
-        <h2>Finding useful addresses</h2>
-      </div>
-      <div class="scanner-layout">
-        <article>
-          <h3>Exact scan</h3>
-          <p>
-            Searches for an exact value in a range or across the whole process.
-            Choose the correct type: <code>u8</code>, <code>u16</code>,
-            <code>u32</code>, <code>u64</code>, <code>f32</code>, or
-            <code>f64</code>. If you are unsure, start with <code>u32</code>
-            for integer counters or <code>f32</code> for decimal values.
-          </p>
-        </article>
-        <article>
-          <h3>Process scan</h3>
-          <p>
-            Scans the readable maps of the selected process. It is useful when
-            you do not know the correct region, but it can be slower and can
-            produce more errors on protected or unstable maps.
-          </p>
-        </article>
-        <article>
-          <h3>AOB scan</h3>
-          <p>
-            Searches for a byte signature. Use wildcards for variable bytes and
-            build patterns that are long enough to avoid too many matches. This
-            is a strong base for trainers that need to survive address changes.
-          </p>
-        </article>
-        <article>
-          <h3>Pointer scan</h3>
-          <p>
-            Use pointer chains when an address changes after a restart or level
-            change. Always verify the chain by restarting the game or reloading
-            the save.
-          </p>
-        </article>
-      </div>
-      <div class="callout">
-        <strong>Recommended method:</strong>
-        scan a known value, change that value in game, narrow the results with a
-        new scan, then verify candidates by reading and writing controlled
-        values.
-      </div>
+    <section id="dump" class="doc-section" data-md="docs/dump.md">
+      <h2>Saving a memory dump</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="trainer" class="section trainer">
-      <div class="section-heading">
-        <p class="eyebrow">Trainer</p>
-        <h2>Building a trainer</h2>
-      </div>
-      <div class="trainer-grid">
-        <article class="card strong">
-          <h3>Example: infinite health</h3>
-          <ol class="ordered">
-            <li>Select the game process.</li>
-            <li>With health at 100, run an exact scan for <code>u32 = 100</code>.</li>
-            <li>Take damage, for example health at 83, and scan for <code>u32 = 83</code>.</li>
-            <li>Repeat until only a few results remain.</li>
-            <li>Read the candidate and verify that it changes with the in-game value.</li>
-            <li>Add the cheat in the Trainer section.</li>
-            <li>Capture the original OFF value.</li>
-            <li>Set the ON value, for example <code>999</code>, and enable lock if needed.</li>
-          </ol>
-        </article>
-        <article class="card">
-          <h3>Cheat fields</h3>
-          <table>
-            <tbody>
-              <tr><th>Name</th><td>Readable label, for example Infinite Health.</td></tr>
-              <tr><th>Address</th><td>Absolute address or a result resolved from AOB/pointer data.</td></tr>
-              <tr><th>Type</th><td>Value type: byte, integer, float, or raw bytes.</td></tr>
-              <tr><th>ON value</th><td>Value written when the cheat is enabled.</td></tr>
-              <tr><th>OFF value</th><td>Original value restored when the cheat is disabled.</td></tr>
-              <tr><th>Lock</th><td>Periodically rewrites the ON value.</td></tr>
-            </tbody>
-          </table>
-        </article>
-      </div>
-      <div class="grid two">
-        <article class="card">
-          <h3>Stable trainers</h3>
-          <p>
-            Absolute addresses can change on every launch because of ASLR,
-            updates, or version differences. For trainers you want to share,
-            prefer AOB signatures or pointer chains verified across multiple
-            sessions.
-          </p>
-        </article>
-        <article class="card">
-          <h3>OFF value</h3>
-          <p>
-            Capture OFF before enabling the cheat. If the original value is
-            dynamic, disabling the cheat may not be enough: in that case, use
-            lock carefully and test restoration on an unimportant save.
-          </p>
-        </article>
-      </div>
+    <section id="scanner" class="doc-section" data-md="docs/scanner.md">
+      <h2>Finding useful addresses</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="dump" class="section split">
-      <div>
-        <p class="eyebrow">Dump</p>
-        <h2>Saving a memory map</h2>
-        <p>
-          After selecting a process and loading its maps, choose a readable map
-          and use Dump selected map. Pick an explicit path to save the dump in
-          the location you want. Dumps are useful for offline analysis, version
-          comparison, and AOB signature creation.
-        </p>
-      </div>
-      <div class="note">
-        <h3>Watch the size</h3>
-        <p>
-          Some maps can be very large. If the dump fails, try a smaller region
-          or verify the permissions on the selected map.
-        </p>
-      </div>
+    <section id="trainer" class="doc-section" data-md="docs/trainer.md">
+      <h2>Building a trainer</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="troubleshooting" class="section">
-      <div class="section-heading">
-        <p class="eyebrow">Troubleshooting</p>
-        <h2>Common errors</h2>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Error</th><th>Meaning</th><th>What to check</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>payload status -3</code></td>
-              <td>I/O error during the requested operation.</td>
-              <td>Selected process, valid range, readable map, payload privileges, and whether the process is still alive.</td>
-            </tr>
-            <tr>
-              <td><code>payload status -8</code></td>
-              <td>Permission denied.</td>
-              <td>Privilege module, active jailbreak, payload logs, and target process permissions.</td>
-            </tr>
-            <tr>
-              <td><code>not connected</code></td>
-              <td>The frontend does not have an active TCP session.</td>
-              <td>Connect to the console first and verify IP/port in Settings.</td>
-            </tr>
-            <tr>
-              <td>Empty process list</td>
-              <td>The payload cannot enumerate processes or is not connected.</td>
-              <td>Ping, payload logs, supported platform, and process privileges.</td>
-            </tr>
-            <tr>
-              <td>Scan has no results</td>
-              <td>The value, type, or range does not match.</td>
-              <td>Try another type, narrow to the correct maps, use AOB, or use unknown scan.</td>
-            </tr>
-            <tr>
-              <td>No UDP logs</td>
-              <td>The frontend and payload are not communicating on the UDP channel.</td>
-              <td>Port 9023, firewall, broadcast, and same network segment.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <section id="batchcode" class="doc-section" data-md="docs/batchcode.md">
+      <h2>Batchcode reference</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="best-practices" class="section">
-      <div class="section-heading">
-        <p class="eyebrow">Best practice</p>
-        <h2>Safe and repeatable usage</h2>
-      </div>
-      <ul class="checklist">
-        <li>Use disposable saves when testing writes or trainers.</li>
-        <li>Record the game version, title id, and payload build for every trainer.</li>
-        <li>Before using lock/freeze, verify that the game is not also writing the value every frame.</li>
-        <li>Prefer AOB and pointer chains for trainers intended to work across sessions.</li>
-        <li>Check Telemetry: many read errors usually mean the range is too wide or maps are unreadable.</li>
-        <li>Keep TCP and UDP on different ports to avoid conflicts with other payloads or tools.</li>
-      </ul>
+    <section id="troubleshooting" class="doc-section" data-md="docs/troubleshooting.md">
+      <h2>Common errors</h2>
+      <div class="md-content"></div>
     </section>
 
-    <section id="credits" class="section credits">
-      <div>
-        <p class="eyebrow">Credits</p>
-        <h2>Author and links</h2>
-        <p>MemDBG is developed by SeregonWar.</p>
-      </div>
-      <div class="credit-links">
-        <a href="https://github.com/seregonwar/" rel="noopener" target="_blank">GitHub</a>
-        <a href="https://www.seregonwar.com/donations" rel="noopener" target="_blank">Donations</a>
-        <a href="https://x.com/SeregonWar" rel="noopener" target="_blank">X</a>
-      </div>
+    <section id="best-practices" class="doc-section" data-md="docs/best-practices.md">
+      <h2>Best practices</h2>
+      <div class="md-content"></div>
     </section>
+
+    <section id="ports" class="doc-section" data-md="docs/ports.md">
+      <h2>Port reference</h2>
+      <div class="md-content"></div>
+    </section>
+
+    <section id="credits" class="doc-section" data-md="docs/credits.md">
+      <h2>Credits</h2>
+      <div class="md-content"></div>
+    </section>
+
+    <footer class="doc-footer">
+      <span>MemDBG</span>
+      <span>Static guide — ready for GitHub Pages.</span>
+    </footer>
   </main>
 
-  <footer class="site-footer">
-    <span>MemDBG</span>
-    <span>Static guide ready for GitHub Pages.</span>
-  </footer>
+  <!-- Load markdown sections + scroll spy -->
+  <script>
+    (function() {
+      // ── Load markdown into each section ──
+      const sections = document.querySelectorAll('.doc-section[data-md]');
+      sections.forEach(function(section) {
+        const mdFile = section.getAttribute('data-md');
+        const container = section.querySelector('.md-content');
+        if (!mdFile || !container) return;
+
+        fetch(mdFile)
+          .then(function(res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.text();
+          })
+          .then(function(md) {
+            container.innerHTML = marked.parse(md);
+          })
+          .catch(function(err) {
+            container.innerHTML = '<p class="md-error">Failed to load ' + mdFile + ': ' + err.message + '</p>';
+          });
+      });
+
+      // ── Scroll spy: highlight active sidebar link ──
+      const allSections = document.querySelectorAll('section[id]');
+      const links = document.querySelectorAll('.nav-link');
+      const observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (!entry.isIntersecting) return;
+          var id = entry.target.getAttribute('id');
+          links.forEach(function(link) {
+            link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+          });
+        });
+      }, { rootMargin: '-20% 0px -70% 0px' });
+      allSections.forEach(function(s) { observer.observe(s); });
+    })();
+  </script>
 </body>
 </html>

@@ -42,15 +42,15 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger check-locales
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-scan-partition check-locales
 
 all: host
 
 host: $(HOST_TARGET)
 
-test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o tests/test_aob_boundary.c
+test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $< -o $(BUILD_DIR)/test_aob_boundary
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 
@@ -89,6 +89,12 @@ test-debugger-protocol: tests/test_debugger_protocol.c
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_protocol.c -o $(BUILD_DIR)/test_debugger_protocol
 	@echo "--- Running Debugger Protocol test ---"
 	$(BUILD_DIR)/test_debugger_protocol
+
+test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< -o $(BUILD_DIR)/test_scan_partition
+	@echo "--- Running Scan Partition test ---"
+	$(BUILD_DIR)/test_scan_partition
 
 test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol
 

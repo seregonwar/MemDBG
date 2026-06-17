@@ -15,6 +15,8 @@
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
 
+#include "scan_partition.h"
+
 #include <limits.h>
 #include <pthread.h>
 #include <stddef.h>
@@ -41,7 +43,7 @@
 #define MEMDBG_SCAN_MIN_READ_CHUNK 4096U
 #define MEMDBG_SCAN_INITIAL_CAPACITY 256U
 #define MEMDBG_MAP_PROT_READ 1U
-#define MEMDBG_SCAN_PARALLEL_MIN_MAPS  2U  /* minimum maps per thread */
+
 
 /* ---- Boyer-Moore-Horspool skip tables ---- */
 
@@ -611,39 +613,31 @@ static memdbg_status_t scan_maps_parallel(
     uint32_t prot_mask, uint64_t start_filter, uint64_t end_filter,
     memdbg_scan_result_t *out) {
 
-  /* Determine thread count: clamp to available maps and config. */
-  size_t num_threads = MEMDBG_SCAN_PARALLEL_THREADS;
-  if (num_threads < 1U) num_threads = 1U;
+  const size_t max_threads = MEMDBG_SCAN_PARALLEL_THREADS;
+  size_t num_threads = max_threads < 1U ? 1U : max_threads;
 
-  /* Count mappable regions so we know the effective workload. */
-  size_t effective_maps = 0U;
-  for (size_t i = 0U; i < map_count; ++i) {
-    const memdbg_map_entry_t *map = &maps[i];
-    if ((map->protection & prot_mask) != prot_mask ||
-        map->end <= map->start)
-      continue;
-    uint64_t ms = map->start, me = map->end;
-    if (start_filter != 0U && ms < start_filter) ms = start_filter;
-    if (end_filter   != 0U && me > end_filter)   me = end_filter;
-    if (me <= ms) continue;
-    if ((uint64_t)(me - ms) < (uint64_t)min_map_len) continue;
-    effective_maps++;
+  /* Partition maps by byte budget.  partition_maps_by_bytes handles
+     thread-count clamping, empty-slot fill, and returns the actual
+     number of used slots via out_used. */
+  scan_partition_slot_t *slots = (scan_partition_slot_t *)calloc(
+      num_threads, sizeof(scan_partition_slot_t));
+  if (slots == NULL) return MEMDBG_ERR_NOMEM;
+
+  size_t actual_workers = 0U;
+  memdbg_status_t part_st = partition_maps_by_bytes(
+      maps, map_count, prot_mask, start_filter, end_filter,
+      min_map_len, num_threads, slots, &actual_workers);
+  if (part_st != MEMDBG_OK) {
+    free(slots);
+    return part_st;
   }
-
-  /* Not worth parallelizing */
-  if (effective_maps < MEMDBG_SCAN_PARALLEL_MIN_MAPS * 2U ||
-      num_threads <= 1U) {
-    num_threads = 1U;
-  } else {
-    if (num_threads > effective_maps / MEMDBG_SCAN_PARALLEL_MIN_MAPS)
-      num_threads = effective_maps / MEMDBG_SCAN_PARALLEL_MIN_MAPS;
-    if (num_threads < 1U) num_threads = 1U;
-  }
-
-  /* Allocate worker structs */
+  /* Allocate worker structs sized to actual used slots only. */
   parallel_worker_t *workers =
-      (parallel_worker_t *)calloc(num_threads, sizeof(parallel_worker_t));
-  if (workers == NULL) return MEMDBG_ERR_NOMEM;
+      (parallel_worker_t *)calloc(actual_workers, sizeof(parallel_worker_t));
+  if (workers == NULL) {
+    free(slots);
+    return MEMDBG_ERR_NOMEM;
+  }
 
   /* Pre-allocate the output buffer at max_results.  Workers get
      their own per-thread preallocated buffers inside the thread. */
@@ -652,84 +646,23 @@ static memdbg_status_t scan_maps_parallel(
       max_results * sizeof(memdbg_scan_result_entry_t));
   if (out->entries == NULL) {
     free(workers);
+    free(slots);
     return MEMDBG_ERR_NOMEM;
   }
   out->count = 0U;
 
-  /* Partition: collect qualifying map indices + byte sizes for
-     size-weighted distribution.  Each thread gets ~equal scan bytes
-     instead of ~equal map count, so large maps don't starve workers.
-     Skip allocation for single-thread (the worker re-filters anyway). */
-  if (num_threads > 1U) {
-    size_t *eff_indices = (size_t *)malloc(
-        effective_maps * sizeof(size_t));
-    uint64_t *eff_bytes = (uint64_t *)malloc(
-        effective_maps * sizeof(uint64_t));
-    if (eff_indices == NULL || eff_bytes == NULL) {
-      free(eff_indices);
-      free(eff_bytes);
-      free(out->entries);
-      free(workers);
-      return MEMDBG_ERR_NOMEM;
-    }
-
-    size_t ei = 0U;
-    uint64_t total_bytes = 0U;
-    for (size_t i = 0U; i < map_count; ++i) {
-      const memdbg_map_entry_t *map = &maps[i];
-      if ((map->protection & prot_mask) != prot_mask ||
-          map->end <= map->start)
-        continue;
-      uint64_t ms = map->start, me = map->end;
-      if (start_filter != 0U && ms < start_filter) ms = start_filter;
-      if (end_filter   != 0U && me > end_filter)   me = end_filter;
-      if (me <= ms) continue;
-      uint64_t mbytes = me - ms;
-      if (mbytes < (uint64_t)min_map_len) continue;
-      eff_indices[ei] = i;
-      eff_bytes[ei]   = mbytes;
-      total_bytes    += mbytes;
-      ++ei;
-    }
-
-    uint64_t bytes_per_thread = total_bytes / (uint64_t)num_threads;
-    if (bytes_per_thread == 0U) bytes_per_thread = 1U;
-
-    size_t t = 0U;
-    uint64_t t_bytes = 0U;
-    workers[0].map_start = eff_indices[0];
-
-    for (size_t i = 0U; i < effective_maps; ++i) {
-      if (t + 1U < num_threads &&
-          t_bytes + eff_bytes[i] > bytes_per_thread && t_bytes > 0U) {
-        workers[t].map_end = eff_indices[i];
-        ++t;
-        workers[t].map_start = eff_indices[i];
-        t_bytes = 0U;
-      }
-      t_bytes += eff_bytes[i];
-    }
-    workers[t].map_end = map_count;
-
-    /* Fill any unused workers with empty ranges. */
-    for (size_t u = t + 1U; u < num_threads; ++u) {
-      workers[u].map_start = map_count;
-      workers[u].map_end   = map_count;
-    }
-
-    free(eff_bytes);
-    free(eff_indices);
-  } else {
-    workers[0].map_start = 0U;
-    workers[0].map_end   = map_count;
+  for (size_t t = 0U; t < actual_workers; ++t) {
+    workers[t].map_start = slots[t].map_start;
+    workers[t].map_end   = slots[t].map_end;
   }
+  free(slots);
 
   /* Populate shared fields and spawn threads. */
   pthread_t *threads =
-      (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+      (pthread_t *)malloc(actual_workers * sizeof(pthread_t));
   bool spawn_ok = (threads != NULL);
 
-  for (size_t t = 0U; t < num_threads; ++t) {
+  for (size_t t = 0U; t < actual_workers; ++t) {
     workers[t].scan_fn      = scan_fn;
     workers[t].ctx          = ctx;
     workers[t].pid          = pid;
@@ -741,7 +674,7 @@ static memdbg_status_t scan_maps_parallel(
     workers[t].end_filter   = end_filter;
     workers[t].min_map_len  = min_map_len;
 
-    if (spawn_ok && num_threads > 1U &&
+    if (spawn_ok && actual_workers > 1U &&
         workers[t].map_start < workers[t].map_end) {
       if (pthread_create(&threads[t], NULL,
                          parallel_worker_thread, &workers[t]) != 0) {
@@ -755,7 +688,7 @@ static memdbg_status_t scan_maps_parallel(
   }
 
   /* Join all spawned threads. */
-  for (size_t t = 0U; t < num_threads && spawn_ok && num_threads > 1U; ++t) {
+  for (size_t t = 0U; t < actual_workers && spawn_ok && actual_workers > 1U; ++t) {
     if (workers[t].status != MEMDBG_ERR_NET)
       (void)pthread_join(threads[t], NULL);
   }
@@ -765,10 +698,10 @@ static memdbg_status_t scan_maps_parallel(
   /* Merge results */
   {
     memdbg_status_t merge_st =
-        merge_scan_results(workers, num_threads, out, max_results);
+        merge_scan_results(workers, actual_workers, out, max_results);
     memdbg_status_t first_err = MEMDBG_OK;
 
-    for (size_t t = 0U; t < num_threads; ++t) {
+    for (size_t t = 0U; t < actual_workers; ++t) {
       if (workers[t].status != MEMDBG_OK && first_err == MEMDBG_OK)
         first_err = workers[t].status;
       /* Free per-thread result entries (now copied into `out`). */

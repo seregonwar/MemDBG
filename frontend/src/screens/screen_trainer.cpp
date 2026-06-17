@@ -10,6 +10,7 @@
 #include "trainer_format.hpp"
 #include "batchcode_parser.hpp"
 #include "file_picker.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -225,7 +226,13 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
+  static bool skip_clear_disabled = false;
   if (ui::soft_button((std::string(icons::kTrash) + "  " + locale::tr("trainer.clear_disabled")).c_str(), ImVec2(0, 38))) {
+    ImGui::OpenPopup("ConfirmClearDisabled");
+  }
+  if (ui::confirm_modal("ConfirmClearDisabled",
+                        locale::tr("trainer.confirm_clear_disabled"), nullptr,
+                        &skip_clear_disabled, true)) {
     state.cheats.erase(std::remove_if(state.cheats.begin(), state.cheats.end(),
       [](const CheatEntry &c){ return !c.enabled; }), state.cheats.end());
   }

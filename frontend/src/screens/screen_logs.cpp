@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 namespace memdbg::frontend {
 
@@ -23,7 +24,13 @@ void draw_logs(AppState &state, ImVec2 avail) {
     if (ui::soft_button((std::string(icons::kStop) + "  " + locale::tr("logs.stop_listener")).c_str(), ImVec2(150, 38))) { state.udp_listener.stop(); set_status(state, locale::tr("logs.stopped")); }
   }
   ImGui::SameLine();
-  if (ui::soft_button((std::string(icons::kTrash) + "  " + locale::tr("logs.clear")).c_str(), ImVec2(110, 38))) state.udp_listener.clear();
+  static bool skip_clear_logs = false;
+  if (ui::soft_button((std::string(icons::kTrash) + "  " + locale::tr("logs.clear")).c_str(), ImVec2(110, 38)))
+    ImGui::OpenPopup("ConfirmClearLogs");
+  if (ui::confirm_modal("ConfirmClearLogs",
+                        locale::tr("logs.confirm_clear"), nullptr,
+                        &skip_clear_logs, true))
+    state.udp_listener.clear();
   ImGui::SameLine();
   auto logs = state.udp_listener.snapshot();
   if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("logs.copy")).c_str(), ImVec2(110, 38))) {

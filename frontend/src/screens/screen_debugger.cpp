@@ -35,6 +35,9 @@ struct DebuggerState {
   int wp_length = 4;
   int wp_type = 1; /* 0=exec, 1=write, 2=read, 3=rw */
 
+  bool pause_on_attach = true;
+  bool auto_refresh_on_stop = true;
+
   std::vector<Client::DebugThreadEntry> threads;
   Client::DebugRegs regs{};
   std::vector<Client::DebugBreakpointEntry> breakpoints;
@@ -57,6 +60,20 @@ static bool parse_input_u64(const char *text, uint64_t &out) {
   }
 }
 
+static void poll_debugger_state(AppState &state);
+static void refresh_threads(AppState &state);
+
+static void refresh_regs(AppState &state) {
+  auto &ds = dstate(state);
+  if (!state.client.connected() || !ds.attached || ds.selected_lwp == 0) return;
+  Client::DebugRegs r{};
+  if (state.client.debug_get_regs(ds.selected_lwp, r)) {
+    ds.regs = r;
+  } else {
+    set_status(state, "Regs: " + state.client.last_error());
+  }
+}
+
 static void poll_debugger_state(AppState &state) {
   auto &ds = dstate(state);
   const double now = ImGui::GetTime();
@@ -68,8 +85,14 @@ static void poll_debugger_state(AppState &state) {
   bool stopped = false;
   int32_t stop_lwp = 0;
   if (state.client.debug_poll_events(stopped, stop_lwp)) {
+    bool was_stopped = ds.stopped;
     ds.stopped = stopped;
     if (stopped && stop_lwp != 0) ds.selected_lwp = stop_lwp;
+    /* Auto-refresh regs when the target just transitioned to stopped */
+    if (ds.auto_refresh_on_stop && !was_stopped && stopped) {
+      refresh_regs(state);
+      refresh_threads(state);
+    }
   }
 }
 
@@ -83,17 +106,6 @@ static void refresh_threads(AppState &state) {
   }
   if (!ds.threads.empty() && ds.selected_lwp == 0) {
     ds.selected_lwp = ds.threads[0].lwp;
-  }
-}
-
-static void refresh_regs(AppState &state) {
-  auto &ds = dstate(state);
-  if (!state.client.connected() || !ds.attached || ds.selected_lwp == 0) return;
-  Client::DebugRegs r{};
-  if (state.client.debug_get_regs(ds.selected_lwp, r)) {
-    ds.regs = r;
-  } else {
-    set_status(state, "Regs: " + state.client.last_error());
   }
 }
 
@@ -168,6 +180,9 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     ImGui::SameLine();
 
     if (!ds.attached) {
+      ImGui::Checkbox(locale::tr("debugger.pause_on_attach"), &ds.pause_on_attach);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", locale::tr("debugger.pause_on_attach_tip"));
       if (ui::primary_button(locale::tr("debugger.attach"), ImVec2(100, 0))) {
         int32_t pid = 0;
         try {
@@ -178,9 +193,16 @@ void draw_debugger(AppState &state, ImVec2 avail) {
         if (pid > 0) {
           if (state.client.debug_attach(pid)) {
             ds.attached = true;
-            ds.stopped = true;
             ds.pid = pid;
             ds.selected_lwp = 0;
+            if (ds.pause_on_attach) {
+              if (state.client.debug_stop()) {
+                ds.stopped = true;
+              } else {
+                ds.stopped = false;
+                set_status(state, "Stop: " + state.client.last_error());
+              }
+            }
             refresh_threads(state);
             refresh_regs(state);
             refresh_bpwp_lists(state);
@@ -228,7 +250,6 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       if (ui::soft_button(locale::tr("debugger.stop"), ImVec2(80, 0))) {
         if (state.client.debug_stop()) {
           ds.stopped = true;
-          refresh_regs(state);
         } else {
           set_status(state, "Stop: " + state.client.last_error());
         }
@@ -296,6 +317,11 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       }
     }
     ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::Checkbox(locale::tr("debugger.auto_refresh_on_stop"), &ds.auto_refresh_on_stop);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("debugger.auto_refresh_on_stop_tip"));
 
     auto &r = ds.regs.regs;
     reg_input(state, "RAX", r.r_rax);

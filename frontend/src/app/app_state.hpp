@@ -248,6 +248,10 @@ struct AppState {
   bool memory_overlay_watchpoints = true;
   bool memory_overlay_freed_allocs = true;
 
+  bool memory_auto_refresh = false;
+  float memory_auto_refresh_interval = 0.5f;
+  double next_memory_auto_refresh = 0.0;
+
   char write_address[32] = "0x0";
   char write_bytes[512] = "";
   char dump_path[512] = "dumps";

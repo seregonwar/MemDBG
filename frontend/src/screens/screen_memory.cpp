@@ -184,18 +184,18 @@ static void draw_overlay_hex_view(AppState &state) {
   }
 }
 
-static void read_memory(AppState &state) {
-  if (!state.client.connected()) {    set_status(state, locale::tr("memory.connect_first")); return; }
-  if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
+static void read_memory(AppState &state, bool quiet = false) {
+  if (!state.client.connected()) {    if (!quiet) set_status(state, locale::tr("memory.connect_first")); return; }
+  if (state.selected_pid <= 0) { if (!quiet) set_status(state, locale::tr("memory.select_process_first")); return; }
   uint64_t address = 0;
-  if (!parse_u64(state.read_address, address)) { set_status(state, locale::tr("memory.invalid_read_addr")); return; }
+  if (!parse_u64(state.read_address, address)) { if (!quiet) set_status(state, locale::tr("memory.invalid_read_addr")); return; }
   state.read_length = std::clamp(state.read_length, 1, static_cast<int>(MEMDBG_PROTOCOL_MAX_READ));
 
   std::vector<uint8_t> next;
   if (!state.client.memory_read(state.selected_pid, address,
                                 static_cast<uint32_t>(state.read_length),
                                 next)) {
-    set_status(state, state.client.last_error());
+    if (!quiet) set_status(state, state.client.last_error());
     return;
   }
 
@@ -203,9 +203,11 @@ static void read_memory(AppState &state) {
   state.memory_previous_base = state.memory_base;
   state.memory = std::move(next);
   state.memory_base = address;
-  char read_buf[64];
-  std::snprintf(read_buf, sizeof(read_buf), locale::tr("memory.read_n_bytes"), state.memory.size());
-  set_status(state, read_buf);
+  if (!quiet) {
+    char read_buf[64];
+    std::snprintf(read_buf, sizeof(read_buf), locale::tr("memory.read_n_bytes"), state.memory.size());
+    set_status(state, read_buf);
+  }
 }
 
 static void write_memory(AppState &state) {
@@ -335,6 +337,26 @@ static void draw_watchpoints(AppState &state) {
 }
 
 static void refresh_allocation_findings(AppState &state) {
+  /* Skip recomputation when allocations haven't changed since last frame.
+   * Use allocation_event_counter (incremented on every alloc/free) to catch
+   * freed-flag flips that don't change vector sizes. */
+  static size_t cached_alloc_count = 0;
+  static size_t cached_alert_count = 0;
+  static uint64_t cached_event_counter = 0;
+  static uint64_t cached_memory_base = 0;
+  static size_t cached_memory_size = 0;
+  if (state.allocations.size() == cached_alloc_count &&
+      state.allocation_alerts.size() == cached_alert_count &&
+      state.allocation_event_counter == cached_event_counter &&
+      state.memory_base == cached_memory_base &&
+      state.memory.size() == cached_memory_size)
+    return;
+  cached_alloc_count = state.allocations.size();
+  cached_alert_count = state.allocation_alerts.size();
+  cached_event_counter = state.allocation_event_counter;
+  cached_memory_base = state.memory_base;
+  cached_memory_size = state.memory.size();
+
   state.allocation_findings.clear();
   uint64_t live_bytes = 0;
   size_t live_count = 0;
@@ -767,6 +789,17 @@ static void draw_exploit_tools(AppState &state) {
 void draw_memory(AppState &state, ImVec2 avail) {
   poll_watchpoints(state, false);
 
+  /* Auto-refresh memory at the configured interval */
+  if (state.memory_auto_refresh && state.client.connected() &&
+      state.selected_pid > 0 &&
+      payload_supports(state, MEMDBG_CAP_MEMORY_READ)) {
+    const double now = ImGui::GetTime();
+    if (now >= state.next_memory_auto_refresh) {
+      state.next_memory_auto_refresh = now + std::max(0.1f, state.memory_auto_refresh_interval);
+      read_memory(state, /*quiet=*/true);
+    }
+  }
+
   const float gap = 16.0f;
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
 
@@ -787,7 +820,15 @@ void draw_memory(AppState &state, ImVec2 avail) {
                              ui::full_button(40))) read_memory(state);
       ImGui::EndDisabled();
 
-      ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+      ImGui::Spacing();
+      ImGui::Checkbox(locale::tr("memory.auto_refresh"), &state.memory_auto_refresh);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", locale::tr("memory.auto_refresh_tip"));
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(160);
+      ImGui::SliderFloat("##mem_interval", &state.memory_auto_refresh_interval, 0.1f, 5.0f, "%.2f s");
+
+      ImGui::Separator(); ImGui::Spacing();
       ImGui::InputText(locale::tr("memory.write_address"), state.write_address, sizeof(state.write_address));
       ImGui::InputText(locale::tr("memory.bytes"), state.write_bytes, sizeof(state.write_bytes));
       bool can_write = state.client.connected() && state.selected_pid > 0 &&

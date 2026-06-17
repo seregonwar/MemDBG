@@ -208,6 +208,16 @@ bool socket_set_recv_buffer(socket_handle_t fd, int bytes) {
                     reinterpret_cast<const char *>(&bytes), sizeof(bytes)) == 0;
 }
 
+bool socket_set_nosigpipe(socket_handle_t fd) {
+#if defined(SO_NOSIGPIPE)
+  int one = 1;
+  return setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) == 0;
+#else
+  (void)fd;
+  return true;
+#endif
+}
+
 int socket_recv(socket_handle_t fd, void *buffer, size_t size) {
   int chunk = clamp_socket_size(size);
 #if defined(_WIN32)

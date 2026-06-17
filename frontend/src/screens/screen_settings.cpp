@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "file_picker.hpp"
+#include "confirm_modal.hpp"
 
 #include <cstdio>
 #include <string>
@@ -98,7 +99,13 @@ void draw_settings(AppState &state, ImVec2 avail) {
     if (ensure_udp_listener(state, error)) set_status(state, locale::tr("settings.udp_applied"));
     else set_status(state, error);
   }
+  static bool skip_reset_defaults = false;
   if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.reset_defaults")).c_str(), ui::full_button(40))) {
+    ImGui::OpenPopup("ConfirmResetDefaults");
+  }
+  if (ui::confirm_modal("ConfirmResetDefaults",
+                        locale::tr("settings.confirm_reset"), nullptr,
+                        &skip_reset_defaults, true)) {
     std::snprintf(state.host, sizeof(state.host), "%s", "192.168.1.100");
     state.debug_port = 9020;
     state.udp_port = 9023;

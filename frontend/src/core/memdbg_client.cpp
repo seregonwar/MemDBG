@@ -169,6 +169,8 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
     return false;
   }
 
+  (void)platform::socket_set_nosigpipe(fd_);
+
   last_error_.clear();
   return true;
 }

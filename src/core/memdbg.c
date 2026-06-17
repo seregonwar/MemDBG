@@ -883,6 +883,7 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS:  return handle_debug_clear_all_watchpoints(fd, req, send_response);
   case MEMDBG_CMD_TELEMETRY:          return handle_telemetry(fd, req);
   case MEMDBG_CMD_SHUTDOWN:
+    pal_notification_send("MemDBG remote termination");
     memdbg_daemon_request_stop();
     return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   default:
@@ -1017,6 +1018,17 @@ static void *worker_thread(void *arg) {
     }
 
     update_udp_log_peer_from_client(&cfg, &ss);
+    {
+      char peer_host[INET_ADDRSTRLEN];
+      const struct sockaddr_in *sin = (const struct sockaddr_in *)&ss;
+      if (ss.ss_family == AF_INET &&
+          inet_ntop(AF_INET, &sin->sin_addr, peer_host, sizeof(peer_host))) {
+        char notify_msg[INET_ADDRSTRLEN + 32];
+        (void)snprintf(notify_msg, sizeof(notify_msg), "MemDBG %s connected",
+                       peer_host);
+        pal_notification_send(notify_msg);
+      }
+    }
     handle_client(client_fd, &cfg);
   }
 

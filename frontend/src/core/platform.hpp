@@ -49,6 +49,7 @@ bool socket_set_send_timeout(socket_handle_t fd, uint32_t timeout_ms);
 bool socket_set_reuse_addr(socket_handle_t fd);
 bool socket_set_broadcast(socket_handle_t fd);
 bool socket_set_recv_buffer(socket_handle_t fd, int bytes);
+bool socket_set_nosigpipe(socket_handle_t fd);
 int socket_recv(socket_handle_t fd, void *buffer, size_t size);
 int socket_send(socket_handle_t fd, const void *buffer, size_t size);
 int socket_recvfrom(socket_handle_t fd, void *buffer, size_t size,

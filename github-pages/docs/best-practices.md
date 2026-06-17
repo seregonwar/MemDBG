@@ -1,0 +1,8 @@
+- Use disposable saves when testing writes or trainers.
+- Record game version, title ID, and payload build for every trainer.
+- Before using lock/freeze, verify the game isn't also writing the value every frame.
+- Prefer AOB and pointer chains for trainers intended to work across sessions.
+- Check Telemetry: many read errors usually mean the range is too wide.
+- Keep TCP and UDP on different ports to avoid conflicts.
+- Test trainers on a secondary account or offline save.
+- Version your trainer files with the game update they target.

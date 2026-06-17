@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
+#include <csignal>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -665,7 +666,8 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
     nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
     nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
-    nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
+    if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
+      nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
 
     ImGui::Dummy(ImVec2(0, 3));
     sidebar_section(locale::tr("sidebar.section.observe"));
@@ -1275,6 +1277,7 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
 
 int run_frontend(int, char **argv) {
   init_executable_dir(argv != nullptr ? argv[0] : nullptr);
+  signal(SIGPIPE, SIG_IGN);
   if (!glfwInit()) return 1;
 
   glfwWindowHintString(GLFW_COCOA_FRAME_NAME, "MemDBG");
