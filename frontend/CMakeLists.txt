@@ -131,6 +131,7 @@ add_executable(memdbg_frontend
   src/screens/screen_trainer.cpp
   src/screens/screen_logs.cpp
   src/screens/screen_telemetry.cpp
+  src/screens/screen_taskmgr.cpp
   src/screens/screen_settings.cpp
   src/screens/screen_credits.cpp
 
