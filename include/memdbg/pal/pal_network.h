@@ -24,15 +24,15 @@ extern "C" {
 
 /* Platform auto-detection (used by all PAL modules). */
 #if defined(PLATFORM_PS4) || defined(__ORBIS__) || defined(PS4)
-#  define MEMDBG_PLATFORM_PS4 1
+#  define MEMDBG_PAL_PLATFORM_PS4 1
 #elif defined(PLATFORM_PS5) || defined(__PROSPERO__) || defined(PS5)
-#  define MEMDBG_PLATFORM_PS5 1
+#  define MEMDBG_PAL_PLATFORM_PS5 1
 #elif defined(__linux__)
-#  define MEMDBG_PLATFORM_LINUX 1
+#  define MEMDBG_PAL_PLATFORM_LINUX 1
 #elif defined(__APPLE__)
-#  define MEMDBG_PLATFORM_MACOS 1
+#  define MEMDBG_PAL_PLATFORM_MACOS 1
 #elif defined(__FreeBSD__)
-#  define MEMDBG_PLATFORM_FREEBSD 1
+#  define MEMDBG_PAL_PLATFORM_FREEBSD 1
 #endif
 
 typedef int socket_t;

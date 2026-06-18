@@ -80,6 +80,13 @@ struct TaskFmemSample {
   bool loaded = false;
 };
 
+struct ConsoleTarget {
+  std::string name = "Default";
+  std::string host = "192.168.1.100";
+  int debug_port = 9020;
+  int udp_port = 9023;
+};
+
 struct CheatEntry {
   std::string description;
   int32_t pid = 0;
@@ -107,17 +114,6 @@ struct Notification {
   double created_at = 0.0;
   double duration = 4.0;
   bool dismissed = false;
-};
-
-struct MemoryWatchpoint {
-  uint64_t address = 0;
-  uint32_t length = 0;
-  bool enabled = true;
-  bool changed = false;
-  std::vector<uint8_t> last_bytes;
-  std::vector<uint8_t> current_bytes;
-  std::string label;
-  std::string status;
 };
 
 struct AllocationRecord {
@@ -247,6 +243,9 @@ struct AppState {
   char host[64] = "192.168.1.100";
   int debug_port = 9020;
   int udp_port = 9023;
+  char target_name[64] = "Default";
+  std::vector<ConsoleTarget> console_targets;
+  int selected_target_index = 0;
   char status[512] = "Ready";
 
   Screen screen = Screen::Home;
@@ -268,7 +267,6 @@ struct AppState {
   uint64_t memory_base = 0;
   uint64_t memory_previous_base = 0;
   bool memory_overlay_changes = true;
-  bool memory_overlay_watchpoints = true;
   bool memory_overlay_freed_allocs = true;
 
   bool memory_auto_refresh = false;
@@ -278,13 +276,6 @@ struct AppState {
   char write_address[32] = "0x0";
   char write_bytes[512] = "";
   char dump_path[512] = "dumps";
-
-  char watch_address[32] = "0x0";
-  int watch_length = 4;
-  bool watchpoints_polling = false;
-  float watchpoint_interval = 0.75f;
-  double next_watchpoint_poll = 0.0;
-  std::vector<MemoryWatchpoint> watchpoints;
 
   char alloc_address[32] = "0x0";
   char alloc_size[32] = "0x100";
@@ -404,6 +395,7 @@ struct AppState {
   /* ---- Task Manager ---- */
   int taskmgr_selected_row = -1;
   int32_t taskmgr_selected_pid = 0;
+  bool taskmgr_detail_open = false;
   ProcessMapSummary taskmgr_map_summary;
   ProcessInfo taskmgr_process_info;
   bool taskmgr_has_process_info = false;
@@ -668,6 +660,11 @@ inline void set_status(AppState &state, const std::string &message) {
   std::snprintf(state.status, sizeof(state.status), "%s", message.c_str());
 }
 void normalize_ports(AppState &state);
+void ensure_console_targets(AppState &state);
+void select_console_target(AppState &state, int index);
+void save_current_console_target(AppState &state);
+void add_console_target(AppState &state);
+void remove_selected_console_target(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
 void disconnect_console(AppState &state, const char *reason = nullptr);

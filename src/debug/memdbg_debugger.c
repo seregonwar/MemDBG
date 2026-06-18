@@ -491,15 +491,6 @@ memdbg_status_t memdbg_debugger_attach(int32_t pid) {
   g_dbg.stopped = true;
   g_dbg.stop_lwp = 0;
 
-  /* Load debug registers from the first thread so watchpoint edits start from
-   * the current hardware state. */
-  int32_t lwps[1];
-  uint32_t count = 0;
-  if (get_threads_locked(lwps, NULL, &count, 1) == MEMDBG_OK &&
-      count > 0) {
-    (void)refresh_dbregs_from_thread(lwps[0]);
-  }
-
   memdbg_log_write(MEMDBG_LOG_INFO, "debugger: attached pid=%d", (int)pid);
   debugger_unlock();
   return MEMDBG_OK;

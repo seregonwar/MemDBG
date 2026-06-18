@@ -16,10 +16,12 @@
 namespace memdbg::frontend {
 
 void draw_settings(AppState &state, ImVec2 avail) {
+  ensure_console_targets(state);
   const float gap = 16.0f;
   const float col_w = (avail.x - gap) * 0.5f;
 
   ui::begin_panel("SettingsConnection", locale::tr("settings.connection_defaults"), ImVec2(col_w, avail.y));
+  ImGui::InputText("Target name", state.target_name, sizeof(state.target_name));
   ImGui::InputText(locale::tr("settings.console_ipv4"), state.host, sizeof(state.host));
   ImGui::InputInt(locale::tr("settings.debug_tcp"), &state.debug_port);
   ImGui::InputInt(locale::tr("settings.udp_logs"), &state.udp_port);
@@ -82,6 +84,7 @@ void draw_settings(AppState &state, ImVec2 avail) {
 
   ImGui::Spacing();
   if (ui::primary_button((std::string(icons::kSave) + "  " + locale::tr("settings.save_defaults")).c_str(), ui::full_button(40))) {
+    save_current_console_target(state);
     std::string error;
     if (save_frontend_settings(state, &error)) {
       set_status(state, locale::tr("settings.saved"));
@@ -106,10 +109,15 @@ void draw_settings(AppState &state, ImVec2 avail) {
   if (ui::confirm_modal("ConfirmResetDefaults",
                         locale::tr("settings.confirm_reset"), nullptr,
                         &skip_reset_defaults, true)) {
+    std::snprintf(state.target_name, sizeof(state.target_name), "%s", "Default");
     std::snprintf(state.host, sizeof(state.host), "%s", "192.168.1.100");
     state.debug_port = 9020;
     state.udp_port = 9023;
     std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", "dumps");
+    state.console_targets.clear();
+    state.selected_target_index = 0;
+    ensure_console_targets(state);
+    save_current_console_target(state);
     set_status(state, locale::tr("settings.restored"));
   }
   ui::end_panel();

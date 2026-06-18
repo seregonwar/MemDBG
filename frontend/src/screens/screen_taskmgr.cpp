@@ -233,6 +233,7 @@ static void select_taskmgr_process(AppState &state, int row) {
   if (row < 0 || row >= static_cast<int>(state.processes.size())) return;
   state.taskmgr_selected_row = row;
   state.taskmgr_selected_pid = state.processes[row].pid;
+  state.taskmgr_detail_open = true;
 }
 
 static void reset_taskmgr_cache(AppState &state) {
@@ -241,8 +242,26 @@ static void reset_taskmgr_cache(AppState &state) {
   state.taskmgr_resources.clear();
   state.taskmgr_selected_row = -1;
   state.taskmgr_selected_pid = 0;
+  state.taskmgr_detail_open = false;
   state.taskmgr_map_summary = ProcessMapSummary{};
   state.taskmgr_has_process_info = false;
+}
+
+static void draw_detail_title_bar(AppState &state) {
+  const float scl = ui::dpi_scale();
+  ImGui::TextColored(ui::colors().primary2, "%s",
+                     locale::tr("taskmgr.process_detail"));
+  ImGui::SameLine();
+  const float close_w = 28.0f * scl;
+  const float right_x = ImGui::GetWindowContentRegionMax().x - close_w;
+  if (right_x > ImGui::GetCursorPosX())
+    ImGui::SetCursorPosX(right_x);
+  if (ui::soft_button("X##TaskMgrCloseDetail", ImVec2(close_w, 26.0f * scl))) {
+    state.taskmgr_detail_open = false;
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "Close process details");
+  ImGui::Separator();
 }
 
 static std::string resource_title_text(const TaskProcessResource *res,
@@ -547,7 +566,8 @@ void draw_taskmgr(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
 
   const float content_h = std::max(180.0f * scl, ImGui::GetContentRegionAvail().y);
-  const bool show_detail = state.taskmgr_selected_pid > 0;
+  const bool show_detail = state.taskmgr_detail_open &&
+                           state.taskmgr_selected_pid > 0;
   const bool side_by_side = show_detail && ImGui::GetContentRegionAvail().x >= 880.0f * scl;
 
   if (side_by_side) {
@@ -560,8 +580,7 @@ void draw_taskmgr(AppState &state, ImVec2 avail) {
 
     ImGui::SameLine(0.0f, gap);
     ImGui::BeginChild("TaskMgrDetailPane", ImVec2(0, content_h), true);
-    ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("taskmgr.process_detail"));
-    ImGui::Separator();
+    draw_detail_title_bar(state);
     draw_detail_panel(state);
     ImGui::EndChild();
   } else {
@@ -570,8 +589,7 @@ void draw_taskmgr(AppState &state, ImVec2 avail) {
     if (show_detail) {
       ImGui::Spacing();
       ImGui::BeginChild("TaskMgrDetailPaneStacked", ImVec2(0, detail_h), true);
-      ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("taskmgr.process_detail"));
-      ImGui::Separator();
+      draw_detail_title_bar(state);
       draw_detail_panel(state);
       ImGui::EndChild();
     }
