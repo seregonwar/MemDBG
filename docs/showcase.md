@@ -1,4 +1,5 @@
 # MemDBG Showcase
+> The photos below may not be completely up to date because the program is constantly being updated; try the latest build to see the updated interface.
 
 This page gives a quick tour of the MemDBG frontend. Each section shows the main workflow exposed by the screen and the kind of console-side payload feature it drives.
 
