@@ -372,6 +372,10 @@ struct AppState {
 
   /* ---- Async connect ---- */
   bool connect_pending = false;
+  bool heartbeat_pending = false;
+  std::future<bool> heartbeat_future;
+  std::string heartbeat_error;
+  double next_heartbeat = 0.0;
 
   /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
   std::mutex scan_async_mtx;
@@ -666,7 +670,7 @@ inline void set_status(AppState &state, const std::string &message) {
 void normalize_ports(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
-void disconnect_console(AppState &state);
+void disconnect_console(AppState &state, const char *reason = nullptr);
 void reset_debugger_state();
 void request_telemetry_async(AppState &state);
 void request_maps_refresh_async(AppState &state);

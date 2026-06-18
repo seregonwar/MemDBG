@@ -926,6 +926,13 @@ static void handle_client(socket_t fd, const memdbg_config_t *cfg) {
       (void)send_response(fd, &req, status, NULL, 0U);
   }
 
+  if (atomic_load_explicit(&g_active_connections, memory_order_relaxed) <= 1U &&
+      memdbg_debugger_is_attached()) {
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "debugger: detaching because the last client disconnected");
+    (void)memdbg_debugger_detach();
+  }
+
   (void)pal_socket_close(fd);
   atomic_fetch_sub_explicit(&g_active_connections, 1U, memory_order_relaxed);
 }

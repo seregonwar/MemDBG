@@ -459,6 +459,13 @@ memdbg_status_t memdbg_debugger_attach(int32_t pid) {
 
   debugger_lock();
   if (g_dbg.attached) {
+    if (g_dbg.pid == pid) {
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "debugger: attach request reused existing session pid=%d",
+                       (int)pid);
+      debugger_unlock();
+      return MEMDBG_OK;
+    }
     debugger_unlock();
     return MEMDBG_ERR_STATE;
   }

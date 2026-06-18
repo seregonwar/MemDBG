@@ -430,9 +430,11 @@ static void test_attach_detach(void) {
   TEST("stopped after attach", memdbg_debugger_is_stopped());
   TEST_EQ_I("attached pid", memdbg_debugger_attached_pid(), MOCK_PID);
 
-  /* Double-attach should fail */
+  /* Re-attaching the same PID is idempotent, a different PID is not. */
+  st = memdbg_debugger_attach(MOCK_PID);
+  TEST_OK("same PID attach is idempotent", st);
   st = memdbg_debugger_attach(MOCK_PID + 1);
-  TEST_ERR("double attach fails", st, MEMDBG_ERR_STATE);
+  TEST_ERR("different PID double attach fails", st, MEMDBG_ERR_STATE);
 
   /* Detach */
   st = memdbg_debugger_detach();

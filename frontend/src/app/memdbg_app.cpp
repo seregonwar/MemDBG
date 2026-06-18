@@ -592,7 +592,7 @@ static void draw_connect_spinner(AppState &state) {
       IM_COL32(0, 0, 0, 80));
 }
 
-void disconnect_console(AppState &state) {
+void disconnect_console(AppState &state, const char *reason) {
   state.connect_pending = false;  /* cancel any in-flight async connect */
 
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
@@ -600,12 +600,16 @@ void disconnect_console(AppState &state) {
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
+  if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
   if (s_connect_future.valid()) s_connect_future.wait();
 
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr_resource_pending = false;  /* cancel any in-flight task manager fetch */
+  state.heartbeat_pending = false;
+  state.heartbeat_error.clear();
+  state.next_heartbeat = 0.0;
   state.client.disconnect();
   state.has_hello = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
@@ -628,8 +632,11 @@ void disconnect_console(AppState &state) {
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");
 
-  set_status(state, "Console disconnected");
-  push_notification(state, "Disconnected from console");
+  const std::string message = reason != nullptr && reason[0] != '\0'
+                                  ? std::string(reason)
+                                  : "Console disconnected";
+  set_status(state, message);
+  push_notification(state, message);
 }
 
 /* ---- Sidebar navigation ---- */
@@ -1249,6 +1256,77 @@ static void poll_release_check(AppState &state) {
   }
 }
 
+static void poll_session_health(AppState &state) {
+  if (state.has_hello && !state.client.connected() && !state.connect_pending) {
+    const std::string error = state.client.last_error();
+    const std::string message = error.empty()
+                                    ? "Payload connection lost"
+                                    : "Payload connection lost: " + error;
+    disconnect_console(state, message.c_str());
+    return;
+  }
+
+  if (state.heartbeat_pending) {
+    if (!state.heartbeat_future.valid()) {
+      state.heartbeat_pending = false;
+      return;
+    }
+
+    auto status = state.heartbeat_future.wait_for(std::chrono::milliseconds(0));
+    if (status != std::future_status::ready) {
+      return;
+    }
+
+    bool ok = false;
+    try {
+      ok = state.heartbeat_future.get();
+    } catch (const std::exception &ex) {
+      state.heartbeat_error = ex.what();
+    } catch (...) {
+      state.heartbeat_error = "Unknown heartbeat error";
+    }
+    state.heartbeat_pending = false;
+
+    if (!ok) {
+      const std::string error = state.heartbeat_error.empty()
+                                    ? state.client.last_error()
+                                    : state.heartbeat_error;
+      const std::string message = error.empty()
+                                      ? "Payload connection lost"
+                                      : "Payload connection lost: " + error;
+      disconnect_console(state, message.c_str());
+      return;
+    }
+
+    state.next_heartbeat = ImGui::GetTime() + 2.5;
+    return;
+  }
+
+  if (!state.client.connected() || state.connect_pending ||
+      state.telemetry_pending || state.scan_async_pending ||
+      state.map_refresh_pending || state.taskmgr_resource_pending) {
+    return;
+  }
+
+  const double now = ImGui::GetTime();
+  if (now < state.next_heartbeat) {
+    return;
+  }
+
+  if (state.heartbeat_future.valid()) {
+    state.heartbeat_future.wait();
+  }
+  state.heartbeat_pending = true;
+  state.heartbeat_error.clear();
+  state.heartbeat_future = std::async(std::launch::async, [&state]() -> bool {
+    if (state.client.ping()) {
+      return true;
+    }
+    state.heartbeat_error = state.client.last_error();
+    return false;
+  });
+}
+
 /* ---- Screen dispatch ---- */
 
 void draw_screen(AppState &state, ImVec2 avail) {
@@ -1297,6 +1375,7 @@ static void draw_app(AppState &state) {
   poll_connect(state);
   poll_telemetry(state);
   poll_map_refresh(state);
+  poll_session_health(state);
   handle_global_shortcuts(state);
 
   ImGuiViewport *viewport = ImGui::GetMainViewport();
