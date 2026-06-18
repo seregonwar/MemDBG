@@ -339,6 +339,22 @@ std::filesystem::path app_cache_dir() {
 #endif
 }
 
+std::filesystem::path app_data_dir() {
+#if defined(_WIN32)
+  if (const char *local = env_value("LOCALAPPDATA")) {
+    return std::filesystem::path(local) / "MemDBG";
+  }
+  return app_config_dir();
+#elif defined(__APPLE__)
+  return home_dir() / "Library" / "Application Support" / "MemDBG";
+#else
+  if (const char *xdg = env_value("XDG_DATA_HOME")) {
+    return std::filesystem::path(xdg) / "MemDBG";
+  }
+  return home_dir() / ".local" / "share" / "MemDBG";
+#endif
+}
+
 bool open_url(const std::string &url) {
 #if defined(_WIN32)
   HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr,

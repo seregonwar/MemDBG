@@ -433,6 +433,7 @@ struct AppState {
 
   /* ---- Locale ---- */
   int language = 0;  /* locale::Lang enum value; EN=0 by default */
+  int pending_language = -1;  /* language waiting for repository download */
 };
 
 /* ---- utility functions ---- */

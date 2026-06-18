@@ -62,6 +62,7 @@ std::string socket_error_text(int code);
 
 std::filesystem::path app_config_dir();
 std::filesystem::path app_cache_dir();
+std::filesystem::path app_data_dir();
 bool open_url(const std::string &url);
 bool download_file(const std::string &url, const std::filesystem::path &out);
 

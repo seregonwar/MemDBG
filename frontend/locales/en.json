@@ -123,6 +123,11 @@
     "settings.taskmgr_prefetch_hint": "Load processes, metadata, and memory-map summaries in the background after a payload connection opens. Disabled by default.",
     "settings.language": "Language",
   "settings.language_hint": "Select the display language. Changes apply immediately.",
+  "settings.language_download": "Download",
+  "settings.language_downloading": "Downloading",
+  "settings.language_busy": "Language repository is busy",
+  "settings.language_checking": "Checking language repository...",
+  "settings.language_repository_ready": "Language repository ready",
 
   "home.session": "Session",
   "home.connecting_status": "CONNECTING",

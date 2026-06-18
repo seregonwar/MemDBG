@@ -14,6 +14,7 @@
 #include "release_check.hpp"
 #include "platform.hpp"
 #include "locale/locale.hpp"
+#include "locale/locale_repository.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -1640,6 +1641,32 @@ static void poll_release_check(AppState &state) {
   }
 }
 
+static void poll_locale_repository(AppState &state) {
+  locale::Manager &loc = locale::Manager::instance();
+  locale::Repository &repo = locale::Repository::instance();
+  (void)repo.poll_completed(loc);
+
+  if (state.pending_language < 0 ||
+      state.pending_language >= static_cast<int>(locale::Lang::COUNT)) {
+    return;
+  }
+
+  locale::Lang pending = static_cast<locale::Lang>(state.pending_language);
+  if (loc.is_loaded(pending) && loc.set_active(pending)) {
+    state.language = state.pending_language;
+    state.pending_language = -1;
+    set_status(state, std::string(locale::tr("settings.language")) + ": " +
+                     locale::lang_name(pending));
+    return;
+  }
+
+  if (!repo.busy()) {
+    const std::string error = repo.error();
+    state.pending_language = -1;
+    if (!error.empty()) set_status(state, error);
+  }
+}
+
 static void poll_session_health(AppState &state) {
   if (state.has_hello && !state.client.connected() && !state.connect_pending) {
     const std::string error = state.client.last_error();
@@ -1757,6 +1784,7 @@ static void handle_global_shortcuts(AppState &state) {
 /* ---- Main app draw ---- */
 
 static void draw_app(AppState &state) {
+  poll_locale_repository(state);
   poll_connect(state);
   poll_taskmgr_prefetch(state);
   poll_telemetry(state);
@@ -1998,9 +2026,11 @@ int run_frontend(int, char **argv) {
     // crash logger failure is non-fatal
   }
 
+  bool settings_loaded = false;
   {
     std::string config_error;
-    if (load_frontend_settings(*state, &config_error) && config_error.empty()) {
+    settings_loaded = load_frontend_settings(*state, &config_error);
+    if (settings_loaded && config_error.empty()) {
       set_status(*state, "Settings loaded");
     } else if (!config_error.empty()) {
       if (state->crash_logging_enabled)
@@ -2022,6 +2052,7 @@ int run_frontend(int, char **argv) {
 
   /* ---- Locale init ---- */
   locale::Manager &loc = locale::Manager::instance();
+  locale::Repository &locale_repo = locale::Repository::instance();
   {
     using namespace memdbg::frontend::assets;
     for (size_t i = 0; i < kEmbeddedLocaleCount; ++i) {
@@ -2029,15 +2060,25 @@ int run_frontend(int, char **argv) {
       (void)loc.load_mem(el.filename, el.data, el.size);
     }
   }
+  locale_repo.preload_installed(loc);
 
   // Set language from saved preference, or auto-detect from OS.
-  if (state->language >= 0 && state->language < static_cast<int>(locale::Lang::COUNT)) {
-    loc.set_active(static_cast<locale::Lang>(state->language));
+  locale::Lang requested_lang = locale::Lang::EN;
+  if (settings_loaded &&
+      state->language >= 0 &&
+      state->language < static_cast<int>(locale::Lang::COUNT)) {
+    requested_lang = static_cast<locale::Lang>(state->language);
   } else {
-    locale::Lang detected = locale::detect_system_lang();
-    loc.set_active(detected);
-    state->language = static_cast<int>(detected);
+    requested_lang = locale::detect_system_lang();
   }
+  if (loc.set_active(requested_lang)) {
+    state->language = static_cast<int>(requested_lang);
+  } else {
+    state->pending_language = static_cast<int>(requested_lang);
+    state->language = static_cast<int>(locale::Lang::EN);
+    (void)loc.set_active(locale::Lang::EN);
+  }
+  (void)locale_repo.start_startup_sync(requested_lang);
   github_profile_start(state->github_profile);
   release_check_start(state->release_check, MEMDBG_FRONTEND_VERSION);
   {
@@ -2101,6 +2142,7 @@ int run_frontend(int, char **argv) {
   state->udp_listener.stop(); state->client.disconnect();
   release_check_shutdown(state->release_check);
   github_profile_shutdown(state->github_profile);
+  locale::Repository::instance().shutdown();
   shutdown_texture(s_logo_texture);
   state->crash_logger.close();
   ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();

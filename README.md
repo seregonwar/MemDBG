@@ -55,7 +55,7 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 - **Capability-aware protocol** — the frontend adapts gracefully to older or partial payloads without crashing.
 - **Five scanner modes**: exact value, process-wide exact, process-wide AOB, pointer chain, unknown initial value, plus a heuristic **Smart Auto-Search** engine tuned for common game values (health, ammo, resources).
 - **Non-blocking UI** — connect, scan, and telemetry requests run on worker threads and stream results back via `std::future` polling.
-- **Full localization** out of the box (8 languages), with a CI check that enforces locale completeness on every build.
+- **Repository-backed localization** — English is embedded, while additional languages are listed, downloaded, validated, and cached from the project repository.
 - **Embeddable library target** (`libmemdbg.a`) for integrating the payload core into other tools.
 - **Zero-config discovery** — payloads respond to UDP broadcasts so the frontend can auto-populate the console list without hardcoding a debug port.
 - **Crash-resilient logging** — ring-buffered event log with signal-safe crash handlers; survives `SIGSEGV`/`SIGABRT`/`SIGFPE`/`SIGILL` and flushes to disk immediately. Captures frontend status, notifications, and UDP console logs.
@@ -82,7 +82,7 @@ MemDBG
     ├── screens/              One file per screen (Home, Consoles, Processes, …)
     ├── scanner/              Auto-Search heuristic engine (mirrors backend semantics)
     ├── trainer/              .cht load/save, batchcode parser
-    ├── locale/               JSON-driven i18n manager with translation files
+    ├── locale/               English embedded i18n plus repository-backed language cache
     ├── ui/                   Reusable widgets, theme, fonts, icon font, file picker
     └── proto/                Standalone protocol probe CLI
 ```
@@ -192,7 +192,9 @@ The frontend connects to the payload over TCP (default port `9020`). Telemetry a
 
 ## Localization
 
-The UI is driven entirely by JSON locale files in [`frontend/locales/`](frontend/locales). On first run the frontend selects a language based on the OS locale and persists the choice. All translation files and `imgui.ini` are **embedded directly into the executable** at build time via `tools/embed_assets.py` — no external locale files are needed at runtime, making the binary fully self-contained on every platform. Adding a new language is as simple as dropping a `<code>.json` file and opening a PR — `make check-locales` will flag any missing keys before the build ships.
+The UI is driven by JSON locale files in [`frontend/locales/`](frontend/locales). English (`en.json`) and `imgui.ini` are embedded at build time via `tools/embed_assets.py`; every other language is fetched from the repository through [`manifest.json`](frontend/locales/manifest.json), stored under the platform app data directory, validated, and preloaded on startup. When a cached language differs from the repository version or fails JSON validation, the frontend redownloads it before loading it into memory.
+
+Adding a new language is as simple as dropping a `<code>.json` file, regenerating the manifest, and opening a PR — `make check-locales` will flag missing keys, stale manifest size/hash data, and format-string mismatches before the build ships.
 
 | Code | Language | File |
 |---|---|---|
@@ -207,6 +209,7 @@ The UI is driven entirely by JSON locale files in [`frontend/locales/`](frontend
 
 ```sh
 make check-locales   # fails if any locale is missing a key present in en.json
+python3 tools/generate_locale_manifest.py
 ```
 
 <br/>
@@ -260,10 +263,11 @@ The host build runs on Linux or macOS, opens real TCP/UDP sockets, and serves th
 
 ```sh
 make frontend
-./build/frontend/memdbg_frontend
+open build/frontend/bin/MemDBG.app        # macOS
+./build/frontend/bin/memdbg_frontend      # Linux / non-bundle builds
 ```
 
-On macOS this produces a `MemDBG.app` bundle with `Resources/locales/`, `Resources/assets/app-icon.png`, and a custom `.icns` icon. On Linux a `MemDBG.desktop` file is placed alongside the binary.
+On macOS this produces a `MemDBG.app` bundle with `Resources/assets/app-icon.png` and a custom `.icns` icon. On Linux a `MemDBG.desktop` file is placed alongside the binary.
 
 ### Protocol probe CLI
 
@@ -388,7 +392,7 @@ Open contribution areas:
 - **UI** — Dear ImGui panels, layout, theming, accessibility.
 - **Scanner** — SIMD paths, parallelism, additional filtering modes.
 - **Backend integration** — new payload protocols or platform ports.
-- **Translations** — drop a `<code>.json` under `frontend/locales/` and open a PR; `make check-locales` guides you.
+- **Translations** — drop a `<code>.json` under `frontend/locales/`, run `python3 tools/generate_locale_manifest.py`, and open a PR; `make check-locales` guides you.
 - **Bug reports and feature proposals** — via GitHub Issues.
 
 Please review the project goals and ethical guidelines before opening a pull request.

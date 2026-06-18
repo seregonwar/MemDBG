@@ -67,7 +67,7 @@ set(MEMDBG_APP_ICON_PNG ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.png)
 set(MEMDBG_APP_ICON_ICO ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.ico)
 set(MEMDBG_APP_ICON_ICNS ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.icns)
 
-# ---- Embedded assets (locales + imgui.ini) ----
+# ---- Embedded assets (English locale + imgui.ini) ----
 # Generated at build time by tools/embed_assets.py.
 set(MEMDBG_EMBEDDED_ASSETS_INC ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/embedded_assets.inc)
 add_custom_command(
@@ -80,19 +80,11 @@ add_custom_command(
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../tools/embed_assets.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../imgui.ini"
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/de.json
     ${CMAKE_CURRENT_SOURCE_DIR}/locales/en.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/es.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/fr.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/it.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/ja.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/pt.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/locales/ru.json
-  COMMENT "Generating embedded assets (locales + imgui.ini)"
+  COMMENT "Generating embedded assets (English locale + imgui.ini)"
 )
 set_source_files_properties(${MEMDBG_EMBEDDED_ASSETS_INC} PROPERTIES GENERATED TRUE)
 set_source_files_properties(
-  src/locale/locale.cpp
   src/app/memdbg_app.cpp
   PROPERTIES OBJECT_DEPENDS ${MEMDBG_EMBEDDED_ASSETS_INC}
 )
@@ -118,6 +110,7 @@ add_executable(memdbg_frontend
 
   # locale (i18n / translations)
   src/locale/locale.cpp
+  src/locale/locale_repository.cpp
 
   # pal (LZ4 decompression for client)
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
@@ -304,6 +297,20 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
+# ---- memdbg_locale_manager_test ----
+
+add_executable(memdbg_locale_manager_test
+  tests/test_locale_manager.cpp
+  src/locale/locale.cpp
+)
+
+target_include_directories(memdbg_locale_manager_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+
 # ---- platform specific ----
 
 if(APPLE)
@@ -325,10 +332,12 @@ if(MSVC)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
+  target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
 else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
