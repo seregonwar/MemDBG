@@ -112,7 +112,22 @@ const char *payload_status_name(int32_t status) {
   }
 }
 
-const char *payload_status_hint(int32_t status) {
+const char *payload_status_hint(uint16_t command, int32_t status) {
+  if (command == MEMDBG_CMD_DEBUG_ATTACH) {
+    switch (static_cast<memdbg_status_t>(status)) {
+    case MEMDBG_ERR_PERMISSION:
+      return "ptrace attach was denied; try a user process/game process and check payload privileges";
+    case MEMDBG_ERR_NOT_FOUND:
+      return "the target process no longer exists; refresh PIDs";
+    case MEMDBG_ERR_STATE:
+      return "the debugger is already attached or the target did not enter a traceable stop state";
+    case MEMDBG_ERR_IO:
+      return "ptrace attach failed on the payload; check /data/memdbg/memdbg.log for the errno line";
+    default:
+      break;
+    }
+  }
+
   switch (static_cast<memdbg_status_t>(status)) {
   case MEMDBG_ERR_IO:
     return "verify the target process, selected map/range, and payload privileges";
@@ -1006,7 +1021,7 @@ bool Client::request(uint16_t command, const void *payload,
 
   if (response_header.status != 0) {
     std::ostringstream oss;
-    const char *hint = payload_status_hint(response_header.status);
+    const char *hint = payload_status_hint(command, response_header.status);
     oss << "payload status " << response_header.status << " ("
         << payload_status_name(response_header.status) << ")";
     if (hint[0] != '\0') {

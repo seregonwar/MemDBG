@@ -10,5 +10,6 @@
 namespace memdbg::frontend {
 
 #include "fa_solid_900.inc"
+#include "fa_brands_400.inc"
 
 } // namespace memdbg::frontend

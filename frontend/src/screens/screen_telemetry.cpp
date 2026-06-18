@@ -157,7 +157,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
 
   if (state.client.connected() &&
       (state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY) &&
-      !state.scan_async_pending) {
+      !client_async_busy(state)) {
     if (now >= state.next_telemetry_poll) {
       state.next_telemetry_poll = now + 1.0;
       if (!state.telemetry_pending) {
@@ -204,7 +204,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
     ImGui::SameLine();
     ImGui::SetCursorPosX(right_x);
   }
-  ImGui::BeginDisabled(state.scan_async_pending);
+  ImGui::BeginDisabled(client_async_busy(state));
   if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("telemetry.refresh_now")).c_str(),
                       ImVec2(refresh_w, 36))) {
     if (!state.telemetry_pending) {

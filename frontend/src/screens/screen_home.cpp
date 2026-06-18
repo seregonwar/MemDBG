@@ -101,6 +101,7 @@ void draw_home(AppState &state, ImVec2 avail) {
 
   if (connected) {
     ui::draw_capabilities(state.hello);
+    ImGui::BeginDisabled(client_async_busy(state));
     if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("home.ping")).c_str(), ImVec2(120.0f * scl, 28.0f * scl))) {
       set_status(state, state.client.ping() ? locale::tr("home.ping_ok") : state.client.last_error());
     }
@@ -114,6 +115,7 @@ void draw_home(AppState &state, ImVec2 avail) {
                           &skip_disconnect_h, true)) {
       disconnect_console(state);
     }
+    ImGui::EndDisabled();
   } else {
     ui::text_muted(locale::tr("home.no_active_session"));
     if (ui::primary_button((std::string(icons::kConnect) + "  " + locale::tr("home.configure")).c_str(), ImVec2(180.0f * scl, 28.0f * scl))) {

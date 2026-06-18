@@ -135,6 +135,7 @@ static std::vector<std::string> split_pipe(const std::string &line) {
 
 bool capture_off_value(AppState &state, CheatEntry &cheat) {
   if (!state.client.connected()) { cheat.status = "No console session"; return false; }
+  if (client_async_busy(state)) { cheat.status = "Client busy"; return false; }
   int32_t pid = cheat.pid > 0 ? cheat.pid : state.selected_pid;
   if (pid <= 0 || cheat.bytes.empty()) { cheat.status = "No target value"; return false; }
   std::vector<uint8_t> current;

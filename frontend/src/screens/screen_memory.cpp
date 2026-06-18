@@ -252,7 +252,7 @@ static void add_watchpoint(AppState &state) {
 static void poll_watchpoints(AppState &state, bool force) {
   if (!state.watchpoints_polling && !force) return;
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (state.scan_async_pending || state.telemetry_pending) return;
+  if (client_async_busy(state)) return;
 
   const double now = ImGui::GetTime();
   if (!force && now < state.next_watchpoint_poll) return;
@@ -285,6 +285,7 @@ static void draw_watchpoints(AppState &state) {
   ImGui::SliderFloat(locale::tr("memory.watchpoints.poll_interval"), &state.watchpoint_interval, 0.1f, 5.0f, "%.2fs");
   ImGui::Checkbox(locale::tr("memory.watchpoints.polling"), &state.watchpoints_polling);
   ImGui::SameLine();
+  ImGui::BeginDisabled(client_async_busy(state));
   if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("memory.watchpoints.poll_now")).c_str(),
                       ImVec2(118, 34))) {
     poll_watchpoints(state, true);
@@ -293,6 +294,7 @@ static void draw_watchpoints(AppState &state) {
                          ui::full_button(38))) {
     add_watchpoint(state);
   }
+  ImGui::EndDisabled();
 
   ImGui::Spacing();
   if (ImGui::BeginTable("Watchpoints", 5,
@@ -710,10 +712,12 @@ static void draw_exploit_tools(AppState &state) {
   ImGui::Checkbox(locale::tr("memory.exploit.exec_only"), &state.gadget_exec_only);
   ImGui::InputInt(locale::tr("memory.exploit.max_gadgets"), &state.gadget_max_results);
   state.gadget_max_results = std::clamp(state.gadget_max_results, 1, 4096);
+  ImGui::BeginDisabled(client_async_busy(state));
   if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("memory.exploit.find_gadgets")).c_str(),
                          ui::full_button(36))) {
     find_gadgets(state);
   }
+  ImGui::EndDisabled();
 
   const GadgetMatch *pop_rdi = find_gadget(state, "pop rdi; ret");
   const GadgetMatch *pop_rsi = find_gadget(state, "pop rsi; ret");
@@ -753,10 +757,12 @@ static void draw_exploit_tools(AppState &state) {
   ImGui::Separator();
   ImGui::InputInt(locale::tr("memory.exploit.sample_kb"), &state.heap_sample_kb);
   ImGui::InputInt(locale::tr("memory.exploit.max_maps"), &state.heap_max_maps);
+  ImGui::BeginDisabled(client_async_busy(state));
   if (ui::soft_button((std::string(icons::kBug) + "  " + locale::tr("memory.exploit.analyze_heap")).c_str(),
                       ui::full_button(36))) {
     analyze_heap_spray(state);
   }
+  ImGui::EndDisabled();
   if (ImGui::BeginTable("HeapFindings", 5,
       ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
@@ -792,6 +798,7 @@ void draw_memory(AppState &state, ImVec2 avail) {
   /* Auto-refresh memory at the configured interval */
   if (state.memory_auto_refresh && state.client.connected() &&
       state.selected_pid > 0 &&
+      !client_async_busy(state) &&
       payload_supports(state, MEMDBG_CAP_MEMORY_READ)) {
     const double now = ImGui::GetTime();
     if (now >= state.next_memory_auto_refresh) {
@@ -814,6 +821,7 @@ void draw_memory(AppState &state, ImVec2 avail) {
       ImGui::InputInt(locale::tr("memory.read_length"), &state.read_length);
       state.read_length = std::clamp(state.read_length, 1, static_cast<int>(MEMDBG_PROTOCOL_MAX_READ));
       bool can_read = state.client.connected() && state.selected_pid > 0 &&
+                      !client_async_busy(state) &&
                       payload_supports(state, MEMDBG_CAP_MEMORY_READ);
       ImGui::BeginDisabled(!can_read);
       if (ui::primary_button((std::string(icons::kPlay) + "  " + locale::tr("memory.read_memory")).c_str(),
@@ -832,6 +840,7 @@ void draw_memory(AppState &state, ImVec2 avail) {
       ImGui::InputText(locale::tr("memory.write_address"), state.write_address, sizeof(state.write_address));
       ImGui::InputText(locale::tr("memory.bytes"), state.write_bytes, sizeof(state.write_bytes));
       bool can_write = state.client.connected() && state.selected_pid > 0 &&
+                       !client_async_busy(state) &&
                        payload_supports(state, MEMDBG_CAP_MEMORY_WRITE);
       ImGui::BeginDisabled(!can_write);
       if (ui::danger_button((std::string(icons::kEdit) + "  " + locale::tr("memory.write_memory")).c_str(),

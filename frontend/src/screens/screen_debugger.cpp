@@ -10,8 +10,11 @@
 #include "confirm_modal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace memdbg::frontend {
 
@@ -37,6 +40,7 @@ struct DebuggerState {
 
   bool pause_on_attach = true;
   bool auto_refresh_on_stop = true;
+  int32_t pid_input_source = 0;
 
   std::vector<Client::DebugThreadEntry> threads;
   Client::DebugRegs regs{};
@@ -64,9 +68,95 @@ static bool parse_input_u64(const char *text, uint64_t &out) {
 static void poll_debugger_state(AppState &state);
 static void refresh_threads(AppState &state);
 
+static void set_debugger_pid_input(DebuggerState &ds, int32_t pid) {
+  if (pid > 0) {
+    std::snprintf(ds.pid_input, sizeof(ds.pid_input), "%d", pid);
+    ds.pid_input_source = pid;
+  }
+}
+
+static void select_debugger_process(AppState &state, DebuggerState &ds, int row) {
+  if (row < 0 || row >= static_cast<int>(state.processes.size())) return;
+  const auto &proc = state.processes[row];
+  set_debugger_pid_input(ds, proc.pid);
+  state.selected_process_row = row;
+  state.selected_pid = proc.pid;
+  state.maps.clear();
+  state.selected_map_row = -1;
+  state.memory.clear();
+  state.has_process_info = false;
+  set_status(state, "Selected PID " + std::to_string(proc.pid) + " (" + proc.name + ")");
+}
+
+static bool refresh_debugger_process_list(AppState &state) {
+  if (!state.client.connected()) return false;
+  if (!state.client.process_list(state.processes)) {
+    set_status(state, state.client.last_error());
+    return false;
+  }
+  set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
+  return true;
+}
+
+static void draw_debugger_pid_selector(AppState &state, DebuggerState &ds) {
+  if (!ds.attached && state.selected_pid > 0 && state.selected_pid != ds.pid_input_source) {
+    set_debugger_pid_input(ds, state.selected_pid);
+  }
+  if (ds.attached) ImGui::BeginDisabled();
+
+  const char *preview = "Select target process";
+  std::string selected_label;
+  for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+    const auto &proc = state.processes[i];
+    if (proc.pid == ds.pid_input_source) {
+      selected_label = std::to_string(proc.pid) + "  " + proc.name;
+      preview = selected_label.c_str();
+      break;
+    }
+  }
+
+  ImGui::SetNextItemWidth(310.0f * ui::dpi_scale());
+  if (ImGui::BeginCombo("##debugger_pid_combo", preview)) {
+    if (state.processes.empty()) {
+      ImGui::TextColored(ui::colors().dim, "%s", "No process list loaded");
+    }
+    for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+      const auto &proc = state.processes[i];
+      const bool selected = proc.pid == ds.pid_input_source;
+      std::string label = std::to_string(proc.pid) + "  " + proc.name;
+      if (ImGui::Selectable(label.c_str(), selected)) {
+        select_debugger_process(state, ds, i);
+      }
+      if (selected) ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "Select a PID from the loaded process list");
+
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kRefresh) + "  PIDs").c_str(),
+                      ImVec2(82.0f * ui::dpi_scale(), 0.0f))) {
+    (void)refresh_debugger_process_list(state);
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "Refresh process list");
+
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "%s", "PID");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90.0f * ui::dpi_scale());
+  if (ImGui::InputText("##pid", ds.pid_input, sizeof(ds.pid_input),
+                       ImGuiInputTextFlags_CharsDecimal)) {
+    ds.pid_input_source = 0;
+  }
+  if (ds.attached) ImGui::EndDisabled();
+}
+
 static void refresh_regs(AppState &state) {
   auto &ds = dstate(state);
   if (!state.client.connected() || !ds.attached || ds.selected_lwp == 0) return;
+  if (client_async_busy(state)) return;
   Client::DebugRegs r{};
   if (state.client.debug_get_regs(ds.selected_lwp, r)) {
     ds.regs = r;
@@ -82,6 +172,7 @@ static void poll_debugger_state(AppState &state) {
   ds.last_poll = now;
 
   if (!state.client.connected() || !ds.attached) return;
+  if (client_async_busy(state)) return;
 
   bool stopped = false;
   int32_t stop_lwp = 0;
@@ -99,8 +190,9 @@ static void poll_debugger_state(AppState &state) {
 
 static void refresh_threads(AppState &state) {
   auto &ds = dstate(state);
-  ds.threads.clear();
   if (!state.client.connected() || !ds.attached) return;
+  if (client_async_busy(state)) return;
+  ds.threads.clear();
   if (!state.client.debug_get_threads(ds.threads)) {
     set_status(state, "Threads: " + state.client.last_error());
     return;
@@ -112,15 +204,17 @@ static void refresh_threads(AppState &state) {
 
 static void refresh_breakpoints(AppState &state) {
   auto &ds = dstate(state);
-  ds.breakpoints.clear();
   if (!state.client.connected() || !ds.attached) return;
+  if (client_async_busy(state)) return;
+  ds.breakpoints.clear();
   state.client.debug_get_breakpoints(ds.breakpoints);
 }
 
 static void refresh_watchpoints(AppState &state) {
   auto &ds = dstate(state);
-  ds.watchpoints.clear();
   if (!state.client.connected() || !ds.attached) return;
+  if (client_async_busy(state)) return;
+  ds.watchpoints.clear();
   state.client.debug_get_watchpoints(ds.watchpoints);
 }
 
@@ -129,16 +223,29 @@ static void refresh_bpwp_lists(AppState &state) {
   refresh_watchpoints(state);
 }
 
-static int64_t reg_input(AppState &state, const char *label, int64_t value,
-                        bool hex = true) {
-  (void)state;
+static int responsive_columns(float available_width, float min_cell_width,
+                              int max_columns) {
+  if (available_width <= min_cell_width) return 1;
+  int columns = static_cast<int>(available_width / min_cell_width);
+  return std::clamp(columns, 1, max_columns);
+}
+
+static void set_table_item_width(float fallback) {
+  const float avail = ImGui::GetContentRegionAvail().x;
+  ImGui::SetNextItemWidth(avail > 24.0f ? -1.0f : fallback);
+}
+
+static int64_t reg_input_cell(const char *label, int64_t value) {
   char buf[32];
-  if (hex)
-    std::snprintf(buf, sizeof(buf), "%016" PRIX64, static_cast<uint64_t>(value));
-  else
-    std::snprintf(buf, sizeof(buf), "%" PRId64, value);
-  ImGui::SetNextItemWidth(140);
-  if (ImGui::InputText(label, buf, sizeof(buf),
+  const float scl = ui::dpi_scale();
+
+  std::snprintf(buf, sizeof(buf), "%016" PRIX64, static_cast<uint64_t>(value));
+  ImGui::PushID(label);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextColored(ui::colors().dim, "%s", label);
+  ImGui::SameLine(46.0f * scl);
+  ImGui::SetNextItemWidth(-1.0f);
+  if (ImGui::InputText("##value", buf, sizeof(buf),
                        ImGuiInputTextFlags_CharsHexadecimal |
                            ImGuiInputTextFlags_EnterReturnsTrue)) {
     try {
@@ -146,7 +253,61 @@ static int64_t reg_input(AppState &state, const char *label, int64_t value,
     } catch (...) {
     }
   }
+  ImGui::PopID();
   return value;
+}
+
+enum class RegField {
+  RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP,
+  R8, R9, R10, R11, R12, R13, R14, R15, RIP, RFLAGS,
+};
+
+static int64_t reg_field_value(const memdbg_debug_regs_t &regs, RegField field) {
+  switch (field) {
+  case RegField::RAX: return regs.r_rax;
+  case RegField::RBX: return regs.r_rbx;
+  case RegField::RCX: return regs.r_rcx;
+  case RegField::RDX: return regs.r_rdx;
+  case RegField::RSI: return regs.r_rsi;
+  case RegField::RDI: return regs.r_rdi;
+  case RegField::RBP: return regs.r_rbp;
+  case RegField::RSP: return regs.r_rsp;
+  case RegField::R8: return regs.r_r8;
+  case RegField::R9: return regs.r_r9;
+  case RegField::R10: return regs.r_r10;
+  case RegField::R11: return regs.r_r11;
+  case RegField::R12: return regs.r_r12;
+  case RegField::R13: return regs.r_r13;
+  case RegField::R14: return regs.r_r14;
+  case RegField::R15: return regs.r_r15;
+  case RegField::RIP: return regs.r_rip;
+  case RegField::RFLAGS: return regs.r_rflags;
+  }
+  return 0;
+}
+
+static void set_reg_field_value(memdbg_debug_regs_t &regs, RegField field,
+                                int64_t value) {
+  switch (field) {
+  case RegField::RAX: regs.r_rax = value; break;
+  case RegField::RBX: regs.r_rbx = value; break;
+  case RegField::RCX: regs.r_rcx = value; break;
+  case RegField::RDX: regs.r_rdx = value; break;
+  case RegField::RSI: regs.r_rsi = value; break;
+  case RegField::RDI: regs.r_rdi = value; break;
+  case RegField::RBP: regs.r_rbp = value; break;
+  case RegField::RSP: regs.r_rsp = value; break;
+  case RegField::R8: regs.r_r8 = value; break;
+  case RegField::R9: regs.r_r9 = value; break;
+  case RegField::R10: regs.r_r10 = value; break;
+  case RegField::R11: regs.r_r11 = value; break;
+  case RegField::R12: regs.r_r12 = value; break;
+  case RegField::R13: regs.r_r13 = value; break;
+  case RegField::R14: regs.r_r14 = value; break;
+  case RegField::R15: regs.r_r15 = value; break;
+  case RegField::RIP: regs.r_rip = value; break;
+  case RegField::RFLAGS: regs.r_rflags = value; break;
+  }
 }
 
 } // namespace
@@ -174,19 +335,23 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     return;
   }
 
+  const bool client_busy = client_async_busy(state);
+  if (client_busy) {
+    ImGui::TextColored(ui::colors().warning, "%s",
+                       "Wait for the active operation to finish");
+    ImGui::BeginDisabled();
+  }
+
   /* ---- Attach / control ---- */
-  if (ImGui::BeginChild("DebuggerControl", ImVec2(0, 110), true)) {
-    ImGui::Text("PID");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120);
-    ImGui::InputText("##pid", ds.pid_input, sizeof(ds.pid_input),
-                     ImGuiInputTextFlags_CharsDecimal);
-    ImGui::SameLine();
+  if (ImGui::BeginChild("DebuggerControl", ImVec2(0, 122.0f * ui::dpi_scale()), true)) {
+    draw_debugger_pid_selector(state, ds);
 
     if (!ds.attached) {
+      ImGui::Spacing();
       ImGui::Checkbox(locale::tr("debugger.pause_on_attach"), &ds.pause_on_attach);
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", locale::tr("debugger.pause_on_attach_tip"));
+      ImGui::SameLine();
       if (ui::primary_button(locale::tr("debugger.attach"), ImVec2(100, 0))) {
         int32_t pid = 0;
         try {
@@ -279,6 +444,7 @@ void draw_debugger(AppState &state, ImVec2 avail) {
   ImGui::EndChild();
 
   if (!ds.attached) {
+    if (client_busy) ImGui::EndDisabled();
     ui::end_panel();
     return;
   }
@@ -328,41 +494,35 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::SetTooltip("%s", locale::tr("debugger.auto_refresh_on_stop_tip"));
 
     auto &r = ds.regs.regs;
-    r.r_rax = reg_input(state, "RAX", r.r_rax);
-    ImGui::SameLine();
-    r.r_rbx = reg_input(state, "RBX", r.r_rbx);
-    ImGui::SameLine();
-    r.r_rcx = reg_input(state, "RCX", r.r_rcx);
-    ImGui::SameLine();
-    r.r_rdx = reg_input(state, "RDX", r.r_rdx);
-
-    r.r_rsi = reg_input(state, "RSI", r.r_rsi);
-    ImGui::SameLine();
-    r.r_rdi = reg_input(state, "RDI", r.r_rdi);
-    ImGui::SameLine();
-    r.r_rbp = reg_input(state, "RBP", r.r_rbp);
-    ImGui::SameLine();
-    r.r_rsp = reg_input(state, "RSP", r.r_rsp);
-
-    r.r_r8  = reg_input(state, "R8 ", r.r_r8);
-    ImGui::SameLine();
-    r.r_r9  = reg_input(state, "R9 ", r.r_r9);
-    ImGui::SameLine();
-    r.r_r10 = reg_input(state, "R10", r.r_r10);
-    ImGui::SameLine();
-    r.r_r11 = reg_input(state, "R11", r.r_r11);
-
-    r.r_r12 = reg_input(state, "R12", r.r_r12);
-    ImGui::SameLine();
-    r.r_r13 = reg_input(state, "R13", r.r_r13);
-    ImGui::SameLine();
-    r.r_r14 = reg_input(state, "R14", r.r_r14);
-    ImGui::SameLine();
-    r.r_r15 = reg_input(state, "R15", r.r_r15);
-
-    r.r_rip = reg_input(state, "RIP", r.r_rip);
-    ImGui::SameLine();
-    r.r_rflags = reg_input(state, "RFLAGS", r.r_rflags);
+    const float scl = ui::dpi_scale();
+    struct RegCell {
+      const char *label;
+      RegField field;
+    };
+    std::array<RegCell, 18> reg_cells{{
+        {"RAX", RegField::RAX}, {"RBX", RegField::RBX},
+        {"RCX", RegField::RCX}, {"RDX", RegField::RDX},
+        {"RSI", RegField::RSI}, {"RDI", RegField::RDI},
+        {"RBP", RegField::RBP}, {"RSP", RegField::RSP},
+        {"R8", RegField::R8}, {"R9", RegField::R9},
+        {"R10", RegField::R10}, {"R11", RegField::R11},
+        {"R12", RegField::R12}, {"R13", RegField::R13},
+        {"R14", RegField::R14}, {"R15", RegField::R15},
+        {"RIP", RegField::RIP}, {"RFLAGS", RegField::RFLAGS},
+    }};
+    const int reg_columns =
+        responsive_columns(ImGui::GetContentRegionAvail().x, 224.0f * scl, 4);
+    if (ImGui::BeginTable("DebuggerRegGrid", reg_columns,
+                          ImGuiTableFlags_SizingStretchSame |
+                              ImGuiTableFlags_PadOuterX)) {
+      for (auto &cell : reg_cells) {
+        ImGui::TableNextColumn();
+        const int64_t edited =
+            reg_input_cell(cell.label, reg_field_value(r, cell.field));
+        set_reg_field_value(r, cell.field, edited);
+      }
+      ImGui::EndTable();
+    }
 
     static const char *cond_reg_names[] = {
       "None", "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
@@ -373,30 +533,49 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     /* ---- Breakpoints ---- */
     ImGui::Separator();
     ImGui::Text("Breakpoints");
-    ImGui::SetNextItemWidth(140);
-    ImGui::InputText("##bpaddr", ds.bp_input, sizeof(ds.bp_input),
-                     ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
     const char *bp_kinds[] = {"Software", "Hardware"};
-    ImGui::Combo("##bpkind", &ds.bp_kind, bp_kinds, IM_ARRAYSIZE(bp_kinds));
-    ImGui::SameLine();
-    /* Condition row */
-    ImGui::SetNextItemWidth(80);
-    ImGui::Combo("##bpcondreg", &ds.bp_cond_reg, cond_reg_names,
-                 IM_ARRAYSIZE(cond_reg_names));
-    ImGui::SameLine();
-    if (ds.bp_cond_reg != 0) {
-      ImGui::SetNextItemWidth(55);
-      ImGui::Combo("##bpcondop", &ds.bp_cond_op, cond_op_names,
-                   IM_ARRAYSIZE(cond_op_names));
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(120);
-      ImGui::InputText("##bpcondval", ds.bp_cond_val, sizeof(ds.bp_cond_val),
+    if (ImGui::BeginTable("BreakpointEditor", 5,
+                          ImGuiTableFlags_SizingStretchProp |
+                              ImGuiTableFlags_PadOuterX)) {
+      ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthStretch, 1.35f);
+      ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 118.0f * scl);
+      ImGui::TableSetupColumn("Condition", ImGuiTableColumnFlags_WidthFixed, 92.0f * scl);
+      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+      ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 112.0f * scl);
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      set_table_item_width(140.0f * scl);
+      ImGui::InputText("##bpaddr", ds.bp_input, sizeof(ds.bp_input),
                        ImGuiInputTextFlags_CharsHexadecimal);
-      ImGui::SameLine();
-    }
-    if (ui::primary_button(locale::tr("debugger.add_bp"), ImVec2(90, 0))) {
+      ImGui::TableSetColumnIndex(1);
+      set_table_item_width(110.0f * scl);
+      ImGui::Combo("##bpkind", &ds.bp_kind, bp_kinds, IM_ARRAYSIZE(bp_kinds));
+      ImGui::TableSetColumnIndex(2);
+      set_table_item_width(80.0f * scl);
+      ImGui::Combo("##bpcondreg", &ds.bp_cond_reg, cond_reg_names,
+                   IM_ARRAYSIZE(cond_reg_names));
+      ImGui::TableSetColumnIndex(3);
+      if (ds.bp_cond_reg != 0) {
+        if (ImGui::BeginTable("BreakpointConditionValue", 2,
+                              ImGuiTableFlags_SizingStretchProp)) {
+          ImGui::TableSetupColumn("Op", ImGuiTableColumnFlags_WidthFixed, 58.0f * scl);
+          ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          set_table_item_width(55.0f * scl);
+          ImGui::Combo("##bpcondop", &ds.bp_cond_op, cond_op_names,
+                       IM_ARRAYSIZE(cond_op_names));
+          ImGui::TableSetColumnIndex(1);
+          set_table_item_width(120.0f * scl);
+          ImGui::InputText("##bpcondval", ds.bp_cond_val, sizeof(ds.bp_cond_val),
+                           ImGuiInputTextFlags_CharsHexadecimal);
+          ImGui::EndTable();
+        }
+      } else {
+        ImGui::TextColored(ui::colors().dim, "%s", "No condition");
+      }
+      ImGui::TableSetColumnIndex(4);
+      if (ui::primary_button(locale::tr("debugger.add_bp"), ImVec2(-1, 0))) {
       uint64_t addr = 0;
       if (parse_input_u64(ds.bp_input, addr)) {
         uint64_t cv = 0;
@@ -415,6 +594,8 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           set_status(state, "BP: " + state.client.last_error());
         }
       }
+      }
+      ImGui::EndTable();
     }
 
     /* Existing breakpoints */
@@ -488,19 +669,28 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     /* ---- Watchpoints ---- */
     ImGui::Separator();
     ImGui::Text("Watchpoints");
-    ImGui::SetNextItemWidth(140);
-    ImGui::InputText("##wpaddr", ds.wp_input, sizeof(ds.wp_input),
-                     ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(80);
-    ImGui::InputInt("##wplen", &ds.wp_length);
-    ds.wp_length = std::clamp(ds.wp_length, 1, 8);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120);
     const char *wp_types[] = {"Exec", "Write", "Read", "Read/Write"};
-    ImGui::Combo("##wptype", &ds.wp_type, wp_types, IM_ARRAYSIZE(wp_types));
-    ImGui::SameLine();
-    if (ui::primary_button(locale::tr("debugger.add_wp"), ImVec2(130, 0))) {
+    if (ImGui::BeginTable("WatchpointEditor", 4,
+                          ImGuiTableFlags_SizingStretchProp |
+                              ImGuiTableFlags_PadOuterX)) {
+      ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthStretch, 1.3f);
+      ImGui::TableSetupColumn("Length", ImGuiTableColumnFlags_WidthFixed, 82.0f * scl);
+      ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 128.0f * scl);
+      ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 136.0f * scl);
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      set_table_item_width(140.0f * scl);
+      ImGui::InputText("##wpaddr", ds.wp_input, sizeof(ds.wp_input),
+                       ImGuiInputTextFlags_CharsHexadecimal);
+      ImGui::TableSetColumnIndex(1);
+      set_table_item_width(80.0f * scl);
+      ImGui::InputInt("##wplen", &ds.wp_length);
+      ds.wp_length = std::clamp(ds.wp_length, 1, 8);
+      ImGui::TableSetColumnIndex(2);
+      set_table_item_width(120.0f * scl);
+      ImGui::Combo("##wptype", &ds.wp_type, wp_types, IM_ARRAYSIZE(wp_types));
+      ImGui::TableSetColumnIndex(3);
+      if (ui::primary_button(locale::tr("debugger.add_wp"), ImVec2(-1, 0))) {
       uint64_t addr = 0;
       if (parse_input_u64(ds.wp_input, addr)) {
         if (state.client.debug_set_watchpoint(
@@ -512,6 +702,8 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           set_status(state, "WP: " + state.client.last_error());
         }
       }
+      }
+      ImGui::EndTable();
     }
 
     /* Existing watchpoints */
@@ -581,6 +773,7 @@ void draw_debugger(AppState &state, ImVec2 avail) {
   }
   ImGui::EndChild();
 
+  if (client_busy) ImGui::EndDisabled();
   ui::end_panel();
 }
 

@@ -108,6 +108,7 @@ add_executable(memdbg_frontend
   src/core/github_profile.cpp
   src/core/memdbg_client.cpp
   src/core/platform.cpp
+  src/core/release_check.cpp
   src/core/udp_log_listener.cpp
 
   # ui (widgets, theme, fonts, icons, file picker)
@@ -161,6 +162,14 @@ target_include_directories(memdbg_frontend PRIVATE
 )
 
 target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
+
+target_compile_definitions(memdbg_frontend PRIVATE
+  MEMDBG_FRONTEND_VERSION="${PROJECT_VERSION}"
+)
+
+if(MSVC)
+  target_compile_options(memdbg_frontend PRIVATE /utf-8)
+endif()
 
 if(APPLE)
   target_sources(memdbg_frontend PRIVATE ${MEMDBG_APP_ICON_ICNS})

@@ -328,8 +328,18 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
 }
 
 memdbg_status_t pal_process_path(int pid, char *out, size_t out_size) {
+  if (out == NULL || out_size == 0U) return MEMDBG_ERR_PARAM;
   out[0] = '\0';
-#ifdef KERN_PROC_PATHNAME
+#if defined(MEMDBG_PROCESS_CONSOLE)
+  /*
+   * On retail console shells, KERN_PROC_PATHNAME can emit noisy
+   * "kern.proc.pathname is not approved" system-log entries even when the
+   * caller only needs best-effort process info. Console callers enrich the
+   * path from KERN_PROC_VMMAP below, which is already used for maps/title IDs.
+   */
+  (void)pid;
+  return MEMDBG_ERR_UNSUPPORTED;
+#elif defined(KERN_PROC_PATHNAME)
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, pid};
   size_t len = out_size;
   if (sysctl(mib, 4, out, &len, NULL, 0) != 0) out[0] = '\0';

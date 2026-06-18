@@ -12,6 +12,7 @@
 #include "discovery_client.hpp"
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
+#include "release_check.hpp"
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "locale/locale.hpp"
@@ -30,6 +31,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace memdbg::frontend {
@@ -42,6 +44,7 @@ using memdbg::frontend::ProcessInfo;
 using memdbg::frontend::ScanResult;
 using memdbg::frontend::UdpLogListener;
 using memdbg::frontend::GitHubProfile;
+using memdbg::frontend::ReleaseCheck;
 
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
@@ -55,6 +58,25 @@ struct ProcessMapSummary {
   uint64_t writable_bytes = 0;
   uint64_t executable_bytes = 0;
   uint64_t rw_heap_bytes = 0;
+  bool loaded = false;
+};
+
+struct TaskProcessResource {
+  int32_t pid = 0;
+  ProcessInfo info;
+  bool has_info = false;
+  bool info_failed = false;
+  ProcessMapSummary maps;
+  bool maps_failed = false;
+  std::string error;
+  double updated_at = 0.0;
+};
+
+struct TaskFmemSample {
+  std::string title_id;
+  std::string name;
+  uint64_t used_bytes = 0;
+  uint64_t budget_bytes = 0;
   bool loaded = false;
 };
 
@@ -220,6 +242,7 @@ struct AppState {
   uint64_t crash_udp_last_received = 0;
   UdpLogListener udp_listener;
   GitHubProfile github_profile;
+  ReleaseCheck release_check;
 
   char host[64] = "192.168.1.100";
   int debug_port = 9020;
@@ -305,6 +328,14 @@ struct AppState {
   bool map_filter_hide_system = true;
   int map_filter_min_kb = 0;
 
+  /* ---- Async map refresh ---- */
+  bool map_refresh_pending = false;
+  std::future<bool> map_refresh_future;
+  int32_t map_refresh_pid = 0;
+  double map_refresh_start_time = 0.0;
+  std::vector<MapEntry> map_refresh_temp_maps;
+  std::string map_refresh_error;
+
   std::vector<CheatEntry> cheats;
   char cheat_description[96] = "New cheat";
   char cheat_address[32] = "0x0";
@@ -373,6 +404,15 @@ struct AppState {
   ProcessInfo taskmgr_process_info;
   bool taskmgr_has_process_info = false;
   double taskmgr_next_telemetry = 0.0;
+  std::unordered_map<int32_t, TaskProcessResource> taskmgr_resources;
+  std::unordered_map<std::string, TaskFmemSample> taskmgr_fmem_by_name;
+  uint64_t taskmgr_last_log_received = 0;
+  bool taskmgr_resource_pending = false;
+  std::future<bool> taskmgr_resource_future;
+  int32_t taskmgr_resource_pid = 0;
+  TaskProcessResource taskmgr_resource_temp;
+  std::string taskmgr_resource_error;
+  double taskmgr_next_resource_fetch = 0.0;
 
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
@@ -613,6 +653,12 @@ inline void push_notification(AppState &state, const std::string &message, doubl
     state.notifications.pop_front();
 }
 
+inline bool client_async_busy(const AppState &state) {
+  return state.connect_pending || state.telemetry_pending ||
+         state.scan_async_pending || state.map_refresh_pending ||
+         state.taskmgr_resource_pending;
+}
+
 /* ---- shared state helpers ---- */
 inline void set_status(AppState &state, const std::string &message) {
   std::snprintf(state.status, sizeof(state.status), "%s", message.c_str());
@@ -623,6 +669,7 @@ void connect_console(AppState &state);
 void disconnect_console(AppState &state);
 void reset_debugger_state();
 void request_telemetry_async(AppState &state);
+void request_maps_refresh_async(AppState &state);
 bool load_frontend_settings(AppState &state, std::string *error = nullptr);
 bool save_frontend_settings(const AppState &state, std::string *error = nullptr);
 

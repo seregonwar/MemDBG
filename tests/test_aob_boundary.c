@@ -275,6 +275,51 @@ static int test_process_exact_scan(
   return failures;
 }
 
+static int test_exact_range_scan_skip_fault(
+    const unsigned char *buf, size_t buf_size,
+    uint32_t needle, uint64_t expected_addr, const char *test_name) {
+  g_mock_buffer = buf;
+  g_mock_size   = buf_size;
+
+  memdbg_scan_exact_request_t request;
+  memset(&request, 0, sizeof(request));
+  request.pid          = 1;
+  request.start        = 0U;
+  request.length       = buf_size;
+  request.value_type   = MEMDBG_VALUE_U32;
+  request.value_length = sizeof(needle);
+  request.alignment    = 4U;
+  request.max_results  = 8U;
+  memcpy(request.value, &needle, sizeof(needle));
+
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_exact(&request, &result);
+
+  if (status != MEMDBG_OK) {
+    printf("FAIL [%s]: scan returned status %d\n", test_name, (int)status);
+    return 1;
+  }
+
+  int found = 0;
+  for (size_t i = 0U; i < result.count; ++i) {
+    if (result.entries[i].address == expected_addr) { found = 1; break; }
+  }
+
+  int failures = 0;
+  if (!found) {
+    printf("FAIL [%s]: missing expected address 0x%llx\n",
+           test_name, (unsigned long long)expected_addr);
+    failures++;
+  }
+  if (result.read_errors == 0U) {
+    printf("FAIL [%s]: expected at least one read error\n", test_name);
+    failures++;
+  }
+
+  memdbg_scan_result_free(&result);
+  return failures;
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -606,14 +651,28 @@ int main(void) {
     mock_read_fail_reset();
   }
 
+  /* Test 18 — Explicit range exact scan: skip a failing page and continue. */
+  {
+    mock_read_fail_range(65536U, 69632U);
+
+    memset(buf, 0x00, buf_size);
+    uint32_t needle = 0xaabbccddU;
+    uint64_t pos = 70000U;
+    memcpy(buf + pos, &needle, sizeof(needle));
+
+    failures += test_exact_range_scan_skip_fault(buf, buf_size, needle, pos,
+                                                 "range exact: skip faulting page");
+    mock_read_fail_reset();
+  }
+
   /* ---- Summary ---- */
   mock_maps_reset();
   mock_read_fail_reset();
 
   if (failures == 0) {
-    printf("\nAll AOB boundary tests PASSED (17/17).\n");
+    printf("\nAll AOB boundary tests PASSED (18/18).\n");
   } else {
-    printf("\n%d test(s) FAILED out of 17.\n", failures);
+    printf("\n%d test(s) FAILED out of 18.\n", failures);
   }
 
   free(buf);

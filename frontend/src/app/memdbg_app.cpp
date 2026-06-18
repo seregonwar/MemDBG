@@ -11,6 +11,7 @@
 #include "embedded_logo.hpp"
 #include "embedded_assets.inc"
 #include "github_profile.hpp"
+#include "release_check.hpp"
 #include "platform.hpp"
 #include "locale/locale.hpp"
 
@@ -35,6 +36,10 @@
 #include <limits>
 #include <string>
 #include <vector>
+
+#ifndef MEMDBG_FRONTEND_VERSION
+#define MEMDBG_FRONTEND_VERSION "0.1.0"
+#endif
 
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
@@ -352,6 +357,7 @@ void connect_console(AppState &state) {
 
 void request_telemetry_async(AppState &state) {
   if (state.telemetry_pending) return;
+  if (state.map_refresh_pending) return;
   if (!state.client.connected()) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
 
@@ -397,6 +403,102 @@ static void poll_telemetry(AppState &state) {
   state.telemetry_available = true;
 }
 
+void request_maps_refresh_async(AppState &state) {
+  if (state.map_refresh_pending) {
+    set_status(state, "Memory maps refresh already in progress");
+    return;
+  }
+  if (state.connect_pending || state.telemetry_pending || state.scan_async_pending) {
+    set_status(state, "Wait for the active operation to finish");
+    return;
+  }
+  if (!state.client.connected()) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", "Maps refresh failed: not connected");
+    set_status(state, locale::tr("connect.no_console_before_maps"));
+    push_notification(state, locale::tr("connect.no_console_before_maps"), 4.0);
+    return;
+  }
+  if (state.selected_pid <= 0) {
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", "Maps refresh failed: no process selected");
+    set_status(state, locale::tr("processes.select_pid_first"));
+    return;
+  }
+
+  if (state.map_refresh_future.valid()) {
+    state.map_refresh_future.wait();
+  }
+
+  state.map_refresh_pid = state.selected_pid;
+  state.map_refresh_start_time = ImGui::GetTime();
+  state.map_refresh_pending = true;
+  state.map_refresh_temp_maps.clear();
+  state.map_refresh_error.clear();
+  set_status(state, "Refreshing memory maps...");
+
+  int32_t pid = state.map_refresh_pid;
+  state.map_refresh_future = std::async(std::launch::async,
+      [pid, &client = state.client,
+       &temp_maps = state.map_refresh_temp_maps,
+       &error = state.map_refresh_error]() -> bool {
+        std::vector<MapEntry> maps;
+        if (!client.process_maps(pid, maps)) {
+          error = client.last_error();
+          if (error.empty()) error = "Memory maps refresh failed";
+          return false;
+        }
+        temp_maps = std::move(maps);
+        error.clear();
+        return true;
+      });
+}
+
+static void poll_map_refresh(AppState &state) {
+  if (!state.map_refresh_pending) return;
+  if (!state.map_refresh_future.valid()) return;
+
+  auto status = state.map_refresh_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) return;
+
+  state.map_refresh_pending = false;
+  bool ok = false;
+  try {
+    ok = state.map_refresh_future.get();
+  } catch (const std::exception &ex) {
+    state.map_refresh_error = ex.what();
+  } catch (...) {
+    state.map_refresh_error = "Unknown maps refresh error";
+  }
+
+  if (state.map_refresh_pid != state.selected_pid) {
+    state.map_refresh_temp_maps.clear();
+    set_status(state, "Memory maps refresh discarded: selected process changed");
+    return;
+  }
+
+  if (!ok) {
+    std::string error = state.map_refresh_error.empty()
+        ? "Memory maps refresh failed"
+        : state.map_refresh_error;
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("error", ("Maps refresh failed: " + error).c_str());
+    set_status(state, error);
+    push_notification(state, "Maps refresh failed: " + error, 5.0);
+    return;
+  }
+
+  state.maps = std::move(state.map_refresh_temp_maps);
+  state.selected_map_row = -1;
+  std::string message =
+      std::string(locale::tr("processes.maps_refreshed")) +
+      " (" + std::to_string(state.maps.size()) + " maps)";
+  set_status(state, message);
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("refresh",
+        ("Memory maps: " + std::to_string(state.maps.size()) + " maps").c_str());
+}
+
 /* Poll async connect result. Called at start of every frame. */
 static void poll_connect(AppState &state) {
   if (!state.connect_pending) return;
@@ -427,6 +529,9 @@ static void poll_connect(AppState &state) {
   state.client.take_fd(s_temp_client.release_fd());
   state.hello = s_temp_hello;
   state.has_hello = true;
+  state.taskmgr_resources.clear();
+  state.taskmgr_fmem_by_name.clear();
+  state.taskmgr_last_log_received = 0U;
   std::string udp_error;
   std::string message = "Connected to console " + std::string(state.host) + ":" + std::to_string(state.debug_port);
   if (!ensure_udp_listener(state, udp_error)) message += " (UDP: " + udp_error + ")";
@@ -493,10 +598,14 @@ void disconnect_console(AppState &state) {
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
   if (state.scan_async_future.valid()) state.scan_async_future.wait();
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
+  if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
+  if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   if (s_connect_future.valid()) s_connect_future.wait();
 
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
+  state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
+  state.taskmgr_resource_pending = false;  /* cancel any in-flight task manager fetch */
   state.client.disconnect();
   state.has_hello = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
@@ -507,6 +616,13 @@ void disconnect_console(AppState &state) {
   state.has_process_info = false;
   state.telemetry_available = false;
   state.next_telemetry_poll = 0.0;
+  state.taskmgr_resources.clear();
+  state.taskmgr_fmem_by_name.clear();
+  state.taskmgr_last_log_received = 0U;
+  state.taskmgr_selected_row = -1;
+  state.taskmgr_selected_pid = 0;
+  state.taskmgr_map_summary = ProcessMapSummary{};
+  state.taskmgr_has_process_info = false;
   reset_debugger_state();
 
   if (state.crash_logging_enabled)
@@ -774,34 +890,18 @@ static void topbar_refresh_processes(AppState &state) {
     state.maps.clear();
     state.selected_map_row = -1;
   }
+  state.taskmgr_resources.clear();
+  state.taskmgr_selected_row = -1;
+  state.taskmgr_selected_pid = 0;
+  state.taskmgr_map_summary = ProcessMapSummary{};
+  state.taskmgr_has_process_info = false;
   set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
   if (state.crash_logging_enabled)
     state.crash_logger.log("refresh", ("Process list: " + std::to_string(state.processes.size()) + " entries").c_str());
 }
 
 static void topbar_refresh_maps(AppState &state) {
-  if (!state.client.connected()) {
-    if (state.crash_logging_enabled)
-      state.crash_logger.log("error", "Maps refresh failed: not connected");
-    set_status(state, "Connect a console before refreshing maps");
-    return;
-  }
-  if (state.selected_pid <= 0) {
-    if (state.crash_logging_enabled)
-      state.crash_logger.log("error", "Maps refresh failed: no process selected");
-    set_status(state, "Select a process first");
-    return;
-  }
-  if (!state.client.process_maps(state.selected_pid, state.maps)) {
-    if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("Maps refresh failed: " + std::string(state.client.last_error())).c_str());
-    set_status(state, state.client.last_error());
-    return;
-  }
-  state.selected_map_row = -1;
-  set_status(state, "Memory maps refreshed (" + std::to_string(state.maps.size()) + " maps)");
-  if (state.crash_logging_enabled)
-    state.crash_logger.log("refresh", ("Memory maps: " + std::to_string(state.maps.size()) + " maps").c_str());
+  request_maps_refresh_async(state);
 }
 
 static bool topbar_button(const char *id, const char *icon, const char *label,
@@ -897,15 +997,19 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   ImGui::SameLine(0.0f, 12.0f * scl);
 
+  ImGui::BeginDisabled(client_async_busy(state));
   if (topbar_button("TopbarRefreshPids", icons::kRefresh, locale::tr("topbar.pids"), 76.0f * scl))
     topbar_refresh_processes(state);
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (!state.client.connected()) ImGui::BeginDisabled();
   draw_process_combo(state, topbar_w > 1280.0f * scl ? 300.0f * scl : 230.0f * scl);
   if (!state.client.connected()) ImGui::EndDisabled();
   ImGui::SameLine();
+  ImGui::BeginDisabled(client_async_busy(state));
   if (topbar_button("TopbarRefreshMaps", icons::kMemory, locale::tr("topbar.maps"), 82.0f * scl))
     topbar_refresh_maps(state);
+  ImGui::EndDisabled();
 
   const bool connected = state.client.connected();
   const ImVec4 session_color = state.connect_pending ? ui::colors().warning :
@@ -916,7 +1020,8 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   if (topbar_w > 1260.0f * scl) {
     ImGui::SameLine();
-    topbar_chip("TopbarMaps", locale::tr("topbar.chip_maps"), std::to_string(state.maps.size()).c_str(), ui::colors().link, 104.0f * scl);
+    std::string maps_value = state.map_refresh_pending ? "..." : std::to_string(state.maps.size());
+    topbar_chip("TopbarMaps", locale::tr("topbar.chip_maps"), maps_value.c_str(), ui::colors().link, 104.0f * scl);
   }
   if (topbar_w > 1370.0f * scl) {
     ImGui::SameLine();
@@ -927,18 +1032,46 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
     topbar_chip("TopbarCheats", locale::tr("topbar.chip_cheats"), std::to_string(state.cheats.size()).c_str(), ui::colors().warning, 104.0f * scl);
   }
 
-  const float right_w = connected ? 432.0f * scl : 376.0f * scl;
+  std::string update_tag;
+  std::string update_url;
+  {
+    std::lock_guard<std::mutex> lock(state.release_check.mutex);
+    if (state.release_check.update_available) {
+      update_tag = state.release_check.latest_tag;
+      update_url = state.release_check.release_url;
+    }
+  }
+
+  const bool has_update = !update_tag.empty();
+  const float right_w = (connected ? 432.0f * scl : 376.0f * scl) +
+                        (has_update ? 126.0f * scl : 0.0f);
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 8.0f * scl, topbar_w - right_w));
+  if (has_update) {
+    std::string label = "Update " + update_tag;
+    if (topbar_button("TopbarUpdate", icons::kNotify, label.c_str(), 118.0f * scl)) {
+      if (!update_url.empty()) {
+        (void)platform::open_url(update_url);
+      }
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("New MemDBG release available: %s", update_tag.c_str());
+    }
+    ImGui::SameLine();
+  }
   if (connected) {
+    ImGui::BeginDisabled(client_async_busy(state));
     if (topbar_button("TopbarPing", icons::kGauge, locale::tr("topbar.ping"), 74.0f * scl))
       set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
+    ImGui::EndDisabled();
     ImGui::SameLine();
     if (topbar_button("TopbarLogs", icons::kLogs, locale::tr("topbar.logs"), 96.0f * scl))
       state.screen = Screen::Logs;
     ImGui::SameLine();
+    ImGui::BeginDisabled(client_async_busy(state));
     std::string label = std::string(locale::tr("topbar.drop"));
     if (topbar_button("TopbarDrop", icons::kDisconnect, label.c_str(), 120.0f * scl))
       disconnect_console(state);
+    ImGui::EndDisabled();
   } else {
     if (topbar_button("TopbarConfigure", icons::kConsole, locale::tr("topbar.console"), 96.0f * scl))
       state.screen = Screen::Consoles;
@@ -1089,6 +1222,33 @@ static void draw_notifications(AppState &state) {
   }
 }
 
+static void poll_release_check(AppState &state) {
+  if (!state.release_check.worker_done.load()) {
+    return;
+  }
+
+  std::string latest_tag;
+  bool update_available = false;
+  bool should_notify = false;
+  {
+    std::lock_guard<std::mutex> lock(state.release_check.mutex);
+    if (!state.release_check.checked || state.release_check.notification_shown) {
+      return;
+    }
+    latest_tag = state.release_check.latest_tag;
+    update_available = state.release_check.update_available;
+    state.release_check.notification_shown = true;
+    should_notify = true;
+  }
+
+  if (!should_notify) return;
+  if (update_available) {
+    std::string message = "New MemDBG release available: " + latest_tag;
+    set_status(state, message);
+    push_notification(state, message, 10.0);
+  }
+}
+
 /* ---- Screen dispatch ---- */
 
 void draw_screen(AppState &state, ImVec2 avail) {
@@ -1121,10 +1281,13 @@ static void handle_global_shortcuts(AppState &state) {
   if (ImGui::IsKeyPressed(ImGuiKey_F9)) state.screen = Screen::Trainer;
   if (ImGui::IsKeyPressed(ImGuiKey_F10)) state.screen = Screen::Logs;
   if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending) {
-    if (state.client.connected())
+    if (client_async_busy(state)) {
+      set_status(state, "Wait for the active operation to finish");
+    } else if (state.client.connected()) {
       disconnect_console(state);
-    else
+    } else {
       connect_console(state);
+    }
   }
 }
 
@@ -1133,6 +1296,7 @@ static void handle_global_shortcuts(AppState &state) {
 static void draw_app(AppState &state) {
   poll_connect(state);
   poll_telemetry(state);
+  poll_map_refresh(state);
   handle_global_shortcuts(state);
 
   ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -1251,9 +1415,16 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
       "/System/Library/Fonts/Hiragino Sans GB.ttc",
       "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
 #elif defined(_WIN32)
+      "C:\\Windows\\Fonts\\YuGothR.ttc",
+      "C:\\Windows\\Fonts\\YuGothM.ttc",
+      "C:\\Windows\\Fonts\\YuGothB.ttc",
+      "C:\\Windows\\Fonts\\meiryo.ttc",
+      "C:\\Windows\\Fonts\\meiryob.ttc",
       "C:\\Windows\\Fonts\\msgothic.ttc",
-      "C:\\Windows\\Fonts\\yugothib.ttf",
+      "C:\\Windows\\Fonts\\msmincho.ttc",
       "C:\\Windows\\Fonts\\malgun.ttf",
+      "C:\\Windows\\Fonts\\msyh.ttc",
+      "C:\\Windows\\Fonts\\simsun.ttc",
       "C:\\Windows\\Fonts\\arialuni.ttf",
 #else
       "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -1284,6 +1455,17 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   io.Fonts->AddFontFromMemoryTTF(
       fa_solid_900, (int)fa_solid_900_len,
       icon_size, &icon_cfg, icon_ranges);
+
+  ImFontConfig brand_cfg;
+  brand_cfg.MergeMode = true;
+  brand_cfg.FontDataOwnedByAtlas = false;
+  brand_cfg.PixelSnapH = true;
+  brand_cfg.GlyphMinAdvanceX = std::roundf(16.0f * dpi_scale);
+  brand_cfg.GlyphOffset = ImVec2(0.0f, 1.0f * dpi_scale);
+  static const ImWchar brand_ranges[] = { 0xE000, 0xF8FF, 0 };
+  io.Fonts->AddFontFromMemoryTTF(
+      fa_brands_400, (int)fa_brands_400_len,
+      icon_size, &brand_cfg, brand_ranges);
   io.Fonts->Build();
 }
 
@@ -1392,6 +1574,7 @@ int run_frontend(int, char **argv) {
     state->language = static_cast<int>(detected);
   }
   github_profile_start(state->github_profile);
+  release_check_start(state->release_check, MEMDBG_FRONTEND_VERSION);
   {
     std::string udp_error;
     if (!ensure_udp_listener(*state, udp_error))
@@ -1422,6 +1605,7 @@ int run_frontend(int, char **argv) {
       glfwPollEvents();
       in_poll = false;
     }
+    poll_release_check(*s_render_state);
 
     if (glfwWindowShouldClose(s_render_window)) return;
 
@@ -1445,7 +1629,10 @@ int run_frontend(int, char **argv) {
   while (!glfwWindowShouldClose(window))
     render_frame();
 
+  if (state->taskmgr_resource_future.valid()) state->taskmgr_resource_future.wait();
+  state->taskmgr_resource_pending = false;
   state->udp_listener.stop(); state->client.disconnect();
+  release_check_shutdown(state->release_check);
   github_profile_shutdown(state->github_profile);
   shutdown_texture(s_logo_texture);
   state->crash_logger.close();
