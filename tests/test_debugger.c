@@ -79,6 +79,7 @@ static struct {
   bool     step_called;
   bool     suspend_called[8];
   bool     resume_called[8];
+  int      attach_errno;
 } mock = {0};
 
 /* ---- Mock helpers ---- */
@@ -125,6 +126,7 @@ bool pal_debug_supported(void) { return mock.supported; }
 
 int pal_debug_attach(int pid) {
   (void)pid;
+  if (mock.attach_errno != 0) { errno = mock.attach_errno; return -1; }
   if (mock.attached) { errno = EINVAL; return -1; }
   mock.attached = true;
   mock.stopped  = true;
@@ -975,7 +977,33 @@ static void test_attach_invalid_pid(void) {
   TEST("attach PID 1 fails", st != MEMDBG_OK);
 }
 
-/* ---- 14. Batch clear-all breakpoints / watchpoints ---- */
+/* ---- 14. Attach errno mapping ---- */
+
+static void test_attach_errno_mapping(void) {
+  printf("\n--- Error: attach errno mapping ---\n");
+
+  mock_reset();
+  mock.attach_errno = EPERM;
+  TEST_ERR("attach EPERM maps to permission",
+           memdbg_debugger_attach(MOCK_PID), MEMDBG_ERR_PERMISSION);
+  TEST("not attached after EPERM", !memdbg_debugger_is_attached());
+
+  mock_reset();
+  mock.attach_errno = ESRCH;
+  TEST_ERR("attach ESRCH maps to not found",
+           memdbg_debugger_attach(MOCK_PID), MEMDBG_ERR_NOT_FOUND);
+  TEST("not attached after ESRCH", !memdbg_debugger_is_attached());
+
+#ifdef ETIMEDOUT
+  mock_reset();
+  mock.attach_errno = ETIMEDOUT;
+  TEST_ERR("attach ETIMEDOUT maps to state",
+           memdbg_debugger_attach(MOCK_PID), MEMDBG_ERR_STATE);
+  TEST("not attached after ETIMEDOUT", !memdbg_debugger_is_attached());
+#endif
+}
+
+/* ---- 15. Batch clear-all breakpoints / watchpoints ---- */
 
 static void test_batch_clear(void) {
   printf("\n--- Batch Clear-All ---\n");
@@ -1116,6 +1144,7 @@ int main(void) {
   test_max_breakpoints_watchpoints();
   test_error_when_detached();
   test_attach_invalid_pid();
+  test_attach_errno_mapping();
   test_batch_clear();
 
   printf("\n=== Results ======================================\n");

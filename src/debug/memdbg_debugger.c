@@ -59,8 +59,8 @@ bool memdbg_debugger_is_elevated(int32_t pid) {
 
 /* ---- Internal helpers ---- */
 
-static memdbg_status_t pal_status_from_errno(void) {
-  switch (errno) {
+static memdbg_status_t pal_status_from_errno_code(int code) {
+  switch (code) {
   case EACCES:
   case EPERM:
     return MEMDBG_ERR_PERMISSION;
@@ -69,11 +69,33 @@ static memdbg_status_t pal_status_from_errno(void) {
     return MEMDBG_ERR_NOT_FOUND;
   case EINVAL:
     return MEMDBG_ERR_PARAM;
+#ifdef ETIMEDOUT
+  case ETIMEDOUT:
+    return MEMDBG_ERR_STATE;
+#endif
+#ifdef EBUSY
+  case EBUSY:
+    return MEMDBG_ERR_STATE;
+#endif
+#ifdef EALREADY
+  case EALREADY:
+    return MEMDBG_ERR_STATE;
+#endif
+#ifdef ENOTSUP
   case ENOTSUP:
     return MEMDBG_ERR_UNSUPPORTED;
+#endif
+#if defined(EOPNOTSUPP) && (!defined(ENOTSUP) || EOPNOTSUPP != ENOTSUP)
+  case EOPNOTSUPP:
+    return MEMDBG_ERR_UNSUPPORTED;
+#endif
   default:
     return MEMDBG_ERR_IO;
   }
+}
+
+static memdbg_status_t pal_status_from_errno(void) {
+  return pal_status_from_errno_code(errno);
 }
 
 /* ---- Condition evaluation ---- */
@@ -447,8 +469,12 @@ memdbg_status_t memdbg_debugger_attach(int32_t pid) {
   elevate_target();
 
   if (pal_debug_attach((int)pid) != 0) {
+    int attach_errno = errno;
+    memdbg_status_t st = pal_status_from_errno_code(attach_errno);
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: attach failed pid=%d errno=%d (%s) status=%d",
+                     (int)pid, attach_errno, strerror(attach_errno), (int)st);
     restore_target();
-    memdbg_status_t st = pal_status_from_errno();
     memset(&g_dbg, 0, sizeof(g_dbg));
     debugger_unlock();
     return st;

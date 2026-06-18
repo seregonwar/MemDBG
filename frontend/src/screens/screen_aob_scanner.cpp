@@ -272,7 +272,7 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
       ? std::string(icons::kSearch) + "  " + std::string(locale::tr("aob_scanner.scan_process_aob"))
       : std::string(icons::kSearch) + "  " + std::string(locale::tr("aob_scanner.scan_aob"));
   bool can_scan = state.client.connected() && state.selected_pid > 0 &&
-                  !state.scan_async_pending &&
+                  !client_async_busy(state) &&
                   payload_supports(state, state.aob_process_wide
                                           ? MEMDBG_CAP_SCAN_PROCESS_AOB
                                           : MEMDBG_CAP_SCAN_AOB);

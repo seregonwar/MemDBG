@@ -756,7 +756,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::InputText(locale::tr("scanner.start"), state.scan_start, sizeof(state.scan_start));
   ImGui::InputText(locale::tr("scanner.length"), state.scan_length, sizeof(state.scan_length));
-  bool can_launch_range = !state.scan_async_pending && state.client.connected() &&
+  bool can_launch_range = !client_async_busy(state) && state.client.connected() &&
                           state.selected_pid > 0 &&
                           payload_supports(state, MEMDBG_CAP_SCAN_EXACT);
   ImGui::BeginDisabled(!can_launch_range);
@@ -766,7 +766,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::InputText(locale::tr("scanner.end_filter"), state.scan_end, sizeof(state.scan_end));
   ImGui::Checkbox(locale::tr("scanner.readable_only"), &state.scan_readable_only);
-  bool can_launch_process = !state.scan_async_pending && state.client.connected() &&
+  bool can_launch_process = !client_async_busy(state) && state.client.connected() &&
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_PROCESS_EXACT);
   ImGui::BeginDisabled(!can_launch_process);
@@ -776,7 +776,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::TextColored(ui::colors().warning, "%s", locale::tr("scanner.unknown_value"));
   ImGui::TextWrapped("%s", locale::tr("scanner.unknown_desc"));
-  bool can_launch_unknown = !state.scan_async_pending && state.client.connected() &&
+  bool can_launch_unknown = !client_async_busy(state) && state.client.connected() &&
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_UNKNOWN);
   ImGui::BeginDisabled(!can_launch_unknown);
@@ -800,7 +800,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
 
   bool can_refine = state.client.connected() && state.selected_pid > 0 &&
                     payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
-                    !state.scan_snapshot.empty() && !state.scan_async_pending;
+                    !state.scan_snapshot.empty() && !client_async_busy(state);
   const float half_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
   ImGui::BeginDisabled(!can_refine);
   if (ui::soft_button(locale::tr("scanner.changed"), ImVec2(half_w, 38))) refine_scan(state, RefineMode::Changed);
@@ -812,7 +812,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::EndDisabled();
   bool can_refresh = state.client.connected() &&
                      payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
-                     !state.scan_snapshot.empty() && !state.scan_async_pending;
+                     !state.scan_snapshot.empty() && !client_async_busy(state);
   ImGui::BeginDisabled(!can_refresh);
   std::string next_label = std::string(icons::kRefresh) + "  " +
       std::string(state.scan_is_unknown_session ? locale::tr("scanner.next_scan_refresh_all") : locale::tr("scanner.refresh_baseline"));

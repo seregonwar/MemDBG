@@ -66,16 +66,37 @@ int pal_debug_attach(int pid) {
   if (pal_debug_ptrace_raw(PT_ATTACH, pid, NULL, 0) == -1) return -1;
 
   /* Wait for the initial SIGTRAP with a safety timeout. */
+  int wait_errno = 0;
   for (int i = 0; i < 500; ++i) {
     int status = 0;
     int r = pal_debug_wait(pid, &status, true);
     if (r == 1 && WIFSTOPPED(status)) {
       return 0;
     }
+    if (r == -1) {
+      wait_errno = errno;
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE)
+      if (wait_errno == ECHILD) {
+        /* On console firmware, PT_ATTACH can succeed without exposing the
+         * traced process through waitpid() as a child of this payload.  Treat
+         * the successful ptrace attach as authoritative and let higher layers
+         * issue an explicit stop/poll if needed. */
+        return 0;
+      }
+#endif
+      if (wait_errno != EINTR) break;
+    }
     (void)usleep(10000); /* 10 ms */
   }
 
-  errno = ETIMEDOUT;
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE)
+  if (wait_errno == 0) {
+    return 0;
+  }
+#endif
+
+  (void)pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0);
+  errno = wait_errno != 0 ? wait_errno : ETIMEDOUT;
   return -1;
 }
 

@@ -358,7 +358,7 @@ static void ensure_process_info(AppState &state) {
   if (state.has_process_info) return;
   if (!state.client.connected() || state.selected_pid <= 0) return;
   /* Skip if payload is busy with an async operation */
-  if (state.telemetry_pending || state.scan_async_pending) return;
+  if (client_async_busy(state)) return;
   if (state.client.process_info(state.selected_pid, state.selected_process_info))
     state.has_process_info = true;
 }
@@ -410,11 +410,7 @@ static void refresh_processes(AppState &state) {
 }
 
 static void refresh_maps(AppState &state) {
-  if (!state.client.connected()) { set_status(state, "Connect a console before refreshing maps"); return; }
-  if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
-  if (!state.client.process_maps(state.selected_pid, state.maps)) { set_status(state, state.client.last_error()); return; }
-  state.selected_map_row = -1;
-  set_status(state, "Memory maps refreshed");
+  request_maps_refresh_async(state);
 }
 
 /* ---- Tables ---- */
@@ -500,7 +496,9 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ImGui::Spacing();
     ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
+    ImGui::BeginDisabled(client_async_busy(state));
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(180, 38))) refresh_processes(state);
+    ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, locale::tr("processes.entries"), state.processes.size());
     ImGui::Spacing();
@@ -523,7 +521,8 @@ void draw_processes(AppState &state, ImVec2 avail) {
       if (!state.selected_process_info.path.empty())
         ImGui::TextWrapped(locale::tr("processes.path"), state.selected_process_info.path.c_str());
     }
-    ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0);
+    ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0 ||
+                         client_async_busy(state));
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 38))) refresh_maps(state);
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);

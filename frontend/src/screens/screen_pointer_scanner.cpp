@@ -162,7 +162,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
 
   ImGui::Spacing();
   bool can_scan = state.client.connected() && state.selected_pid > 0 &&
-                  !state.scan_async_pending &&
+                  !client_async_busy(state) &&
                   payload_supports(state, MEMDBG_CAP_SCAN_POINTER);
   ImGui::BeginDisabled(!can_scan);
   if (ui::primary_button((std::string(icons::kPointer) + "  " + locale::tr("pointer_scanner.scan_pointers")).c_str(),

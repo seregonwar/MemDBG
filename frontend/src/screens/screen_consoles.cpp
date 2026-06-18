@@ -26,6 +26,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
       connect_console(state);
     }
   } else {
+    ImGui::BeginDisabled(client_async_busy(state));
     if (ui::danger_button(locale::tr("consoles.disconnect"), ui::full_button(42))) {
       ImGui::OpenPopup("ConfirmDisconnectConsoles");
     }
@@ -35,9 +36,11 @@ void draw_consoles(AppState &state, ImVec2 avail) {
                           &skip_disconnect_c, true)) {
       disconnect_console(state);
     }
+    ImGui::EndDisabled();
   }
 
   if (state.client.connected()) {
+    ImGui::BeginDisabled(client_async_busy(state));
     if (ui::soft_button(locale::tr("consoles.ping_payload"), ui::full_button(40))) {
       set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
     }
@@ -50,6 +53,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
                           &skip_shutdown, true)) {
       set_status(state, state.client.shutdown_payload() ? "Shutdown sent" : state.client.last_error());
     }
+    ImGui::EndDisabled();
   }
 
   ImGui::Spacing();

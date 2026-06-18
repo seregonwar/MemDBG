@@ -17,6 +17,8 @@ namespace memdbg::frontend {
 /* Binary TrueType font data (generated with xxd -i). */
 extern unsigned char fa_solid_900[];
 extern unsigned int  fa_solid_900_len;
+extern unsigned char fa_brands_400[];
+extern unsigned int  fa_brands_400_len;
 
 /*
  * The FontAwesome PUA glyph range (0xF000-0xF8FF) must be passed to
