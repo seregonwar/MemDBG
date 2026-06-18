@@ -235,6 +235,110 @@ void normalize_ports(AppState &state) {
   state.udp_port    = std::clamp(state.udp_port, 1, 65535);
 }
 
+static void normalize_console_target(ConsoleTarget &target) {
+  target.name = trim_copy(target.name);
+  if (target.name.empty()) target.name = "Default";
+  target.host = trim_copy(target.host);
+  if (target.host.empty()) target.host = "192.168.1.100";
+  target.debug_port = target.debug_port <= 0 ? 9020 : std::clamp(target.debug_port, 1, 65535);
+  target.udp_port = target.udp_port <= 0 ? 9023 : std::clamp(target.udp_port, 1, 65535);
+}
+
+static ConsoleTarget current_console_target_from_fields(const AppState &state) {
+  ConsoleTarget target;
+  target.name = state.target_name;
+  target.host = state.host;
+  target.debug_port = state.debug_port;
+  target.udp_port = state.udp_port;
+  normalize_console_target(target);
+  return target;
+}
+
+static void apply_console_target(AppState &state, const ConsoleTarget &target) {
+  ConsoleTarget normalized = target;
+  normalize_console_target(normalized);
+  std::snprintf(state.target_name, sizeof(state.target_name), "%s", normalized.name.c_str());
+  std::snprintf(state.host, sizeof(state.host), "%s", normalized.host.c_str());
+  state.debug_port = normalized.debug_port;
+  state.udp_port = normalized.udp_port;
+}
+
+static bool console_target_name_exists(const AppState &state, const std::string &name, int ignore_index) {
+  for (int i = 0; i < static_cast<int>(state.console_targets.size()); ++i) {
+    if (i == ignore_index) continue;
+    if (state.console_targets[i].name == name) return true;
+  }
+  return false;
+}
+
+static std::string unique_console_target_name(const AppState &state, std::string base, int ignore_index = -1) {
+  base = trim_copy(base);
+  if (base.empty()) base = "Target";
+  if (!console_target_name_exists(state, base, ignore_index)) return base;
+
+  for (int i = 2; i < 1000; ++i) {
+    const std::string candidate = base + " " + std::to_string(i);
+    if (!console_target_name_exists(state, candidate, ignore_index)) return candidate;
+  }
+  return base + " copy";
+}
+
+void ensure_console_targets(AppState &state) {
+  normalize_ports(state);
+  if (state.console_targets.empty()) {
+    state.console_targets.push_back(current_console_target_from_fields(state));
+  }
+  for (auto &target : state.console_targets) normalize_console_target(target);
+  if (state.selected_target_index < 0 ||
+      state.selected_target_index >= static_cast<int>(state.console_targets.size())) {
+    state.selected_target_index = 0;
+  }
+}
+
+void select_console_target(AppState &state, int index) {
+  ensure_console_targets(state);
+  if (state.console_targets.empty()) return;
+  index = std::clamp(index, 0, static_cast<int>(state.console_targets.size()) - 1);
+  state.selected_target_index = index;
+  apply_console_target(state, state.console_targets[static_cast<size_t>(index)]);
+}
+
+void save_current_console_target(AppState &state) {
+  ensure_console_targets(state);
+  if (state.console_targets.empty()) return;
+  ConsoleTarget target = current_console_target_from_fields(state);
+  target.name = unique_console_target_name(state, target.name, state.selected_target_index);
+  state.console_targets[static_cast<size_t>(state.selected_target_index)] = target;
+  apply_console_target(state, target);
+}
+
+void add_console_target(AppState &state) {
+  ensure_console_targets(state);
+  ConsoleTarget target = current_console_target_from_fields(state);
+  target.name = unique_console_target_name(state, target.name);
+  state.console_targets.push_back(target);
+  state.selected_target_index = static_cast<int>(state.console_targets.size()) - 1;
+  apply_console_target(state, target);
+}
+
+void remove_selected_console_target(AppState &state) {
+  ensure_console_targets(state);
+  if (state.console_targets.size() <= 1U) {
+    state.console_targets.clear();
+    state.selected_target_index = 0;
+    ConsoleTarget target;
+    state.console_targets.push_back(target);
+    apply_console_target(state, target);
+    return;
+  }
+
+  const int index = std::clamp(state.selected_target_index, 0,
+                              static_cast<int>(state.console_targets.size()) - 1);
+  state.console_targets.erase(state.console_targets.begin() + index);
+  state.selected_target_index = std::min(index, static_cast<int>(state.console_targets.size()) - 1);
+  apply_console_target(state, state.console_targets[static_cast<size_t>(state.selected_target_index)]);
+}
+
 bool ensure_udp_listener(AppState &state, std::string &error) {
   normalize_ports(state);
   if (state.udp_listener.running()) return true;
@@ -255,6 +359,8 @@ bool load_frontend_settings(AppState &state, std::string *error) {
   std::ifstream in(path);
   if (!in) return false;
 
+  state.console_targets.clear();
+  int saved_selected_target = 0;
   std::string line;
   while (std::getline(in, line)) {
     const size_t eq = line.find('=');
@@ -267,14 +373,45 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       state.debug_port = std::atoi(value.c_str());
     } else if (key == "udp_port") {
       state.udp_port = std::atoi(value.c_str());
-    } else    if (key == "dump_path" && !value.empty()) {
+    } else if (key == "dump_path" && !value.empty()) {
       std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", value.c_str());
     } else if (key == "language") {
       state.language = static_cast<int>(locale::lang_from_code(value.c_str()));
+    } else if (key == "selected_target") {
+      saved_selected_target = std::atoi(value.c_str());
+    } else if (key.rfind("target.", 0) == 0) {
+      const std::string rest = key.substr(7);
+      const size_t dot = rest.find('.');
+      if (dot == std::string::npos) continue;
+
+      const std::string index_text = rest.substr(0, dot);
+      char *end = nullptr;
+      const long index = std::strtol(index_text.c_str(), &end, 10);
+      if (end == index_text.c_str() || *end != '\0' || index < 0 || index >= 64) continue;
+
+      const size_t target_index = static_cast<size_t>(index);
+      if (state.console_targets.size() <= target_index)
+        state.console_targets.resize(target_index + 1U);
+
+      const std::string field = rest.substr(dot + 1);
+      ConsoleTarget &target = state.console_targets[target_index];
+      if (field == "name") {
+        target.name = value;
+      } else if (field == "host") {
+        target.host = value;
+      } else if (field == "debug_port") {
+        target.debug_port = std::atoi(value.c_str());
+      } else if (field == "udp_port") {
+        target.udp_port = std::atoi(value.c_str());
+      }
     }
   }
 
   normalize_ports(state);
+  ensure_console_targets(state);
+  state.selected_target_index = std::clamp(saved_selected_target, 0,
+      static_cast<int>(state.console_targets.size()) - 1);
+  select_console_target(state, state.selected_target_index);
   if (!in.eof() && error != nullptr) {
     *error = "Failed while reading " + path.string();
     return false;
@@ -297,11 +434,29 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
     if (error != nullptr) *error = "Cannot write " + path.string();
     return false;
   }
+  std::vector<ConsoleTarget> targets = state.console_targets;
+  if (targets.empty()) targets.push_back(current_console_target_from_fields(state));
+  for (auto &target : targets) normalize_console_target(target);
+
+  int selected_target = state.selected_target_index;
+  if (selected_target < 0 || selected_target >= static_cast<int>(targets.size()))
+    selected_target = 0;
+  targets[static_cast<size_t>(selected_target)] = current_console_target_from_fields(state);
+
   out << "host=" << state.host << "\n";
   out << "debug_port=" << state.debug_port << "\n";
   out << "udp_port=" << state.udp_port << "\n";
   out << "dump_path=" << state.dump_path << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
+  out << "selected_target=" << selected_target << "\n";
+  out << "target_count=" << targets.size() << "\n";
+  for (size_t i = 0; i < targets.size(); ++i) {
+    const ConsoleTarget &target = targets[i];
+    out << "target." << i << ".name=" << target.name << "\n";
+    out << "target." << i << ".host=" << target.host << "\n";
+    out << "target." << i << ".debug_port=" << target.debug_port << "\n";
+    out << "target." << i << ".udp_port=" << target.udp_port << "\n";
+  }
   if (!out) {
     if (error != nullptr) *error = "Failed while writing " + path.string();
     return false;
@@ -318,6 +473,8 @@ static std::string         s_temp_error;
 void connect_console(AppState &state) {
   if (state.connect_pending) return;  /* already connecting */
   if (s_connect_future.valid()) s_connect_future.wait();  /* drain previous async */
+  ensure_console_targets(state);
+  save_current_console_target(state);
   normalize_ports(state);
   state.client.disconnect();
   state.has_hello = false;
@@ -625,6 +782,7 @@ void disconnect_console(AppState &state, const char *reason) {
   state.taskmgr_last_log_received = 0U;
   state.taskmgr_selected_row = -1;
   state.taskmgr_selected_pid = 0;
+  state.taskmgr_detail_open = false;
   state.taskmgr_map_summary = ProcessMapSummary{};
   state.taskmgr_has_process_info = false;
   reset_debugger_state();
@@ -900,6 +1058,7 @@ static void topbar_refresh_processes(AppState &state) {
   state.taskmgr_resources.clear();
   state.taskmgr_selected_row = -1;
   state.taskmgr_selected_pid = 0;
+  state.taskmgr_detail_open = false;
   state.taskmgr_map_summary = ProcessMapSummary{};
   state.taskmgr_has_process_info = false;
   set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
@@ -912,13 +1071,18 @@ static void topbar_refresh_maps(AppState &state) {
 }
 
 static bool topbar_button(const char *id, const char *icon, const char *label,
-                          float width, bool primary = false) {
+                          float width, bool primary = false,
+                          bool danger = false) {
   ImGui::PushID(id);
   topbar_align();
   std::string text = std::string(icon) + " " + label;
-  const bool pressed = primary
-      ? ui::primary_button(text.c_str(), ImVec2(width, topbar_control_h()))
-      : ui::soft_button(text.c_str(), ImVec2(width, topbar_control_h()));
+  bool pressed = false;
+  if (danger)
+    pressed = ui::danger_button(text.c_str(), ImVec2(width, topbar_control_h()));
+  else if (primary)
+    pressed = ui::primary_button(text.c_str(), ImVec2(width, topbar_control_h()));
+  else
+    pressed = ui::soft_button(text.c_str(), ImVec2(width, topbar_control_h()));
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", label);
   ImGui::PopID();
   return pressed;
@@ -976,6 +1140,40 @@ static void draw_process_combo(AppState &state, float width) {
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select target process for all tools");
 }
 
+static std::string console_target_label(const ConsoleTarget &target) {
+  ConsoleTarget normalized = target;
+  normalize_console_target(normalized);
+  return normalized.name + "  " + normalized.host + ":" + std::to_string(normalized.debug_port);
+}
+
+static void draw_console_target_combo(AppState &state, float width) {
+  ensure_console_targets(state);
+  const ConsoleTarget preview_target = current_console_target_from_fields(state);
+  const std::string preview = console_target_label(preview_target);
+  const bool locked = state.client.connected() || state.connect_pending;
+
+  topbar_align();
+  const float frame_pad_y = std::max(0.0f, (topbar_control_h() - ImGui::GetFontSize()) * 0.5f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(9.0f, frame_pad_y));
+  ImGui::BeginDisabled(locked);
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::BeginCombo("##TopbarConsoleTarget", preview.c_str())) {
+    for (int i = 0; i < static_cast<int>(state.console_targets.size()); ++i) {
+      const bool selected = i == state.selected_target_index;
+      const std::string label = console_target_label(state.console_targets[static_cast<size_t>(i)]);
+      if (ImGui::Selectable(label.c_str(), selected)) select_console_target(state, i);
+      if (selected) ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::EndDisabled();
+  ImGui::PopStyleVar();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("%s", locked ? "Disconnect before switching console target"
+                                   : "Select the console target used by Connect");
+  }
+}
+
 static void draw_top_bar(AppState &state, ImVec2 size) {
   const float scl = ui::dpi_scale();
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
@@ -1004,13 +1202,20 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   ImGui::SameLine(0.0f, 12.0f * scl);
 
+  const bool show_target_combo = topbar_w > 1780.0f * scl;
+  if (show_target_combo) {
+    draw_console_target_combo(state, 230.0f * scl);
+    ImGui::SameLine();
+  }
+
   ImGui::BeginDisabled(client_async_busy(state));
   if (topbar_button("TopbarRefreshPids", icons::kRefresh, locale::tr("topbar.pids"), 76.0f * scl))
     topbar_refresh_processes(state);
   ImGui::EndDisabled();
   ImGui::SameLine();
   if (!state.client.connected()) ImGui::BeginDisabled();
-  draw_process_combo(state, topbar_w > 1280.0f * scl ? 300.0f * scl : 230.0f * scl);
+  draw_process_combo(state, show_target_combo ? 240.0f * scl :
+                     (topbar_w > 1280.0f * scl ? 300.0f * scl : 230.0f * scl));
   if (!state.client.connected()) ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(client_async_busy(state));
@@ -1050,8 +1255,8 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
 
   const bool has_update = !update_tag.empty();
-  const float right_w = (connected ? 432.0f * scl : 376.0f * scl) +
-                        (has_update ? 126.0f * scl : 0.0f);
+  const float right_group_w = 376.0f * scl;
+  const float right_w = right_group_w + (has_update ? 126.0f * scl : 0.0f);
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 8.0f * scl, topbar_w - right_w));
   if (has_update) {
     std::string label = "Update " + update_tag;
@@ -1067,27 +1272,29 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   if (connected) {
     ImGui::BeginDisabled(client_async_busy(state));
-    if (topbar_button("TopbarPing", icons::kGauge, locale::tr("topbar.ping"), 74.0f * scl))
+    if (topbar_button("TopbarPing", icons::kGauge, locale::tr("topbar.ping"), 96.0f * scl))
       set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (topbar_button("TopbarLogs", icons::kLogs, locale::tr("topbar.logs"), 96.0f * scl))
+    if (topbar_button("TopbarLogs", icons::kLogs, locale::tr("topbar.logs"), 130.0f * scl))
       state.screen = Screen::Logs;
     ImGui::SameLine();
     ImGui::BeginDisabled(client_async_busy(state));
     std::string label = std::string(locale::tr("topbar.drop"));
-    if (topbar_button("TopbarDrop", icons::kDisconnect, label.c_str(), 120.0f * scl))
+    if (topbar_button("TopbarDrop", icons::kDisconnect, label.c_str(), 136.0f * scl, false, true))
       disconnect_console(state);
     ImGui::EndDisabled();
   } else {
     if (topbar_button("TopbarConfigure", icons::kConsole, locale::tr("topbar.console"), 96.0f * scl))
       state.screen = Screen::Consoles;
-    ImGui::SameLine();      if (topbar_button("TopbarSettings", icons::kSettings, locale::tr("topbar.settings"), 130.0f * scl))
+    ImGui::SameLine();
+    if (topbar_button("TopbarSettings", icons::kSettings, locale::tr("topbar.settings"), 130.0f * scl))
       state.screen = Screen::Settings;
     ImGui::SameLine();
     if (state.connect_pending) {
-      ImGui::SetCursorPosY(topbar_center_y(ImGui::GetFontSize()));
-      ImGui::TextColored(ui::colors().warning, "%s  %s", icons::kConnect, locale::tr("topbar.connecting"));
+      ImGui::BeginDisabled();
+      (void)topbar_button("TopbarConnecting", icons::kConnect, locale::tr("topbar.connecting"), 136.0f * scl, true);
+      ImGui::EndDisabled();
     } else {
       if (topbar_button("TopbarConnect", icons::kConnect, locale::tr("topbar.connect"), 136.0f * scl, true))
         connect_console(state);

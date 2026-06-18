@@ -74,15 +74,6 @@ static const AllocationRecord *allocation_at(const AppState &state,
   return nullptr;
 }
 
-static bool watchpoint_at(const AppState &state, uint64_t address) {
-  for (const auto &watch : state.watchpoints) {
-    if (!watch.enabled || watch.length == 0U) continue;
-    if (address >= watch.address && address < watch.address + watch.length)
-      return true;
-  }
-  return false;
-}
-
 static bool byte_changed(const AppState &state, uint64_t address,
                          uint8_t value) {
   if (!state.memory_overlay_changes) return false;
@@ -100,9 +91,6 @@ static ImVec4 byte_color(const AppState &state, uint64_t address,
       allocation_at(state, address, true) != nullptr) {
     return ui::colors().danger;
   }
-  if (state.memory_overlay_watchpoints && watchpoint_at(state, address)) {
-    return ui::colors().primary2;
-  }
   if (byte_changed(state, address, value)) {
     return ui::colors().warning;
   }
@@ -117,8 +105,6 @@ static void draw_overlay_hex_view(AppState &state) {
   }
 
   ImGui::Checkbox(locale::tr("memory.changes"), &state.memory_overlay_changes);
-  ImGui::SameLine();
-  ImGui::Checkbox(locale::tr("memory.watchpoints_overlay"), &state.memory_overlay_watchpoints);
   ImGui::SameLine();
   ImGui::Checkbox(locale::tr("memory.freed_allocs"), &state.memory_overlay_freed_allocs);
   ImGui::SameLine();
@@ -145,8 +131,6 @@ static void draw_overlay_hex_view(AppState &state) {
       if (ImGui::Selectable((addr + "##memrow" + std::to_string(row)).c_str(),
                             false, ImGuiSelectableFlags_SpanAllColumns)) {
         std::snprintf(state.read_address, sizeof(state.read_address), "%s",
-                      addr.c_str());
-        std::snprintf(state.watch_address, sizeof(state.watch_address), "%s",
                       addr.c_str());
         char sel_buf[128];
         std::snprintf(sel_buf, sizeof(sel_buf), locale::tr("memory.selected"), addr.c_str());
@@ -224,118 +208,6 @@ static void write_memory(AppState &state) {
   char wrote_buf[64];
   std::snprintf(wrote_buf, sizeof(wrote_buf), locale::tr("memory.wrote_n_bytes"), written);
   set_status(state, wrote_buf);
-}
-
-static void add_watchpoint(AppState &state) {
-  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
-  uint64_t address = 0;
-  if (!parse_u64(state.watch_address, address)) { set_status(state, "Invalid watch address"); return; }
-  state.watch_length = std::clamp(state.watch_length, 1, 256);
-
-  MemoryWatchpoint watch;
-  watch.address = address;
-  watch.length = static_cast<uint32_t>(state.watch_length);
-  watch.label = hex_u64(address);
-  if (!state.client.memory_read(state.selected_pid, watch.address, watch.length,
-                                watch.last_bytes)) {
-    set_status(state, "Watchpoint read failed: " + state.client.last_error());
-    return;
-  }
-  watch.current_bytes = watch.last_bytes;
-  watch.status = "armed";
-  state.watchpoints.push_back(std::move(watch));    char wp_buf[128];
-    std::snprintf(wp_buf, sizeof(wp_buf), locale::tr("memory.watchpoints.armed_at"), hex_u64(address).c_str());
-    set_status(state, wp_buf);
-}
-
-static void poll_watchpoints(AppState &state, bool force) {
-  if (!state.watchpoints_polling && !force) return;
-  if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (client_async_busy(state)) return;
-
-  const double now = ImGui::GetTime();
-  if (!force && now < state.next_watchpoint_poll) return;
-  state.next_watchpoint_poll = now + std::max(0.1f, state.watchpoint_interval);
-
-  for (auto &watch : state.watchpoints) {
-    if (!watch.enabled || watch.length == 0U) continue;
-    std::vector<uint8_t> bytes;
-    if (!state.client.memory_read(state.selected_pid, watch.address,
-                                  watch.length, bytes)) {
-      watch.status = state.client.last_error();
-      continue;
-    }
-    watch.current_bytes = bytes;
-    watch.changed = bytes != watch.last_bytes;
-    if (watch.changed) {
-      watch.status = "changed";
-      push_notification(state, "Watchpoint changed at " + hex_u64(watch.address), 5.0);
-      watch.last_bytes = bytes;
-    } else {
-      watch.status = "stable";
-    }
-  }
-}
-
-static void draw_watchpoints(AppState &state) {
-  ImGui::InputText(locale::tr("memory.watchpoints.address"), state.watch_address, sizeof(state.watch_address));
-  ImGui::InputInt(locale::tr("memory.watchpoints.length"), &state.watch_length);
-  state.watch_length = std::clamp(state.watch_length, 1, 256);
-  ImGui::SliderFloat(locale::tr("memory.watchpoints.poll_interval"), &state.watchpoint_interval, 0.1f, 5.0f, "%.2fs");
-  ImGui::Checkbox(locale::tr("memory.watchpoints.polling"), &state.watchpoints_polling);
-  ImGui::SameLine();
-  ImGui::BeginDisabled(client_async_busy(state));
-  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("memory.watchpoints.poll_now")).c_str(),
-                      ImVec2(118, 34))) {
-    poll_watchpoints(state, true);
-  }
-  if (ui::primary_button((std::string(icons::kAdd) + "  " + locale::tr("memory.watchpoints.add")).c_str(),
-                         ui::full_button(38))) {
-    add_watchpoint(state);
-  }
-  ImGui::EndDisabled();
-
-  ImGui::Spacing();
-  if (ImGui::BeginTable("Watchpoints", 5,
-      ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-          ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
-      ImVec2(0, 190))) {
-    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.on_col"), ImGuiTableColumnFlags_WidthFixed, 42);
-    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.addr_col"));
-    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.len_col"), ImGuiTableColumnFlags_WidthFixed, 54);
-    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.value_col"));
-    ImGui::TableSetupColumn(locale::tr("memory.watchpoints.state_col"), ImGuiTableColumnFlags_WidthFixed, 86);
-    ImGui::TableHeadersRow();
-    for (size_t i = 0; i < state.watchpoints.size(); ++i) {
-      auto &watch = state.watchpoints[i];
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::PushID(static_cast<int>(i));
-      ImGui::Checkbox("##enabled", &watch.enabled);
-      ImGui::TableSetColumnIndex(1);
-      ImGui::TextUnformatted(hex_u64(watch.address).c_str());
-      ImGui::TableSetColumnIndex(2);
-      ImGui::Text("%u", watch.length);
-      ImGui::TableSetColumnIndex(3);
-      ImGui::TextUnformatted(bytes_hex(watch.current_bytes).c_str());
-      ImGui::TableSetColumnIndex(4);
-      ImGui::TextColored(watch.changed ? ui::colors().warning : ui::colors().muted,
-                         "%s", watch.status.c_str());
-      ImGui::PopID();
-    }
-    ImGui::EndTable();
-  }
-  static bool skip_clear_wp = false;
-  if (ui::danger_button((std::string(icons::kTrash) + "  " + locale::tr("memory.watchpoints.clear")).c_str(),
-                        ui::full_button(34))) {
-    ImGui::OpenPopup("ConfirmClearMemWP");
-  }
-  if (ui::confirm_modal("ConfirmClearMemWP",
-                        locale::tr("memory.watchpoints.confirm_clear"), nullptr,
-                        &skip_clear_wp, true)) {
-    state.watchpoints.clear();
-  }
 }
 
 static void refresh_allocation_findings(AppState &state) {
@@ -793,8 +665,6 @@ static void draw_exploit_tools(AppState &state) {
 } // namespace
 
 void draw_memory(AppState &state, ImVec2 avail) {
-  poll_watchpoints(state, false);
-
   /* Auto-refresh memory at the configured interval */
   if (state.memory_auto_refresh && state.client.connected() &&
       state.selected_pid > 0 &&
@@ -849,11 +719,6 @@ void draw_memory(AppState &state, ImVec2 avail) {
 
       ImGui::Spacing();
       ui::text_dim(locale::tr("memory.byte_format_hint"));
-      ImGui::EndTabItem();
-    }
-
-    if (ImGui::BeginTabItem(locale::tr("memory.tab_watchpoints"))) {
-      draw_watchpoints(state);
       ImGui::EndTabItem();
     }
 

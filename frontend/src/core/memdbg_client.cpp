@@ -1136,7 +1136,7 @@ std::string platform_name(uint16_t platform_id) {
   case MEMDBG_PLATFORM_HOST:
     return "Host";
   default:
-    return "Unknown";
+    return "Unknown (" + std::to_string(platform_id) + ")";
   }
 }
 
