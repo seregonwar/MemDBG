@@ -341,6 +341,53 @@ static memdbg_status_t handle_process_info(socket_t fd, const memdbg_packet_head
   return send_response(fd, req, MEMDBG_OK, &info, sizeof(info)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
+/* ---- BATCH_PROCESS_INFO ---- */
+
+#define MEMDBG_BATCH_PROCESS_INFO_MAX 128U
+
+static memdbg_status_t handle_batch_process_info(socket_t fd,
+    const memdbg_packet_header_t *req, const void *body, uint32_t body_len) {
+  if (body_len < sizeof(memdbg_batch_process_info_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  const memdbg_batch_process_info_request_t *bp_req =
+      (const memdbg_batch_process_info_request_t *)body;
+  uint32_t count = bp_req->count;
+  if (count == 0U || count > MEMDBG_BATCH_PROCESS_INFO_MAX)
+    return MEMDBG_ERR_PARAM;
+
+  size_t pids_size = count * sizeof(int32_t);
+  size_t entries_size = count * sizeof(memdbg_process_info_response_t);
+  if (body_len < sizeof(*bp_req) + pids_size)
+    return MEMDBG_ERR_PROTOCOL;
+
+  const int32_t *pids = (const int32_t *)((const uint8_t *)body + sizeof(*bp_req));
+
+  /* Allocate response: prefix + count entries */
+  size_t payload_len = sizeof(memdbg_batch_process_info_response_t) + entries_size;
+  if (payload_len > MEMDBG_PROTOCOL_MAX_PACKET) return MEMDBG_ERR_OVERFLOW;
+
+  unsigned char *payload = (unsigned char *)calloc(1U, payload_len);
+  if (payload == NULL) return MEMDBG_ERR_NOMEM;
+
+  memdbg_batch_process_info_response_t *prefix =
+      (memdbg_batch_process_info_response_t *)payload;
+  prefix->count = count;
+  prefix->reserved = 0U;
+
+  memdbg_process_info_response_t *entries =
+      (memdbg_process_info_response_t *)(payload + sizeof(*prefix));
+
+  for (uint32_t i = 0U; i < count; ++i) {
+    memset(&entries[i], 0, sizeof(entries[i]));
+    entries[i].pid = pids[i];
+    (void)memdbg_process_info(pids[i], &entries[i]);
+  }
+
+  int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
+  free(payload);
+  return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
 /* ---- MEMORY_READ / MEMORY_WRITE ---- */
 
 static memdbg_status_t handle_memory_read(socket_t fd, const memdbg_packet_header_t *req,
@@ -850,6 +897,7 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_MEMORY_WRITE:       return handle_memory_write(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_BATCH_READ:         return handle_batch_read(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_BATCH_WRITE:        return handle_batch_write(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_BATCH_PROCESS_INFO: return handle_batch_process_info(fd, req, body, req->length);
   case MEMDBG_CMD_SCAN_EXACT:         return handle_scan_exact_v2(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_PROCESS_EXACT: return handle_scan_process_exact(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_AOB:           return handle_scan_aob(fd, req, cfg, body, req->length);

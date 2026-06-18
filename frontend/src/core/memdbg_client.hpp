@@ -80,6 +80,8 @@ public:
   bool process_list(std::vector<ProcessEntry> &out);
   bool process_maps(int32_t pid, std::vector<MapEntry> &out);
   bool process_info(int32_t pid, ProcessInfo &out);
+  bool batch_process_info(const std::vector<int32_t> &pids,
+                          std::vector<ProcessInfo> &out);
   bool memory_read(int32_t pid, uint64_t address, uint32_t length,
                    std::vector<uint8_t> &out);
   bool memory_write(int32_t pid, uint64_t address,
@@ -144,6 +146,12 @@ public:
   /* ---- Debugger ---- */
   struct DebugThreadEntry {
     int32_t lwp = 0;
+    uint32_t state = 0; /* memdbg_thread_state_t */
+    memdbg_thread_stop_info_t stop_info{}; /* granular PT_LWPINFO data */
+    int32_t priority = 0;     /* scheduling priority */
+    uint64_t runtime_us = 0;  /* accumulated CPU time in microseconds */
+    int32_t pctcpu = 0;       /* recent CPU utilisation 0..10000 */
+    int32_t cpu_id = -1;      /* last CPU core index, -1 = n/a */
     std::string name;
   };
   struct DebugRegs {

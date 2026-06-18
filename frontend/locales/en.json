@@ -117,6 +117,10 @@
     "settings.crash_logging_on": "Crash logging enabled",
     "settings.crash_logging_off": "Crash logging disabled",
     "settings.crash_logging_hint": "Write status and notification logs to a crash-log file. Data survives application crashes.",
+    "settings.taskmgr_prefetch_on_connect": "Prefetch Task Manager data after connecting",
+    "settings.taskmgr_prefetch_on": "Task Manager prefetch enabled",
+    "settings.taskmgr_prefetch_off": "Task Manager prefetch disabled",
+    "settings.taskmgr_prefetch_hint": "Load processes, metadata, and memory-map summaries in the background after a payload connection opens. Disabled by default.",
     "settings.language": "Language",
   "settings.language_hint": "Select the display language. Changes apply immediately.",
 

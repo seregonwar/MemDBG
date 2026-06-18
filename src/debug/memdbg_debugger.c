@@ -46,6 +46,7 @@ static void debugger_lock(void);
 static void debugger_unlock(void);
 static void debugger_init_mutex(void);
 static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
+                                         uint32_t *states,
                                          uint32_t *count, uint32_t max);
 
 bool memdbg_debugger_supported(void) { return pal_debug_supported(); }
@@ -324,8 +325,7 @@ static void build_dr7(uint32_t *dr7_out) {
 
 static memdbg_status_t apply_dbregs_to_all(void) {
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
-  uint32_t count = 0;
-  memdbg_status_t st = get_threads_locked(lwps, NULL, &count,
+  uint32_t count = 0;    memdbg_status_t st = get_threads_locked(lwps, NULL, NULL, &count,
                                           MEMDBG_DEBUGGER_MAX_THREADS);
   if (st != MEMDBG_OK) return st;
   for (uint32_t i = 0; i < count; ++i) {
@@ -394,7 +394,7 @@ static memdbg_status_t sync_hardware_dbregs_locked(void) {
   if (!g_dbg.dbregs_valid) {
     int32_t lwps[1];
     uint32_t count = 0;
-    if (get_threads_locked(lwps, NULL, &count, 1) != MEMDBG_OK ||
+    if (get_threads_locked(lwps, NULL, NULL, &count, 1) != MEMDBG_OK ||
         count == 0) {
       return MEMDBG_ERR_IO;
     }
@@ -558,7 +558,7 @@ memdbg_status_t memdbg_debugger_continue(void) {
   /* If any thread is stopped on a software breakpoint, single-step over it. */
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
   uint32_t count = 0;
-  if (memdbg_debugger_get_threads(lwps, NULL, &count,
+  if (memdbg_debugger_get_threads(lwps, NULL, NULL, &count,
                                   MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
     for (uint32_t i = 0; i < count; ++i) {
       if (pal_debug_get_regs((int)g_dbg.pid, lwps[i], &regs) != 0) continue;
@@ -633,7 +633,8 @@ memdbg_status_t memdbg_debugger_resume_thread(int32_t lwp) {
 }
 
 static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
-                                        uint32_t *count, uint32_t max) {
+                                         uint32_t *states,
+                                         uint32_t *count, uint32_t max) {
   if (count == NULL || lwps == NULL) return MEMDBG_ERR_PARAM;
   if (!g_dbg.attached) return MEMDBG_ERR_STATE;
 
@@ -653,13 +654,22 @@ static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
       memcpy(names[i], buf, sizeof(buf));
     }
   }
+
+  if (states != NULL) {
+    for (uint32_t i = 0; i < *count; ++i) {
+      int st = (int)MEMDBG_THREAD_UNKNOWN;
+      (void)pal_debug_get_thread_state((int)g_dbg.pid, lwps[i], &st);
+      states[i] = (uint32_t)st;
+    }
+  }
   return MEMDBG_OK;
 }
 
 memdbg_status_t memdbg_debugger_get_threads(int32_t *lwps, char (*names)[24],
+                                            uint32_t *states,
                                             uint32_t *count, uint32_t max) {
   debugger_lock();
-  memdbg_status_t st = get_threads_locked(lwps, names, count, max);
+  memdbg_status_t st = get_threads_locked(lwps, names, states, count, max);
   debugger_unlock();
   return st;
 }
@@ -984,7 +994,7 @@ memdbg_status_t memdbg_debugger_poll_events(void) {
       /* Try to identify the stopped LWP. */
       int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
       uint32_t count = 0;
-      if (get_threads_locked(lwps, NULL, &count,
+      if (get_threads_locked(lwps, NULL, NULL, &count,
                              MEMDBG_DEBUGGER_MAX_THREADS) ==
           MEMDBG_OK) {
         for (uint32_t i = 0; i < count; ++i) {

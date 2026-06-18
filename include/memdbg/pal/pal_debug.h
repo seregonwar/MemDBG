@@ -64,6 +64,45 @@ int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs);
  * Callers should fall back to a synthetic name like "lwp-NNN". */
 int pal_debug_get_thread_name(int pid, int32_t lwp, char *name, size_t name_len);
 
+/* Query the kernel state of a thread.
+ * On platforms that support it (FreeBSD/console), uses PT_LWPINFO.
+ * Returns 0 on success and writes the state to *state_out.
+ * Returns -1 on error (caller should fall back to process-level state). */
+int pal_debug_get_thread_state(int pid, int32_t lwp, int *state_out);
+
+/* Retrieve granular stop information for an LWP via PT_LWPINFO.
+ * Returns 0 on success, populating:
+ *   pl_event      – PL_EVENT_NONE or PL_EVENT_SIGNAL
+ *   stop_signal   – the signal number that stopped the thread (0 if none)
+ *   pl_flags      – PL_FLAG_* bits (SCE, SCX, EXEC, FORKED, etc.)
+ *   pl_sigmask_lo – blocked signal mask bits 0..63
+ *   pl_sigmask_hi – blocked signal mask bits 64..127
+ *   pl_siglist_lo – pending signal bits 0..63
+ *   pl_siglist_hi – pending signal bits 64..127
+ * Returns -1 on error; caller should set fields to zero. */
+int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
+                                   int *pl_event, int *stop_signal,
+                                   int *pl_flags,
+                                   uint64_t *pl_sigmask_lo,
+                                   uint64_t *pl_sigmask_hi,
+                                   uint64_t *pl_siglist_lo,
+                                   uint64_t *pl_siglist_hi);
+
+/* Retrieve scheduling/CPU statistics for a set of LWPs via sysctl KERN_PROC_PID.
+ * On platforms that support it (FreeBSD/console), queries the kernel once
+ * per process and fills the per-LWP output arrays.  Fields not available on
+ * a given platform are left at their initial (zero) value.
+ *
+ *   priorities  – scheduling priority (ki_pri)
+ *   runtimes_us – accumulated CPU time in microseconds (ki_runtime)
+ *   pctcpus     – recent CPU utilisation percentage, as 0..10000 (ki_pctcpu * 100)
+ *   cpu_ids     – last CPU core index, or -1 if unavailable (ki_lastcpu / ki_oncpu)
+ *
+ * Returns 0 on success, -1 on error (caller should leave fields at defaults). */
+int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count,
+                                    int *priorities, uint64_t *runtimes_us,
+                                    int *pctcpus, int *cpu_ids);
+
 /* Debug register access (used for hardware breakpoints/watchpoints). */
 int pal_debug_get_dbregs(int pid, int32_t lwp, memdbg_debug_dbregs_t *dbregs);
 int pal_debug_set_dbregs(int pid, int32_t lwp,

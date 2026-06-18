@@ -35,6 +35,7 @@
 #include <future>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifndef MEMDBG_FRONTEND_VERSION
@@ -377,6 +378,9 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", value.c_str());
     } else if (key == "language") {
       state.language = static_cast<int>(locale::lang_from_code(value.c_str()));
+    } else if (key == "taskmgr_prefetch_on_connect") {
+      state.taskmgr_prefetch_on_connect =
+          value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "selected_target") {
       saved_selected_target = std::atoi(value.c_str());
     } else if (key.rfind("target.", 0) == 0) {
@@ -448,6 +452,7 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "udp_port=" << state.udp_port << "\n";
   out << "dump_path=" << state.dump_path << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
+  out << "taskmgr_prefetch_on_connect=" << (state.taskmgr_prefetch_on_connect ? 1 : 0) << "\n";
   out << "selected_target=" << selected_target << "\n";
   out << "target_count=" << targets.size() << "\n";
   for (size_t i = 0; i < targets.size(); ++i) {
@@ -656,6 +661,169 @@ static void poll_map_refresh(AppState &state) {
         ("Memory maps: " + std::to_string(state.maps.size()) + " maps").c_str());
 }
 
+static ProcessMapSummary summarize_taskmgr_prefetch_maps(const std::vector<MapEntry> &maps) {
+  ProcessMapSummary summary;
+  summary.loaded = true;
+  for (const auto &map : maps) {
+    if (map.end <= map.start) continue;
+    const uint64_t size = map.end - map.start;
+    summary.map_count++;
+    summary.total_mapped += size;
+    if (map.protection & 1U) summary.readable_bytes += size;
+    if (map.protection & 2U) summary.writable_bytes += size;
+    if (map.protection & 4U) summary.executable_bytes += size;
+    if ((map.protection & 3U) == 3U && !(map.protection & 4U))
+      summary.rw_heap_bytes += size;
+  }
+  return summary;
+}
+
+static void merge_taskmgr_resource(AppState &state, TaskProcessResource &&incoming) {
+  if (incoming.pid <= 0) return;
+  TaskProcessResource &resource = state.taskmgr_resources[incoming.pid];
+  resource.pid = incoming.pid;
+  if (incoming.has_info) {
+    resource.info = std::move(incoming.info);
+    resource.has_info = true;
+    resource.info_failed = false;
+  } else if (incoming.info_failed) {
+    resource.info_failed = true;
+  }
+  if (incoming.maps.loaded || incoming.maps_failed) {
+    resource.maps = incoming.maps;
+    resource.maps_failed = incoming.maps_failed;
+  }
+  if (!incoming.error.empty()) resource.error = std::move(incoming.error);
+  resource.updated_at = ImGui::GetTime();
+}
+
+static void start_taskmgr_prefetch(AppState &state) {
+  if (!state.taskmgr_prefetch_on_connect || state.taskmgr_prefetch_pending) return;
+  if (!state.client.connected() || !state.has_hello) return;
+  if (!(state.hello.capabilities & MEMDBG_CAP_PROCESS_LIST)) return;
+  if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
+
+  state.taskmgr_prefetch_pending = true;
+  state.taskmgr_prefetch_processes.clear();
+  state.taskmgr_prefetch_resources.clear();
+  state.taskmgr_prefetch_error.clear();
+
+  const uint32_t capabilities = state.hello.capabilities;
+  state.taskmgr_prefetch_future = std::async(std::launch::async,
+      [&client = state.client,
+       &processes_out = state.taskmgr_prefetch_processes,
+       &resources_out = state.taskmgr_prefetch_resources,
+       &error = state.taskmgr_prefetch_error,
+       capabilities]() -> bool {
+        std::vector<ProcessEntry> processes;
+        if (!client.process_list(processes)) {
+          error = client.last_error();
+          return false;
+        }
+
+        std::unordered_map<int32_t, TaskProcessResource> resources;
+        resources.reserve(processes.size());
+        for (const auto &process : processes) {
+          if (process.pid <= 0) continue;
+          TaskProcessResource &resource = resources[process.pid];
+          resource.pid = process.pid;
+        }
+
+        if (capabilities & MEMDBG_CAP_PROCESS_INFO) {
+          constexpr size_t kBatchInfoMax = 128U;
+          for (size_t base = 0; base < processes.size(); base += kBatchInfoMax) {
+            const size_t end = std::min(base + kBatchInfoMax, processes.size());
+            std::vector<int32_t> pids;
+            pids.reserve(end - base);
+            for (size_t i = base; i < end; ++i) {
+              if (processes[i].pid > 0) pids.push_back(processes[i].pid);
+            }
+            if (pids.empty()) continue;
+
+            std::vector<ProcessInfo> infos;
+            if (client.batch_process_info(pids, infos)) {
+              for (auto &info : infos) {
+                if (info.pid <= 0) continue;
+                TaskProcessResource &resource = resources[info.pid];
+                resource.pid = info.pid;
+                resource.info = std::move(info);
+                resource.has_info = true;
+              }
+              continue;
+            }
+
+            const std::string batch_error = client.last_error();
+            if (error.empty()) error = batch_error;
+            for (int32_t pid : pids) {
+              ProcessInfo info;
+              TaskProcessResource &resource = resources[pid];
+              resource.pid = pid;
+              if (client.process_info(pid, info)) {
+                resource.info = std::move(info);
+                resource.has_info = true;
+                resource.info_failed = false;
+              } else {
+                resource.info_failed = true;
+                if (resource.error.empty()) resource.error = client.last_error();
+              }
+            }
+          }
+        }
+
+        if (capabilities & MEMDBG_CAP_PROCESS_MAPS) {
+          for (const auto &process : processes) {
+            if (process.pid <= 0) continue;
+            std::vector<MapEntry> maps;
+            TaskProcessResource &resource = resources[process.pid];
+            resource.pid = process.pid;
+            if (client.process_maps(process.pid, maps)) {
+              resource.maps = summarize_taskmgr_prefetch_maps(maps);
+              resource.maps_failed = false;
+            } else {
+              resource.maps.loaded = true;
+              resource.maps_failed = true;
+              resource.error = client.last_error();
+              if (error.empty()) error = resource.error;
+            }
+          }
+        }
+
+        processes_out = std::move(processes);
+        resources_out = std::move(resources);
+        return true;
+      });
+}
+
+static void poll_taskmgr_prefetch(AppState &state) {
+  if (!state.taskmgr_prefetch_pending || !state.taskmgr_prefetch_future.valid()) return;
+
+  auto status = state.taskmgr_prefetch_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) return;
+
+  state.taskmgr_prefetch_pending = false;
+  bool ok = false;
+  try {
+    ok = state.taskmgr_prefetch_future.get();
+  } catch (const std::exception &ex) {
+    state.taskmgr_prefetch_error = ex.what();
+  } catch (...) {
+    state.taskmgr_prefetch_error = "Unknown task manager prefetch error";
+  }
+
+  if (ok) {
+    if (!state.taskmgr_prefetch_processes.empty()) {
+      state.processes = std::move(state.taskmgr_prefetch_processes);
+    }
+    for (auto &entry : state.taskmgr_prefetch_resources) {
+      merge_taskmgr_resource(state, std::move(entry.second));
+    }
+    state.taskmgr_next_resource_fetch = ImGui::GetTime() + 1.0;
+  }
+
+  state.taskmgr_prefetch_processes.clear();
+  state.taskmgr_prefetch_resources.clear();
+}
+
 /* Poll async connect result. Called at start of every frame. */
 static void poll_connect(AppState &state) {
   if (!state.connect_pending) return;
@@ -689,6 +857,9 @@ static void poll_connect(AppState &state) {
   state.taskmgr_resources.clear();
   state.taskmgr_fmem_by_name.clear();
   state.taskmgr_last_log_received = 0U;
+  state.taskmgr_prefetch_processes.clear();
+  state.taskmgr_prefetch_resources.clear();
+  state.taskmgr_prefetch_error.clear();
   std::string udp_error;
   std::string message = "Connected to console " + std::string(state.host) + ":" + std::to_string(state.debug_port);
   if (!ensure_udp_listener(state, udp_error)) message += " (UDP: " + udp_error + ")";
@@ -698,6 +869,7 @@ static void poll_connect(AppState &state) {
 
   set_status(state, message);
   push_notification(state, "Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port));
+  start_taskmgr_prefetch(state);
 }
 
 /* Modal spinner drawn during async connect */
@@ -757,6 +929,7 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
+  if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
   if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
   if (s_connect_future.valid()) s_connect_future.wait();
 
@@ -764,6 +937,7 @@ void disconnect_console(AppState &state, const char *reason) {
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr_resource_pending = false;  /* cancel any in-flight task manager fetch */
+  state.taskmgr_prefetch_pending = false;
   state.heartbeat_pending = false;
   state.heartbeat_error.clear();
   state.next_heartbeat = 0.0;
@@ -779,6 +953,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.next_telemetry_poll = 0.0;
   state.taskmgr_resources.clear();
   state.taskmgr_fmem_by_name.clear();
+  state.taskmgr_prefetch_processes.clear();
+  state.taskmgr_prefetch_resources.clear();
+  state.taskmgr_prefetch_error.clear();
   state.taskmgr_last_log_received = 0U;
   state.taskmgr_selected_row = -1;
   state.taskmgr_selected_pid = 0;
@@ -1511,7 +1688,8 @@ static void poll_session_health(AppState &state) {
 
   if (!state.client.connected() || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
-      state.map_refresh_pending || state.taskmgr_resource_pending) {
+      state.map_refresh_pending || state.taskmgr_resource_pending ||
+      state.taskmgr_prefetch_pending) {
     return;
   }
 
@@ -1580,6 +1758,7 @@ static void handle_global_shortcuts(AppState &state) {
 
 static void draw_app(AppState &state) {
   poll_connect(state);
+  poll_taskmgr_prefetch(state);
   poll_telemetry(state);
   poll_map_refresh(state);
   poll_session_health(state);
@@ -1917,6 +2096,8 @@ int run_frontend(int, char **argv) {
 
   if (state->taskmgr_resource_future.valid()) state->taskmgr_resource_future.wait();
   state->taskmgr_resource_pending = false;
+  if (state->taskmgr_prefetch_future.valid()) state->taskmgr_prefetch_future.wait();
+  state->taskmgr_prefetch_pending = false;
   state->udp_listener.stop(); state->client.disconnect();
   release_check_shutdown(state->release_check);
   github_profile_shutdown(state->github_profile);

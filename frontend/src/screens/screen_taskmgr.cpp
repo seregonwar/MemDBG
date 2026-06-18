@@ -23,6 +23,8 @@ namespace memdbg::frontend {
 
 namespace {
 
+constexpr size_t kTaskMgrBatchInfoMax = 128U;
+
 inline std::string format_bytes_tm(uint64_t bytes) {
   if (bytes < 1024ULL) return std::to_string(bytes) + " B";
   double v;
@@ -127,7 +129,7 @@ static void start_resource_fetch(AppState &state, int32_t pid) {
   if (pid <= 0 || !state.client.connected()) return;
   if (state.taskmgr_resource_pending || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
-      state.map_refresh_pending) {
+      state.map_refresh_pending || state.taskmgr_prefetch_pending) {
     return;
   }
   if (state.taskmgr_resource_future.valid()) {
@@ -140,19 +142,25 @@ static void start_resource_fetch(AppState &state, int32_t pid) {
   state.taskmgr_resource_temp = TaskProcessResource{};
   state.taskmgr_resource_temp.pid = pid;
 
+  ProcessInfo existing_info;
+  bool existing_has_info = false;
+  bool existing_info_failed = false;
+  auto existing = state.taskmgr_resources.find(pid);
+  if (existing != state.taskmgr_resources.end()) {
+    existing_info = existing->second.info;
+    existing_has_info = existing->second.has_info;
+    existing_info_failed = existing->second.info_failed;
+  }
+
   state.taskmgr_resource_future = std::async(std::launch::async,
-      [pid, &client = state.client,
-       &temp = state.taskmgr_resource_temp,
-       &error = state.taskmgr_resource_error]() -> bool {
+      [pid, existing_info = std::move(existing_info), existing_has_info,
+       existing_info_failed, &client = state.client,
+       &temp = state.taskmgr_resource_temp]() -> bool {
         TaskProcessResource local;
         local.pid = pid;
-
-        if (client.process_info(pid, local.info)) {
-          local.has_info = true;
-        } else {
-          local.info_failed = true;
-          error = client.last_error();
-        }
+        local.info = existing_info;
+        local.has_info = existing_has_info;
+        local.info_failed = existing_info_failed;
 
         std::vector<MapEntry> maps;
         if (client.process_maps(pid, maps)) {
@@ -160,7 +168,7 @@ static void start_resource_fetch(AppState &state, int32_t pid) {
         } else {
           local.maps.loaded = true;
           local.maps_failed = true;
-          if (error.empty()) error = client.last_error();
+          local.error = client.last_error();
         }
 
         temp = std::move(local);
@@ -180,16 +188,63 @@ static void poll_resource_fetch(AppState &state) {
     state.taskmgr_resource_error = ex.what();
     state.taskmgr_resource_temp.maps.loaded = true;
     state.taskmgr_resource_temp.maps_failed = true;
+    state.taskmgr_batch_temp_infos.clear();
+    state.taskmgr_batch_temp_failed_pids.clear();
   } catch (...) {
     state.taskmgr_resource_error = "Unknown task manager resource error";
     state.taskmgr_resource_temp.maps.loaded = true;
     state.taskmgr_resource_temp.maps_failed = true;
+    state.taskmgr_batch_temp_infos.clear();
+    state.taskmgr_batch_temp_failed_pids.clear();
   }
 
+  /* Merge batch process_info results into resources (UI thread only). */
+  double now = ImGui::GetTime();
+  if (!state.taskmgr_batch_temp_infos.empty()) {
+    for (auto &info : state.taskmgr_batch_temp_infos) {
+      if (info.pid <= 0) continue;
+      TaskProcessResource &res = state.taskmgr_resources[info.pid];
+      res.pid = info.pid;
+      res.info = std::move(info);
+      res.has_info = true;
+      res.info_failed = false;
+      res.updated_at = now;
+    }
+    state.taskmgr_batch_temp_infos.clear();
+  }
+  if (!state.taskmgr_batch_temp_failed_pids.empty()) {
+    for (int32_t pid : state.taskmgr_batch_temp_failed_pids) {
+      if (pid <= 0) continue;
+      TaskProcessResource &res = state.taskmgr_resources[pid];
+      res.pid = pid;
+      res.info_failed = true;
+      if (!state.taskmgr_resource_error.empty())
+        res.error = state.taskmgr_resource_error;
+      res.updated_at = now;
+    }
+    state.taskmgr_batch_temp_failed_pids.clear();
+  }
+
+  /* Merge per-pid resource fetch result (maps only, info already populated). */
   if (state.taskmgr_resource_temp.pid > 0) {
     state.taskmgr_resource_temp.updated_at = ImGui::GetTime();
-    state.taskmgr_resources[state.taskmgr_resource_temp.pid] =
-        std::move(state.taskmgr_resource_temp);
+    TaskProcessResource &res =
+        state.taskmgr_resources[state.taskmgr_resource_temp.pid];
+    res.pid = state.taskmgr_resource_temp.pid;
+    if (state.taskmgr_resource_temp.has_info) {
+      res.info = std::move(state.taskmgr_resource_temp.info);
+      res.has_info = true;
+      res.info_failed = false;
+    } else if (state.taskmgr_resource_temp.info_failed) {
+      res.info_failed = true;
+    }
+    res.maps = state.taskmgr_resource_temp.maps;
+    res.maps_failed = state.taskmgr_resource_temp.maps_failed;
+    res.error = std::move(state.taskmgr_resource_temp.error);
+    res.updated_at = state.taskmgr_resource_temp.updated_at;
+    if (!res.error.empty())
+      state.taskmgr_resource_error = res.error;
+    state.taskmgr_resource_temp = TaskProcessResource{};
   }
 }
 
@@ -197,13 +252,76 @@ static bool resource_needs_fetch(const AppState &state, int32_t pid) {
   auto it = state.taskmgr_resources.find(pid);
   if (it == state.taskmgr_resources.end()) return true;
   const TaskProcessResource &res = it->second;
-  return !res.maps.loaded && !res.maps_failed && !res.info_failed;
+  return !res.maps.loaded && !res.maps_failed;
+}
+
+static void start_batch_info_fetch(AppState &state) {
+  if (!state.client.connected() || state.processes.empty()) return;
+  if (state.taskmgr_resource_pending || state.connect_pending ||
+      state.telemetry_pending || state.scan_async_pending ||
+      state.map_refresh_pending || state.taskmgr_prefetch_pending) {
+    return;
+  }
+  if (state.taskmgr_resource_future.valid()) {
+    state.taskmgr_resource_future.wait();
+  }
+
+  /* Collect the next protocol-sized batch of PIDs that don't yet have info. */
+  std::vector<int32_t> pids;
+  pids.reserve(kTaskMgrBatchInfoMax);
+  for (const auto &proc : state.processes) {
+    auto it = state.taskmgr_resources.find(proc.pid);
+    if (it == state.taskmgr_resources.end() ||
+        (!it->second.has_info && !it->second.info_failed)) {
+      pids.push_back(proc.pid);
+      if (pids.size() >= kTaskMgrBatchInfoMax) break;
+    }
+  }
+  if (pids.empty()) return;
+
+  state.taskmgr_resource_pending = true;
+  state.taskmgr_resource_pid = 0;
+  state.taskmgr_resource_error.clear();
+  state.taskmgr_batch_temp_infos.clear();
+  state.taskmgr_batch_temp_failed_pids.clear();
+
+  state.taskmgr_resource_future = std::async(std::launch::async,
+      [pids = std::move(pids), &client = state.client,
+       &temp_infos = state.taskmgr_batch_temp_infos,
+       &failed_pids = state.taskmgr_batch_temp_failed_pids,
+       &error = state.taskmgr_resource_error]() -> bool {
+        if (!client.batch_process_info(pids, temp_infos)) {
+          error = client.last_error();
+          temp_infos.clear();
+          failed_pids = pids;
+          return false;
+        }
+        return true;
+      });
 }
 
 static void schedule_resource_fetch(AppState &state, double now) {
   if (!state.client.connected() || state.processes.empty()) return;
-  if (state.taskmgr_resource_pending || now < state.taskmgr_next_resource_fetch) return;
+  if (state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
+      now < state.taskmgr_next_resource_fetch) return;
 
+  /* First, check if we need a batch process_info fetch for all new PIDs */
+  bool need_batch = false;
+  for (const auto &proc : state.processes) {
+    auto it = state.taskmgr_resources.find(proc.pid);
+    if (it == state.taskmgr_resources.end() ||
+        (!it->second.has_info && !it->second.info_failed)) {
+      need_batch = true;
+      break;
+    }
+  }
+  if (need_batch) {
+    state.taskmgr_next_resource_fetch = now + 0.08;
+    start_batch_info_fetch(state);
+    return;
+  }
+
+  /* Then, schedule per-pid map fetches */
   int32_t pid = 0;
   if (state.taskmgr_selected_pid > 0 &&
       resource_needs_fetch(state, state.taskmgr_selected_pid)) {
@@ -218,7 +336,7 @@ static void schedule_resource_fetch(AppState &state, double now) {
   }
 
   if (pid > 0) {
-    state.taskmgr_next_resource_fetch = now + 0.08;
+    state.taskmgr_next_resource_fetch = now + 0.04;
     start_resource_fetch(state, pid);
   }
 }

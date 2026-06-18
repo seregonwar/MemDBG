@@ -237,6 +237,12 @@ int pal_debug_get_thread_name(int pid, int32_t lwp, char *name, size_t name_len)
   return -1;
 }
 
+int pal_debug_get_thread_state(int pid, int32_t lwp, int *state_out) {
+  (void)pid; (void)lwp;
+  if (state_out != NULL) *state_out = (int)MEMDBG_THREAD_RUNNING;
+  return 0;
+}
+
 int pal_debug_get_regs(int pid, int32_t lwp, memdbg_debug_regs_t *regs) {
   (void)pid;
   if (regs == NULL) { errno = EINVAL; return -1; }
@@ -487,7 +493,7 @@ static void test_thread_enumeration(void) {
   char    names[MEMDBG_DEBUGGER_MAX_THREADS][24];
   uint32_t count = 0;
 
-  memdbg_status_t st = memdbg_debugger_get_threads(lwps, names, &count,
+  memdbg_status_t st = memdbg_debugger_get_threads(lwps, names, NULL, &count,
                                                     MEMDBG_DEBUGGER_MAX_THREADS);
   TEST_OK("get_threads succeeds", st);
   TEST_EQ_U("thread count", count, 2U);
@@ -498,7 +504,7 @@ static void test_thread_enumeration(void) {
 
   /* Also test without names (names == NULL) */
   count = 0;
-  st = memdbg_debugger_get_threads(lwps, NULL, &count,
+  st = memdbg_debugger_get_threads(lwps, NULL, NULL, &count,
                                    MEMDBG_DEBUGGER_MAX_THREADS);
   TEST_OK("get_threads without names succeeds", st);
   TEST_EQ_U("count still 2", count, 2U);
@@ -954,7 +960,7 @@ static void test_error_when_detached(void) {
 
   int32_t lwps[8];
   uint32_t count = 0;
-  st = memdbg_debugger_get_threads(lwps, NULL, &count, 8);
+  st = memdbg_debugger_get_threads(lwps, NULL, NULL, &count, 8);
   TEST_ERR("get_threads while detached", st, MEMDBG_ERR_STATE);
 
   memdbg_debug_regs_t regs;

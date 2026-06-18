@@ -279,6 +279,158 @@ int pal_debug_get_thread_name(int pid, int32_t lwp, char *name,
   return -1;
 }
 
+int pal_debug_get_thread_state(int pid, int32_t lwp, int *state_out) {
+  (void)pid;
+  if (state_out == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+#ifdef PT_LWPINFO
+  {
+    struct ptrace_lwpinfo lwpinfo;
+    memset(&lwpinfo, 0, sizeof(lwpinfo));
+    long r = pal_debug_ptrace_raw(PT_LWPINFO, (int)lwp,
+                                  (void *)&lwpinfo, (long)sizeof(lwpinfo));
+    if (r == -1) {
+      /* LWP is likely running or cannot be queried right now. */
+      *state_out = (int)MEMDBG_THREAD_RUNNING;
+      return -1;
+    }
+    if (lwpinfo.pl_flags &
+        (PL_FLAG_SCE | PL_FLAG_SCX | PL_FLAG_EXEC | PL_FLAG_FORKED)) {
+      /* Thread is stopped at a kernel event (syscall, exec, fork). */
+      *state_out = (int)MEMDBG_THREAD_WAITING;
+    } else if (lwpinfo.pl_event == PL_EVENT_SIGNAL) {
+      /* Stopped by a signal (SIGSTOP, SIGTRAP, etc.) — genuine debugger stop. */
+      *state_out = (int)MEMDBG_THREAD_STOPPED;
+    } else {
+      /* Stopped but not by a signal — kernel-suspended via PT_SUSPEND or
+       * a scheduling-level suspend (TDF_SUSPEND). */
+      *state_out = (int)MEMDBG_THREAD_SUSPENDED;
+    }
+    return 0;
+  }
+#else
+  *state_out = (int)MEMDBG_THREAD_UNKNOWN;
+  return -1;
+#endif
+}
+
+int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
+                                   int *pl_event, int *stop_signal,
+                                   int *pl_flags,
+                                   uint64_t *pl_sigmask_lo,
+                                   uint64_t *pl_sigmask_hi,
+                                   uint64_t *pl_siglist_lo,
+                                   uint64_t *pl_siglist_hi) {
+  (void)pid;
+
+#ifdef PT_LWPINFO
+  {
+    struct ptrace_lwpinfo lwpinfo;
+    memset(&lwpinfo, 0, sizeof(lwpinfo));
+    long r = pal_debug_ptrace_raw(PT_LWPINFO, (int)lwp,
+                                  (void *)&lwpinfo, (long)sizeof(lwpinfo));
+    if (r == -1) return -1;
+
+    if (pl_event != NULL)
+      *pl_event = (int)lwpinfo.pl_event;
+    if (pl_flags != NULL)
+      *pl_flags = (int)lwpinfo.pl_flags;
+    if (stop_signal != NULL) {
+      if ((lwpinfo.pl_flags & PL_FLAG_SI) &&
+          lwpinfo.pl_event == PL_EVENT_SIGNAL) {
+        *stop_signal = (int)lwpinfo.pl_siginfo.si_signo;
+      } else {
+        *stop_signal = 0;
+      }
+    }
+    /* sigset_t is typically 128 bits (4 x uint32_t) on FreeBSD x86-64.
+     * Copy as two uint64_t fields for the wire protocol. */
+    if (pl_sigmask_lo != NULL || pl_sigmask_hi != NULL) {
+      uint32_t mask[4];
+      memcpy(mask, &lwpinfo.pl_sigmask, sizeof(mask));
+      if (pl_sigmask_lo != NULL)
+        *pl_sigmask_lo = (uint64_t)mask[0] | ((uint64_t)mask[1] << 32);
+      if (pl_sigmask_hi != NULL)
+        *pl_sigmask_hi = (uint64_t)mask[2] | ((uint64_t)mask[3] << 32);
+    }
+    if (pl_siglist_lo != NULL || pl_siglist_hi != NULL) {
+      uint32_t list[4];
+      memcpy(list, &lwpinfo.pl_siglist, sizeof(list));
+      if (pl_siglist_lo != NULL)
+        *pl_siglist_lo = (uint64_t)list[0] | ((uint64_t)list[1] << 32);
+      if (pl_siglist_hi != NULL)
+        *pl_siglist_hi = (uint64_t)list[2] | ((uint64_t)list[3] << 32);
+    }
+    return 0;
+  }
+#else
+  (void)pl_event; (void)stop_signal; (void)pl_flags;
+  (void)pl_sigmask_lo; (void)pl_sigmask_hi;
+  (void)pl_siglist_lo; (void)pl_siglist_hi;
+  return -1;
+#endif
+}
+
+int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count,
+                                    int *priorities, uint64_t *runtimes_us,
+                                    int *pctcpus, int *cpu_ids) {
+  if (lwps == NULL || count == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+#if defined(MEMDBG_PAL_DEBUG_FREEBSD) || defined(MEMDBG_PAL_DEBUG_CONSOLE)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <sys/user.h>
+
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+  size_t len = 0;
+  if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return -1;
+  if (len == 0) return -1;
+
+  unsigned char *buf = (unsigned char *)malloc(len);
+  if (buf == NULL) return -1;
+  if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return -1; }
+
+  for (size_t off = 0; off + sizeof(int) <= len;) {
+    struct kinfo_proc *proc = (struct kinfo_proc *)(void *)(buf + off);
+    size_t rs = proc->ki_structsize > 0 ? (size_t)proc->ki_structsize
+                                        : sizeof(*proc);
+    if (rs < sizeof(int) || off + rs > len) break;
+
+    int32_t tid = (int32_t)proc->ki_tid;
+    for (uint32_t i = 0; i < count; ++i) {
+      if (lwps[i] != tid) continue;
+      if (priorities != NULL)
+        priorities[i] = (int)proc->ki_pri;
+      if (runtimes_us != NULL)
+        runtimes_us[i] = (uint64_t)proc->ki_runtime;
+      if (pctcpus != NULL)
+        pctcpus[i] = (int)(((uint64_t)proc->ki_pctcpu * 100U) / 65536U);
+      if (cpu_ids != NULL) {
+#ifdef KERN_PROC_INC_THREAD
+        /* FreeBSD 9+ — ki_cpuid is part of the extended fields */
+        cpu_ids[i] = -1; /* not available in base kinfo_proc */
+#else
+        cpu_ids[i] = -1;
+#endif
+      }
+      break;
+    }
+    off += rs;
+  }
+  free(buf);
+  return 0;
+#else
+  (void)pid; (void)priorities; (void)runtimes_us; (void)pctcpus; (void)cpu_ids;
+  return -1;
+#endif
+}
+
 #else /* Unsupported platform */
 
 bool pal_debug_supported(void) { return false; }
@@ -398,6 +550,37 @@ int pal_debug_get_thread_name(int pid, int32_t lwp, char *name,
   (void)pid;
   (void)lwp;
   if (name != NULL && name_len > 0) name[0] = '\0';
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_get_thread_state(int pid, int32_t lwp, int *state_out) {
+  (void)pid;
+  (void)lwp;
+  if (state_out != NULL) *state_out = (int)MEMDBG_THREAD_UNKNOWN;
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
+                                   int *pl_event, int *stop_signal,
+                                   int *pl_flags,
+                                   uint64_t *pl_sigmask_lo,
+                                   uint64_t *pl_sigmask_hi,
+                                   uint64_t *pl_siglist_lo,
+                                   uint64_t *pl_siglist_hi) {
+  (void)pid; (void)lwp; (void)pl_event; (void)stop_signal; (void)pl_flags;
+  (void)pl_sigmask_lo; (void)pl_sigmask_hi;
+  (void)pl_siglist_lo; (void)pl_siglist_hi;
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count,
+                                    int *priorities, uint64_t *runtimes_us,
+                                    int *pctcpus, int *cpu_ids) {
+  (void)pid; (void)lwps; (void)count;
+  (void)priorities; (void)runtimes_us; (void)pctcpus; (void)cpu_ids;
   errno = ENOTSUP;
   return -1;
 }

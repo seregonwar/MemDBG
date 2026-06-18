@@ -118,6 +118,10 @@
     "settings.crash_logging_on": "クラッシュログ有効",
     "settings.crash_logging_off": "クラッシュログ無効",
     "settings.crash_logging_hint": "ステータスと通知をログファイルに書き込みます。クラッシュ後もデータは保持されます。",
+    "settings.taskmgr_prefetch_on_connect": "接続後にタスクマネージャーデータを事前取得",
+    "settings.taskmgr_prefetch_on": "タスクマネージャー事前取得を有効化",
+    "settings.taskmgr_prefetch_off": "タスクマネージャー事前取得を無効化",
+    "settings.taskmgr_prefetch_hint": "payload接続後、プロセス、メタデータ、メモリマップ概要をバックグラウンドで読み込みます。既定では無効です。",
     "settings.language": "言語",
   "settings.language_hint": "表示言語を選択。即時反映されます。",
 

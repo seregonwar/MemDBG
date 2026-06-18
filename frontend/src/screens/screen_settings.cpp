@@ -49,6 +49,17 @@ void draw_settings(AppState &state, ImVec2 avail) {
 
   ImGui::Spacing();
 
+  if (ImGui::Checkbox(locale::tr("settings.taskmgr_prefetch_on_connect"),
+                      &state.taskmgr_prefetch_on_connect)) {
+    set_status(state, state.taskmgr_prefetch_on_connect
+        ? locale::tr("settings.taskmgr_prefetch_on")
+        : locale::tr("settings.taskmgr_prefetch_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.taskmgr_prefetch_hint"));
+
+  ImGui::Spacing();
+
   // Language selector
   ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.language"));
   ImGui::Spacing();

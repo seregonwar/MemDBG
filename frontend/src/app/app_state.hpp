@@ -235,6 +235,7 @@ struct AppState {
   Client client;
   CrashLogger crash_logger;
   bool crash_logging_enabled = true;
+  bool taskmgr_prefetch_on_connect = false;
   uint64_t crash_udp_last_received = 0;
   UdpLogListener udp_listener;
   GitHubProfile github_profile;
@@ -409,6 +410,15 @@ struct AppState {
   TaskProcessResource taskmgr_resource_temp;
   std::string taskmgr_resource_error;
   double taskmgr_next_resource_fetch = 0.0;
+  /* Batch process_info temporary storage — filled by async worker, merged
+   * into taskmgr_resources by poll_resource_fetch on the UI thread. */
+  std::vector<ProcessInfo> taskmgr_batch_temp_infos;
+  std::vector<int32_t> taskmgr_batch_temp_failed_pids;
+  bool taskmgr_prefetch_pending = false;
+  std::future<bool> taskmgr_prefetch_future;
+  std::vector<ProcessEntry> taskmgr_prefetch_processes;
+  std::unordered_map<int32_t, TaskProcessResource> taskmgr_prefetch_resources;
+  std::string taskmgr_prefetch_error;
 
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
@@ -652,7 +662,7 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
-         state.taskmgr_resource_pending;
+         state.taskmgr_resource_pending || state.taskmgr_prefetch_pending;
 }
 
 /* ---- shared state helpers ---- */

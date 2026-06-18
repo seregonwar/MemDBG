@@ -78,6 +78,7 @@ typedef enum memdbg_command {
 
   MEMDBG_CMD_BATCH_READ = 0x0202U,
   MEMDBG_CMD_BATCH_WRITE = 0x0203U,
+  MEMDBG_CMD_BATCH_PROCESS_INFO = 0x0107U,
   MEMDBG_CMD_TELEMETRY = 0x0400U,
   MEMDBG_CMD_DISCOVERY = 0x0500U,
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
@@ -283,6 +284,20 @@ typedef struct MEMDBG_PACKED memdbg_process_control_request {
   uint32_t action;
 } memdbg_process_control_request_t;
 
+/* ---- Batch process info (fetch title_id/path/name for many PIDs) ---- */
+
+typedef struct MEMDBG_PACKED memdbg_batch_process_info_request {
+  uint32_t count;
+  uint32_t reserved;
+  /* followed by 'count' int32_t pid values */
+} memdbg_batch_process_info_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_batch_process_info_response {
+  uint32_t count;
+  uint32_t reserved;
+  /* followed by 'count' memdbg_process_info_response_t entries */
+} memdbg_batch_process_info_response_t;
+
 typedef struct MEMDBG_PACKED memdbg_batch_read_item {
   uint64_t address;
   uint32_t length;
@@ -336,6 +351,26 @@ typedef struct MEMDBG_PACKED memdbg_telemetry_response {
 
 /* ---- Debugger ---- */
 
+typedef enum memdbg_thread_state {
+  MEMDBG_THREAD_RUNNING = 0,
+  MEMDBG_THREAD_STOPPED = 1,
+  MEMDBG_THREAD_SUSPENDED = 2,
+  MEMDBG_THREAD_WAITING = 3,
+  MEMDBG_THREAD_UNKNOWN = 4
+} memdbg_thread_state_t;
+
+/* Granular stop information from PT_LWPINFO — why a thread stopped. */
+typedef struct MEMDBG_PACKED memdbg_thread_stop_info {
+  int32_t pl_event;      /* PL_EVENT_NONE=0, PL_EVENT_SIGNAL=1 */
+  int32_t stop_signal;   /* signal number (SIGTRAP=5, SIGSTOP=17, etc.), 0=none */
+  int32_t pl_flags;      /* PL_FLAG_* bits (SCE, SCX, EXEC, FORKED, SI, etc.) */
+  uint32_t _pad;
+  uint64_t pl_sigmask_lo; /* blocked signal mask, bits 0..63 */
+  uint64_t pl_sigmask_hi; /* blocked signal mask, bits 64..127 */
+  uint64_t pl_siglist_lo; /* pending signals, bits 0..63 */
+  uint64_t pl_siglist_hi; /* pending signals, bits 64..127 */
+} memdbg_thread_stop_info_t;
+
 typedef struct MEMDBG_PACKED memdbg_debug_attach_request {
   int32_t pid;
   uint32_t reserved;
@@ -348,6 +383,12 @@ typedef struct MEMDBG_PACKED memdbg_debug_thread_request {
 
 typedef struct MEMDBG_PACKED memdbg_debug_thread_entry {
   int32_t lwp;
+  uint32_t state; /* memdbg_thread_state_t */
+  memdbg_thread_stop_info_t stop_info; /* granular PT_LWPINFO data */
+  int32_t priority;   /* scheduling priority (ki_pri), 0 if unavailable */
+  uint64_t runtime_us; /* accumulated CPU time in microseconds */
+  int32_t pctcpu;      /* recent CPU utilisation 0..10000 (0.00% .. 100.00%) */
+  int32_t cpu_id;      /* last CPU core index, -1 if unavailable */
   char name[24];
 } memdbg_debug_thread_entry_t;
 

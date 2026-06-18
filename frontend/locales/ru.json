@@ -116,6 +116,10 @@
     "settings.crash_logging_on": "Журнал сбоев включён",
     "settings.crash_logging_off": "Журнал сбоев выключен",
     "settings.crash_logging_hint": "Записывает статус и уведомления в файл журнала. Данные сохраняются при сбоях.",
+    "settings.taskmgr_prefetch_on_connect": "Предзагружать данные диспетчера задач после подключения",
+    "settings.taskmgr_prefetch_on": "Предзагрузка диспетчера задач включена",
+    "settings.taskmgr_prefetch_off": "Предзагрузка диспетчера задач отключена",
+    "settings.taskmgr_prefetch_hint": "Загружает процессы, метаданные и сводки карт памяти в фоне после подключения к payload. По умолчанию отключено.",
     "settings.language": "Язык",
   "settings.language_hint": "Выберите язык интерфейса. Применяется сразу.",
 

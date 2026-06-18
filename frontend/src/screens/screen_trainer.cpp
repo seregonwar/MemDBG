@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -23,6 +24,41 @@ namespace memdbg::frontend {
 
 /* build_value_bytes and build_scan_value are in app_state.hpp */
 /* trainer load/save now in trainer_format.cpp */
+
+static bool validate_writable_address(AppState &state, int32_t pid,
+                                      uint64_t address, size_t length,
+                                      std::string &error) {
+  if (length == 0U) return true;
+  const uint64_t byte_length = static_cast<uint64_t>(length);
+  if (address > UINT64_MAX - byte_length) {
+    error = "Trainer address range overflows";
+    return false;
+  }
+
+  std::vector<MapEntry> fetched_maps;
+  const std::vector<MapEntry> *maps = nullptr;
+  if (pid == state.selected_pid && !state.maps.empty()) {
+    maps = &state.maps;
+  } else if (state.client.connected()) {
+    if (state.client.process_maps(pid, fetched_maps)) maps = &fetched_maps;
+  }
+
+  if (maps == nullptr || maps->empty()) return true;
+
+  const uint64_t end = address + byte_length;
+  for (const auto &map : *maps) {
+    if (address < map.start || end > map.end) continue;
+    if ((map.protection & 2U) == 0U) {
+      error = "Address " + hex_u64(address) + " is in a non-writable map";
+      if (!map.name.empty()) error += ": " + map.name;
+      return false;
+    }
+    return true;
+  }
+
+  error = "Address " + hex_u64(address) + " is outside the known process maps";
+  return false;
+}
 
 static void labeled_input_text(const char *label, const char *id, char *buffer,
                                size_t buffer_size,
@@ -44,6 +80,12 @@ static bool apply_cheat(AppState &state, CheatEntry &cheat) {
   int32_t pid = cheat.pid>0 ? cheat.pid : state.selected_pid;
   if (pid<=0) { cheat.status="No target PID"; return false; }
   if (cheat.bytes.empty()) { cheat.status="Empty value"; return false; }
+  std::string validation_error;
+  if (!validate_writable_address(state, pid, cheat.address, cheat.bytes.size(),
+                                 validation_error)) {
+    cheat.status = validation_error;
+    return false;
+  }
   uint32_t written=0;
   if (!state.client.memory_write(pid, cheat.address, cheat.bytes, written)) { cheat.status=state.client.last_error(); return false; }
   cheat.active = true;
@@ -56,6 +98,12 @@ static bool deactivate_cheat(AppState &state, CheatEntry &cheat) {
   if (!state.client.connected()) { cheat.status="No console session"; return false; }
   int32_t pid = cheat.pid>0 ? cheat.pid : state.selected_pid;
   if (pid<=0) { cheat.status="No target PID"; return false; }
+  std::string validation_error;
+  if (!validate_writable_address(state, pid, cheat.address, cheat.off_bytes.size(),
+                                 validation_error)) {
+    cheat.status = validation_error;
+    return false;
+  }
   uint32_t written=0;
   if (!state.client.memory_write(pid, cheat.address, cheat.off_bytes, written)) { cheat.status=state.client.last_error(); return false; }
   cheat.active = false;

@@ -16,6 +16,7 @@
 
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/pal/pal_debug.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -86,11 +87,18 @@ static inline memdbg_status_t handle_debug_get_threads(int fd,
                             memdbg_status_t, const void *, uint32_t)) {
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
   char names[MEMDBG_DEBUGGER_MAX_THREADS][24];
+  uint32_t states[MEMDBG_DEBUGGER_MAX_THREADS];
   uint32_t count = 0;
-  memdbg_status_t st = memdbg_debugger_get_threads(lwps, names, &count,
+  memdbg_status_t st = memdbg_debugger_get_threads(lwps, names, states, &count,
                                                    MEMDBG_DEBUGGER_MAX_THREADS);
   if (st != MEMDBG_OK)
     return send_response_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+
+  const uint32_t max_count =
+      (MEMDBG_PROTOCOL_MAX_PACKET -
+       (uint32_t)sizeof(memdbg_debug_threads_response_prefix_t)) /
+      (uint32_t)sizeof(memdbg_debug_thread_entry_t);
+  if (count > max_count) count = max_count;
 
   uint32_t payload_len = (uint32_t)(sizeof(memdbg_debug_threads_response_prefix_t) +
                          count * sizeof(memdbg_debug_thread_entry_t));
@@ -100,13 +108,57 @@ static inline memdbg_status_t handle_debug_get_threads(int fd,
   memdbg_debug_threads_response_prefix_t *prefix =
       (memdbg_debug_threads_response_prefix_t *)payload;
   prefix->count = count;
-  prefix->reserved = 0;
+  prefix->reserved = (uint32_t)sizeof(memdbg_debug_thread_entry_t);
 
   memdbg_debug_thread_entry_t *entries =
       (memdbg_debug_thread_entry_t *)(payload + sizeof(*prefix));
   for (uint32_t i = 0; i < count; ++i) {
     entries[i].lwp = lwps[i];
+    entries[i].state = states[i];
+    /* Query granular stop info per thread (best-effort). */
+    {
+      int pl_event = 0, stop_signal = 0, pl_flags = 0;
+      uint64_t sm_lo = 0, sm_hi = 0, sl_lo = 0, sl_hi = 0;
+      (void)pal_debug_get_thread_stop_info(
+          (int)memdbg_debugger_attached_pid(), lwps[i],
+          &pl_event, &stop_signal, &pl_flags,
+          &sm_lo, &sm_hi, &sl_lo, &sl_hi);
+      entries[i].stop_info.pl_event      = (int32_t)pl_event;
+      entries[i].stop_info.stop_signal   = (int32_t)stop_signal;
+      entries[i].stop_info.pl_flags      = (int32_t)pl_flags;
+      entries[i].stop_info._pad          = 0;
+      entries[i].stop_info.pl_sigmask_lo = sm_lo;
+      entries[i].stop_info.pl_sigmask_hi = sm_hi;
+      entries[i].stop_info.pl_siglist_lo = sl_lo;
+      entries[i].stop_info.pl_siglist_hi = sl_hi;
+    }
+    entries[i].priority = 0;
+    entries[i].runtime_us = 0;
+    entries[i].pctcpu = 0;
+    entries[i].cpu_id = -1;
     memcpy(entries[i].name, names[i], sizeof(entries[i].name));
+  }
+
+  /* Query scheduling/CPU stats via sysctl KERN_PROC_PID (best-effort).
+   * Use temporary contiguous arrays — struct fields are not contiguous. */
+  if (count > 0 && count <= MEMDBG_DEBUGGER_MAX_THREADS) {
+    int pri[MEMDBG_DEBUGGER_MAX_THREADS];
+    uint64_t rt[MEMDBG_DEBUGGER_MAX_THREADS];
+    int pc[MEMDBG_DEBUGGER_MAX_THREADS];
+    int cid[MEMDBG_DEBUGGER_MAX_THREADS];
+    memset(pri, 0, sizeof(pri));
+    memset(rt, 0, sizeof(rt));
+    memset(pc, 0, sizeof(pc));
+    memset(cid, -1, sizeof(cid));
+    (void)pal_debug_get_thread_extra_info(
+        (int)memdbg_debugger_attached_pid(), lwps, count,
+        pri, rt, pc, cid);
+    for (uint32_t i = 0; i < count; ++i) {
+      entries[i].priority   = (int32_t)pri[i];
+      entries[i].runtime_us = rt[i];
+      entries[i].pctcpu     = (int32_t)pc[i];
+      entries[i].cpu_id     = (int32_t)cid[i];
+    }
   }
 
   int rc = send_response_fn(fd, req, MEMDBG_OK, payload, payload_len);

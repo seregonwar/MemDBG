@@ -66,6 +66,8 @@ constexpr uint32_t kMaxProcessEntries =
 constexpr uint32_t kMaxMapEntries =
     (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
     sizeof(memdbg_map_entry_t);
+constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
+constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
 
 template <typename T> bool read_object(const std::vector<uint8_t> &data, T &out) {
   if (data.size() < sizeof(T)) {
@@ -392,6 +394,66 @@ bool Client::process_info(int32_t pid, ProcessInfo &out) {
   out.title_id = fixed_string(wire.title_id, sizeof(wire.title_id));
   out.content_id = fixed_string(wire.content_id, sizeof(wire.content_id));
   out.path = fixed_string(wire.path, sizeof(wire.path));
+  return true;
+}
+
+bool Client::batch_process_info(const std::vector<int32_t> &pids,
+                                std::vector<ProcessInfo> &out) {
+  out.clear();
+  if (pids.empty()) return true;
+  if (pids.size() > 128U) {
+    set_error("batch_process_info: too many PIDs (max 128)");
+    return false;
+  }
+
+  uint32_t count = static_cast<uint32_t>(pids.size());
+  size_t body_len = sizeof(memdbg_batch_process_info_request_t) +
+                    count * sizeof(int32_t);
+  std::vector<uint8_t> body(body_len);
+
+  auto *hdr = reinterpret_cast<memdbg_batch_process_info_request_t *>(body.data());
+  hdr->count = count;
+  hdr->reserved = 0;
+  auto *pid_buf = reinterpret_cast<int32_t *>(body.data() + sizeof(*hdr));
+  for (uint32_t i = 0; i < count; ++i)
+    pid_buf[i] = pids[i];
+
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_BATCH_PROCESS_INFO, body.data(),
+               static_cast<uint32_t>(body_len), response))
+    return false;
+
+  if (response.size() < sizeof(memdbg_batch_process_info_response_t)) {
+    set_error("batch_process_info: short response");
+    return false;
+  }
+
+  auto *prefix = reinterpret_cast<const memdbg_batch_process_info_response_t *>(
+      response.data());
+  if (prefix->count != count) {
+    set_error("batch_process_info: count mismatch");
+    return false;
+  }
+
+  size_t expected = sizeof(*prefix) +
+                    count * sizeof(memdbg_process_info_response_t);
+  if (response.size() < expected) {
+    set_error("batch_process_info: truncated response");
+    return false;
+  }
+
+  auto *entries = reinterpret_cast<const memdbg_process_info_response_t *>(
+      response.data() + sizeof(*prefix));
+  out.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    ProcessInfo info;
+    info.pid = entries[i].pid;
+    info.name = fixed_string(entries[i].name, sizeof(entries[i].name));
+    info.title_id = fixed_string(entries[i].title_id, sizeof(entries[i].title_id));
+    info.content_id = fixed_string(entries[i].content_id, sizeof(entries[i].content_id));
+    info.path = fixed_string(entries[i].path, sizeof(entries[i].path));
+    out.push_back(std::move(info));
+  }
   return true;
 }
 
@@ -751,7 +813,7 @@ bool Client::debug_continue() {
 }
 
 bool Client::debug_step(int32_t lwp) {
-  memdbg_debug_thread_request_t body{lwp, 0};
+  memdbg_debug_thread_request_t body{0, lwp};
   std::vector<uint8_t> response;
   return request(MEMDBG_CMD_DEBUG_STEP, &body, sizeof(body), response);
 }
@@ -767,26 +829,74 @@ bool Client::debug_get_threads(std::vector<DebugThreadEntry> &out) {
   }
   auto *prefix = reinterpret_cast<const memdbg_debug_threads_response_prefix_t *>(
       response.data());
-  size_t expected = sizeof(*prefix) +
-                    prefix->count * sizeof(memdbg_debug_thread_entry_t);
-  if (response.size() < expected) {
+  if (prefix->count == 0U) return true;
+
+  const size_t body_size = response.size() - sizeof(*prefix);
+  size_t entry_size = prefix->reserved;
+  if (entry_size != sizeof(memdbg_debug_thread_entry_t) &&
+      entry_size != kLegacyThreadEntryV1Size &&
+      entry_size != kLegacyThreadEntryV2Size) {
+    const size_t full_size = sizeof(memdbg_debug_thread_entry_t);
+    if (prefix->count > 0U && body_size >= prefix->count * full_size) {
+      entry_size = full_size;
+    } else if (prefix->count > 0U &&
+               body_size >= prefix->count * kLegacyThreadEntryV2Size) {
+      entry_size = kLegacyThreadEntryV2Size;
+    } else {
+      entry_size = kLegacyThreadEntryV1Size;
+    }
+  }
+
+  if (entry_size == 0U || body_size < entry_size) {
+    set_error("empty thread list response");
+    return false;
+  }
+
+  const size_t available_count = body_size / entry_size;
+  const uint32_t count = static_cast<uint32_t>(
+      available_count < prefix->count ? available_count : prefix->count);
+  if (count == 0U && prefix->count != 0U) {
     set_error("truncated thread list response");
     return false;
   }
-  auto *entries = reinterpret_cast<const memdbg_debug_thread_entry_t *>(
-      response.data() + sizeof(*prefix));
-  out.reserve(prefix->count);
-  for (uint32_t i = 0; i < prefix->count; ++i) {
+
+  const uint8_t *entries = response.data() + sizeof(*prefix);
+  out.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint8_t *entry = entries + static_cast<size_t>(i) * entry_size;
     DebugThreadEntry e;
-    e.lwp = entries[i].lwp;
-    e.name.assign(entries[i].name, strnlen(entries[i].name, sizeof(entries[i].name)));
+    std::memcpy(&e.lwp, entry, sizeof(e.lwp));
+    if (entry_size == sizeof(memdbg_debug_thread_entry_t)) {
+      auto *full = reinterpret_cast<const memdbg_debug_thread_entry_t *>(entry);
+      e.state = full->state;
+      e.stop_info.pl_event = full->stop_info.pl_event;
+      e.stop_info.stop_signal = full->stop_info.stop_signal;
+      e.stop_info.pl_flags = full->stop_info.pl_flags;
+      e.stop_info._pad = full->stop_info._pad;
+      e.stop_info.pl_sigmask_lo = full->stop_info.pl_sigmask_lo;
+      e.stop_info.pl_sigmask_hi = full->stop_info.pl_sigmask_hi;
+      e.stop_info.pl_siglist_lo = full->stop_info.pl_siglist_lo;
+      e.stop_info.pl_siglist_hi = full->stop_info.pl_siglist_hi;
+      e.priority = full->priority;
+      e.runtime_us = full->runtime_us;
+      e.pctcpu = full->pctcpu;
+      e.cpu_id = full->cpu_id;
+      e.name.assign(full->name, strnlen(full->name, sizeof(full->name)));
+    } else if (entry_size == kLegacyThreadEntryV2Size) {
+      std::memcpy(&e.state, entry + sizeof(int32_t), sizeof(e.state));
+      const char *name = reinterpret_cast<const char *>(entry + sizeof(int32_t) + sizeof(uint32_t));
+      e.name.assign(name, strnlen(name, 24U));
+    } else {
+      const char *name = reinterpret_cast<const char *>(entry + sizeof(int32_t));
+      e.name.assign(name, strnlen(name, 24U));
+    }
     out.push_back(std::move(e));
   }
   return true;
 }
 
 bool Client::debug_get_regs(int32_t lwp, DebugRegs &out) {
-  memdbg_debug_thread_request_t body{lwp, 0};
+  memdbg_debug_thread_request_t body{0, lwp};
   std::vector<uint8_t> response;
   if (!request(MEMDBG_CMD_DEBUG_GET_REGS, &body, sizeof(body), response))
     return false;
@@ -802,7 +912,7 @@ bool Client::debug_set_regs(int32_t lwp, const DebugRegs &in) {
   std::vector<uint8_t> payload(sizeof(memdbg_debug_thread_request_t) +
                                sizeof(memdbg_debug_regs_t));
   auto *body = reinterpret_cast<memdbg_debug_thread_request_t *>(payload.data());
-  body->pid = lwp;
+  body->pid = 0;
   body->lwp = lwp;
   std::memcpy(payload.data() + sizeof(*body), &in.regs, sizeof(in.regs));
   std::vector<uint8_t> response;
@@ -811,7 +921,7 @@ bool Client::debug_set_regs(int32_t lwp, const DebugRegs &in) {
 }
 
 bool Client::debug_get_dbregs(int32_t lwp, DebugDbregs &out) {
-  memdbg_debug_thread_request_t body{lwp, 0};
+  memdbg_debug_thread_request_t body{0, lwp};
   std::vector<uint8_t> response;
   if (!request(MEMDBG_CMD_DEBUG_GET_DBREGS, &body, sizeof(body), response))
     return false;
@@ -827,7 +937,7 @@ bool Client::debug_set_dbregs(int32_t lwp, const DebugDbregs &in) {
   std::vector<uint8_t> payload(sizeof(memdbg_debug_thread_request_t) +
                                sizeof(memdbg_debug_dbregs_t));
   auto *body = reinterpret_cast<memdbg_debug_thread_request_t *>(payload.data());
-  body->pid = lwp;
+  body->pid = 0;
   body->lwp = lwp;
   std::memcpy(payload.data() + sizeof(*body), &in.dbregs, sizeof(in.dbregs));
   std::vector<uint8_t> response;
@@ -901,13 +1011,13 @@ bool Client::debug_clear_all_watchpoints(uint32_t &cleared) {
 }
 
 bool Client::debug_suspend_thread(int32_t lwp) {
-  memdbg_debug_thread_request_t body{lwp, 0};
+  memdbg_debug_thread_request_t body{0, lwp};
   std::vector<uint8_t> response;
   return request(MEMDBG_CMD_DEBUG_SUSPEND_THREAD, &body, sizeof(body), response);
 }
 
 bool Client::debug_resume_thread(int32_t lwp) {
-  memdbg_debug_thread_request_t body{lwp, 0};
+  memdbg_debug_thread_request_t body{0, lwp};
   std::vector<uint8_t> response;
   return request(MEMDBG_CMD_DEBUG_RESUME_THREAD, &body, sizeof(body), response);
 }

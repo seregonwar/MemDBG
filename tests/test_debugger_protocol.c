@@ -211,6 +211,7 @@ int32_t memdbg_debugger_get_stop_lwp(void) {
   return g_mock_stop_lwp;
 }
 memdbg_status_t memdbg_debugger_get_threads(int32_t *lwps, char (*names)[24],
+                                            uint32_t *states,
                                             uint32_t *count_out, uint32_t max) {
   if (g_mock_get_threads_st != MEMDBG_OK) {
     if (count_out != NULL) *count_out = 0;
@@ -220,6 +221,9 @@ memdbg_status_t memdbg_debugger_get_threads(int32_t *lwps, char (*names)[24],
   if (n > max) n = max;
   if (lwps != NULL) memcpy(lwps, g_mock_lwps, n * sizeof(int32_t));
   if (names != NULL) memcpy(names, g_mock_names, n * sizeof(g_mock_names[0]));
+  if (states != NULL) {
+    for (uint32_t i = 0; i < n; ++i) states[i] = (uint32_t)MEMDBG_THREAD_RUNNING;
+  }
   if (count_out != NULL) *count_out = n;
   return MEMDBG_OK;
 }
@@ -235,6 +239,37 @@ const memdbg_watchpoint_t *memdbg_debugger_watchpoints(uint32_t *count) {
 /* Stub: memdbg_debugger_is_elevated (needed by memdbg_memory.c but not by handlers) */
 bool memdbg_debugger_is_elevated(int32_t pid) {
   (void)pid; return false;
+}
+
+int32_t memdbg_debugger_attached_pid(void) {
+  return 100;
+}
+
+int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
+                                   int *pl_event, int *stop_signal,
+                                   int *pl_flags,
+                                   uint64_t *pl_sigmask_lo,
+                                   uint64_t *pl_sigmask_hi,
+                                   uint64_t *pl_siglist_lo,
+                                   uint64_t *pl_siglist_hi) {
+  (void)pid; (void)lwp;
+  if (pl_event != NULL) *pl_event = 0;
+  if (stop_signal != NULL) *stop_signal = 0;
+  if (pl_flags != NULL) *pl_flags = 0;
+  if (pl_sigmask_lo != NULL) *pl_sigmask_lo = 0;
+  if (pl_sigmask_hi != NULL) *pl_sigmask_hi = 0;
+  if (pl_siglist_lo != NULL) *pl_siglist_lo = 0;
+  if (pl_siglist_hi != NULL) *pl_siglist_hi = 0;
+  return -1;
+}
+
+int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count,
+                                    int *priorities, uint64_t *runtimes_us,
+                                    int *pctcpus, int *cpu_ids) {
+  (void)pid; (void)lwps; (void)count;
+  /* Leave all fields at defaults — the handler already zeroed them. */
+  (void)priorities; (void)runtimes_us; (void)pctcpus; (void)cpu_ids;
+  return -1;
 }
 
 /* ======================================================================

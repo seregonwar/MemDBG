@@ -71,6 +71,7 @@ memdbg_status_t memdbg_debugger_suspend_thread(int32_t lwp);
 memdbg_status_t memdbg_debugger_resume_thread(int32_t lwp);
 
 memdbg_status_t memdbg_debugger_get_threads(int32_t *lwps, char (*names)[24],
+                                            uint32_t *states,
                                             uint32_t *count, uint32_t max);
 
 memdbg_status_t memdbg_debugger_get_regs(int32_t lwp,
