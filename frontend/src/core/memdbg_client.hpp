@@ -200,6 +200,7 @@ private:
   bool read_exact(void *data, size_t size);
   bool write_all(const void *data, size_t size);
   void disconnect_unlocked();
+  void close_after_connection_loss();
   void set_error_from_errno(const std::string &prefix);
   void set_error(const std::string &message);
 

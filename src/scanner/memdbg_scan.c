@@ -17,6 +17,7 @@
 
 #include "scan_partition.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stddef.h>
@@ -187,6 +188,37 @@ typedef struct scan_context {
   size_t buffer_size;
   scan_match_fn_t match;
 } scan_context_t;
+
+#if defined(MEMDBG_SCAN_CONSOLE)
+static pthread_mutex_t g_process_scan_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static memdbg_status_t process_scan_guard_begin(void) {
+  int rc = pthread_mutex_trylock(&g_process_scan_mtx);
+  if (rc == 0) return MEMDBG_OK;
+  return rc == EBUSY ? MEMDBG_ERR_STATE : MEMDBG_ERR_IO;
+}
+
+static void process_scan_guard_end(void) {
+  (void)pthread_mutex_unlock(&g_process_scan_mtx);
+}
+
+static memdbg_status_t scan_process_maps_for_scan(int pid,
+                                                  memdbg_map_list_t *maps) {
+  return memdbg_process_maps(pid, maps);
+}
+#else
+static memdbg_status_t process_scan_guard_begin(void) {
+  return MEMDBG_OK;
+}
+
+static void process_scan_guard_end(void) {
+}
+
+static memdbg_status_t scan_process_maps_for_scan(int pid,
+                                                  memdbg_map_list_t *maps) {
+  return memdbg_process_maps_cached(pid, maps);
+}
+#endif
 
 /* ---- Clock ---- */
 
@@ -797,9 +829,19 @@ memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_reques
       request->value_length, request->alignment, request->value);
   if (st != MEMDBG_OK) return st;
 
+  st = process_scan_guard_begin();
+  if (st != MEMDBG_OK) {
+    scan_context_fini(&ctx);
+    return st;
+  }
+
   memdbg_map_list_t maps;
-  st = memdbg_process_maps_cached(request->pid, &maps);
-  if (st != MEMDBG_OK) { scan_context_fini(&ctx); return st; }
+  st = scan_process_maps_for_scan(request->pid, &maps);
+  if (st != MEMDBG_OK) {
+    process_scan_guard_end();
+    scan_context_fini(&ctx);
+    return st;
+  }
 
   size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
@@ -814,6 +856,7 @@ memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_reques
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
   memdbg_process_maps_free(&maps);
+  process_scan_guard_end();
   scan_context_fini(&ctx);
   if (st != MEMDBG_OK) memdbg_scan_result_free(out);
   return st;
@@ -973,9 +1016,15 @@ memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t 
   size_t pat_len = (size_t)request->pattern_length;
   size_t buf_size = MEMDBG_SCAN_CHUNK + (pat_len > 1U ? pat_len - 1U : 0U);
 
-  memdbg_map_list_t maps;
-  memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
+  memdbg_status_t st = process_scan_guard_begin();
   if (st != MEMDBG_OK) return st;
+
+  memdbg_map_list_t maps;
+  st = scan_process_maps_for_scan(request->pid, &maps);
+  if (st != MEMDBG_OK) {
+    process_scan_guard_end();
+    return st;
+  }
 
   bm_table_t bm;
   bm_build_table(pattern, pat_len, mask, &bm);
@@ -999,6 +1048,7 @@ memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t 
 
   bm_free_table(&bm);
   memdbg_process_maps_free(&maps);
+  process_scan_guard_end();
   if (st != MEMDBG_OK) memdbg_scan_result_free(out);
   return st;
 }
@@ -1090,9 +1140,15 @@ memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *r
 
   size_t buf_size = MEMDBG_SCAN_CHUNK + (value_len > 1U ? (size_t)value_len - 1U : 0U);
 
-  memdbg_map_list_t maps;
-  memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
+  memdbg_status_t st = process_scan_guard_begin();
   if (st != MEMDBG_OK) return st;
+
+  memdbg_map_list_t maps;
+  st = scan_process_maps_for_scan(request->pid, &maps);
+  if (st != MEMDBG_OK) {
+    process_scan_guard_end();
+    return st;
+  }
 
   size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
@@ -1106,6 +1162,7 @@ memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *r
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
   memdbg_process_maps_free(&maps);
+  process_scan_guard_end();
   if (st != MEMDBG_OK) memdbg_scan_result_free(out);
   return st;
 }
@@ -1137,22 +1194,37 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
     }
   }
 
+  memdbg_status_t st = process_scan_guard_begin();
+  if (st != MEMDBG_OK) return st;
+
   /* Restrict scan to mapped regions so we don't hit unmapped/guarded pages
    * that trigger data aborts on console. */
   memdbg_map_list_t maps;
-  memdbg_status_t st = memdbg_process_maps_cached(request->pid, &maps);
-  if (st != MEMDBG_OK) return st;
+  st = scan_process_maps_for_scan(request->pid, &maps);
+  if (st != MEMDBG_OK) {
+    process_scan_guard_end();
+    return st;
+  }
 
   static const size_t kPtrOverlap = sizeof(uint64_t) - 1U;
   unsigned char *buffer = (unsigned char *)malloc(MEMDBG_SCAN_CHUNK + kPtrOverlap);
-  if (buffer == NULL) { memdbg_process_maps_free(&maps); return MEMDBG_ERR_NOMEM; }
+  if (buffer == NULL) {
+    memdbg_process_maps_free(&maps);
+    process_scan_guard_end();
+    return MEMDBG_ERR_NOMEM;
+  }
 
   scan_builder_t builder;
   memset(&builder, 0, sizeof(builder));
   builder.result = out;
   builder.max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   st = scan_builder_prealloc(&builder);
-  if (st != MEMDBG_OK) { free(buffer); memdbg_process_maps_free(&maps); return st; }
+  if (st != MEMDBG_OK) {
+    free(buffer);
+    memdbg_process_maps_free(&maps);
+    process_scan_guard_end();
+    return st;
+  }
 
   uint32_t alignment = request->alignment == 0U ? 8U : request->alignment;
   uint64_t start_ns = monotonic_ns();
@@ -1194,7 +1266,12 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
         if (candidate == request->target_address) {
           uint64_t addr = base_addr + i;
           memdbg_status_t as = scan_builder_append(&builder, addr);
-          if (as != MEMDBG_OK) { free(buffer); memdbg_process_maps_free(&maps); return as; }
+          if (as != MEMDBG_OK) {
+            free(buffer);
+            memdbg_process_maps_free(&maps);
+            process_scan_guard_end();
+            return as;
+          }
         }
       }
 
@@ -1211,6 +1288,7 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
   out->regions_scanned = (uint32_t)maps.count;
   free(buffer);
   memdbg_process_maps_free(&maps);
+  process_scan_guard_end();
   return MEMDBG_OK;
 }
 

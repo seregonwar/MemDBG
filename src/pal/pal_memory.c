@@ -37,7 +37,9 @@
 #if defined(MEMDBG_PAL_PS4)
 #include <ps4/mdbg.h>
 #elif defined(MEMDBG_PAL_PS5)
+#include <ps5/kernel.h>
 #include <ps5/mdbg.h>
+#include <sys/mman.h>
 #endif
 
 #if defined(__FreeBSD__) && !defined(MEMDBG_PAL_CONSOLE)
@@ -365,6 +367,39 @@ static memdbg_status_t mdbg_errno_status(void) {
   }
 }
 
+static int console_mdbg_copyin(pid_t pid, intptr_t address, const void *buffer,
+                               size_t length) {
+  errno = 0;
+  if (mdbg_copyin(pid, buffer, address, length) == 0) {
+    return 0;
+  }
+
+  const int first_errno = errno;
+
+#if defined(MEMDBG_PAL_PS5)
+  if ((first_errno == EACCES || first_errno == EPERM) && length != 0U) {
+    const int original_prot = kernel_get_vmem_protection(pid, address, length);
+    if (original_prot >= 0 && (original_prot & PROT_WRITE) == 0) {
+      const int writable_prot = original_prot | PROT_READ | PROT_WRITE;
+      if (kernel_set_vmem_protection(pid, address, length, writable_prot) == 0) {
+        errno = 0;
+        const int rc = mdbg_copyin(pid, buffer, address, length);
+        const int retry_errno = errno;
+        (void)kernel_set_vmem_protection(pid, address, length, original_prot);
+        if (rc == 0) {
+          return 0;
+        }
+        errno = retry_errno != 0 ? retry_errno : first_errno;
+        return -1;
+      }
+    }
+  }
+#endif
+
+  errno = first_errno;
+  return -1;
+}
+
 memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
                                 size_t length, size_t *read_out) {
   if (read_out != NULL) *read_out = 0U;
@@ -389,7 +424,7 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
   if (length == 0U) return MEMDBG_OK;
 
   errno = 0;
-  if (mdbg_copyin((pid_t)pid, buffer, (intptr_t)address, length) != 0)
+  if (console_mdbg_copyin((pid_t)pid, (intptr_t)address, buffer, length) != 0)
     return mdbg_errno_status();
 
   if (written_out != NULL) *written_out = length;
@@ -427,8 +462,7 @@ pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) {
 size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
   if (b == NULL || buf == NULL || len == 0U) return 0U;
   if (b->pid <= 1) return 0U;
-  errno = 0;
-  return mdbg_copyin((pid_t)b->pid, buf, (intptr_t)a, len) == 0 ? len : 0U;
+  return console_mdbg_copyin((pid_t)b->pid, (intptr_t)a, buf, len) == 0 ? len : 0U;
 }
 
 void pal_memory_batch_write_end(pal_memory_batch_write_t *b) { free(b); }

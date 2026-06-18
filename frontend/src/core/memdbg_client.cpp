@@ -128,6 +128,20 @@ const char *payload_status_hint(uint16_t command, int32_t status) {
     }
   }
 
+  if (command == MEMDBG_CMD_SCAN_PROCESS_EXACT ||
+      command == MEMDBG_CMD_SCAN_PROCESS_AOB ||
+      command == MEMDBG_CMD_SCAN_UNKNOWN ||
+      command == MEMDBG_CMD_SCAN_POINTER) {
+    switch (static_cast<memdbg_status_t>(status)) {
+    case MEMDBG_ERR_STATE:
+      return "another process-wide scan is already running; wait for it to finish before starting a new one";
+    case MEMDBG_ERR_NOT_FOUND:
+      return "the target process no longer exists; refresh PIDs";
+    default:
+      break;
+    }
+  }
+
   switch (static_cast<memdbg_status_t>(status)) {
   case MEMDBG_ERR_IO:
     return "verify the target process, selected map/range, and payload privileges";
@@ -205,6 +219,10 @@ void Client::disconnect_unlocked() {
     platform::socket_cleanup();
     socket_runtime_active_ = false;
   }
+}
+
+void Client::close_after_connection_loss() {
+  disconnect_unlocked();
 }
 
 platform::socket_handle_t Client::release_fd() {
@@ -1035,6 +1053,11 @@ bool Client::request(uint16_t command, const void *payload,
 }
 
 bool Client::read_exact(void *data, size_t size) {
+  if (!platform::socket_valid(fd_)) {
+    set_error("not connected");
+    return false;
+  }
+
   auto *cursor = static_cast<uint8_t *>(data);
   size_t total = 0;
   while (total < size) {
@@ -1045,10 +1068,12 @@ bool Client::read_exact(void *data, size_t size) {
         continue;
       }
       set_error_from_errno("recv");
+      close_after_connection_loss();
       return false;
     }
     if (n == 0) {
-      set_error("connection closed by console — disconnect and reconnect");
+      set_error("connection closed by console");
+      close_after_connection_loss();
       return false;
     }
     total += static_cast<size_t>(n);
@@ -1057,6 +1082,11 @@ bool Client::read_exact(void *data, size_t size) {
 }
 
 bool Client::write_all(const void *data, size_t size) {
+  if (!platform::socket_valid(fd_)) {
+    set_error("not connected");
+    return false;
+  }
+
   const auto *cursor = static_cast<const uint8_t *>(data);
   size_t total = 0;
   while (total < size) {
@@ -1067,10 +1097,12 @@ bool Client::write_all(const void *data, size_t size) {
         continue;
       }
       set_error_from_errno("send");
+      close_after_connection_loss();
       return false;
     }
     if (n == 0) {
-      set_error("send: connection lost — disconnect and reconnect");
+      set_error("send: connection lost");
+      close_after_connection_loss();
       return false;
     }
     total += static_cast<size_t>(n);
