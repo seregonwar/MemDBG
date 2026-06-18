@@ -3,8 +3,8 @@
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Community-friendly translation layer.
- * Add or update JSON files under locales/ to contribute a language.
+ * Community-friendly translation layer. English is embedded in the app; other
+ * locale JSON files live in the app data directory and are fetched on demand.
  */
 
 #ifndef MEMDBG_FRONTEND_LOCALE_HPP
@@ -40,9 +40,9 @@ Lang lang_from_code(const char *code);
 Lang detect_system_lang();
 
 // ---- Manager ----
-// All methods are safe to call from any thread.  tr() uses a relaxed
-// atomic load so the active language may lag by at most one frame after
-// a set_active() call, which is acceptable for a UI.
+// The manager is intended to be mutated from the UI thread during startup or
+// when a completed repository download is consumed. tr() uses a relaxed atomic
+// load so the active language may lag by at most one frame after set_active().
 class Manager {
 public:
   static Manager &instance();

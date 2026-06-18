@@ -23,6 +23,9 @@
 
 #include <sys/ptrace.h>
 #include <sys/signal.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <sys/user.h>
 #include <sys/wait.h>
 
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)
@@ -260,6 +263,7 @@ int pal_debug_set_dbregs(int pid, int32_t lwp,
 int pal_debug_get_thread_name(int pid, int32_t lwp, char *name,
                               size_t name_len) {
   (void)pid;
+  (void)lwp;
   if (name == NULL || name_len == 0) {
     errno = EINVAL;
     return -1;
@@ -383,11 +387,11 @@ int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count
   }
 
 #if defined(MEMDBG_PAL_DEBUG_FREEBSD) || defined(MEMDBG_PAL_DEBUG_CONSOLE)
-#include <sys/sysctl.h>
-#include <sys/types.h>
-#include <sys/user.h>
-
-  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+  int proc_selector = KERN_PROC_PID;
+#ifdef KERN_PROC_INC_THREAD
+  proc_selector |= KERN_PROC_INC_THREAD;
+#endif
+  int mib[4] = {CTL_KERN, KERN_PROC, proc_selector, pid};
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return -1;
   if (len == 0) return -1;
@@ -406,18 +410,20 @@ int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count
     for (uint32_t i = 0; i < count; ++i) {
       if (lwps[i] != tid) continue;
       if (priorities != NULL)
-        priorities[i] = (int)proc->ki_pri;
+        priorities[i] = (int)proc->ki_pri.pri_level;
       if (runtimes_us != NULL)
         runtimes_us[i] = (uint64_t)proc->ki_runtime;
       if (pctcpus != NULL)
         pctcpus[i] = (int)(((uint64_t)proc->ki_pctcpu * 100U) / 65536U);
       if (cpu_ids != NULL) {
-#ifdef KERN_PROC_INC_THREAD
-        /* FreeBSD 9+ — ki_cpuid is part of the extended fields */
-        cpu_ids[i] = -1; /* not available in base kinfo_proc */
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+        const int cpu = proc->ki_oncpu >= 0 ? proc->ki_oncpu
+                                            : proc->ki_lastcpu;
 #else
-        cpu_ids[i] = -1;
+        const int cpu = proc->ki_oncpu != 255U ? (int)proc->ki_oncpu
+                                               : (int)proc->ki_lastcpu;
 #endif
+        cpu_ids[i] = cpu >= 0 ? cpu : -1;
       }
       break;
     }

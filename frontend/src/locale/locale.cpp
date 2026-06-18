@@ -5,7 +5,6 @@
  */
 
 #include "locale.hpp"
-#include "ui/embedded_assets.inc"
 
 #include <nlohmann/json.hpp>
 
@@ -16,6 +15,40 @@
 #include <sstream>
 
 namespace memdbg::frontend::locale {
+
+namespace {
+
+Lang detect_lang_from_filename(const char *filename) {
+  if (filename == nullptr) return Lang::EN;
+  const std::string path(filename);
+  for (int i = 0; i < static_cast<int>(Lang::COUNT); ++i) {
+    Lang lang = static_cast<Lang>(i);
+    const std::string suffix = std::string(lang_code(lang)) + ".json";
+    if (path.size() >= suffix.size() &&
+        path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      return lang;
+    }
+  }
+  return Lang::EN;
+}
+
+bool build_catalog(const nlohmann::json &doc,
+                   std::unordered_map<std::string, std::string> &out) {
+  if (!doc.is_object()) return false;
+
+  std::unordered_map<std::string, std::string> kv;
+  for (auto it = doc.begin(); it != doc.end(); ++it) {
+    if (it.key() == "_meta") continue;
+    if (!it.value().is_string()) return false;
+    kv[it.key()] = it.value().get<std::string>();
+  }
+
+  if (kv.empty()) return false;
+  out = std::move(kv);
+  return true;
+}
+
+} // namespace
 
 // ---- Language metadata ----
 
@@ -94,26 +127,10 @@ bool Manager::load(const char *json_path) {
 
   if (!doc.is_object()) return false;
 
-  // Determine language from file name: en.json -> EN, es.json -> ES, etc.
-  std::string path(json_path);
-  Lang detected = Lang::EN;
-  for (int i = 0; i < static_cast<int>(Lang::COUNT); ++i) {
-    Lang l = static_cast<Lang>(i);
-    std::string suffix = std::string(lang_code(l)) + ".json";
-    if (path.size() >= suffix.size() &&
-        path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      detected = l;
-      break;
-    }
-  }
-
   std::unordered_map<std::string, std::string> kv;
-  for (auto it = doc.begin(); it != doc.end(); ++it) {
-    if (it.value().is_string())
-      kv[it.key()] = it.value().get<std::string>();
-  }
+  if (!build_catalog(doc, kv)) return false;
 
-  strings_[detected] = std::move(kv);
+  strings_[detect_lang_from_filename(json_path)] = std::move(kv);
   return true;
 }
 
@@ -130,26 +147,10 @@ bool Manager::load_mem(const char *filename, const unsigned char *data, size_t s
 
   if (!doc.is_object()) return false;
 
-  // Determine language from filename: en.json -> EN, es.json -> ES, etc.
-  std::string path(filename);
-  Lang detected = Lang::EN;
-  for (int i = 0; i < static_cast<int>(Lang::COUNT); ++i) {
-    Lang l = static_cast<Lang>(i);
-    std::string suffix = std::string(lang_code(l)) + ".json";
-    if (path.size() >= suffix.size() &&
-        path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      detected = l;
-      break;
-    }
-  }
-
   std::unordered_map<std::string, std::string> kv;
-  for (auto it = doc.begin(); it != doc.end(); ++it) {
-    if (it.value().is_string())
-      kv[it.key()] = it.value().get<std::string>();
-  }
+  if (!build_catalog(doc, kv)) return false;
 
-  strings_[detected] = std::move(kv);
+  strings_[detect_lang_from_filename(filename)] = std::move(kv);
   return true;
 }
 

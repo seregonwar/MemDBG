@@ -15,6 +15,7 @@ Exit code: 0 on success, 1 on validation errors.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -84,11 +85,64 @@ def check_unicode_escapes(text: str, path: str) -> list[str]:
     return errors
 
 
+def check_manifest(locales_dir: Path, locale_files: list[str]) -> list[str]:
+    """Verify manifest.json tracks every locale file with current size/hash."""
+    path = locales_dir / "manifest.json"
+    if not path.exists():
+        return ["manifest.json: missing remote locale manifest"]
+
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"manifest.json: parse error: {exc}"]
+    except OSError as exc:
+        return [f"manifest.json: read error: {exc}"]
+
+    if not isinstance(manifest, dict):
+        return ["manifest.json: top-level value is not an object"]
+    languages = manifest.get("languages")
+    if not isinstance(languages, list):
+        return ["manifest.json: languages is not an array"]
+
+    expected = {Path(name).stem: name for name in locale_files}
+    seen: set[str] = set()
+    errors: list[str] = []
+    for entry in languages:
+        if not isinstance(entry, dict):
+            errors.append("manifest.json: language entry is not an object")
+            continue
+        code = entry.get("code")
+        filename = entry.get("filename")
+        if not isinstance(code, str) or not isinstance(filename, str):
+            errors.append("manifest.json: language entry missing code or filename")
+            continue
+        seen.add(code)
+        if expected.get(code) != filename:
+            errors.append(f"manifest.json: {code} filename mismatch")
+            continue
+        raw = (locales_dir / filename).read_bytes()
+        if entry.get("size") != len(raw):
+            errors.append(f"manifest.json: {filename} size is stale")
+        if entry.get("sha256") != hashlib.sha256(raw).hexdigest():
+            errors.append(f"manifest.json: {filename} sha256 is stale")
+        if entry.get("embedded") != (code == "en"):
+            errors.append(f"manifest.json: {code} embedded flag is wrong")
+
+    for code in sorted(set(expected) - seen):
+        errors.append(f"manifest.json: missing language '{code}'")
+    for code in sorted(seen - set(expected)):
+        errors.append(f"manifest.json: extra language '{code}'")
+    return errors
+
+
 # ── main validation ──────────────────────────────────────────────────────────
 
 def validate(locales_dir: Path) -> int:
     """Run all checks.  Return 0 on success, 1 on failure."""
-    json_files = sorted(locales_dir.glob("*.json"))
+    json_files = sorted(
+        fp for fp in locales_dir.glob("*.json")
+        if fp.name != "manifest.json"
+    )
     if not json_files:
         print(red("ERROR:"), f"No JSON files found in {locales_dir}")
         return 1
@@ -170,7 +224,10 @@ def validate(locales_dir: Path) -> int:
             if isinstance(value, str) and not value.strip():
                 errors.append(f"{lang_file}: key '{key}' is empty or whitespace-only")
 
-    # ── 6. Report ────────────────────────────────────────────────────────
+    # ── 6. Remote manifest consistency ───────────────────────────────────
+    errors.extend(check_manifest(locales_dir, langs))
+
+    # ── 7. Report ────────────────────────────────────────────────────────
     print()
 
     if errors:

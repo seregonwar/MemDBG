@@ -122,6 +122,11 @@
     "settings.taskmgr_prefetch_hint": "Загружает процессы, метаданные и сводки карт памяти в фоне после подключения к payload. По умолчанию отключено.",
     "settings.language": "Язык",
   "settings.language_hint": "Выберите язык интерфейса. Применяется сразу.",
+  "settings.language_download": "Скачать",
+  "settings.language_downloading": "Загрузка",
+  "settings.language_busy": "Репозиторий языков занят",
+  "settings.language_checking": "Проверка репозитория языков...",
+  "settings.language_repository_ready": "Репозиторий языков готов",
 
   "home.session": "Сессия",
   "home.connecting_status": "ПОДКЛЮЧЕНИЕ",

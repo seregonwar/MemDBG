@@ -9,7 +9,9 @@
 #include "ui_icons.hpp"
 #include "file_picker.hpp"
 #include "confirm_modal.hpp"
+#include "locale/locale_repository.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -65,29 +67,78 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
   {
     auto &mgr = locale::Manager::instance();
-    locale::Lang active_lang = static_cast<locale::Lang>(state.language);
+    auto &repo = locale::Repository::instance();
+    locale::Lang active_lang = mgr.active();
+    if (state.pending_language >= 0 &&
+        state.pending_language < static_cast<int>(locale::Lang::COUNT)) {
+      active_lang = static_cast<locale::Lang>(state.pending_language);
+    }
+    const auto languages = repo.languages();
+    auto active_info = std::find_if(languages.begin(), languages.end(),
+                                    [active_lang](const locale::RepositoryLanguage &info) {
+                                      return info.lang == active_lang;
+                                    });
+    const char *active_name = active_info != languages.end()
+                                  ? active_info->name.c_str()
+                                  : locale::lang_name(active_lang);
     int active_pct = mgr.translation_progress(active_lang);
     char preview_buf[128];
-    std::snprintf(preview_buf, sizeof(preview_buf), "%s (%d%%)",
-                  locale::lang_name(active_lang), active_pct);
+    if (state.pending_language >= 0) {
+      std::snprintf(preview_buf, sizeof(preview_buf), "%s - %s",
+                    active_name, locale::tr("settings.language_downloading"));
+    } else {
+      std::snprintf(preview_buf, sizeof(preview_buf), "%s (%d%%)",
+                    active_name, active_pct);
+    }
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("##LangCombo", preview_buf)) {
-      for (int i = 0; i < static_cast<int>(locale::Lang::COUNT); ++i) {
-        locale::Lang lang = static_cast<locale::Lang>(i);
-        if (!mgr.is_loaded(lang)) continue;
-        const bool selected = state.language == i;
-        int pct = mgr.translation_progress(lang);
+      (void)repo.request_manifest();
+      for (const auto &info : languages) {
+        locale::Lang lang = info.lang;
+        const int lang_index = static_cast<int>(lang);
+        const bool loaded = mgr.is_loaded(lang);
+        const bool selected = state.language == lang_index ||
+                              state.pending_language == lang_index;
+        const int pct = mgr.translation_progress(lang);
         char label[128];
-        std::snprintf(label, sizeof(label), "%s (%d%%)",
-                      locale::lang_name(lang), pct);
+        if (loaded) {
+          std::snprintf(label, sizeof(label), "%s (%d%%)", info.name.c_str(), pct);
+        } else if (state.pending_language == lang_index) {
+          std::snprintf(label, sizeof(label), "%s - %s", info.name.c_str(),
+                        locale::tr("settings.language_downloading"));
+        } else {
+          std::snprintf(label, sizeof(label), "%s - %s", info.name.c_str(),
+                        locale::tr("settings.language_download"));
+        }
         if (ImGui::Selectable(label, selected)) {
-          state.language = i;
-          mgr.set_active(lang);
-          set_status(state, std::string(locale::tr("settings.language")) + ": " + label);
+          if (loaded) {
+            state.language = lang_index;
+            state.pending_language = -1;
+            mgr.set_active(lang);
+            set_status(state, std::string(locale::tr("settings.language")) + ": " + label);
+          } else if (repo.request_download(lang)) {
+            state.pending_language = lang_index;
+            set_status(state, std::string(locale::tr("settings.language_downloading")) +
+                              ": " + info.name);
+          } else {
+            const std::string status = repo.status();
+            set_status(state, status.empty()
+                                  ? locale::tr("settings.language_busy")
+                                  : status);
+          }
         }
         if (selected) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
+    }
+    if (repo.busy()) {
+      ImGui::TextColored(ui::colors().muted, "%s",
+                         locale::tr("settings.language_checking"));
+    } else if (!repo.error().empty()) {
+      ImGui::TextColored(ui::colors().warning, "%s", repo.error().c_str());
+    } else if (repo.manifest_ready()) {
+      ImGui::TextColored(ui::colors().muted, "%s",
+                         locale::tr("settings.language_repository_ready"));
     }
   }
   if (ImGui::IsItemHovered())
