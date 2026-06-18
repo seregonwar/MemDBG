@@ -451,6 +451,10 @@ void draw_debugger(AppState &state, ImVec2 avail) {
   }
 
   const bool client_busy = client_async_busy(state) || ds.attach_pending;
+
+  /* Outer clipping child keeps all debugger panels within the screen area */
+  ImGui::BeginChild("DebuggerOuter", avail, false);
+
   const float session_h = ds.attached ? 142.0f * scl : 128.0f * scl;
   ui::begin_panel("DebuggerSession", locale::tr("debugger.title"),
                   ImVec2(0, std::min(session_h, avail.y)));
@@ -566,41 +570,39 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     ui::draw_empty_state("No debugger session",
                          "Select a process and attach to inspect threads, registers, breakpoints, and watchpoints.");
     ui::end_panel();
-    return;
-  }
-
-  const float work_h = std::max(180.0f * scl, ImGui::GetContentRegionAvail().y);
-  const float threads_w = std::min(320.0f * scl,
-      std::max(240.0f * scl, avail.x * 0.22f));
-  ui::begin_panel("DebuggerThreads", "Threads", ImVec2(threads_w, work_h));
-  ImGui::BeginDisabled(client_busy);
-  if (ui::soft_button((std::string(icons::kRefresh) + "  " +
-                       locale::tr("debugger.refresh")).c_str(),
-                      ui::full_button(34.0f))) {
-    refresh_threads(state);
-  }
-  ImGui::EndDisabled();
-  ImGui::Spacing();
-  if (ds.threads.empty()) {
-    ui::draw_empty_state("No threads", "Refresh after the target enters a stopped state.");
-  } else if (ImGui::BeginListBox("##threads", ImVec2(-1, -1))) {
-    for (const auto &t : ds.threads) {
-      bool sel = (t.lwp == ds.selected_lwp);
-      char label[96];
-      std::snprintf(label, sizeof(label), "LWP %d  %s", (int)t.lwp,
-                    t.name.c_str());
-      if (ImGui::Selectable(label, sel)) {
-        ds.selected_lwp = t.lwp;
-        refresh_regs(state);
-      }
-      if (sel) ImGui::SetItemDefaultFocus();
+  } else {
+    const float work_h = std::max(180.0f * scl, ImGui::GetContentRegionAvail().y);
+    const float threads_w = std::min(320.0f * scl,
+        std::max(240.0f * scl, avail.x * 0.22f));
+    ui::begin_panel("DebuggerThreads", "Threads", ImVec2(threads_w, work_h));
+    ImGui::BeginDisabled(client_busy);
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " +
+                         locale::tr("debugger.refresh")).c_str(),
+                        ui::full_button(34.0f))) {
+      refresh_threads(state);
     }
-    ImGui::EndListBox();
-  }
-  ui::end_panel();
+    ImGui::EndDisabled();
+    ImGui::Spacing();
+    if (ds.threads.empty()) {
+      ui::draw_empty_state("No threads", "Refresh after the target enters a stopped state.");
+    } else if (ImGui::BeginListBox("##threads", ImVec2(-1, -1))) {
+      for (const auto &t : ds.threads) {
+        bool sel = (t.lwp == ds.selected_lwp);
+        char label[96];
+        std::snprintf(label, sizeof(label), "LWP %d  %s", (int)t.lwp,
+                      t.name.c_str());
+        if (ImGui::Selectable(label, sel)) {
+          ds.selected_lwp = t.lwp;
+          refresh_regs(state);
+        }
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndListBox();
+    }
+    ui::end_panel();
 
-  ImGui::SameLine(0, gap);
-  ui::begin_panel("DebuggerWorkspace", "Debugger Workspace", ImVec2(0, work_h));
+    ImGui::SameLine(0, gap);
+    ui::begin_panel("DebuggerWorkspace", "Debugger Workspace", ImVec2(0, work_h));
   if (ImGui::BeginTabBar("DebuggerWorkspaceTabs")) {
     if (ImGui::BeginTabItem("Registers")) {
       ImGui::TextColored(ui::colors().muted, "Registers (LWP %d)",
@@ -948,8 +950,11 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
+    }
+    ui::end_panel();
   }
-  ui::end_panel();
+
+  ImGui::EndChild();
 }
 
 } // namespace memdbg::frontend
