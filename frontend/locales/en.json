@@ -2,13 +2,13 @@
   "_meta": {
     "language": "English",
     "code": "en",
-    "version": "0.1.0",
+    "locale_revision": 1,
     "authors": ["SeregonWar"],
     "note": "This is the reference translation. All keys present here must exist in every language file. To add a new language, copy this file and translate the values. To contribute, open a PR on GitHub."
   },
 
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "Version",
   "app.tagline": "PlayStation Memory Debugger",
 
   "sidebar.section.main": "MAIN",
@@ -27,6 +27,7 @@
   "nav.pointer_scanner": "Pointer Scan",
   "nav.aob_scanner": "AOB Scan",
   "nav.trainer": "Trainer",
+  "nav.plugins": "Plugins",
   "nav.logs": "UDP Logs",
   "nav.telemetry": "Telemetry",
   "nav.taskmgr": "Task Manager",
@@ -634,7 +635,7 @@
   "telemetry.write_mibs": "Write  %.2f MiB/s   (%s total)",
   "telemetry.read_write_total": "Read %s total  |  Write %s total",
 
-  "credits.version": "Version 0.1.0",
+  "credits.version": "Version",
   "credits.creator": "Creator: %s (@%s)",
   "credits.creator_default": "Creator: SeregonWar (@seregonwar)",
   "credits.github_profile": "GitHub profile: %s",

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "auto_search.hpp"
+#include "scanner/heuristics/auto_search.hpp"
 
 #include <cstdint>
 #include <cstdio>

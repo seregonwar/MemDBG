@@ -2,14 +2,14 @@
   "_meta": {
     "language": "日本語",
     "code": "ja",
-    "version": "0.1.0",
+    "locale_revision": 1,
     "authors": ["Community"],
     "status": "complete",
     "note": "日本語翻訳。貢献するにはGitHubでPRを開いてください。"
   },
 
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "バージョン",
   "app.tagline": "PlayStation メモリデバッガ",
 
   "sidebar.section.main": "メイン",
@@ -28,6 +28,7 @@
   "nav.pointer_scanner": "ポインタ検索",
   "nav.aob_scanner": "AOB検索",
   "nav.trainer": "トレーナー",
+  "nav.plugins": "プラグイン",
   "nav.logs": "UDPログ",
   "nav.telemetry": "テレメトリ",
   "nav.taskmgr": "タスク管理",
@@ -634,7 +635,7 @@
   "telemetry.write_mibs": "書込 %.2f MiB/s (%s 総)",
   "telemetry.read_write_total": "読 %s 総 | 書 %s 総",
 
-  "credits.version": "バージョン 0.1.0",
+  "credits.version": "バージョン",
   "credits.creator": "作者: %s (@%s)",
   "credits.creator_default": "作者: SeregonWar (@seregonwar)",
   "credits.github_profile": "GitHub: %s",

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, for example 0.1.0 or v0.1.0"
+        description: "Release version, for example 0.2.0 or v0.2.0"
         required: true
         type: string
       draft:
@@ -78,6 +78,26 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Resolve build version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' VERSION)"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          fi
+          version="${version#v}"
+          version="${version#V}"
+          if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){1,3}([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid MemDBG version: ${version}" >&2
+            exit 1
+          fi
+          printf '%s\n' "${version}" > VERSION
+          echo "MEMDBG_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "MemDBG build version: ${version}"
 
       - name: Validate locale files
         if: matrix.kind == 'host' && matrix.platform == 'linux'
@@ -151,25 +171,27 @@ jobs:
           set -euo pipefail
           case "${{ matrix.kind }}" in
             host)
-              make clean host
+              make clean host MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}"
               if [ "${{ runner.os }}" = "Linux" ]; then
-                make test
+                make test MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}"
               fi
               ;;
             frontend)
               if [ "${{ runner.os }}" = "Windows" ]; then
-                cmake -S frontend -B build/frontend
+                cmake -S frontend -B build/frontend -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
                 cmake --build build/frontend --config Release --parallel 4
               else
-                make clean frontend
+                make clean frontend MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}"
               fi
               ;;
             ps4)
               make clean payload-ps4 payload-ps4-lib \
+                MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}" \
                 PS4_PAYLOAD_SDK="$PS4_PAYLOAD_SDK"
               ;;
             ps5)
               make clean payload-ps5 payload-ps5-lib \
+                MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}" \
                 PS5_PAYLOAD_SDK="$PS5_PAYLOAD_SDK"
               ;;
             *)
@@ -192,6 +214,7 @@ jobs:
               chmod +x "dist/$pkg/MemDBG-host"
               cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
           project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
           component=host
           platform=${{ matrix.platform }}
           ref=${{ github.ref_name }}
@@ -216,6 +239,7 @@ jobs:
                 chmod +x "dist/$pkg/MemDBG.app/Contents/MacOS/"*
                 cat > "dist/$pkg/MemDBG.app/Contents/Resources/BUILD_INFO.txt" <<EOF
           project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
           component=frontend
           platform=${{ matrix.platform }}
           ref=${{ github.ref_name }}
@@ -259,6 +283,7 @@ jobs:
                 fi
                 cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
           project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
           component=frontend
           platform=${{ matrix.platform }}
           ref=${{ github.ref_name }}
@@ -350,7 +375,7 @@ jobs:
             fi
             if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){1,3}([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
               echo "Invalid release version: ${INPUT_VERSION}" >&2
-              echo "Use a version like 0.1.0, 1.2.3-beta.1, or v1.2.3" >&2
+              echo "Use a version like 0.2.0, 1.2.3-beta.1, or v1.2.3" >&2
               exit 1
             fi
             git config user.name "github-actions[bot]"

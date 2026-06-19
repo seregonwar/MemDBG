@@ -2,14 +2,14 @@
   "_meta": {
     "language": "Italiano",
     "code": "it",
-    "version": "0.1.0",
+    "locale_revision": 1,
     "authors": [
       "Community"
     ],
     "note": "Traduzione italiana. Per contribuire, apri una PR su GitHub."
   },
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "Versione",
   "app.tagline": "Debugger di Memoria PlayStation",
   "sidebar.section.main": "PRINCIPALE",
   "sidebar.section.tools": "STRUMENTI",
@@ -26,6 +26,7 @@
   "nav.pointer_scanner": "Scan Puntatori",
   "nav.aob_scanner": "Scan AOB",
   "nav.trainer": "Trainer",
+  "nav.plugins": "Plugin",
   "nav.logs": "Log UDP",
   "nav.telemetry": "Telemetria",
   "nav.taskmgr": "Task Manager",
@@ -608,7 +609,7 @@
   "telemetry.read_mibs": "Lettura   %.2f MiB/s   (%s totale)",
   "telemetry.write_mibs": "Scrittura  %.2f MiB/s   (%s totale)",
   "telemetry.read_write_total": "Lettura %s totale  |  Scrittura %s totale",
-  "credits.version": "Versione 0.1.0",
+  "credits.version": "Versione",
   "credits.creator": "Creatore: %s (@%s)",
   "credits.creator_default": "Creatore: SeregonWar (@seregonwar)",
   "credits.github_profile": "Profilo GitHub: %s",

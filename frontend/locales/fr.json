@@ -2,14 +2,14 @@
   "_meta": {
     "language": "Français",
     "code": "fr",
-    "version": "0.1.0",
+    "locale_revision": 1,
     "authors": [
       "Community"
     ],
     "note": "Traduction française. Pour contribuer, ouvrez une PR sur GitHub."
   },
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "Version",
   "app.tagline": "Débogueur Mémoire PlayStation",
   "sidebar.section.main": "PRINCIPAL",
   "sidebar.section.tools": "OUTILS",
@@ -26,6 +26,7 @@
   "nav.pointer_scanner": "Scan Pointeurs",
   "nav.aob_scanner": "Scan AOB",
   "nav.trainer": "Trainer",
+  "nav.plugins": "Plugins",
   "nav.logs": "Logs UDP",
   "nav.telemetry": "Télémétrie",
   "nav.taskmgr": "Gestionnaire",

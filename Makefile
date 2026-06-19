@@ -11,6 +11,15 @@ PS4_TARGET ?= $(BUILD_DIR)/ps4/MemDBG-ps4.elf
 PS4_LIB_TARGET ?= $(BUILD_DIR)/ps4/libmemdbg.a
 PS5_TARGET ?= $(BUILD_DIR)/ps5/MemDBG-ps5.elf
 PS5_LIB_TARGET ?= $(BUILD_DIR)/ps5/libmemdbg.a
+VERSION_FILE ?= $(CURDIR)/VERSION
+MEMDBG_VERSION ?= $(shell sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$$//;s/^[vV]//;p;q;}' "$(VERSION_FILE)")
+MEMDBG_VERSION_CORE := $(firstword $(subst -, ,$(MEMDBG_VERSION)))
+MEMDBG_VERSION_PARTS := $(subst ., ,$(MEMDBG_VERSION_CORE))
+MEMDBG_VERSION_MAJOR := $(or $(word 1,$(MEMDBG_VERSION_PARTS)),0)
+MEMDBG_VERSION_MINOR := $(or $(word 2,$(MEMDBG_VERSION_PARTS)),0)
+MEMDBG_VERSION_PATCH := $(or $(word 3,$(MEMDBG_VERSION_PARTS)),0)
+GENERATED_INCLUDE_DIR := $(BUILD_DIR)/generated/include
+GENERATED_VERSION_HEADER := $(GENERATED_INCLUDE_DIR)/memdbg/core/memdbg_version.h
 
 PS4_PAYLOAD_SDK ?= $(CURDIR)/external/ps4-payload-sdk
 PS5_PAYLOAD_SDK ?= $(CURDIR)/external/ps5-payload-sdk
@@ -28,7 +37,7 @@ PS5_CC ?= $(PS5_PAYLOAD_SDK)/bin/prospero-clang
 PS5_AR ?= $(PS5_PAYLOAD_SDK)/bin/prospero-ar
 PS5_DEPLOY ?= $(PS5_PAYLOAD_SDK)/bin/prospero-deploy
 
-COMMON_CPPFLAGS := -Iinclude
+COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude
 COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L
 HOST_CFLAGS := $(COMMON_CFLAGS)
@@ -42,15 +51,15 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition check-locales
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition check-locales FORCE
 
 all: host
 
 host: $(HOST_TARGET)
 
-test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
+test-aob-boundary: $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o -o $(BUILD_DIR)/test_aob_boundary
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 
@@ -66,7 +75,7 @@ test-process-aob-e2e: host tests/test_process_aob_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_process_aob_e2e 127.0.0.1 $$port
 
-test-debugger: $(BUILD_DIR)/host/debug/memdbg_debugger.o tests/test_debugger.c
+test-debugger: $(BUILD_DIR)/host/debug/session/memdbg_debugger.o tests/test_debugger.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $< -lpthread -o $(BUILD_DIR)/test_debugger
 	@echo "--- Running Debugger test ---"
@@ -117,7 +126,7 @@ deploy-ps5: $(PS5_TARGET)
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<
 
 frontend:
-	cmake -S frontend -B $(BUILD_DIR)/frontend -DCMAKE_BUILD_TYPE=Release
+	cmake -S frontend -B $(BUILD_DIR)/frontend -DCMAKE_BUILD_TYPE=Release -DMEMDBG_RELEASE_VERSION="$(MEMDBG_VERSION)"
 	cmake --build $(BUILD_DIR)/frontend -j4
 
 check-locales:
@@ -133,7 +142,26 @@ $(HOST_TARGET): $(HOST_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $^ $(HOST_LDLIBS) -o $@
 
-$(BUILD_DIR)/host/%.o: src/%.c
+$(GENERATED_VERSION_HEADER): $(VERSION_FILE) FORCE
+	@mkdir -p $(dir $@)
+	@tmp="$@.tmp"; \
+	{ \
+	  printf '/*\n'; \
+	  printf ' * memDBG - Generated project version header.\n'; \
+	  printf ' * Copyright (C) 2026 SeregonWar\n'; \
+	  printf ' * SPDX-License-Identifier: GPL-3.0-or-later\n'; \
+	  printf ' */\n\n'; \
+	  printf '#ifndef MEMDBG_CORE_MEMDBG_VERSION_H\n'; \
+	  printf '#define MEMDBG_CORE_MEMDBG_VERSION_H\n\n'; \
+	  printf '#define MEMDBG_VERSION_MAJOR %sU\n' "$(MEMDBG_VERSION_MAJOR)"; \
+	  printf '#define MEMDBG_VERSION_MINOR %sU\n' "$(MEMDBG_VERSION_MINOR)"; \
+	  printf '#define MEMDBG_VERSION_PATCH %sU\n' "$(MEMDBG_VERSION_PATCH)"; \
+	  printf '#define MEMDBG_VERSION_STRING "%s"\n\n' "$(MEMDBG_VERSION)"; \
+	  printf '#endif /* MEMDBG_CORE_MEMDBG_VERSION_H */\n'; \
+	} > "$$tmp"; \
+	if [ -f "$@" ] && cmp -s "$$tmp" "$@"; then rm "$$tmp"; else mv "$$tmp" "$@"; fi
+
+$(BUILD_DIR)/host/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) -c $< -o $@
 
@@ -153,19 +181,19 @@ $(PS5_LIB_TARGET): $(PS5_LIB_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(PS5_AR) rcs $@ $^
 
-$(BUILD_DIR)/ps4/%.o: src/%.c
+$(BUILD_DIR)/ps4/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
 	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 $(COMMON_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ps4-lib/%.o: src/%.c
+$(BUILD_DIR)/ps4-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
 	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ps5/%.o: src/%.c
+$(BUILD_DIR)/ps5/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
 	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 $(COMMON_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ps5-lib/%.o: src/%.c
+$(BUILD_DIR)/ps5-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
 	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -c $< -o $@
 

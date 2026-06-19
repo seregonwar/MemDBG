@@ -7,7 +7,7 @@
  * Usage: memdbg_probe [host] [port]
  */
 
-#include "memdbg_client.hpp"
+#include "core/client/memdbg_client.hpp"
 #include "memdbg/core/memdbg.h"
 
 #include <cstdio>

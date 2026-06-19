@@ -12,10 +12,12 @@
 #include <string>
 #include <thread>
 
+#include "memdbg/core/memdbg_version.h"
+
 namespace memdbg::frontend {
 
 struct ReleaseCheck {
-  std::string current_version = "0.1.0";
+  std::string current_version = MEMDBG_VERSION_STRING;
   std::string latest_tag;
   std::string latest_name;
   std::string release_url;

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * This header contains the handle_debug_* functions that are used by both
- * src/core/memdbg.c (production) and tests/test_debugger_protocol.c (testing).
+ * src/core/daemon/memdbg.c (production) and tests/test_debugger_protocol.c (testing).
  * Include this header in both files to prevent handler drift.
  *
  * The handlers are declared as 'static inline' so each translation unit gets
