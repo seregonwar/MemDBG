@@ -15,6 +15,7 @@
 #include "platform.hpp"
 #include "locale/locale.hpp"
 #include "locale/locale_repository.hpp"
+#include "plugins/repository/gui_bridge.hpp"
 #include "memdbg/core/memdbg_version.h"
 
 #include "imgui.h"
@@ -962,6 +963,13 @@ void disconnect_console(AppState &state, const char *reason) {
   state.taskmgr_has_process_info = false;
   reset_debugger_state();
 
+  /* Stop any running GUI plugin bridge */
+  if (state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
+    state.plugin_gui_bridge->stop();
+    state.plugin_gui_starting = false;
+    state.plugin_gui_error.clear();
+  }
+
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");
 
@@ -1008,6 +1016,79 @@ static void text_ellipsis(const char *text, float max_width, ImVec4 color) {
 static void sidebar_section(const char *label) {
   ImGui::SetCursorPosX(10.0f * ui::dpi_scale());
   ImGui::TextColored(alpha(ui::colors().primary2, 0.70f), "%s", label);
+}
+
+static void stop_gui_plugin_if_idle(AppState &state) {
+  if (state.screen != Screen::PluginGUI &&
+      state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
+    state.plugin_gui_bridge->stop();
+    state.plugin_gui_starting = false;
+    state.plugin_gui_error.clear();
+  }
+}
+
+static void draw_gui_plugin_dropdown(AppState &state) {
+  /* Stop GUI plugin when navigating away */
+  stop_gui_plugin_if_idle(state);
+
+  /* Collect installed GUI plugins (tagged with "gui" in the manifest) */
+  std::vector<plugins::PluginPackage> catalog = state.plugin_manager.catalog();
+  std::vector<plugins::PluginPackage> gui_plugins;
+  for (const auto &pkg : catalog) {
+    if (!pkg.installed || !pkg.enabled) continue;
+    bool has_gui = false;
+    for (const auto &tag : pkg.tags) {
+      std::string lower = tag;
+      std::transform(lower.begin(), lower.end(), lower.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      if (lower == "gui") { has_gui = true; break; }
+    }
+    if (has_gui) gui_plugins.push_back(pkg);
+  }
+
+  if (gui_plugins.empty()) return;
+
+  const float scl = ui::dpi_scale();
+  const float row_h = 28.0f * scl;
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f * scl, 4.0f * scl));
+
+  /* Determine current preview text */
+  std::string preview = "GUI Tools";
+  for (const auto &pkg : gui_plugins) {
+    if (state.plugin_gui_active_id == pkg.id &&
+        state.screen == Screen::PluginGUI) {
+      preview = pkg.name;
+      break;
+    }
+  }
+
+  ImGui::SetCursorPosX(10.0f * scl);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 8.0f * scl);
+  if (ImGui::BeginCombo("##GuiPluginDropdown", preview.c_str())) {
+    for (const auto &pkg : gui_plugins) {
+      bool is_selected = (state.plugin_gui_active_id == pkg.id &&
+                          state.screen == Screen::PluginGUI);
+      std::string label = pkg.name;
+      if (ImGui::Selectable(label.c_str(), is_selected)) {
+        /* Stop previous GUI plugin if running */
+        if (state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
+          state.plugin_gui_bridge->stop();
+        }
+        state.plugin_gui_active_id = pkg.id;
+        state.plugin_gui_error.clear();
+        state.screen = Screen::PluginGUI;
+        set_status(state, "Opening GUI plugin: " + pkg.name);
+      }
+      if (is_selected) ImGui::SetItemDefaultFocus();
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", pkg.short_description.c_str());
+      }
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::PopStyleVar();
+
+  ImGui::Dummy(ImVec2(0, 2));
 }
 
 static void nav_item(AppState &state, Screen screen, const char *icon, const char *label) {
@@ -1135,6 +1216,10 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
     nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
     nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
+
+    /* GUI plugin dropdown */
+    draw_gui_plugin_dropdown(state);
+
     if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
       nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
 
@@ -1751,6 +1836,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
   case Screen::AOBScanner:     draw_aob_scanner(state, avail); break;
   case Screen::Trainer:        draw_trainer(state, avail); break;
   case Screen::Plugins:        draw_plugins(state, avail); break;
+  case Screen::PluginGUI:      draw_plugin_gui(state, avail); break;
   case Screen::Logs:      draw_logs(state, avail); break;
   case Screen::Telemetry: draw_telemetry(state, avail); break;
   case Screen::TaskMgr:   draw_taskmgr(state, avail); break;
@@ -2152,6 +2238,8 @@ int run_frontend(int, char **argv) {
   state->plugin_refresh_pending = false;
   if (state->plugin_run_future.valid()) state->plugin_run_future.wait();
   state->plugin_run_pending = false;
+  if (state->plugin_gui_bridge && state->plugin_gui_bridge->running())
+    state->plugin_gui_bridge->stop();
   state->udp_listener.stop(); state->client.disconnect();
   release_check_shutdown(state->release_check);
   github_profile_shutdown(state->github_profile);

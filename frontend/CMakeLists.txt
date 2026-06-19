@@ -140,6 +140,7 @@ add_executable(memdbg_frontend
 
   # plugins (repository manifests + Lua/Python script runner)
   src/plugins/repository/plugin_manager.cpp
+  src/plugins/repository/gui_bridge.cpp
 
   # ui (widgets, theme, fonts, icons, file picker)
   src/ui/icon_font.cpp
@@ -163,6 +164,7 @@ add_executable(memdbg_frontend
   src/screens/aob_scanner/screen_aob_scanner.cpp
   src/screens/trainer/screen_trainer.cpp
   src/screens/plugins/screen_plugins.cpp
+  src/screens/plugins/screen_plugin_gui.cpp
   src/screens/logs/screen_logs.cpp
   src/screens/telemetry/screen_telemetry.cpp
   src/screens/task_manager/screen_taskmgr.cpp
