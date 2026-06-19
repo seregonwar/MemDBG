@@ -1,0 +1,120 @@
+name: Console crash or kernel panic
+description: Report a PS4/PS5 hard crash, kernel panic, or unsafe payload behavior.
+title: "[Crash]: "
+labels: ["crash", "payload", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for console hangs, hard crashes, kernel panics, payload exits, or scan/read/write flows that make the console unstable.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - PS5
+        - PS4
+        - Host payload
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware / environment
+      placeholder: "Console firmware, jailbreak/homebrew environment, payload loader"
+    validations:
+      required: true
+
+  - type: input
+    id: build
+    attributes:
+      label: MemDBG build
+      description: Release tag, commit SHA, branch, and whether it is debug/local/release.
+      placeholder: "main@abcdef0, local release build"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation that triggered the crash
+      options:
+        - Connect / HELLO
+        - Process list
+        - Process info
+        - Process maps
+        - Memory read
+        - Memory write
+        - Exact scan
+        - Process-wide exact scan
+        - AOB scan
+        - Process-wide AOB scan
+        - Unknown initial value scan
+        - Pointer scan
+        - Debugger attach / stop / continue
+        - Telemetry / discovery
+        - Shutdown
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: Target process and range
+      description: Include PID, process name, Title ID, Content ID, map name, protection flags, address range, scan type, value, and filters where relevant.
+      placeholder: |
+        PID / name:
+        Title ID / Content ID:
+        Map / range:
+        Protection filter:
+        Scan value or AOB pattern:
+        Chunk/result limits:
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Exact reproduction path
+      description: Start from payload launch and include frontend actions or protocol commands.
+      placeholder: |
+        1. Build payload with ...
+        2. Deploy using ...
+        3. Connect from frontend/probe ...
+        4. Select process ...
+        5. Run ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: crash_behavior
+    attributes:
+      label: Crash behavior
+      description: Describe the visible console state, payload logs, UART/serial output, frontend status, and whether the console reboots.
+      placeholder: |
+        Console state:
+        Payload/frontend log:
+        Reboot required:
+        Frequency:
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste payload logs, frontend logs, `memdbg_probe` output, screenshots, or crash dumps.
+      render: text
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I can reproduce this on an offline/local setup.
+          required: true
+        - label: I did not use this against online services or multiplayer sessions.
+          required: true
+        - label: I am willing to retest a smaller read/scan range or diagnostic build if requested.
+          required: true
