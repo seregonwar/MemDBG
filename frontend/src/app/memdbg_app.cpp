@@ -15,6 +15,7 @@
 #include "platform.hpp"
 #include "locale/locale.hpp"
 #include "locale/locale_repository.hpp"
+#include "memdbg/core/memdbg_version.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -38,10 +39,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#ifndef MEMDBG_FRONTEND_VERSION
-#define MEMDBG_FRONTEND_VERSION "0.1.0"
-#endif
 
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
@@ -1090,7 +1087,7 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
 
   ImGui::TextColored(ui::colors().text, "%s", locale::tr("sidebar.brand"));
   ImGui::SameLine();
-  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("app.version"));
+  ImGui::TextColored(ui::colors().muted, "v%s", MEMDBG_VERSION_STRING);
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg3);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8,6));
@@ -1137,6 +1134,7 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
     nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
     nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
+    nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
     if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
       nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
 
@@ -1716,7 +1714,8 @@ static void poll_session_health(AppState &state) {
   if (!state.client.connected() || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
       state.map_refresh_pending || state.taskmgr_resource_pending ||
-      state.taskmgr_prefetch_pending) {
+      state.taskmgr_prefetch_pending || state.plugin_refresh_pending ||
+      state.plugin_run_pending) {
     return;
   }
 
@@ -1751,6 +1750,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
   case Screen::PointerScanner: draw_pointer_scanner(state, avail); break;
   case Screen::AOBScanner:     draw_aob_scanner(state, avail); break;
   case Screen::Trainer:        draw_trainer(state, avail); break;
+  case Screen::Plugins:        draw_plugins(state, avail); break;
   case Screen::Logs:      draw_logs(state, avail); break;
   case Screen::Telemetry: draw_telemetry(state, avail); break;
   case Screen::TaskMgr:   draw_taskmgr(state, avail); break;
@@ -1770,6 +1770,7 @@ static void handle_global_shortcuts(AppState &state) {
   if (ImGui::IsKeyPressed(ImGuiKey_F8)) state.screen = Screen::Memory;
   if (ImGui::IsKeyPressed(ImGuiKey_F9)) state.screen = Screen::Trainer;
   if (ImGui::IsKeyPressed(ImGuiKey_F10)) state.screen = Screen::Logs;
+  if (ImGui::IsKeyPressed(ImGuiKey_F11)) state.screen = Screen::Plugins;
   if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending) {
     if (client_async_busy(state)) {
       set_status(state, "Wait for the active operation to finish");
@@ -1789,6 +1790,7 @@ static void draw_app(AppState &state) {
   poll_taskmgr_prefetch(state);
   poll_telemetry(state);
   poll_map_refresh(state);
+  poll_plugin_tasks(state);
   poll_session_health(state);
   handle_global_shortcuts(state);
 
@@ -2015,6 +2017,13 @@ int run_frontend(int, char **argv) {
   ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
   auto state = std::make_unique<AppState>();
+  state->plugin_manager.set_bundle_root(s_executable_dir);
+  {
+    std::string plugin_error;
+    if (!state->plugin_manager.load(&plugin_error) && !plugin_error.empty()) {
+      set_status(*state, plugin_error);
+    }
+  }
 
   // Open crash logger in the executable directory
   try {
@@ -2080,7 +2089,7 @@ int run_frontend(int, char **argv) {
   }
   (void)locale_repo.start_startup_sync(requested_lang);
   github_profile_start(state->github_profile);
-  release_check_start(state->release_check, MEMDBG_FRONTEND_VERSION);
+  release_check_start(state->release_check, MEMDBG_VERSION_STRING);
   {
     std::string udp_error;
     if (!ensure_udp_listener(*state, udp_error))
@@ -2139,6 +2148,10 @@ int run_frontend(int, char **argv) {
   state->taskmgr_resource_pending = false;
   if (state->taskmgr_prefetch_future.valid()) state->taskmgr_prefetch_future.wait();
   state->taskmgr_prefetch_pending = false;
+  if (state->plugin_refresh_future.valid()) state->plugin_refresh_future.wait();
+  state->plugin_refresh_pending = false;
+  if (state->plugin_run_future.valid()) state->plugin_run_future.wait();
+  state->plugin_run_pending = false;
   state->udp_listener.stop(); state->client.disconnect();
   release_check_shutdown(state->release_check);
   github_profile_shutdown(state->github_profile);

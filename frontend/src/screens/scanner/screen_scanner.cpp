@@ -7,7 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
-#include "auto_search.hpp"
+#include "scanner/heuristics/auto_search.hpp"
 
 #include <algorithm>
 #include <array>

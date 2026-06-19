@@ -1,6 +1,35 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(memdbg_frontend VERSION 0.1.0 LANGUAGES C CXX)
+set(MEMDBG_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+if(DEFINED MEMDBG_RELEASE_VERSION AND NOT "${MEMDBG_RELEASE_VERSION}" STREQUAL "")
+  set(MEMDBG_VERSION_RAW "${MEMDBG_RELEASE_VERSION}")
+else()
+  file(STRINGS "${MEMDBG_VERSION_FILE}" MEMDBG_VERSION_LINES LIMIT_COUNT 1)
+  list(GET MEMDBG_VERSION_LINES 0 MEMDBG_VERSION_RAW)
+endif()
+
+string(STRIP "${MEMDBG_VERSION_RAW}" MEMDBG_VERSION_DISPLAY)
+string(REGEX REPLACE "^[vV]" "" MEMDBG_VERSION_DISPLAY "${MEMDBG_VERSION_DISPLAY}")
+if(NOT MEMDBG_VERSION_DISPLAY MATCHES "^[0-9]+\\.[0-9]+(\\.[0-9]+)?(\\.[0-9]+)?([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$")
+  message(FATAL_ERROR "Invalid MemDBG version: ${MEMDBG_VERSION_RAW}")
+endif()
+string(REGEX MATCH "^[0-9]+(\\.[0-9]+)?(\\.[0-9]+)?(\\.[0-9]+)?" MEMDBG_VERSION_NUMERIC "${MEMDBG_VERSION_DISPLAY}")
+string(REPLACE "." ";" MEMDBG_VERSION_PARTS "${MEMDBG_VERSION_NUMERIC}")
+set(MEMDBG_VERSION_MAJOR 0)
+set(MEMDBG_VERSION_MINOR 0)
+set(MEMDBG_VERSION_PATCH 0)
+list(LENGTH MEMDBG_VERSION_PARTS MEMDBG_VERSION_PART_COUNT)
+if(MEMDBG_VERSION_PART_COUNT GREATER 0)
+  list(GET MEMDBG_VERSION_PARTS 0 MEMDBG_VERSION_MAJOR)
+endif()
+if(MEMDBG_VERSION_PART_COUNT GREATER 1)
+  list(GET MEMDBG_VERSION_PARTS 1 MEMDBG_VERSION_MINOR)
+endif()
+if(MEMDBG_VERSION_PART_COUNT GREATER 2)
+  list(GET MEMDBG_VERSION_PARTS 2 MEMDBG_VERSION_PATCH)
+endif()
+
+project(memdbg_frontend VERSION ${MEMDBG_VERSION_NUMERIC} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -66,6 +95,12 @@ target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 set(MEMDBG_APP_ICON_PNG ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.png)
 set(MEMDBG_APP_ICON_ICO ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.ico)
 set(MEMDBG_APP_ICON_ICNS ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.icns)
+set(MEMDBG_GENERATED_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/include)
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include/memdbg/core/memdbg_version.h.in
+  ${MEMDBG_GENERATED_INCLUDE_DIR}/memdbg/core/memdbg_version.h
+  @ONLY
+)
 
 # ---- Embedded assets (English locale + imgui.ini) ----
 # Generated at build time by tools/embed_assets.py.
@@ -85,23 +120,26 @@ add_custom_command(
 )
 set_source_files_properties(${MEMDBG_EMBEDDED_ASSETS_INC} PROPERTIES GENERATED TRUE)
 set_source_files_properties(
-  src/app/memdbg_app.cpp
+  src/app/shell/memdbg_app.cpp
   PROPERTIES OBJECT_DEPENDS ${MEMDBG_EMBEDDED_ASSETS_INC}
 )
 
 add_executable(memdbg_frontend
   # app (entry point, shell, shared state)
   src/app/main.cpp
-  src/app/memdbg_app.cpp
+  src/app/shell/memdbg_app.cpp
 
   # core (backend clients)
   src/core/crash_logger.cpp
   src/core/discovery_client.cpp
   src/core/github_profile.cpp
-  src/core/memdbg_client.cpp
+  src/core/client/memdbg_client.cpp
   src/core/platform.cpp
   src/core/release_check.cpp
   src/core/udp_log_listener.cpp
+
+  # plugins (repository manifests + Lua/Python script runner)
+  src/plugins/repository/plugin_manager.cpp
 
   # ui (widgets, theme, fonts, icons, file picker)
   src/ui/icon_font.cpp
@@ -116,49 +154,68 @@ add_executable(memdbg_frontend
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 
   # screens
-  src/screens/screen_home.cpp
-  src/screens/screen_consoles.cpp
-  src/screens/screen_processes.cpp
-  src/screens/screen_memory.cpp
-  src/screens/screen_scanner.cpp
-  src/screens/screen_pointer_scanner.cpp
-  src/screens/screen_aob_scanner.cpp
-  src/screens/screen_trainer.cpp
-  src/screens/screen_logs.cpp
-  src/screens/screen_telemetry.cpp
-  src/screens/screen_taskmgr.cpp
-  src/screens/screen_settings.cpp
-  src/screens/screen_credits.cpp
-  src/screens/screen_debugger.cpp
+  src/screens/home/screen_home.cpp
+  src/screens/consoles/screen_consoles.cpp
+  src/screens/processes/screen_processes.cpp
+  src/screens/memory/screen_memory.cpp
+  src/screens/scanner/screen_scanner.cpp
+  src/screens/pointer_scanner/screen_pointer_scanner.cpp
+  src/screens/aob_scanner/screen_aob_scanner.cpp
+  src/screens/trainer/screen_trainer.cpp
+  src/screens/plugins/screen_plugins.cpp
+  src/screens/logs/screen_logs.cpp
+  src/screens/telemetry/screen_telemetry.cpp
+  src/screens/task_manager/screen_taskmgr.cpp
+  src/screens/settings/screen_settings.cpp
+  src/screens/credits/screen_credits.cpp
+  src/screens/debugger/debugger_disassembly.cpp
+  src/screens/debugger/screen_debugger.cpp
 
   # trainer
   src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
 
   # scanner (auto-search heuristic engine)
-  src/scanner/auto_search.cpp
+  src/scanner/heuristics/auto_search.cpp
 )
 
 target_include_directories(memdbg_frontend PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app/shell
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
   ${CMAKE_CURRENT_SOURCE_DIR}/src/screens
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/aob_scanner
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/consoles
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/credits
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/debugger
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/home
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/logs
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/memory
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/plugins
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/pointer_scanner
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/processes
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/scanner
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/settings
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/task_manager
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/telemetry
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/trainer
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner/heuristics
   ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
   ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
   ${stb_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
 target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
-
-target_compile_definitions(memdbg_frontend PRIVATE
-  MEMDBG_FRONTEND_VERSION="${PROJECT_VERSION}"
-)
 
 if(MSVC)
   target_compile_options(memdbg_frontend PRIVATE /utf-8)
@@ -228,15 +285,17 @@ endif()
 
 add_executable(memdbg_probe
   src/proto/protocol_probe.cpp
-  src/core/memdbg_client.cpp
+  src/core/client/memdbg_client.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 )
 
 target_include_directories(memdbg_probe PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
   ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
 )
 
@@ -246,15 +305,17 @@ target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 
 add_executable(memdbg_auto_search_test
   tests/test_auto_search.cpp
-  src/scanner/auto_search.cpp
+  src/scanner/heuristics/auto_search.cpp
 )
 
 target_include_directories(memdbg_auto_search_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner/heuristics
   ${imgui_SOURCE_DIR}
 )
 
@@ -265,6 +326,7 @@ add_executable(memdbg_app_state_parsing_test
 )
 
 target_include_directories(memdbg_app_state_parsing_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
@@ -278,7 +340,7 @@ add_executable(memdbg_trainer_formats_test
   tests/test_trainer_formats.cpp
   src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
-  src/core/memdbg_client.cpp
+  src/core/client/memdbg_client.cpp
   src/core/crash_logger.cpp
   src/core/udp_log_listener.cpp
   src/core/platform.cpp
@@ -288,10 +350,12 @@ add_executable(memdbg_trainer_formats_test
 target_link_libraries(memdbg_trainer_formats_test PRIVATE imgui Threads::Threads)
 
 target_include_directories(memdbg_trainer_formats_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
   ${imgui_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
@@ -305,9 +369,32 @@ add_executable(memdbg_locale_manager_test
 )
 
 target_include_directories(memdbg_locale_manager_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+
+# ---- memdbg_plugin_manager_test ----
+
+add_executable(memdbg_plugin_manager_test
+  tests/test_plugin_manager.cpp
+  src/plugins/repository/plugin_manager.cpp
+  src/core/platform.cpp
+)
+
+target_compile_definitions(memdbg_plugin_manager_test PRIVATE
+  MEMDBG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+target_include_directories(memdbg_plugin_manager_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
@@ -321,9 +408,11 @@ if(WIN32)
   target_compile_definitions(memdbg_frontend PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_trainer_formats_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_plugin_manager_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_trainer_formats_test PRIVATE ws2_32)
+  target_link_libraries(memdbg_plugin_manager_test PRIVATE ws2_32 shell32)
 endif()
 
 if(MSVC)
@@ -333,6 +422,7 @@ if(MSVC)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
+  target_compile_options(memdbg_plugin_manager_test PRIVATE /W4)
 else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -340,4 +430,5 @@ else()
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_plugin_manager_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()

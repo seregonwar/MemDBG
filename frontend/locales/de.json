@@ -2,13 +2,14 @@
   "_meta": {
     "language": "Deutsch",
     "code": "de",
+    "locale_revision": 1,
     "authors": [
       "Community"
     ],
     "status": "complete"
   },
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "Version",
   "app.tagline": "Nativer Speicher-Debugger",
   "sidebar.section.main": "HAUPT",
   "sidebar.section.tools": "WERKZEUGE",
@@ -25,6 +26,7 @@
   "nav.pointer_scanner": "Pointer-Scanner",
   "nav.aob_scanner": "AOB-Scanner",
   "nav.trainer": "Trainer",
+  "nav.plugins": "Plugins",
   "nav.logs": "Logs",
   "nav.telemetry": "Telemetrie",
   "nav.taskmgr": "Task-Manager",

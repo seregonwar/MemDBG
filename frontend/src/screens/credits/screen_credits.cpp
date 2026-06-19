@@ -9,6 +9,7 @@
 #include "ui_icons.hpp"
 #include "github_profile.hpp"
 #include "platform.hpp"
+#include "memdbg/core/memdbg_version.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -131,7 +132,8 @@ void draw_credits(AppState &state, ImVec2 avail) {
     ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, "%s", locale::tr("app.tagline"));
     ImGui::Spacing();
-    ImGui::TextColored(ui::colors().text, "%s", locale::tr("credits.version"));
+    ImGui::TextColored(ui::colors().text, "%s v%s",
+                       locale::tr("credits.version"), MEMDBG_VERSION_STRING);
     ImGui::TextColored(ui::colors().muted, "%s", creator_buf);
     const char *bio_text = !profile_bio.empty() ? profile_bio.c_str()
                                                 : locale::tr("app.tagline");

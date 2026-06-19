@@ -7,12 +7,13 @@
 #ifndef MEMDBG_FRONTEND_APP_STATE_HPP
 #define MEMDBG_FRONTEND_APP_STATE_HPP
 
-#include "memdbg_client.hpp"
+#include "core/client/memdbg_client.hpp"
 #include "crash_logger.hpp"
 #include "discovery_client.hpp"
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
 #include "release_check.hpp"
+#include "plugins/repository/plugin_manager.hpp"
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "locale/locale.hpp"
@@ -48,7 +49,7 @@ using memdbg::frontend::ReleaseCheck;
 
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
-  Trainer, Logs, Settings, Telemetry, TaskMgr, Debugger, Credits,
+  Trainer, Plugins, Logs, Settings, Telemetry, TaskMgr, Debugger, Credits,
 };
 
 struct ProcessMapSummary {
@@ -240,6 +241,7 @@ struct AppState {
   UdpLogListener udp_listener;
   GitHubProfile github_profile;
   ReleaseCheck release_check;
+  plugins::PluginManager plugin_manager;
 
   char host[64] = "192.168.1.100";
   int debug_port = 9020;
@@ -434,6 +436,25 @@ struct AppState {
   /* ---- Locale ---- */
   int language = 0;  /* locale::Lang enum value; EN=0 by default */
   int pending_language = -1;  /* language waiting for repository download */
+
+  /* ---- Plugin manager ---- */
+  char plugin_source_name[96] = "Community Repository";
+  char plugin_source_url[512] = "";
+  char plugin_filter[128] = "";
+  int plugin_source_filter = 0; /* 0 = all sources, otherwise sources[index - 1] */
+  int plugin_selected_row = -1;
+  bool plugin_description_expanded = false;
+  bool plugin_add_source_modal_open = false;
+  bool plugin_refresh_pending = false;
+  std::future<bool> plugin_refresh_future;
+  std::string plugin_refresh_error;
+  bool plugin_run_pending = false;
+  std::future<plugins::PluginRunResult> plugin_run_future;
+  double plugin_run_start_time = 0.0;
+  std::string plugin_last_output;
+  std::string plugin_last_error;
+  std::string plugin_last_command;
+  std::string plugin_last_id;
 };
 
 /* ---- utility functions ---- */
@@ -623,6 +644,7 @@ inline const char *screen_title(Screen s) {
   case Screen::PointerScanner: return "Pointer Scanner";
   case Screen::AOBScanner: return "AOB Scanner";
   case Screen::Trainer: return "Trainer";
+  case Screen::Plugins: return "Plugins";
   case Screen::Logs: return "Logs"; case Screen::Settings: return "Settings";
   case Screen::Telemetry: return "Telemetry";
   case Screen::TaskMgr: return "Task Manager";
@@ -641,6 +663,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::PointerScanner: return "Find pointer chains to a target address";
   case Screen::AOBScanner: return "Search memory with array-of-bytes patterns";
   case Screen::Trainer: return "Build and lock runtime cheats for the selected game";
+  case Screen::Plugins: return "Install and run Lua/Python automation from plugin repositories";
   case Screen::Logs: return "Watch UDP telemetry and on-console file logging";
   case Screen::Settings: return "Configure frontend connection defaults";
   case Screen::Telemetry: return "Payload performance and runtime metrics";
@@ -663,7 +686,8 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
-         state.taskmgr_resource_pending || state.taskmgr_prefetch_pending;
+         state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
+         state.plugin_refresh_pending || state.plugin_run_pending;
 }
 
 /* ---- shared state helpers ---- */
@@ -694,6 +718,8 @@ void draw_scanner(AppState &state, struct ImVec2 avail);
 void draw_pointer_scanner(AppState &state, struct ImVec2 avail);
 void draw_aob_scanner(AppState &state, struct ImVec2 avail);
 void draw_trainer(AppState &state, struct ImVec2 avail);
+void draw_plugins(AppState &state, struct ImVec2 avail);
+void poll_plugin_tasks(AppState &state);
 void draw_logs(AppState &state, struct ImVec2 avail);
 void draw_settings(AppState &state, struct ImVec2 avail);
 void draw_credits(AppState &state, struct ImVec2 avail);

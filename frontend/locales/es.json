@@ -2,14 +2,14 @@
   "_meta": {
     "language": "Español",
     "code": "es",
-    "version": "0.1.0",
+    "locale_revision": 1,
     "authors": [
       "Community"
     ],
     "note": "Traducción al español. Para contribuir, abre un PR en GitHub."
   },
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "Versión",
   "app.tagline": "Depurador de Memoria PlayStation",
   "sidebar.section.main": "PRINCIPAL",
   "sidebar.section.tools": "HERRAMIENTAS",
@@ -26,6 +26,7 @@
   "nav.pointer_scanner": "Escanear Punteros",
   "nav.aob_scanner": "Escanear AOB",
   "nav.trainer": "Entrenador",
+  "nav.plugins": "Plugins",
   "nav.logs": "Registros UDP",
   "nav.telemetry": "Telemetría",
   "nav.taskmgr": "Admin. Tareas",
@@ -608,7 +609,7 @@
   "telemetry.read_mibs": "Lect.   %.2f MiB/s   (%s total)",
   "telemetry.write_mibs": "Escr.  %.2f MiB/s   (%s total)",
   "telemetry.read_write_total": "Lect. %s total  |  Escr. %s total",
-  "credits.version": "Versión 0.1.0",
+  "credits.version": "Versión",
   "credits.creator": "Creador: %s (@%s)",
   "credits.creator_default": "Creador: SeregonWar (@seregonwar)",
   "credits.github_profile": "Perfil GitHub: %s",

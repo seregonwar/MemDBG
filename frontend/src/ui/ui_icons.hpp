@@ -19,6 +19,7 @@ constexpr const char *kProcess   = u8"\uf0ae"; /* list-check */
 constexpr const char *kMemory    = u8"\uf2db"; /* microchip */
 constexpr const char *kScanner   = u8"\uf002"; /* magnifying-glass */
 constexpr const char *kTrainer   = u8"\uf44b"; /* dumbbell */
+constexpr const char *kPlugins   = u8"\uf12e"; /* puzzle-piece */
 constexpr const char *kLogs      = u8"\uf03a"; /* list */
 constexpr const char *kSettings  = u8"\uf013"; /* gear */
 constexpr const char *kCredits   = u8"\uf05a"; /* circle-info */
@@ -59,6 +60,7 @@ constexpr const char *kCopy       = u8"\uf0c5"; /* copy */
 constexpr const char *kPaste      = u8"\uf0ea"; /* paste */
 constexpr const char *kEdit       = u8"\uf044"; /* pen-to-square */
 constexpr const char *kTrash      = u8"\uf2ed"; /* trash-can */
+constexpr const char *kLink       = u8"\uf0c1"; /* link */
 
 /* Metrics */
 constexpr const char *kTelemetry  = u8"\uf201"; /* chart-line */

@@ -2,14 +2,14 @@
   "_meta": {
     "language": "Русский",
     "code": "ru",
-    "version": "0.1.0",
+    "locale_revision": 1,
     "authors": ["Community"],
     "status": "complete",
     "note": "Русский перевод. Чтобы внести вклад, откройте PR на GitHub."
   },
 
   "app.title": "MemDBG",
-  "app.version": "0.1.0",
+  "app.version": "Версия",
   "app.tagline": "Отладчик памяти PlayStation",
 
   "sidebar.section.main": "ГЛАВНОЕ",
@@ -28,6 +28,7 @@
   "nav.pointer_scanner": "Скан указателей",
   "nav.aob_scanner": "AOB поиск",
   "nav.trainer": "Тренер",
+  "nav.plugins": "Плагины",
   "nav.logs": "UDP логи",
   "nav.telemetry": "Телеметрия",
   "nav.taskmgr": "Диспетчер",
@@ -632,7 +633,7 @@
   "telemetry.write_mibs": "Запись %.2f МиБ/с (%s всего)",
   "telemetry.read_write_total": "Чтение %s | Запись %s",
 
-  "credits.version": "Версия 0.1.0",
+  "credits.version": "Версия",
   "credits.creator": "Автор: %s (@%s)",
   "credits.creator_default": "Автор: SeregonWar (@seregonwar)",
   "credits.github_profile": "GitHub: %s",

@@ -17,14 +17,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "memdbg/core/memdbg_version.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define MEMDBG_VERSION_MAJOR 0U
-#define MEMDBG_VERSION_MINOR 1U
-#define MEMDBG_VERSION_PATCH 0U
-#define MEMDBG_VERSION_STRING "0.1.0"
 
 #define MEMDBG_BIND_HOST_MAX 64U
 #define MEMDBG_ALLOW_HOST_MAX 64U

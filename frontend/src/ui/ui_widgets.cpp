@@ -8,7 +8,7 @@
 #include "ui_icons.hpp"
 #include "locale/locale.hpp"
 
-#include "memdbg_client.hpp"
+#include "core/client/memdbg_client.hpp"
 #include "memdbg/core/memdbg_protocol.h"
 
 #include <cctype>

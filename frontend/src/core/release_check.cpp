@@ -129,7 +129,7 @@ void worker_main(ReleaseCheck *check) {
 void release_check_start(ReleaseCheck &check, const char *current_version) {
   {
     std::lock_guard<std::mutex> lock(check.mutex);
-    check.current_version = current_version != nullptr ? current_version : "0.1.0";
+    check.current_version = current_version != nullptr ? current_version : MEMDBG_VERSION_STRING;
   }
 
   bool expected = false;

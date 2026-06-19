@@ -37,6 +37,7 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 - [Wire Protocol](#wire-protocol)
 - [Supported Platforms](#supported-platforms)
 - [Localization](#localization)
+- [Plugins and Scripting](#plugins-and-scripting)
 - [Building](#building)
 - [Testing](#testing)
 - [Workflow](#workflow)
@@ -57,6 +58,7 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 - **Five scanner modes**: exact value, process-wide exact, process-wide AOB, pointer chain, unknown initial value, plus a heuristic **Smart Auto-Search** engine tuned for common game values (health, ammo, resources).
 - **Non-blocking UI** — connect, scan, and telemetry requests run on worker threads and stream results back via `std::future` polling.
 - **Repository-backed localization** — English is embedded, while additional languages are listed, downloaded, validated, and cached from the project repository.
+- **Lua / Python plugin system** — desktop-side scripts install from  `manifest.json` repositories, with a forkable default source at `seregonwar/MemDBG-Plugin` and a bundled local fallback under `plugin-repository/`.
 - **Embeddable library target** (`libmemdbg.a`) for integrating the payload core into other tools.
 - **Zero-config discovery** — payloads respond to UDP broadcasts so the frontend can auto-populate the console list without hardcoding a debug port.
 - **Crash-resilient logging** — ring-buffered event log with signal-safe crash handlers; survives `SIGSEGV`/`SIGABRT`/`SIGFPE`/`SIGILL` and flushes to disk immediately. Captures frontend status, notifications, and UDP console logs.
@@ -69,20 +71,34 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 ```
 MemDBG
 ├── payload/                  C11 homebrew daemon (PS4, PS5, host)
-│   ├── core/                 Engine, instance lifecycle, logging
-│   ├── scanner/              Exact, AOB, pointer, unknown + process-wide variants
-│   ├── debug/                Process / memory primitives shared by the scanner
+│   ├── core/
+│   │   ├── daemon/           TCP protocol daemon and command dispatch
+│   │   └── *.c               Entry point, instance lifecycle, logging
+│   ├── scanner/
+│   │   ├── engine/           Exact, AOB, pointer, unknown + process-wide scans
+│   │   └── scan_partition.*  Host-tested scan map partitioning
+│   ├── debug/
+│   │   ├── session/          Debug attach/stop/step, breakpoints, watchpoints
+│   │   ├── memory/           Telemetry-aware memory read/write wrappers
+│   │   └── process/          Process metadata, map cache, map enrichment
 │   ├── privilege/            Sandbox escape + per-process elevation
 │   ├── telemetry/            UDP broadcast logger + discovery responder
 │   └── pal/                  Platform abstraction (network, memory, fileio, notify, lz4)
 ├── libmemdbg.a               Static library target (PS4 / PS5) for embedded use
 ├── memdbg-host               Host validation build (same C sources, host toolchain)
 └── frontend/                 C++17 + Dear ImGui desktop app
-    ├── app/                  Window, sidebar, top bar, status bar, async dispatch
-    ├── core/                 TCP client, UDP listener, GitHub profile loader
-    ├── screens/              One file per screen (Home, Consoles, Processes, …)
-    ├── scanner/              Auto-Search heuristic engine (mirrors backend semantics)
+    ├── app/
+    │   ├── shell/            Window, sidebar, top bar, status bar, async dispatch
+    │   └── app_state.hpp     Shared UI/session state
+    ├── core/
+    │   ├── client/           TCP protocol client
+    │   └── *.cpp             UDP listener, release checks, GitHub profile loader
+    ├── screens/              Feature folders for Home, Debugger, Plugins, Scanner, …
+    ├── scanner/
+    │   └── heuristics/       Auto-Search heuristic engine
     ├── trainer/              .cht load/save, batchcode parser
+    ├── plugins/
+    │   └── repository/       Plugin sources, manifests, install/update/run
     ├── locale/               English embedded i18n plus repository-backed language cache
     ├── ui/                   Reusable widgets, theme, fonts, icon font, file picker
     └── proto/                Standalone protocol probe CLI
@@ -116,6 +132,7 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 | **Pointer Scan** | Trace pointer chains back from a target address with adjustable depth and alignment. |
 | **AOB Scan** | `48 8B ?? ??`-style pattern search with wildcards, process-wide or range mode, and per-map protection filtering. |
 | **Trainer** | Build cheats (name, address, type, ON/OFF/lock); import batchcodes (`offset`, `value`, `size`, AOB tokens); capture OFF values from live memory; set per-entry lock intervals; save and load `.cht`-style trainer files. |
+| **Plugins** | Add  plugin sources by URL, refresh manifests, install/update/remove packages, and run desktop-side Lua/Python scripts with a MemDBG JSON context. |
 | **Logs** | Live UDP telemetry feed with start / stop / clear / copy; sender endpoint; bind-retry counter; received / dropped / evicted message stats. |
 | **Telemetry** | Payload runtime metrics (requires `PERF_TELEMETRY` capability): uptime, active connections, thread-pool size, total read/write bytes and call counts, throughput, scan-map LRU cache hit/miss rate, last-poll age. |
 | **Settings** | Persistent connection defaults (host, TCP debug port, UDP log port, dump directory), 8-language picker — written to the per-platform app config directory. |
@@ -212,6 +229,26 @@ Adding a new language is as simple as dropping a `<code>.json` file, regeneratin
 make check-locales   # fails if any locale is missing a key present in en.json
 python3 tools/generate_locale_manifest.py
 ```
+
+<br/>
+
+## Plugins and Scripting
+
+The frontend includes a plugin manager for desktop-side Lua and Python scripts.
+Plugin sources are repositories with a `manifest.json` package list; the default
+source is [`seregonwar/MemDBG-Plugin`](https://github.com/seregonwar/MemDBG-Plugin),
+and this checkout carries a bundled fallback copy in [`plugin-repository/`](plugin-repository).
+
+In **Plugins** you can add a GitHub repository URL, a raw manifest URL, or a
+local folder/file path, then refresh, install, update, remove, enable/disable,
+and run packages. Scripts receive a JSON context file with the active console,
+selected PID, process name, dump/trainer paths, map count, scan hits, trainer
+entry count, protocol version, and payload capabilities.
+
+To publish your own plugins, fork the default repository, add scripts under
+`plugins/`, edit `manifest.json`, and add your fork URL as a MemDBG source. See
+[`docs/plugins.md`](docs/plugins.md) for the manifest format and runtime
+contract.
 
 <br/>
 
@@ -371,6 +408,8 @@ Every tag (`v*`) or manual `workflow_dispatch` triggers a matrix build of seven 
 | `frontend-windows` | `MemDBG-frontend-windows.zip` |
 | `payload-ps4` | `MemDBG-ps4.elf` + `libmemdbg-ps4.a` |
 | `payload-ps5` | `MemDBG-ps5.elf` + `libmemdbg-ps5.a` |
+
+`VERSION` is the single checked-in source for local builds. During GitHub Actions releases, the workflow resolves the version from the tag or manual input, writes it to `VERSION` in the build workspace, and passes it into CMake/Make so the payload, frontend UI, app bundle metadata, and `BUILD_INFO.txt` agree.
 
 `make check-locales` and both scanner tests run as part of the `host-linux` job, so a release can only complete when locales are complete and all scanner tests pass. Artifacts are uploaded to the GitHub Release alongside a `SHA256SUMS.txt`.
 
