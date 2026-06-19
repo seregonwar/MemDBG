@@ -1,0 +1,73 @@
+name: Feature request
+description: Propose a MemDBG capability or workflow improvement.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests should describe a legitimate debugging, research, preservation, or offline homebrew workflow.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Payload protocol
+        - PS5 payload
+        - PS4 payload
+        - Host payload
+        - Frontend UX
+        - Scanner
+        - AOB scanner
+        - Pointer scanner
+        - Trainer
+        - Debugger
+        - Telemetry / logs
+        - Localization
+        - Build / release
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow or problem
+      description: What are you trying to do, and where does the current tool slow you down?
+      placeholder: "I want to ... because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the user-facing behavior, protocol shape, or build/release change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention existing workarounds, related tools, or why the current workflow is not enough.
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How should it be verified?
+      description: List expected tests, manual console checks, frontend interactions, or docs updates.
+      placeholder: |
+        - Host test:
+        - Frontend test:
+        - PS4/PS5 manual check:
+        - Documentation:
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Use scope
+      options:
+        - label: This request is not for online cheating, piracy, unauthorized access, or service disruption.
+          required: true

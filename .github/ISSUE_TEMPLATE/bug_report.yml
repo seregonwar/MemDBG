@@ -1,0 +1,111 @@
+name: Bug report
+description: Report a reproducible MemDBG problem.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Keep reports focused on legitimate debugging, research, preservation, and offline homebrew workflows.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which area is affected?
+      options:
+        - Payload - PS5
+        - Payload - PS4
+        - Host payload
+        - Frontend
+        - Scanner
+        - AOB scanner
+        - Pointer scanner
+        - Trainer
+        - Debugger
+        - Telemetry / logs
+        - Localization
+        - Build / CI
+        - Documentation
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, commit SHA, or branch name.
+      placeholder: "v0.1.0, main@abcdef0, or local branch name"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, compiler, console model/firmware when relevant, and whether this is a release build or local build.
+      placeholder: |
+        OS:
+        Compiler:
+        Console model / firmware:
+        Payload SDK:
+        Frontend platform:
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: List the shortest reliable path that triggers the issue.
+      placeholder: |
+        1. Build with ...
+        2. Launch ...
+        3. Open ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should MemDBG have done instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened? Include exact errors, screenshots, logs, or console output if available.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: Paste relevant payload logs, frontend logs, terminal output, crash reports, or CI links.
+      render: text
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Checks already tried
+      description: Mark or describe anything you already ran.
+      value: |
+        - [ ] `make host`
+        - [ ] `make test`
+        - [ ] `make frontend`
+        - [ ] `make verify`
+        - [ ] Reproduced on a clean checkout
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Use scope
+      description: MemDBG is for legitimate debugging, research, preservation, and offline homebrew development.
+      options:
+        - label: This report is not asking for online cheating, piracy, unauthorized access, or service disruption support.
+          required: true
