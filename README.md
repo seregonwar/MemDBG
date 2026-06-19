@@ -178,8 +178,8 @@ Every `SCAN_*` response opens with a `memdbg_scan_response_prefix_t` carrying hi
 
 | Platform | Status |
 |---|---|
-| PlayStation 5 | In development (`make payload-ps5`) |
-| PlayStation 4 | In development (`make payload-ps4`) |
+| PlayStation 5 | Supported (`make payload-ps5`) |
+| PlayStation 4 | Supported (`make payload-ps4`) |
 | Linux host | Supported |
 | macOS host | Supported |
 | Windows host + frontend | Supported |
