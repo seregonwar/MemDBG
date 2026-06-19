@@ -27,6 +27,7 @@ extern "C" {
 #define MEMDBG_VERSION_STRING "0.1.0"
 
 #define MEMDBG_BIND_HOST_MAX 64U
+#define MEMDBG_ALLOW_HOST_MAX 64U
 #define MEMDBG_UDP_HOST_MAX 64U
 #define MEMDBG_PATH_MAX 512U
 
@@ -52,6 +53,7 @@ typedef enum memdbg_status {
 
 typedef struct memdbg_config {
   char bind_host[MEMDBG_BIND_HOST_MAX];
+  char allow_host[MEMDBG_ALLOW_HOST_MAX];
   char udp_log_host[MEMDBG_UDP_HOST_MAX];
   char data_root[MEMDBG_PATH_MAX];
   uint16_t debug_port;

@@ -254,11 +254,12 @@ Both archives include the scanner, debug, telemetry, PAL, and privilege modules 
 
 ```sh
 make host
-./build/MemDBG-host --bind=0.0.0.0 --debug-port=9020 \
+./build/MemDBG-host --bind=127.0.0.1 --debug-port=9020 \
                     --udp-port=9023 --data-root=/tmp/MemDBG
 ```
 
 The host build runs on Linux or macOS, opens real TCP/UDP sockets, and serves the identical protocol as the console payload — useful for unit tests, frontend development, and hardware bring-up without a console.
+Bind to `0.0.0.0` only when remote machines must connect, and prefer `--allow=<frontend-ip>` for LAN sessions.
 
 ### Desktop frontend
 
@@ -292,11 +293,15 @@ make verify    # host + payload-ps4 + payload-ps5
 ```sh
 make test-aob-boundary     # 17-case AOB pattern boundary suite
 make test-process-aob-e2e  # End-to-end AOB scan against a live host payload
-make test                  # Both of the above
+make test-debugger         # Mocked debugger backend tests
+make test-debugger-e2e     # Live host debugger protocol smoke test
+make test-lz4              # Internal LZ4 codec round-trip/corruption tests
+make test                  # Full host test suite
 ```
 
 - **`test_aob_boundary`** mocks the memory backend and map table to verify that the scanner correctly carries pending bytes across 1 MiB chunk boundaries, handles wildcards, applies the good-suffix shift, and survives faulting pages.
 - **`test_process_aob_e2e`** spawns a real `MemDBG-host` on a temporary data root and walks the full `PROCESS_LIST → PROCESS_MAPS → SCAN_PROCESS_AOB` sequence. The test is self-contained and cleans up on exit.
+- **`test_lz4`** validates the internal LZ4 encoder/decoder with round-trip, literal-only, and corrupted block cases.
 
 The frontend CMake build also produces **`memdbg_auto_search_test`**, a unit test for the Auto-Search heuristic engine.
 
@@ -343,7 +348,8 @@ Host build CLI flags:
 
 | Flag | Purpose |
 |---|---|
-| `--bind=0.0.0.0` | TCP bind address. |
+| `--bind=127.0.0.1` | TCP bind address. Host builds default to loopback; console payloads default to `0.0.0.0`. |
+| `--allow=192.168.1.50` | Optional single IPv4 client allowlist. Non-matching clients are rejected immediately after accept. |
 | `--debug-port=9020` | TCP port the frontend connects to. |
 | `--udp-port=9023` | UDP port for telemetry and discovery. |
 | `--data-root=/tmp/MemDBG` | Working directory for logs and dumps. |

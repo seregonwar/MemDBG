@@ -25,6 +25,7 @@
 #define X86_TRAP_FLAG 0x100U
 
 static pthread_mutex_t g_dbg_mtx;
+static pthread_once_t g_dbg_once = PTHREAD_ONCE_INIT;
 
 typedef struct memdbg_debugger_state {
   int32_t pid;
@@ -142,11 +143,7 @@ static bool evaluate_bp_condition(const memdbg_breakpoint_t *bp,
 }
 
 static void debugger_lock(void) {
-  static bool once = false;
-  if (!once) {
-    debugger_init_mutex();
-    once = true;
-  }
+  (void)pthread_once(&g_dbg_once, debugger_init_mutex);
   (void)pthread_mutex_lock(&g_dbg_mtx);
 }
 
@@ -179,7 +176,8 @@ static void debugger_sleep_ms(unsigned int ms) {
   struct timespec ts;
   ts.tv_sec = (time_t)(ms / 1000U);
   ts.tv_nsec = (long)((ms % 1000U) * 1000000U);
-  (void)nanosleep(&ts, NULL);
+  while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+  }
 }
 
 static void restore_target(void) {
@@ -884,9 +882,25 @@ memdbg_status_t memdbg_debugger_clear_all_breakpoints(uint32_t *cleared) {
   return MEMDBG_OK;
 }
 
-const memdbg_breakpoint_t *memdbg_debugger_breakpoints(uint32_t *count) {
-  if (count != NULL) *count = MEMDBG_DEBUGGER_MAX_BREAKPOINTS;
-  return g_dbg.breakpoints;
+memdbg_status_t memdbg_debugger_breakpoints_snapshot(
+    memdbg_breakpoint_t *out, uint32_t max, uint32_t *count) {
+  if (count == NULL || (out == NULL && max > 0U)) {
+    return MEMDBG_ERR_PARAM;
+  }
+
+  uint32_t n = max;
+  if (n > MEMDBG_DEBUGGER_MAX_BREAKPOINTS) {
+    n = MEMDBG_DEBUGGER_MAX_BREAKPOINTS;
+  }
+
+  debugger_lock();
+  if (n > 0U) {
+    memcpy(out, g_dbg.breakpoints, n * sizeof(out[0]));
+  }
+  debugger_unlock();
+
+  *count = n;
+  return MEMDBG_OK;
 }
 
 memdbg_status_t memdbg_debugger_set_watchpoint(uint64_t address,
@@ -973,9 +987,25 @@ memdbg_status_t memdbg_debugger_clear_all_watchpoints(uint32_t *cleared) {
   return MEMDBG_OK;
 }
 
-const memdbg_watchpoint_t *memdbg_debugger_watchpoints(uint32_t *count) {
-  if (count != NULL) *count = MEMDBG_DEBUGGER_MAX_WATCHPOINTS;
-  return g_dbg.watchpoints;
+memdbg_status_t memdbg_debugger_watchpoints_snapshot(
+    memdbg_watchpoint_t *out, uint32_t max, uint32_t *count) {
+  if (count == NULL || (out == NULL && max > 0U)) {
+    return MEMDBG_ERR_PARAM;
+  }
+
+  uint32_t n = max;
+  if (n > MEMDBG_DEBUGGER_MAX_WATCHPOINTS) {
+    n = MEMDBG_DEBUGGER_MAX_WATCHPOINTS;
+  }
+
+  debugger_lock();
+  if (n > 0U) {
+    memcpy(out, g_dbg.watchpoints, n * sizeof(out[0]));
+  }
+  debugger_unlock();
+
+  *count = n;
+  return MEMDBG_OK;
 }
 
 memdbg_status_t memdbg_debugger_poll_events(void) {

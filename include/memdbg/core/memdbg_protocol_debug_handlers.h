@@ -342,7 +342,13 @@ static inline memdbg_status_t handle_debug_get_breakpoints(int fd,
     int (*send_response_fn)(int, const memdbg_packet_header_t *,
                             memdbg_status_t, const void *, uint32_t)) {
   uint32_t count = 0;
-  const memdbg_breakpoint_t *bps = memdbg_debugger_breakpoints(&count);
+  memdbg_breakpoint_t bps[MEMDBG_DEBUGGER_MAX_BREAKPOINTS];
+  memdbg_status_t st = memdbg_debugger_breakpoints_snapshot(
+      bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &count);
+  if (st != MEMDBG_OK) {
+    return send_response_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK
+                                                        : MEMDBG_ERR_NET;
+  }
 
   uint32_t active = 0;
   for (uint32_t i = 0; i < count; ++i) {
@@ -385,7 +391,13 @@ static inline memdbg_status_t handle_debug_get_watchpoints(int fd,
     int (*send_response_fn)(int, const memdbg_packet_header_t *,
                             memdbg_status_t, const void *, uint32_t)) {
   uint32_t count = 0;
-  const memdbg_watchpoint_t *wps = memdbg_debugger_watchpoints(&count);
+  memdbg_watchpoint_t wps[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
+  memdbg_status_t st = memdbg_debugger_watchpoints_snapshot(
+      wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count);
+  if (st != MEMDBG_OK) {
+    return send_response_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK
+                                                        : MEMDBG_ERR_NET;
+  }
 
   uint32_t active = 0;
   for (uint32_t i = 0; i < count; ++i) {

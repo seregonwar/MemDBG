@@ -90,14 +90,16 @@ memdbg_status_t memdbg_debugger_set_breakpoint_cond(
     uint32_t cond_reg, uint32_t cond_op, uint64_t cond_value);
 memdbg_status_t memdbg_debugger_clear_breakpoint(uint64_t address);
 memdbg_status_t memdbg_debugger_clear_all_breakpoints(uint32_t *cleared);
-const memdbg_breakpoint_t *memdbg_debugger_breakpoints(uint32_t *count);
+memdbg_status_t memdbg_debugger_breakpoints_snapshot(
+    memdbg_breakpoint_t *out, uint32_t max, uint32_t *count);
 
 memdbg_status_t memdbg_debugger_set_watchpoint(uint64_t address,
                                                uint32_t length,
                                                uint32_t type);
 memdbg_status_t memdbg_debugger_clear_watchpoint(uint64_t address);
 memdbg_status_t memdbg_debugger_clear_all_watchpoints(uint32_t *cleared);
-const memdbg_watchpoint_t *memdbg_debugger_watchpoints(uint32_t *count);
+memdbg_status_t memdbg_debugger_watchpoints_snapshot(
+    memdbg_watchpoint_t *out, uint32_t max, uint32_t *count);
 
 /* Consumes any pending wait event and updates the internal stopped flag.
  * Call this before querying state if you are polling. */

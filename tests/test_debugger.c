@@ -606,7 +606,10 @@ static void test_software_breakpoint(void) {
 
   /* Verify breakpoint list */
   uint32_t bp_count = 0;
-  const memdbg_breakpoint_t *bps = memdbg_debugger_breakpoints(&bp_count);
+  memdbg_breakpoint_t bps[MEMDBG_DEBUGGER_MAX_BREAKPOINTS];
+  TEST_OK("breakpoint snapshot",
+          memdbg_debugger_breakpoints_snapshot(
+              bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &bp_count));
   TEST_EQ_U("breakpoint slots total", bp_count, MEMDBG_DEBUGGER_MAX_BREAKPOINTS);
 
   int found = 0;
@@ -632,7 +635,9 @@ static void test_software_breakpoint(void) {
   TEST("original byte restored to 0x90", mock.memory[0x1000] == 0x90U);
 
   /* Verify breakpoint list empty */
-  bps = memdbg_debugger_breakpoints(&bp_count);
+  TEST_OK("breakpoint snapshot after clear",
+          memdbg_debugger_breakpoints_snapshot(
+              bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &bp_count));
   int still_active = 0;
   for (uint32_t i = 0; i < bp_count; ++i) {
     if (bps[i].active) still_active++;
@@ -666,7 +671,10 @@ static void test_hardware_breakpoint(void) {
 
   /* Verify it appears in breakpoint list */
   uint32_t bp_count = 0;
-  const memdbg_breakpoint_t *bps = memdbg_debugger_breakpoints(&bp_count);
+  memdbg_breakpoint_t bps[MEMDBG_DEBUGGER_MAX_BREAKPOINTS];
+  TEST_OK("breakpoint snapshot",
+          memdbg_debugger_breakpoints_snapshot(
+              bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &bp_count));
   int found = 0;
   for (uint32_t i = 0; i < bp_count; ++i) {
     if (bps[i].active && bps[i].address == 0x2000ULL &&
@@ -679,7 +687,10 @@ static void test_hardware_breakpoint(void) {
 
   /* Verify it also appears as a watchpoint (HW BPs consume watchpoint slots) */
   uint32_t wp_count = 0;
-  const memdbg_watchpoint_t *wps = memdbg_debugger_watchpoints(&wp_count);
+  memdbg_watchpoint_t wps[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
+  TEST_OK("watchpoint snapshot",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &wp_count));
   int wp_found = 0;
   for (uint32_t i = 0; i < wp_count; ++i) {
     if (wps[i].installed && wps[i].address == 0x2000ULL &&
@@ -722,7 +733,10 @@ static void test_watchpoint(void) {
 
   /* Verify in list */
   uint32_t count = 0;
-  const memdbg_watchpoint_t *wps = memdbg_debugger_watchpoints(&count);
+  memdbg_watchpoint_t wps[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
+  TEST_OK("watchpoint snapshot",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count));
   TEST_EQ_U("watchpoint slots total", count, MEMDBG_DEBUGGER_MAX_WATCHPOINTS);
 
   int found = 0;
@@ -762,7 +776,9 @@ static void test_watchpoint(void) {
   TEST_OK("clear watchpoint succeeds", st);
 
   /* Verify removed from list */
-  wps = memdbg_debugger_watchpoints(&count);
+  TEST_OK("watchpoint snapshot after clear",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count));
   int still_installed = 0;
   for (uint32_t i = 0; i < count; ++i) {
     if (wps[i].installed) still_installed++;
@@ -881,7 +897,10 @@ static void test_max_breakpoints_watchpoints(void) {
 
   /* Clear all remaining */
   uint32_t count = 0;
-  const memdbg_breakpoint_t *bps = memdbg_debugger_breakpoints(&count);
+  memdbg_breakpoint_t bps[MEMDBG_DEBUGGER_MAX_BREAKPOINTS];
+  TEST_OK("breakpoint snapshot before clear remaining",
+          memdbg_debugger_breakpoints_snapshot(
+              bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &count));
   for (uint32_t j = 0; j < count; ++j) {
     if (bps[j].active) memdbg_debugger_clear_breakpoint(bps[j].address);
   }
@@ -1043,7 +1062,10 @@ static void test_batch_clear(void) {
 
   /* Verify list is empty */
   uint32_t bp_count = 0;
-  const memdbg_breakpoint_t *bps = memdbg_debugger_breakpoints(&bp_count);
+  memdbg_breakpoint_t bps[MEMDBG_DEBUGGER_MAX_BREAKPOINTS];
+  TEST_OK("breakpoint snapshot after clear-all",
+          memdbg_debugger_breakpoints_snapshot(
+              bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &bp_count));
   int active = 0;
   for (uint32_t i = 0; i < bp_count; ++i) { if (bps[i].active) ++active; }
   TEST_EQ_I("no active BPs after clear-all", active, 0);
@@ -1075,7 +1097,10 @@ static void test_batch_clear(void) {
 
   /* Verify list is empty */
   uint32_t wp_count = 0;
-  const memdbg_watchpoint_t *wps = memdbg_debugger_watchpoints(&wp_count);
+  memdbg_watchpoint_t wps[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
+  TEST_OK("watchpoint snapshot after clear-all",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &wp_count));
   int installed = 0;
   for (uint32_t i = 0; i < wp_count; ++i) { if (wps[i].installed) ++installed; }
   TEST_EQ_I("no installed WPs after clear-all", installed, 0);
@@ -1113,13 +1138,17 @@ static void test_batch_clear(void) {
   TEST_EQ_U("cleared 2 mixed BPs", cleared, 2U);
   TEST("SW BP INT3 restored", mock.memory[0x5000] == 0x90U);
 
-  bps = memdbg_debugger_breakpoints(&bp_count);
+  TEST_OK("breakpoint snapshot after mixed clear-all",
+          memdbg_debugger_breakpoints_snapshot(
+              bps, MEMDBG_DEBUGGER_MAX_BREAKPOINTS, &bp_count));
   active = 0;
   for (uint32_t i = 0; i < bp_count; ++i) { if (bps[i].active) ++active; }
   TEST_EQ_I("no active BPs after mixed clear-all", active, 0);
 
   /* Verify HW BP watchpoint slot also freed */
-  wps = memdbg_debugger_watchpoints(&wp_count);
+  TEST_OK("watchpoint snapshot after mixed clear-all",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &wp_count));
   installed = 0;
   for (uint32_t i = 0; i < wp_count; ++i) { if (wps[i].installed) ++installed; }
   TEST_EQ_I("no installed WPs after mixed clear-all", installed, 0);

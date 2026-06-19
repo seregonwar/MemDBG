@@ -4,7 +4,8 @@ MemDBG exposes a TCP server for commands and a UDP channel for logs. The payload
 
 | Argument | Purpose |
 |---|---|
-| `--bind=0.0.0.0` | Address the payload listens on. |
+| `--bind=127.0.0.1` | Address the payload listens on. Host builds default to loopback; console payloads default to `0.0.0.0`. |
+| `--allow=192.168.1.50` | Optional single IPv4 client allowlist for LAN sessions. |
 | `--debug-port=9020` | TCP port used by the frontend. |
 | `--udp-host=255.255.255.255` | UDP host or broadcast address for logs. |
 | `--udp-port=9023` | UDP port for live console logs. |

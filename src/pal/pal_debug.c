@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) ||          \
@@ -52,6 +53,14 @@ long pal_debug_ptrace(int op, int pid, void *addr, long data) {
   return pal_debug_ptrace_raw(op, pid, addr, data);
 }
 
+static void pal_debug_sleep_ms(uint32_t ms) {
+  struct timespec ts;
+  ts.tv_sec = (time_t)(ms / 1000U);
+  ts.tv_nsec = (long)((ms % 1000U) * 1000000UL);
+  while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+  }
+}
+
 int pal_debug_wait(int pid, int *status, bool nohang) {
   int st = 0;
   if (status == NULL) status = &st;
@@ -89,7 +98,7 @@ int pal_debug_attach(int pid) {
 #endif
       if (wait_errno != EINTR) break;
     }
-    (void)usleep(10000); /* 10 ms */
+    pal_debug_sleep_ms(10U);
   }
 
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)

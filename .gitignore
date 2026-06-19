@@ -62,3 +62,4 @@ dkms.conf
 /make_all.sh
 /frontend/build
 /.commandcode
+docs/x_project_article.md

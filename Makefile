@@ -42,7 +42,7 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-scan-partition check-locales
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition check-locales
 
 all: host
 
@@ -90,13 +90,19 @@ test-debugger-protocol: tests/test_debugger_protocol.c
 	@echo "--- Running Debugger Protocol test ---"
 	$(BUILD_DIR)/test_debugger_protocol
 
+test-lz4: src/pal/lz4.c include/memdbg/pal/lz4.h tests/test_lz4.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_lz4.c src/pal/lz4.c -o $(BUILD_DIR)/test_lz4
+	@echo "--- Running LZ4 test ---"
+	$(BUILD_DIR)/test_lz4
+
 test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< -o $(BUILD_DIR)/test_scan_partition
 	@echo "--- Running Scan Partition test ---"
 	$(BUILD_DIR)/test_scan_partition
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-scan-partition
+test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)

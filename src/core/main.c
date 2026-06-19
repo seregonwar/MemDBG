@@ -54,7 +54,9 @@ static bool parse_u32(const char *text, uint32_t *out) {
 static void print_usage(const char *argv0) {
   const char *prog = (argv0 != NULL && argv0[0] != '\0') ? argv0 : "memdbg";
   printf("Usage: %s [options]\n", prog);
-  printf("  --bind=ADDR              TCP bind address (default 0.0.0.0)\n");
+  printf("  --bind=ADDR              TCP bind address (default 127.0.0.1 on host,\n");
+  printf("                           0.0.0.0 on console)\n");
+  printf("  --allow=ADDR             Only accept a single IPv4 client address\n");
   printf("  --debug-port=PORT        TCP command port (default %u)\n",
          MEMDBG_DEFAULT_DEBUG_PORT);
   printf("  --udp-host=ADDR          UDP log destination (default %s)\n",
@@ -77,6 +79,8 @@ static int apply_arg(memdbg_config_t *cfg, const char *arg) {
   }
   if (strncmp(arg, "--bind=", 7) == 0) {
     (void)snprintf(cfg->bind_host, sizeof(cfg->bind_host), "%s", arg + 7);
+  } else if (strncmp(arg, "--allow=", 8) == 0) {
+    (void)snprintf(cfg->allow_host, sizeof(cfg->allow_host), "%s", arg + 8);
   } else if (strncmp(arg, "--debug-port=", 13) == 0) {
     if (!parse_u16(arg + 13, &cfg->debug_port)) return -1;
   } else if (strncmp(arg, "--udp-host=", 11) == 0) {

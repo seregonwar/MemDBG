@@ -27,11 +27,20 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 static int test_socket = -1;
 static uint32_t next_id = 1;
 static int quiet_payload_errors = 0;
+
+static void sleep_ms(unsigned int ms) {
+  struct timespec ts;
+  ts.tv_sec = (time_t)(ms / 1000U);
+  ts.tv_nsec = (long)((ms % 1000U) * 1000000UL);
+  while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+  }
+}
 
 /* ---- Socket helpers (same pattern as test_process_aob_e2e.c) ---- */
 
@@ -176,7 +185,7 @@ int main(int argc, char **argv) {
 
   printf("  Child PID: %d\n", (int)child_pid);
   /* Give the child a moment to exec. */
-  usleep(100000);
+  sleep_ms(100U);
 
   /* 4. DEBUG_ATTACH */
   {
@@ -309,7 +318,7 @@ int main(int argc, char **argv) {
     else printf("  DEBUG_CONTINUE: OK\n");
 
     /* Small delay to let the process run a bit */
-    usleep(50000);
+    sleep_ms(50U);
 
     rc = send_cmd(test_socket, MEMDBG_CMD_DEBUG_STOP);
     if (rc != 0) { printf("FAIL: DEBUG_STOP after continue\n"); failures++; }
@@ -513,7 +522,7 @@ int main(int argc, char **argv) {
     /* Child may have terminated after detach, or may still be sleeping.
      * SIGTERM first, then SIGKILL after a short wait. */
     kill(child_pid, SIGTERM);
-    usleep(100000);
+    sleep_ms(100U);
     kill(child_pid, SIGKILL);
     waitpid(child_pid, NULL, 0);
     printf("  Child cleaned up\n");

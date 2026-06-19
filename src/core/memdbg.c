@@ -57,7 +57,12 @@ static uint64_t    g_start_ticks = 0;
 void memdbg_config_defaults(memdbg_config_t *cfg) {
   if (cfg == NULL) return;
   memset(cfg, 0, sizeof(*cfg));
+#if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
+    defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
   (void)snprintf(cfg->bind_host, sizeof(cfg->bind_host), "0.0.0.0");
+#else
+  (void)snprintf(cfg->bind_host, sizeof(cfg->bind_host), "127.0.0.1");
+#endif
   (void)snprintf(cfg->udp_log_host, sizeof(cfg->udp_log_host), "%s",
                  MEMDBG_DEFAULT_UDP_LOG_HOST);
   (void)snprintf(cfg->data_root, sizeof(cfg->data_root), "%s",
@@ -1020,19 +1025,41 @@ static bool udp_log_should_follow_client(const memdbg_config_t *cfg) {
          strcmp(cfg->udp_log_host, "*") == 0;
 }
 
-static void update_udp_log_peer_from_client(const memdbg_config_t *cfg,
-                                            const struct sockaddr_storage *ss) {
-  char host[INET_ADDRSTRLEN];
+static bool sockaddr_ipv4_host(const struct sockaddr_storage *ss, char *host,
+                               size_t host_len) {
   const struct sockaddr_in *sin;
-  memdbg_status_t status;
 
-  if (!udp_log_should_follow_client(cfg) || ss == NULL ||
+  if (ss == NULL || host == NULL || host_len == 0U ||
       ss->ss_family != AF_INET) {
-    return;
+    return false;
   }
 
   sin = (const struct sockaddr_in *)ss;
-  if (inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host)) == NULL) {
+  return inet_ntop(AF_INET, &sin->sin_addr, host, host_len) != NULL;
+}
+
+static bool client_peer_allowed(const memdbg_config_t *cfg,
+                                const struct sockaddr_storage *ss) {
+  char peer_host[INET_ADDRSTRLEN];
+
+  if (cfg == NULL || cfg->allow_host[0] == '\0') {
+    return true;
+  }
+
+  if (!sockaddr_ipv4_host(ss, peer_host, sizeof(peer_host))) {
+    return false;
+  }
+
+  return strcmp(cfg->allow_host, peer_host) == 0;
+}
+
+static void update_udp_log_peer_from_client(const memdbg_config_t *cfg,
+                                            const struct sockaddr_storage *ss) {
+  char host[INET_ADDRSTRLEN];
+  memdbg_status_t status;
+
+  if (!udp_log_should_follow_client(cfg) ||
+      !sockaddr_ipv4_host(ss, host, sizeof(host))) {
     return;
   }
 
@@ -1074,12 +1101,23 @@ static void *worker_thread(void *arg) {
       continue;
     }
 
+    if (!client_peer_allowed(&cfg, &ss)) {
+      char peer_host[INET_ADDRSTRLEN];
+      const char *peer = "unknown";
+      if (sockaddr_ipv4_host(&ss, peer_host, sizeof(peer_host))) {
+        peer = peer_host;
+      }
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "client rejected by allowlist: peer=%s allow=%s",
+                       peer, cfg.allow_host);
+      (void)pal_socket_close(client_fd);
+      continue;
+    }
+
     update_udp_log_peer_from_client(&cfg, &ss);
     {
       char peer_host[INET_ADDRSTRLEN];
-      const struct sockaddr_in *sin = (const struct sockaddr_in *)&ss;
-      if (ss.ss_family == AF_INET &&
-          inet_ntop(AF_INET, &sin->sin_addr, peer_host, sizeof(peer_host))) {
+      if (sockaddr_ipv4_host(&ss, peer_host, sizeof(peer_host))) {
         char notify_msg[INET_ADDRSTRLEN + 32];
         (void)snprintf(notify_msg, sizeof(notify_msg), "MemDBG %s connected",
                        peer_host);
@@ -1207,6 +1245,10 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                    cfg.enable_udp_log ? cfg.udp_log_host : "off",
                    cfg.enable_udp_log ? cfg.udp_log_port : 0U,
                    MEMDBG_THREAD_POOL_SIZE);
+  if (cfg.allow_host[0] != '\0') {
+    memdbg_log_write(MEMDBG_LOG_INFO, "network: allowing TCP client %s only",
+                     cfg.allow_host);
+  }
   memdbg_log_write(MEMDBG_LOG_INFO, "logging: file=%s mirror=%s",
                    memdbg_log_path()[0] ? memdbg_log_path() : "unavailable",
                    memdbg_log_mirror_path()[0] ? memdbg_log_mirror_path() : "off");

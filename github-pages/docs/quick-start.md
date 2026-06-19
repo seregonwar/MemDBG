@@ -12,8 +12,10 @@ make payload-ps5 PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk
 On host builds you can pass port, bind address, and log destination from the command line.
 
 ```bash
-./build/memdbg-host --bind=0.0.0.0 --debug-port=9020 --udp-port=9023
+./build/MemDBG-host --bind=127.0.0.1 --debug-port=9020 --udp-port=9023
 ```
+
+Use `--bind=0.0.0.0 --allow=<frontend-ip>` only when another machine on the LAN must connect.
 
 ## Open the frontend
 

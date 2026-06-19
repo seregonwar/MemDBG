@@ -227,13 +227,27 @@ memdbg_status_t memdbg_debugger_get_threads(int32_t *lwps, char (*names)[24],
   if (count_out != NULL) *count_out = n;
   return MEMDBG_OK;
 }
-const memdbg_breakpoint_t *memdbg_debugger_breakpoints(uint32_t *count) {
-  if (count != NULL) *count = MEMDBG_DEBUGGER_MAX_BREAKPOINTS;
-  return g_mock_bps;
+memdbg_status_t memdbg_debugger_breakpoints_snapshot(
+    memdbg_breakpoint_t *out, uint32_t max, uint32_t *count) {
+  if (count == NULL || (out == NULL && max > 0U)) return MEMDBG_ERR_PARAM;
+  uint32_t n = max;
+  if (n > MEMDBG_DEBUGGER_MAX_BREAKPOINTS) {
+    n = MEMDBG_DEBUGGER_MAX_BREAKPOINTS;
+  }
+  if (n > 0U) memcpy(out, g_mock_bps, n * sizeof(out[0]));
+  *count = n;
+  return MEMDBG_OK;
 }
-const memdbg_watchpoint_t *memdbg_debugger_watchpoints(uint32_t *count) {
-  if (count != NULL) *count = MEMDBG_DEBUGGER_MAX_WATCHPOINTS;
-  return g_mock_wps;
+memdbg_status_t memdbg_debugger_watchpoints_snapshot(
+    memdbg_watchpoint_t *out, uint32_t max, uint32_t *count) {
+  if (count == NULL || (out == NULL && max > 0U)) return MEMDBG_ERR_PARAM;
+  uint32_t n = max;
+  if (n > MEMDBG_DEBUGGER_MAX_WATCHPOINTS) {
+    n = MEMDBG_DEBUGGER_MAX_WATCHPOINTS;
+  }
+  if (n > 0U) memcpy(out, g_mock_wps, n * sizeof(out[0]));
+  *count = n;
+  return MEMDBG_OK;
 }
 
 /* Stub: memdbg_debugger_is_elevated (needed by memdbg_memory.c but not by handlers) */
