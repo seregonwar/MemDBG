@@ -30,12 +30,17 @@
 #include <deque>
 #include <future>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace memdbg::frontend {
+
+/* forward declare GuiBridge to avoid pulling its full header into every
+   includer of AppState (especially test targets that don't need it) */
+namespace plugins { class GuiBridge; }
 
 using memdbg::frontend::Client;
 using memdbg::frontend::HelloInfo;
@@ -49,7 +54,7 @@ using memdbg::frontend::ReleaseCheck;
 
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
-  Trainer, Plugins, Logs, Settings, Telemetry, TaskMgr, Debugger, Credits,
+  Trainer, Plugins, PluginGUI, Logs, Settings, Telemetry, TaskMgr, Debugger, Credits,
 };
 
 struct ProcessMapSummary {
@@ -455,6 +460,15 @@ struct AppState {
   std::string plugin_last_error;
   std::string plugin_last_command;
   std::string plugin_last_id;
+
+  /* ---- GUI plugin bridge ----
+   *   shared_ptr works with incomplete types; unique_ptr would need the
+   *   complete GuiBridge definition in every translation unit that includes
+   *   app_state.hpp. */
+  std::shared_ptr<plugins::GuiBridge> plugin_gui_bridge;
+  std::string plugin_gui_active_id;
+  bool plugin_gui_starting = false;
+  std::string plugin_gui_error;
 };
 
 /* ---- utility functions ---- */
@@ -645,6 +659,7 @@ inline const char *screen_title(Screen s) {
   case Screen::AOBScanner: return "AOB Scanner";
   case Screen::Trainer: return "Trainer";
   case Screen::Plugins: return "Plugins";
+  case Screen::PluginGUI: return "Plugin";
   case Screen::Logs: return "Logs"; case Screen::Settings: return "Settings";
   case Screen::Telemetry: return "Telemetry";
   case Screen::TaskMgr: return "Task Manager";
@@ -664,6 +679,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::AOBScanner: return "Search memory with array-of-bytes patterns";
   case Screen::Trainer: return "Build and lock runtime cheats for the selected game";
   case Screen::Plugins: return "Install and run Lua/Python automation from plugin repositories";
+  case Screen::PluginGUI: return "Plugin graphical interface";
   case Screen::Logs: return "Watch UDP telemetry and on-console file logging";
   case Screen::Settings: return "Configure frontend connection defaults";
   case Screen::Telemetry: return "Payload performance and runtime metrics";
@@ -687,7 +703,8 @@ inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
-         state.plugin_refresh_pending || state.plugin_run_pending;
+         state.plugin_refresh_pending || state.plugin_run_pending ||
+         state.plugin_gui_starting;
 }
 
 /* ---- shared state helpers ---- */
@@ -719,6 +736,7 @@ void draw_pointer_scanner(AppState &state, struct ImVec2 avail);
 void draw_aob_scanner(AppState &state, struct ImVec2 avail);
 void draw_trainer(AppState &state, struct ImVec2 avail);
 void draw_plugins(AppState &state, struct ImVec2 avail);
+void draw_plugin_gui(AppState &state, struct ImVec2 avail);
 void poll_plugin_tasks(AppState &state);
 void draw_logs(AppState &state, struct ImVec2 avail);
 void draw_settings(AppState &state, struct ImVec2 avail);
