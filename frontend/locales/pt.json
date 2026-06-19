@@ -27,6 +27,7 @@
   "nav.aob_scanner": "Scan AOB",
   "nav.trainer": "Trainer",
   "nav.plugins": "Plugins",
+  "nav.plugin_gui": "Ferramentas GUI",
   "nav.logs": "Logs UDP",
   "nav.telemetry": "Telemetria",
   "nav.taskmgr": "Gestor Tarefas",

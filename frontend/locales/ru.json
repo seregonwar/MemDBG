@@ -29,6 +29,7 @@
   "nav.aob_scanner": "AOB поиск",
   "nav.trainer": "Тренер",
   "nav.plugins": "Плагины",
+  "nav.plugin_gui": "GUI инструменты",
   "nav.logs": "UDP логи",
   "nav.telemetry": "Телеметрия",
   "nav.taskmgr": "Диспетчер",

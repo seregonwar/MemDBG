@@ -29,6 +29,7 @@
   "nav.aob_scanner": "AOB検索",
   "nav.trainer": "トレーナー",
   "nav.plugins": "プラグイン",
+  "nav.plugin_gui": "GUIツール",
   "nav.logs": "UDPログ",
   "nav.telemetry": "テレメトリ",
   "nav.taskmgr": "タスク管理",
