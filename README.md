@@ -12,9 +12,10 @@
 <br/>
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-black?style=flat-square)](LICENSE)
-[![Platform: PS4 / PS5](https://img.shields.io/badge/Platform-PS4%20%2F%20PS5-black?style=flat-square)](#supported-platforms)
-[![Status: Pre-release](https://img.shields.io/badge/Status-Pre--release-black?style=flat-square)](#repository-status)
-[![Language: C11 / C++17](https://img.shields.io/badge/Language-C11%20%2F%20C%2B%2B17-black?style=flat-square)](#building)
+[![Platform: PS4 / PS5](https://img.shields.io/badge/Platform-PS4%20%2F%20PS5-blue?style=flat-square)](#supported-platforms)
+[![Status: release](https://img.shields.io/badge/Status-release-green?style=flat-square)](#repository-status)
+[![Downloads](https://img.shields.io/github/downloads/seregonwar/MemDBG/total?style=flat-square&color=brightgreen)](https://github.com/seregonwar/MemDBG/releases)
+[![Language: C11 / C++17](https://img.shields.io/badge/Language-C11%20%2F%20C%2B%2B17-red?style=flat-square)](#building)
 
 <br/>
 
