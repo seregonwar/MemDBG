@@ -154,6 +154,9 @@ add_executable(memdbg_frontend
   # pal (LZ4 decompression for client)
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 
+  # tracer (syscall name lookup)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/tracer/syscall_names.c
+
   # screens
   src/screens/home/screen_home.cpp
   src/screens/consoles/screen_consoles.cpp
@@ -172,6 +175,7 @@ add_executable(memdbg_frontend
   src/screens/credits/screen_credits.cpp
   src/screens/debugger/debugger_disassembly.cpp
   src/screens/debugger/screen_debugger.cpp
+  src/screens/tracer/screen_tracer.cpp
 
   # trainer
   src/trainer/batchcode_parser.cpp

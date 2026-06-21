@@ -36,6 +36,11 @@ int pal_debug_detach(int pid);
 /* Wait for a stop event.  If nohang is true, returns immediately. */
 int pal_debug_wait(int pid, int *status, bool nohang);
 
+/* Enable syscall tracing for the traced process.
+ * On FreeBSD/console, calls PT_SYSCALL which traps on every syscall
+ * entry and exit.  On other platforms returns -1 and sets errno to ENOTSUP. */
+int pal_debug_syscall(int pid);
+
 /* Resume the whole process (all LWPs).  Returns 0 on success, -1 on error. */
 int pal_debug_continue(int pid);
 

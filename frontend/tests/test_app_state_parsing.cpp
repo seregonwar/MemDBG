@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace memdbg::frontend {
 namespace {
@@ -90,6 +92,22 @@ static void test_build_scan_value() {
                          value, len));
 }
 
+static void test_text_helpers() {
+  std::printf("\n--- text helpers ---\n");
+  std::vector<uint8_t> bytes;
+  TEST("UTF-8 text bytes", parse_text_bytes("Caff\xC3\xA8", bytes) &&
+                              bytes.size() == 6U && bytes[4] == 0xC3U &&
+                              bytes[5] == 0xA8U);
+  TEST("empty text rejected", !parse_text_bytes("", bytes));
+  const std::string oversized(257U, 'A');
+  TEST("text size limit", !parse_text_bytes(oversized.c_str(), bytes));
+
+  bytes = {0x48U, 0x65U, 0x6CU, 0x6CU, 0x6FU, 0x00U, 0xFFU,
+           0x20U, 0xC3U, 0xA8U};
+  TEST("readable text conversion",
+       bytes_to_readable_text(bytes) == "Hello.. \xC3\xA8");
+}
+
 } // namespace
 } // namespace memdbg::frontend
 
@@ -99,6 +117,7 @@ int main() {
   std::printf("=== Frontend Parsing Tests ===\n");
   test_parse_u64();
   test_build_scan_value();
+  test_text_helpers();
 
   std::printf("\n=== Results ======================================\n");
   int total = g_passed + g_failed;

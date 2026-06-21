@@ -112,6 +112,16 @@ static void draw_overlay_hex_view(AppState &state) {
                       ImVec2(130, 30))) {
     ImGui::SetClipboardText(bytes_hex(state.memory).c_str());
   }
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kCopy) + "  Copy Text").c_str(),
+                      ImVec2(130, 30))) {
+    const std::string text = bytes_to_readable_text(state.memory);
+    ImGui::SetClipboardText(text.c_str());
+    set_status(state, "Copied memory as readable text");
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Copy printable UTF-8 text; non-text bytes are shown as .");
+  }
   ImGui::Spacing();
 
   if (ImGui::BeginTable("memory_overlay_hex", 3,

@@ -80,6 +80,7 @@ static struct {
   bool     suspend_called[8];
   bool     resume_called[8];
   int      attach_errno;
+  int      thread_list_errno;
 } mock = {0};
 
 /* ---- Mock helpers ---- */
@@ -219,6 +220,10 @@ int pal_debug_resume_thread(int pid, int32_t lwp) {
 int pal_debug_get_thread_list(int pid, int32_t *lwps, int max_count) {
   (void)pid;
   if (lwps == NULL || max_count <= 0) { errno = EINVAL; return -1; }
+  if (mock.thread_list_errno != 0) {
+    errno = mock.thread_list_errno;
+    return -1;
+  }
   int n = mock.lwp_count < max_count ? mock.lwp_count : max_count;
   for (int i = 0; i < n; ++i) lwps[i] = mock.lwps[i];
   return n;
@@ -508,6 +513,28 @@ static void test_thread_enumeration(void) {
                                    MEMDBG_DEBUGGER_MAX_THREADS);
   TEST_OK("get_threads without names succeeds", st);
   TEST_EQ_U("count still 2", count, 2U);
+
+  TEST_OK("detach", memdbg_debugger_detach());
+}
+
+static void test_thread_enumeration_eio_fallback(void) {
+  printf("\n--- Thread Enumeration EIO Fallback ---\n");
+
+  mock_reset();
+  TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
+  mock.thread_list_errno = EIO;
+
+  int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
+  char names[MEMDBG_DEBUGGER_MAX_THREADS][24];
+  uint32_t states[MEMDBG_DEBUGGER_MAX_THREADS];
+  uint32_t count = 0;
+  memdbg_status_t st = memdbg_debugger_get_threads(
+      lwps, names, states, &count, MEMDBG_DEBUGGER_MAX_THREADS);
+  TEST_OK("EIO uses main LWP fallback", st);
+  TEST_EQ_U("fallback thread count", count, 1U);
+  TEST_EQ_I("fallback LWP is PID", lwps[0], MOCK_PID);
+  TEST("fallback thread is labeled", strcmp(names[0], "main (fallback)") == 0);
+  TEST_EQ_U("fallback state is stopped", states[0], MEMDBG_THREAD_STOPPED);
 
   TEST_OK("detach", memdbg_debugger_detach());
 }
@@ -1170,6 +1197,7 @@ int main(void) {
   test_attach_detach();
   test_stop_continue_step();
   test_thread_enumeration();
+  test_thread_enumeration_eio_fallback();
   test_register_access();
   test_debug_registers();
   test_software_breakpoint();

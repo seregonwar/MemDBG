@@ -76,6 +76,12 @@ typedef enum memdbg_command {
   MEMDBG_CMD_DEBUG_CLEAR_ALL_BREAKPOINTS = 0x0614U,
   MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS = 0x0615U,
 
+  /* Tracer (syscall tracing, crash dump) */
+  MEMDBG_CMD_TRACER_ATTACH = 0x0700U,
+  MEMDBG_CMD_TRACER_DETACH = 0x0701U,
+  MEMDBG_CMD_TRACER_POLL   = 0x0702U,
+  MEMDBG_CMD_TRACER_STATUS = 0x0703U,
+
   MEMDBG_CMD_BATCH_READ = 0x0202U,
   MEMDBG_CMD_BATCH_WRITE = 0x0203U,
   MEMDBG_CMD_BATCH_PROCESS_INFO = 0x0107U,
@@ -112,7 +118,8 @@ typedef enum memdbg_capability {
   MEMDBG_CAP_LZ4 = 1U << 17,
   MEMDBG_CAP_SCAN_PROCESS_AOB = 1U << 18,
   MEMDBG_CAP_DISCOVERY = 1U << 19,
-  MEMDBG_CAP_DEBUGGER = 1U << 20
+  MEMDBG_CAP_DEBUGGER = 1U << 20,
+  MEMDBG_CAP_TRACER = 1U << 21
 } memdbg_capability_t;
 
 typedef enum memdbg_value_type {
@@ -554,6 +561,54 @@ typedef struct MEMDBG_PACKED memdbg_discovery_response {
   char version[16];
   char name[16];
 } memdbg_discovery_response_t;
+
+/* ---- Tracer (syscall tracing, crash dump) ---- */
+
+typedef struct MEMDBG_PACKED memdbg_tracer_attach_request {
+  int32_t pid;
+} memdbg_tracer_attach_request_t;
+
+/* Tracer event — one entry in the poll ring buffer. */
+typedef struct MEMDBG_PACKED memdbg_tracer_event {
+  uint64_t timestamp_ns;
+  uint32_t event_type;   /* 1=entry, 2=exit, 3=signal, 4=crash */
+  uint32_t lwp;
+  uint32_t syscall_no;
+  int32_t  syscall_ret;
+  uint64_t args[6];
+  int32_t  signal;
+  uint32_t reserved;
+  uint64_t fault_addr;
+} memdbg_tracer_event_t;
+
+typedef struct MEMDBG_PACKED memdbg_tracer_poll_response_prefix {
+  uint32_t count;
+  uint32_t reserved;
+} memdbg_tracer_poll_response_prefix_t;
+
+/* Tracer daemon states. */
+#define MEMDBG_TRACER_STATE_IDLE     0
+#define MEMDBG_TRACER_STATE_RUNNING  1
+#define MEMDBG_TRACER_STATE_CRASHED  2
+#define MEMDBG_TRACER_STATE_EXITED   3
+#define MEMDBG_TRACER_STATE_STOPPED  4
+#define MEMDBG_TRACER_STATE_STARTING 5
+
+/* Tracer event types. */
+#define MEMDBG_TRACER_EVENT_SYSCALL_ENTRY  1U
+#define MEMDBG_TRACER_EVENT_SYSCALL_EXIT   2U
+#define MEMDBG_TRACER_EVENT_SIGNAL         3U
+#define MEMDBG_TRACER_EVENT_CRASH          4U
+
+typedef struct MEMDBG_PACKED memdbg_tracer_status_response {
+  int32_t  state;           /* MEMDBG_TRACER_STATE_* */
+  uint32_t events_total;    /* total events captured */
+  int32_t  crash_signal;    /* 0 if no crash */
+  uint32_t reserved;
+  uint64_t start_time_ns;
+  uint64_t elapsed_ns;
+  char     dump_path[256];  /* path to crash dump, empty if none */
+} memdbg_tracer_status_response_t;
 
 #undef MEMDBG_PACKED
 

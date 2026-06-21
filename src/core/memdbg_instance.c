@@ -12,7 +12,9 @@
 #include "memdbg/core/memdbg_instance.h"
 
 #include "memdbg/core/memdbg_log.h"
+#include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_fileio.h"
+#include "memdbg/pal/pal_network.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -83,33 +85,105 @@ static bool process_name_contains_memdbg(int pid) {
   char path[256];
   char comm[64];
   FILE *fp;
-  size_t len;
-  bool found = false;
 
   (void)snprintf(path, sizeof(path), "/proc/%d/comm", pid);
   fp = fopen(path, "r");
   if (fp == NULL) return true;  /* cannot verify — be conservative */
 
   if (fgets(comm, sizeof(comm), fp) != NULL) {
-    len = strlen(comm);
+    size_t len = strlen(comm);
     if (len > 0U && comm[len - 1U] == '\n') comm[len - 1U] = '\0';
-    for (size_t i = 0; comm[i]; ++i) {
-      char c = comm[i];
-      if ((c >= 'A' && c <= 'Z')) c = (char)(c + ('a' - 'A'));
-      if (c == 'm' && strstr(&comm[i], "memdbg") == &comm[i]) {
-        found = true;
-        break;
+    for (size_t i = 0U; comm[i] != '\0'; ++i) {
+      static const char needle[] = "memdbg";
+      size_t j = 0U;
+      while (needle[j] != '\0' && comm[i + j] != '\0') {
+        char c = comm[i + j];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+        if (c != needle[j]) break;
+        ++j;
+      }
+      if (needle[j] == '\0') {
+        (void)fclose(fp);
+        return true;
       }
     }
   }
   (void)fclose(fp);
-  return found;
+  return false;
+}
+
+/* ---- Cooperative previous-instance shutdown ----
+ *
+ * A PID file is useful after a hard crash, but it is not the best control
+ * path for a live daemon.  Ask the listener to stop first: that detaches an
+ * active debugger session before the process exits and does not rely on the
+ * new payload having signal permission over the old one.
+ */
+
+static const char *instance_control_host(const memdbg_config_t *cfg) {
+  if (cfg == NULL || cfg->bind_host[0] == '\0' ||
+      strcmp(cfg->bind_host, "0.0.0.0") == 0 ||
+      strcmp(cfg->bind_host, "*") == 0) {
+    return "127.0.0.1";
+  }
+  return cfg->bind_host;
+}
+
+static bool request_previous_shutdown(const memdbg_config_t *cfg) {
+  const uint32_t request_id = 0x4d444247U; /* "MDBG" */
+  memdbg_packet_header_t request;
+  memdbg_response_header_t response;
+  socket_t fd = PAL_INVALID_SOCKET;
+  bool stopped = false;
+
+  if (cfg == NULL || cfg->debug_port == 0U) return false;
+  if (pal_tcp_connect(instance_control_host(cfg), cfg->debug_port, 500U,
+                      &fd) != 0) {
+    return false;
+  }
+
+  memset(&request, 0, sizeof(request));
+  request.magic = MEMDBG_PACKET_MAGIC;
+  request.version = MEMDBG_PROTOCOL_VERSION;
+  request.command = MEMDBG_CMD_SHUTDOWN;
+  request.request_id = request_id;
+
+  if (pal_socket_write_all(fd, &request, sizeof(request)) ==
+          (ssize_t)sizeof(request) &&
+      pal_socket_read_exact(fd, &response, sizeof(response)) ==
+          (ssize_t)sizeof(response) &&
+      response.magic == MEMDBG_PACKET_MAGIC &&
+      response.version == MEMDBG_PROTOCOL_VERSION &&
+      response.command == MEMDBG_CMD_SHUTDOWN &&
+      response.request_id == request_id && response.status == MEMDBG_OK &&
+      response.length == 0U) {
+    stopped = true;
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "instance: previous payload accepted shutdown on %s:%u",
+                     instance_control_host(cfg), cfg->debug_port);
+  }
+
+  (void)pal_socket_close(fd);
+  return stopped;
+}
+
+static bool wait_for_process_exit(int pid, uint32_t timeout_ms) {
+  const uint32_t step_ms = 50U;
+  uint32_t waited = 0U;
+
+  while (waited < timeout_ms) {
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 50000000L };
+    nanosleep(&ts, NULL);
+    if (!process_exists(pid)) return true;
+    waited += step_ms;
+  }
+  return !process_exists(pid);
 }
 
 /* ---- Terminate a process: SIGTERM → wait → SIGKILL ---- */
 
-static void terminate_process(int pid) {
-  if (pid <= 0) return;
+static bool terminate_process(int pid) {
+  if (pid <= 0) return true;
 
   memdbg_log_write(MEMDBG_LOG_INFO, "instance: sending SIGTERM to pid %d",
                    pid);
@@ -117,33 +191,26 @@ static void terminate_process(int pid) {
     memdbg_log_write(MEMDBG_LOG_WARN,
                      "instance: SIGTERM failed pid=%d: %s", pid,
                      strerror(errno));
-    return;
+    return !process_exists(pid);
   }
 
-  /* Wait up to 2 s for graceful shutdown. */
-  for (int i = 0; i < 20; ++i) {
-    struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000000L }; /* 100 ms */
-    nanosleep(&ts, NULL);
-    if (!process_exists(pid)) {
-      memdbg_log_write(MEMDBG_LOG_INFO, "instance: pid %d exited cleanly",
-                       pid);
-      return;
-    }
+  if (wait_for_process_exit(pid, 1000U)) {
+    memdbg_log_write(MEMDBG_LOG_INFO, "instance: pid %d exited cleanly", pid);
+    return true;
   }
 
   /* Process still alive — escalate. */
   memdbg_log_write(MEMDBG_LOG_WARN, "instance: SIGKILL pid %d", pid);
   (void)kill((pid_t)pid, SIGKILL);
 
-  /* Brief wait for the kill to take effect. */
-  { struct timespec ts = { .tv_sec = 0, .tv_nsec = 200000000L };
-    nanosleep(&ts, NULL); }
-
-  if (!process_exists(pid))
+  if (wait_for_process_exit(pid, 1000U)) {
     memdbg_log_write(MEMDBG_LOG_INFO, "instance: pid %d killed", pid);
-  else
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "instance: pid %d still alive after SIGKILL", pid);
+    return true;
+  }
+
+  memdbg_log_write(MEMDBG_LOG_WARN,
+                   "instance: pid %d still alive after SIGKILL", pid);
+  return false;
 }
 
 /* ---- Public API ---- */
@@ -151,14 +218,20 @@ static void terminate_process(int pid) {
 memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
   char path[MEMDBG_PATH_MAX];
   int prev_pid;
+  bool confirmed_live_payload;
 
   if (cfg == NULL) return MEMDBG_ERR_PARAM;
 
   if (build_pid_path(cfg, path, sizeof(path)) != 0)
     return MEMDBG_ERR_PARAM;
 
+  /* This also covers old payloads whose pid file was lost or pre-dates the
+   * file lifecycle.  Its matching response proves that the listener is
+   * memDBG before we ever consider a PID-based fallback. */
+  confirmed_live_payload = request_previous_shutdown(cfg);
+
   prev_pid = read_pid_file(path);
-  if (prev_pid <= 0) return MEMDBG_OK; /* no previous instance */
+  if (prev_pid <= 0) return MEMDBG_OK; /* no PID fallback available */
 
   /* Never kill ourself. */
   if (prev_pid == getpid()) {
@@ -178,14 +251,15 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
   }
 
   if (!process_name_contains_memdbg(prev_pid)) {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "instance: pid %d does not appear to be a MemDBG process; refusing to terminate",
+    memdbg_log_write(confirmed_live_payload ? MEMDBG_LOG_INFO : MEMDBG_LOG_WARN,
+                     confirmed_live_payload
+                         ? "instance: previous payload is stopping; refusing PID fallback for unrelated pid %d"
+                         : "instance: pid %d does not appear to be a MemDBG process; refusing to terminate",
                      prev_pid);
     return MEMDBG_OK;
   }
 
-  terminate_process(prev_pid);
-  return MEMDBG_OK;
+  return terminate_process(prev_pid) ? MEMDBG_OK : MEMDBG_ERR_STATE;
 }
 
 int memdbg_instance_write_pid_file(const memdbg_config_t *cfg) {

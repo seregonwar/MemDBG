@@ -16,7 +16,9 @@
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/core/memdbg_protocol_debug_handlers.h"
+#include "memdbg/core/memdbg_protocol_tracer_handlers.h"
 #include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/tracer/memdbg_tracer_daemon.h"
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_debug.h"
@@ -126,7 +128,7 @@ uint32_t memdbg_capabilities(const memdbg_config_t *cfg) {
                   MEMDBG_CAP_SCAN_UNKNOWN | MEMDBG_CAP_SCAN_PROCESS_AOB |
                   MEMDBG_CAP_DISCOVERY;
   if (pal_debug_supported())
-    caps |= MEMDBG_CAP_DEBUGGER;
+    caps |= MEMDBG_CAP_DEBUGGER | MEMDBG_CAP_TRACER;
   if (cfg != NULL && cfg->enable_udp_log)
     caps |= MEMDBG_CAP_UDP_LOG;
   return caps;
@@ -914,7 +916,11 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PROCESS_STOP:       return handle_process_control(fd, req, body, req->length, 1U);
   case MEMDBG_CMD_PROCESS_CONTINUE:   return handle_process_control(fd, req, body, req->length, 2U);
   case MEMDBG_CMD_PROCESS_KILL:       return handle_process_control(fd, req, body, req->length, 3U);
-  case MEMDBG_CMD_DEBUG_ATTACH:       return handle_debug_attach(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_DEBUG_ATTACH:
+    /* Tracer and debugger both own ptrace; release a previous trace session
+     * before attaching the debugger so the target cannot remain EALREADY. */
+    memdbg_tracer_daemon_stop();
+    return handle_debug_attach(fd, req, body, req->length, send_response);
   case MEMDBG_CMD_DEBUG_DETACH:       return handle_debug_detach(fd, req, send_response);
   case MEMDBG_CMD_DEBUG_STOP:         return handle_debug_stop(fd, req, send_response);
   case MEMDBG_CMD_DEBUG_CONTINUE:     return handle_debug_continue(fd, req, send_response);
@@ -936,6 +942,10 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_DEBUG_GET_WATCHPOINTS: return handle_debug_get_watchpoints(fd, req, send_response);
   case MEMDBG_CMD_DEBUG_CLEAR_ALL_BREAKPOINTS: return handle_debug_clear_all_breakpoints(fd, req, send_response);
   case MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS:  return handle_debug_clear_all_watchpoints(fd, req, send_response);
+  case MEMDBG_CMD_TRACER_ATTACH:       return handle_tracer_attach(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_TRACER_DETACH:       return handle_tracer_detach(fd, req, send_response);
+  case MEMDBG_CMD_TRACER_POLL:         return handle_tracer_poll(fd, req, send_response);
+  case MEMDBG_CMD_TRACER_STATUS:       return handle_tracer_status(fd, req, send_response);
   case MEMDBG_CMD_TELEMETRY:          return handle_telemetry(fd, req);
   case MEMDBG_CMD_SHUTDOWN:
     pal_notification_send("MemDBG remote termination");
@@ -948,6 +958,8 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
 
 /* ---- Single client handler (runs in thread pool worker) ---- */
 
+static int wait_for_client(socket_t listen_fd);
+
 static void handle_client(socket_t fd, const memdbg_config_t *cfg) {
   atomic_fetch_add_explicit(&g_active_connections, 1U, memory_order_relaxed);
   (void)pal_socket_set_nonblocking(fd, false);
@@ -955,6 +967,18 @@ static void handle_client(socket_t fd, const memdbg_config_t *cfg) {
 
   while (!memdbg_daemon_should_stop()) {
     memdbg_packet_header_t req;
+
+    /* Do not sit in a 30-second recv timeout while another connection asks
+     * this daemon to stop.  Idle frontend connections stay open; we simply
+     * re-check the shutdown flag every quarter second before reading a new
+     * packet. */
+    int ready = wait_for_client(fd);
+    if (ready == 0) continue;
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (memdbg_daemon_should_stop()) break;
     if (pal_socket_read_exact(fd, &req, sizeof(req)) < 0) break;
 
     if (req.magic != MEMDBG_PACKET_MAGIC || req.version != MEMDBG_PROTOCOL_VERSION ||
@@ -1302,6 +1326,10 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   /* Wait for workers to exit (happens on shutdown). */
   for (int i = 0; i < worker_count; ++i)
     (void)pthread_join(workers[i], NULL);
+
+  /* A tracer owns ptrace independently of a client worker.  Stop it before
+   * this payload exits so its target is detached and resumed cleanly. */
+  memdbg_tracer_daemon_stop();
 
   (void)pal_socket_close(listen_fd);
   memdbg_discovery_stop();

@@ -637,12 +637,36 @@ static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
   if (!g_dbg.attached) return MEMDBG_ERR_STATE;
 
   int n = pal_debug_get_thread_list((int)g_dbg.pid, lwps, (int)max);
-  if (n < 0) return pal_status_from_errno();
+  bool using_main_lwp_fallback = false;
+  if (n < 0) {
+    const int thread_list_errno = errno;
+    /*
+     * Some PS4 firmware/debugger combinations return EIO for
+     * PT_GETLWPLIST even though the target is still attached and its main
+     * LWP can be inspected.  Do not turn a thread-list refresh into a
+     * fatal debugger error in that case: keep the session usable with the
+     * process id as its main-LWP fallback.  Other failures still propagate
+     * so a vanished target or a permission problem is never hidden.
+     */
+    if (thread_list_errno != EIO || max == 0U) return pal_status_from_errno();
+    lwps[0] = g_dbg.pid;
+    n = 1;
+    using_main_lwp_fallback = true;
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: LWP enumeration failed pid=%d errno=%d; "
+                     "using main LWP fallback",
+                     (int)g_dbg.pid, thread_list_errno);
+  }
   *count = (uint32_t)n;
 
   if (names != NULL) {
     for (uint32_t i = 0; i < *count; ++i) {
       char buf[24] = {0};
+      if (using_main_lwp_fallback && i == 0U) {
+        (void)snprintf(buf, sizeof(buf), "main (fallback)");
+        memcpy(names[i], buf, sizeof(buf));
+        continue;
+      }
       /* Try the real thread name first; fall back to lwp-NNN if empty. */
       if (pal_debug_get_thread_name((int)g_dbg.pid, lwps[i], buf,
                                     sizeof(buf)) != 0 ||
@@ -655,6 +679,11 @@ static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
 
   if (states != NULL) {
     for (uint32_t i = 0; i < *count; ++i) {
+      if (using_main_lwp_fallback && i == 0U) {
+        states[i] = g_dbg.stopped ? MEMDBG_THREAD_STOPPED
+                                  : MEMDBG_THREAD_RUNNING;
+        continue;
+      }
       int st = (int)MEMDBG_THREAD_UNKNOWN;
       (void)pal_debug_get_thread_state((int)g_dbg.pid, lwps[i], &st);
       states[i] = (uint32_t)st;
