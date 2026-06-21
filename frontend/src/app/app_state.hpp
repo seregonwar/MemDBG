@@ -55,7 +55,8 @@ using memdbg::frontend::ReleaseCheck;
 
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
-  Trainer, Plugins, PluginGUI, Logs, Settings, Telemetry, TaskMgr, Debugger, Credits,
+  Trainer, Plugins, PluginGUI, Logs, Settings, Telemetry, TaskMgr, Debugger,
+  Tracer, Credits,
 };
 
 struct ProcessMapSummary {
@@ -379,6 +380,7 @@ struct AppState {
   char aob_pattern[512] = "";
   ScanResult aob_result;
   bool aob_process_wide = false;  /* Scan across all process maps */
+  bool aob_text_mode = false;     /* Treat aob_pattern as an exact UTF-8 string */
 
   /* ---- Pointer Scanner ---- */
   char pointer_target_address[32] = "0x0";
@@ -390,6 +392,8 @@ struct AppState {
   /* ---- Async connect ---- */
   bool connect_pending = false;
   bool heartbeat_pending = false;
+  /* A debugger thread refresh owns the shared client socket off the UI thread. */
+  bool debugger_threads_pending = false;
   std::future<bool> heartbeat_future;
   std::string heartbeat_error;
   double next_heartbeat = 0.0;
@@ -487,6 +491,33 @@ struct AppState {
   std::string plugin_gui_active_id;
   bool plugin_gui_starting = false;
   std::string plugin_gui_error;
+
+  /* ---- Tracer ---- */
+  bool tracer_pending = false;
+  bool tracer_detach_pending = false;
+  bool tracer_detach_requested = false;
+  std::future<bool> tracer_future;
+  std::string tracer_error;
+  std::string tracer_temp_error;
+  bool tracer_status_pending = false;
+  std::future<bool> tracer_status_future;
+  Client::TracerStatus tracer_temp_status;
+  std::string tracer_status_error;
+  bool tracer_events_pending = false;
+  std::future<bool> tracer_events_future;
+  std::vector<Client::TracerEvent> tracer_temp_events;
+  std::string tracer_events_error;
+  std::vector<Client::TracerEvent> tracer_events;
+  Client::TracerStatus tracer_status;
+  double tracer_last_poll = 0.0;
+  double tracer_next_poll = 0.0;
+  double tracer_next_event_poll = 0.0;
+  int32_t tracer_target_pid = 0;
+  char tracer_pid_input[16] = "";
+  char tracer_status_text[64] = "";
+  bool tracer_was_crashed = false;
+  std::string tracer_crash_dump_path;
+  double tracer_crash_notification_time = 0.0;
 };
 
 /* ---- utility functions ---- */
@@ -588,6 +619,83 @@ inline bool parse_hex_bytes(const char *text, std::vector<uint8_t> &out) {
   return !out.empty();
 }
 
+/* Preserve the UTF-8 byte sequence exactly as entered. Text searches use the
+ * AOB transport with an all-ones mask, which supports longer literals than
+ * the 16-byte exact-value request. */
+inline bool parse_text_bytes(const char *text, std::vector<uint8_t> &out,
+                             size_t max_bytes = 256U) {
+  out.clear();
+  if (text == nullptr || text[0] == '\0') return false;
+  const size_t length = std::strlen(text);
+  if (length == 0U || length > max_bytes) return false;
+  out.assign(reinterpret_cast<const uint8_t *>(text),
+             reinterpret_cast<const uint8_t *>(text) + length);
+  return true;
+}
+
+/* Convert memory bytes into a clipboard-safe, readable UTF-8 string. Keep
+ * printable ASCII and well-formed UTF-8 sequences intact; render controls,
+ * embedded NULs and malformed bytes as dots so clipboard consumers never see
+ * a truncated or invalid string. */
+inline std::string bytes_to_readable_text(const std::vector<uint8_t> &bytes) {
+  std::string out;
+  out.reserve(bytes.size());
+
+  auto continuation = [&](size_t index) {
+    return index < bytes.size() && (bytes[index] & 0xC0U) == 0x80U;
+  };
+
+  for (size_t i = 0U; i < bytes.size();) {
+    const uint8_t byte = bytes[i];
+    if (byte == '\n' || byte == '\r' || byte == '\t' ||
+        (byte >= 0x20U && byte <= 0x7EU)) {
+      out.push_back(static_cast<char>(byte));
+      ++i;
+      continue;
+    }
+
+    size_t sequence_len = 0U;
+    if (byte >= 0xC2U && byte <= 0xDFU && continuation(i + 1U)) {
+      sequence_len = 2U;
+    } else if (byte == 0xE0U && i + 2U < bytes.size() &&
+               bytes[i + 1U] >= 0xA0U && bytes[i + 1U] <= 0xBFU &&
+               continuation(i + 2U)) {
+      sequence_len = 3U;
+    } else if (byte >= 0xE1U && byte <= 0xECU && i + 2U < bytes.size() &&
+               continuation(i + 1U) && continuation(i + 2U)) {
+      sequence_len = 3U;
+    } else if (byte == 0xEDU && i + 2U < bytes.size() &&
+               bytes[i + 1U] >= 0x80U && bytes[i + 1U] <= 0x9FU &&
+               continuation(i + 2U)) {
+      sequence_len = 3U;
+    } else if (byte >= 0xEEU && byte <= 0xEFU && i + 2U < bytes.size() &&
+               continuation(i + 1U) && continuation(i + 2U)) {
+      sequence_len = 3U;
+    } else if (byte == 0xF0U && i + 3U < bytes.size() &&
+               bytes[i + 1U] >= 0x90U && bytes[i + 1U] <= 0xBFU &&
+               continuation(i + 2U) && continuation(i + 3U)) {
+      sequence_len = 4U;
+    } else if (byte >= 0xF1U && byte <= 0xF3U && i + 3U < bytes.size() &&
+               continuation(i + 1U) && continuation(i + 2U) &&
+               continuation(i + 3U)) {
+      sequence_len = 4U;
+    } else if (byte == 0xF4U && i + 3U < bytes.size() &&
+               bytes[i + 1U] >= 0x80U && bytes[i + 1U] <= 0x8FU &&
+               continuation(i + 2U) && continuation(i + 3U)) {
+      sequence_len = 4U;
+    }
+
+    if (sequence_len != 0U) {
+      out.append(reinterpret_cast<const char *>(bytes.data() + i), sequence_len);
+      i += sequence_len;
+    } else {
+      out.push_back('.');
+      ++i;
+    }
+  }
+  return out;
+}
+
 template <typename T> inline void append_value(std::vector<uint8_t> &out, T value) {
   const auto *p = reinterpret_cast<const uint8_t*>(&value);
   out.insert(out.end(), p, p + sizeof(T));
@@ -682,6 +790,7 @@ inline const char *screen_title(Screen s) {
   case Screen::Telemetry: return "Telemetry";
   case Screen::TaskMgr: return "Task Manager";
   case Screen::Debugger: return "Debugger";
+  case Screen::Tracer: return "Tracer";
   case Screen::Credits: return "Credits";
   } return "MemDBG";
 }
@@ -703,6 +812,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::Telemetry: return "Payload performance and runtime metrics";
   case Screen::TaskMgr: return "Real-time console process and resource monitor";
   case Screen::Debugger: return "Attach, stop, step and manage breakpoints/watchpoints";
+  case Screen::Tracer: return "Trace syscalls and detect process crashes";
   case Screen::Credits: return "Project information";
   } return "";
 }
@@ -721,6 +831,9 @@ inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
+         state.debugger_threads_pending ||
+         state.tracer_pending || state.tracer_status_pending ||
+         state.tracer_events_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||
          state.plugin_gui_starting;
@@ -739,7 +852,7 @@ void remove_selected_console_target(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
 void disconnect_console(AppState &state, const char *reason = nullptr);
-void reset_debugger_state();
+void reset_debugger_state(AppState &state);
 void request_telemetry_async(AppState &state);
 void request_maps_refresh_async(AppState &state);
 bool load_frontend_settings(AppState &state, std::string *error = nullptr);
@@ -763,6 +876,7 @@ void draw_credits(AppState &state, struct ImVec2 avail);
 void draw_telemetry(AppState &state, struct ImVec2 avail);
 void draw_taskmgr(AppState &state, struct ImVec2 avail);
 void draw_debugger(AppState &state, struct ImVec2 avail);
+void draw_tracer(AppState &state, struct ImVec2 avail);
 void draw_screen(AppState &state, struct ImVec2 avail);
 
 } // namespace memdbg::frontend

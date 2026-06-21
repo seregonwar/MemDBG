@@ -88,6 +88,15 @@ struct DebuggerAttachResult {
 
 static std::future<DebuggerAttachResult> s_attach_future;
 
+struct DebuggerThreadsResult {
+  bool ok = false;
+  int32_t pid = 0;
+  std::string error;
+  std::vector<Client::DebugThreadEntry> threads;
+};
+
+static std::future<DebuggerThreadsResult> s_threads_future;
+
 static DebuggerState &dstate(AppState &state) {
   (void)state;
   return s_dbg_state;
@@ -124,6 +133,7 @@ static bool parse_pid_input(const char *text, int32_t &out) {
 }
 
 static void poll_debugger_state(AppState &state);
+static void poll_debugger_threads(AppState &state, DebuggerState &ds);
 static void refresh_threads(AppState &state);
 static void refresh_disasm(AppState &state);
 static void refresh_stack(AppState &state);
@@ -260,14 +270,72 @@ static void refresh_threads(AppState &state) {
   auto &ds = dstate(state);
   if (!state.client.connected() || !ds.attached) return;
   if (client_async_busy(state)) return;
-  ds.threads.clear();
-  if (!state.client.debug_get_threads(ds.threads)) {
-    set_status(state, "Threads: " + state.client.last_error());
+  const int32_t pid = ds.pid;
+  auto &client = state.client;
+  state.debugger_threads_pending = true;
+  set_status(state, "Refreshing threads...");
+  try {
+    s_threads_future = std::async(std::launch::async,
+        [&client, pid]() -> DebuggerThreadsResult {
+      DebuggerThreadsResult result;
+      result.pid = pid;
+      if (client.debug_get_threads(result.threads)) {
+        result.ok = true;
+      } else {
+        result.error = client.last_error();
+      }
+      return result;
+    });
+  } catch (const std::exception &ex) {
+    state.debugger_threads_pending = false;
+    set_status(state, std::string("Threads: could not start refresh: ") + ex.what());
+  } catch (...) {
+    state.debugger_threads_pending = false;
+    set_status(state, "Threads: could not start refresh");
+  }
+}
+
+static void poll_debugger_threads(AppState &state, DebuggerState &ds) {
+  if (!state.debugger_threads_pending) return;
+  if (!s_threads_future.valid()) {
+    state.debugger_threads_pending = false;
+    set_status(state, "Threads: refresh worker did not start");
     return;
   }
-  if (!ds.threads.empty() && ds.selected_lwp == 0) {
-    ds.selected_lwp = ds.threads[0].lwp;
+  if (s_threads_future.wait_for(std::chrono::milliseconds(0)) !=
+      std::future_status::ready) {
+    return;
   }
+
+  DebuggerThreadsResult result;
+  try {
+    result = s_threads_future.get();
+  } catch (const std::exception &ex) {
+    result.error = ex.what();
+  } catch (...) {
+    result.error = "Unknown refresh error";
+  }
+  state.debugger_threads_pending = false;
+
+  /* A stale result belongs to a previous attach session and must not alter it. */
+  if (!ds.attached || ds.pid != result.pid) return;
+  if (!result.ok) {
+    set_status(state, "Threads: " + result.error);
+    return;
+  }
+
+  const int32_t previous_lwp = ds.selected_lwp;
+  ds.threads = std::move(result.threads);
+  const bool selection_still_exists = std::any_of(
+      ds.threads.begin(), ds.threads.end(),
+      [previous_lwp](const Client::DebugThreadEntry &entry) {
+        return entry.lwp == previous_lwp;
+      });
+  if (!selection_still_exists) {
+    ds.selected_lwp = ds.threads.empty() ? 0 : ds.threads.front().lwp;
+  }
+  set_status(state, "Threads refreshed (" +
+                    std::to_string(ds.threads.size()) + ")");
 }
 
 static void refresh_breakpoints(AppState &state) {
@@ -611,11 +679,25 @@ static void load_watchpoints_from_file(AppState &state, const char *path) {
                     " watchpoints from " + std::string(path));
 }
 
-void reset_debugger_state() { s_dbg_state = DebuggerState{}; }
+void reset_debugger_state(AppState &state) {
+  /* disconnect_console() closes the client first, so this wait is normally
+   * already complete.  It also makes any future caller safe before the
+   * static future is replaced or the Client object goes away. */
+  if (s_threads_future.valid()) {
+    s_threads_future.wait();
+    try {
+      (void)s_threads_future.get();
+    } catch (...) {
+    }
+  }
+  state.debugger_threads_pending = false;
+  s_dbg_state = DebuggerState{};
+}
 
 void draw_debugger(AppState &state, ImVec2 avail) {
   auto &ds = dstate(state);
   poll_debugger_attach(state, ds);
+  poll_debugger_threads(state, ds);
   poll_debugger_state(state);
 
   const float scl = ui::dpi_scale();
@@ -772,15 +854,19 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     const float threads_w = std::min(320.0f * scl,
         std::max(240.0f * scl, avail.x * 0.22f));
     ui::begin_panel("DebuggerThreads", "Threads", ImVec2(threads_w, work_h));
+    const std::string refresh_label = std::string(icons::kRefresh) + "  " +
+        (state.debugger_threads_pending ? "Refreshing..." :
+                                          locale::tr("debugger.refresh"));
     ImGui::BeginDisabled(client_busy);
-    if (ui::soft_button((std::string(icons::kRefresh) + "  " +
-                         locale::tr("debugger.refresh")).c_str(),
+    if (ui::soft_button(refresh_label.c_str(),
                         ui::full_button(34.0f))) {
       refresh_threads(state);
     }
     ImGui::EndDisabled();
     ImGui::Spacing();
-    if (ds.threads.empty()) {
+    if (state.debugger_threads_pending) {
+      ImGui::TextColored(ui::colors().warning, "%s", "Refreshing thread list...");
+    } else if (ds.threads.empty()) {
       ui::draw_empty_state("No threads", "Refresh after the target enters a stopped state.");
     } else if (ImGui::BeginTable("##threads", 2,
           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |

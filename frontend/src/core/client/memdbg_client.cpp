@@ -1104,6 +1104,66 @@ bool Client::debug_poll_events(bool &stopped, int32_t &stop_lwp) {
   return true;
 }
 
+/* ---- Tracer ---- */
+
+bool Client::tracer_attach(int32_t pid) {
+  memdbg_tracer_attach_request_t req;
+  req.pid = pid;
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_TRACER_ATTACH, &req, sizeof(req), response);
+}
+
+bool Client::tracer_detach() {
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_TRACER_DETACH, nullptr, 0, response);
+}
+
+bool Client::tracer_poll(std::vector<TracerEvent> &out) {
+  out.clear();
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_TRACER_POLL, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_tracer_poll_response_prefix_t))
+    return true; /* no events, not an error */
+  auto *pfx = reinterpret_cast<const memdbg_tracer_poll_response_prefix_t *>(response.data());
+  uint32_t count = pfx->count;
+  if (count == 0) return true;
+  const auto *evs = reinterpret_cast<const memdbg_tracer_event_t *>(
+      response.data() + sizeof(memdbg_tracer_poll_response_prefix_t));
+  out.reserve(count);
+  for (uint32_t i = 0; i < count; i++) {
+    TracerEvent e;
+    e.timestamp_ns = evs[i].timestamp_ns;
+    e.event_type    = evs[i].event_type;
+    e.lwp           = evs[i].lwp;
+    e.syscall_no    = evs[i].syscall_no;
+    e.syscall_ret   = evs[i].syscall_ret;
+    e.signal        = evs[i].signal;
+    e.fault_addr    = evs[i].fault_addr;
+    for (int j = 0; j < 6; j++) e.args[j] = evs[i].args[j];
+    out.push_back(e);
+  }
+  return true;
+}
+
+bool Client::tracer_status(TracerStatus &out) {
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_TRACER_STATUS, nullptr, 0, response))
+    return false;
+  if (response.size() < sizeof(memdbg_tracer_status_response_t)) {
+    set_error("short tracer status response");
+    return false;
+  }
+  auto *st = reinterpret_cast<const memdbg_tracer_status_response_t *>(response.data());
+  out.state        = st->state;
+  out.events_total = st->events_total;
+  out.crash_signal = st->crash_signal;
+  out.start_time_ns = st->start_time_ns;
+  out.elapsed_ns    = st->elapsed_ns;
+  out.dump_path     = st->dump_path;
+  return true;
+}
+
 bool Client::request(uint16_t command, const void *payload,
                      uint32_t payload_len, std::vector<uint8_t> &response) {
   std::lock_guard<std::mutex> lock(io_mutex_);

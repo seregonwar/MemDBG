@@ -929,6 +929,9 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
   if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
+  if (state.tracer_future.valid()) state.tracer_future.wait();
+  if (state.tracer_status_future.valid()) state.tracer_status_future.wait();
+  if (state.tracer_events_future.valid()) state.tracer_events_future.wait();
   if (s_connect_future.valid()) s_connect_future.wait();
 
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
@@ -939,6 +942,24 @@ void disconnect_console(AppState &state, const char *reason) {
   state.heartbeat_pending = false;
   state.heartbeat_error.clear();
   state.next_heartbeat = 0.0;
+  const bool tracer_may_own_target = state.tracer_pending ||
+      state.tracer_target_pid > 0 ||
+      state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING;
+  if (state.client.connected() && state.has_hello && tracer_may_own_target &&
+      (state.hello.capabilities & MEMDBG_CAP_TRACER)) {
+    /* Do not leave a traced process stopped when the frontend disconnects. */
+    (void)state.client.tracer_detach();
+  }
+  state.tracer_pending = false;
+  state.tracer_detach_pending = false;
+  state.tracer_detach_requested = false;
+  state.tracer_status_pending = false;
+  state.tracer_events_pending = false;
+  state.tracer_target_pid = 0;
+  state.tracer_status = {};
+  state.tracer_status_text[0] = '\0';
+  state.tracer_error.clear();
+  state.tracer_temp_events.clear();
   state.client.disconnect();
   state.has_hello = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
@@ -960,7 +981,7 @@ void disconnect_console(AppState &state, const char *reason) {
   state.taskmgr_detail_open = false;
   state.taskmgr_map_summary = ProcessMapSummary{};
   state.taskmgr_has_process_info = false;
-  reset_debugger_state();
+  reset_debugger_state(state);
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");
@@ -1143,6 +1164,7 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::TaskMgr, icons::kGauge, locale::tr("nav.taskmgr"));
     nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
     nav_item(state, Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
+    nav_item(state, Screen::Tracer, icons::kSearch, locale::tr("nav.tracer"));
 
     ImGui::Dummy(ImVec2(0, 3));
     sidebar_section(locale::tr("sidebar.section.system"));
@@ -1755,6 +1777,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
   case Screen::Telemetry: draw_telemetry(state, avail); break;
   case Screen::TaskMgr:   draw_taskmgr(state, avail); break;
   case Screen::Debugger:  draw_debugger(state, avail); break;
+  case Screen::Tracer:    draw_tracer(state, avail); break;
   case Screen::Settings:  draw_settings(state, avail); break;
   case Screen::Credits:   draw_credits(state, avail); break;
   }

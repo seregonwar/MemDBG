@@ -202,6 +202,31 @@ public:
   bool debug_get_watchpoints(std::vector<DebugWatchpointEntry> &out);
   bool debug_poll_events(bool &stopped, int32_t &stop_lwp);
 
+  /* ---- Tracer ---- */
+  struct TracerEvent {
+    uint64_t timestamp_ns = 0;
+    uint32_t event_type = 0;
+    uint32_t lwp = 0;
+    uint32_t syscall_no = 0;
+    int32_t  syscall_ret = 0;
+    uint64_t args[6]{};
+    int32_t  signal = 0;
+    uint64_t fault_addr = 0;
+  };
+  struct TracerStatus {
+    int32_t  state = 0;          /* MEMDBG_TRACER_STATE_* */
+    uint32_t events_total = 0;
+    int32_t  crash_signal = 0;
+    uint64_t start_time_ns = 0;
+    uint64_t elapsed_ns = 0;
+    std::string dump_path;
+  };
+
+  bool tracer_attach(int32_t pid);
+  bool tracer_detach();
+  bool tracer_poll(std::vector<TracerEvent> &out);
+  bool tracer_status(TracerStatus &out);
+
 private:
   bool request(uint16_t command, const void *payload, uint32_t payload_len,
                std::vector<uint8_t> &response);

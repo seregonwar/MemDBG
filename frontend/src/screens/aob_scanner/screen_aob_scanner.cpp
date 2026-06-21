@@ -60,6 +60,19 @@ static bool parse_aob_pattern(const char *text,
   return true;
 }
 
+static bool build_aob_pattern(const char *text, bool text_mode,
+                              std::vector<uint8_t> &pattern,
+                              std::vector<uint8_t> &mask,
+                              std::string &error) {
+  if (!text_mode) return parse_aob_pattern(text, pattern, mask, error);
+  if (!parse_text_bytes(text, pattern, 256U)) {
+    error = "Text must contain 1 to 256 UTF-8 bytes";
+    return false;
+  }
+  mask.assign(pattern.size(), 0xFFU);
+  return true;
+}
+
 /* ---- Async scan poll ---- */
 static void poll_aob_async(AppState &state) {
   if (!state.scan_async_pending) return;
@@ -117,14 +130,16 @@ static void run_aob_scan(AppState &state) {
 
   std::vector<uint8_t> pattern, mask;
   std::string error;
-  if (!parse_aob_pattern(state.aob_pattern, pattern, mask, error)) {
-    set_status(state, "AOB: " + error); return;
+  const bool text_mode = state.aob_text_mode;
+  if (!build_aob_pattern(state.aob_pattern, text_mode, pattern, mask, error)) {
+    set_status(state, (text_mode ? "Text search: " : "AOB: ") + error);
+    return;
   }
 
   state.scan_max_results = std::max(state.scan_max_results, 1);
 
   if (state.aob_process_wide) {
-    state.scan_async_label = "Process AOB";
+    state.scan_async_label = text_mode ? "Process text search" : "Process AOB";
     uint64_t start = 0, end = 0;
     if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_end, end)) {
       set_status(state, "Invalid process scan window"); return;
@@ -151,7 +166,7 @@ static void run_aob_scan(AppState &state) {
     auto &error_out = state.scan_async_error;
 
     state.scan_async_future = std::async(std::launch::async,
-      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out,
+      [&client, request, pattern, mask, text_mode, &temp_result, &temp_status, &error_out,
        &mtx = state.scan_async_mtx]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult res;
@@ -161,13 +176,14 @@ static void run_aob_scan(AppState &state) {
         }
         temp_result = std::move(res);
         std::snprintf(temp_status, sizeof(temp_status),
-                      "Process AOB: %u hits in %u regions (%.2f MiB)",
+                      "%s: %u hits in %u regions (%.2f MiB)",
+                      text_mode ? "Process text" : "Process AOB",
                       temp_result.count, temp_result.regions_scanned,
                       static_cast<double>(temp_result.bytes_scanned) / (1024.0 * 1024.0));
         return true;
       });
   } else {
-    state.scan_async_label = "AOB scan";
+    state.scan_async_label = text_mode ? "Text search" : "AOB scan";
     uint64_t start = 0, length = 0;
     if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_length, length)) {
       set_status(state, "Invalid scan range"); return;
@@ -191,7 +207,7 @@ static void run_aob_scan(AppState &state) {
     request.pattern_length = static_cast<uint32_t>(pattern.size());
 
     state.scan_async_future = std::async(std::launch::async,
-      [&client, request, pattern, mask, &temp_result, &temp_status, &error_out,
+      [&client, request, pattern, mask, text_mode, &temp_result, &temp_status, &error_out,
        &mtx = state.scan_async_mtx]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult res;
@@ -201,7 +217,8 @@ static void run_aob_scan(AppState &state) {
         }
         temp_result = std::move(res);
         std::snprintf(temp_status, sizeof(temp_status),
-                      "AOB scan: %u hits (%.2f MiB scanned)",
+                      "%s: %u hits (%.2f MiB scanned)",
+                      text_mode ? "Text search" : "AOB scan",
                       temp_result.count,
                       static_cast<double>(temp_result.bytes_scanned) / (1024.0 * 1024.0));
         return true;
@@ -228,9 +245,13 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
     "push rbp; mov rbp, rsp   =  55 48 89 E5",
     "nop; nop; ret            =  90 90 C3",
   };
-  ImGui::InputTextMultiline(locale::tr("aob_scanner.pattern"), state.aob_pattern, sizeof(state.aob_pattern),
+  ImGui::Checkbox("Search text (UTF-8)", &state.aob_text_mode);
+  const char *pattern_label = state.aob_text_mode
+      ? "Text to find" : locale::tr("aob_scanner.pattern");
+  ImGui::InputTextMultiline(pattern_label, state.aob_pattern, sizeof(state.aob_pattern),
                             ImVec2(0, 80));
-  if (ImGui::BeginCombo("##AOBExamples", locale::tr("aob_scanner.examples"))) {
+  if (!state.aob_text_mode &&
+      ImGui::BeginCombo("##AOBExamples", locale::tr("aob_scanner.examples"))) {
     for (const char *alias : aob_aliases) {
       if (ImGui::Selectable(alias)) {
         // Extract the part after "= "
@@ -242,7 +263,9 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
   }
 
   ImGui::Spacing();
-  ui::text_dim(locale::tr("aob_scanner.wildcard_hint"));
+  ui::text_dim(state.aob_text_mode
+                   ? "Matches an exact UTF-8 string (including spaces), up to 256 bytes."
+                   : locale::tr("aob_scanner.wildcard_hint"));
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
   /* Process-wide toggle */
@@ -268,9 +291,11 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
   state.scan_max_results = std::max(state.scan_max_results, 1);
 
   ImGui::Spacing();
-  std::string scan_label = state.aob_process_wide
-      ? std::string(icons::kSearch) + "  " + std::string(locale::tr("aob_scanner.scan_process_aob"))
-      : std::string(icons::kSearch) + "  " + std::string(locale::tr("aob_scanner.scan_aob"));
+  const char *scan_action = state.aob_text_mode
+      ? (state.aob_process_wide ? "Search Process Text" : "Search Text")
+      : (state.aob_process_wide ? locale::tr("aob_scanner.scan_process_aob")
+                                : locale::tr("aob_scanner.scan_aob"));
+  std::string scan_label = std::string(icons::kSearch) + "  " + scan_action;
   bool can_scan = state.client.connected() && state.selected_pid > 0 &&
                   !client_async_busy(state) &&
                   payload_supports(state, state.aob_process_wide
