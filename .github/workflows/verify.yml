@@ -53,7 +53,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate locale files
-        run: make check-locales
+        run: |
+          python3 tools/generate_locale_manifest.py
+          make check-locales
 
   frontend:
     name: Frontend build and tests (${{ matrix.os }})
@@ -131,6 +133,7 @@ jobs:
           }
 
           run_frontend_test memdbg_auto_search_test
+          run_frontend_test memdbg_structure_compare_test
           run_frontend_test memdbg_app_state_parsing_test
           run_frontend_test memdbg_trainer_formats_test
           run_frontend_test memdbg_locale_manager_test

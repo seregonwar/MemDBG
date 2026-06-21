@@ -177,8 +177,9 @@ add_executable(memdbg_frontend
   src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
 
-  # scanner (auto-search heuristic engine)
+  # scanner (heuristics and structure comparison)
   src/scanner/heuristics/auto_search.cpp
+  src/scanner/structure_compare.cpp
 )
 
 target_include_directories(memdbg_frontend PRIVATE
@@ -321,6 +322,18 @@ target_include_directories(memdbg_auto_search_test PRIVATE
   ${imgui_SOURCE_DIR}
 )
 
+# ---- memdbg_structure_compare_test ----
+
+add_executable(memdbg_structure_compare_test
+  tests/test_structure_compare.cpp
+  src/scanner/structure_compare.cpp
+)
+
+target_include_directories(memdbg_structure_compare_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
+)
+
 # ---- memdbg_app_state_parsing_test ----
 
 add_executable(memdbg_app_state_parsing_test
@@ -421,6 +434,7 @@ if(MSVC)
   target_compile_options(memdbg_frontend PRIVATE /W4)
   target_compile_options(memdbg_probe PRIVATE /W4)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4)
+  target_compile_options(memdbg_structure_compare_test PRIVATE /W4)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
@@ -429,6 +443,7 @@ else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_structure_compare_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)

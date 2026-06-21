@@ -14,6 +14,7 @@
 #include "github_profile.hpp"
 #include "release_check.hpp"
 #include "plugins/repository/plugin_manager.hpp"
+#include "scanner/structure_compare.hpp"
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "locale/locale.hpp"
@@ -319,6 +320,23 @@ struct AppState {
   int scan_snapshot_type = MEMDBG_VALUE_U32;
   char scan_session_status[256] = "No scan session";
   bool scan_is_unknown_session = false;
+
+  /* ---- Structure Compare ---- */
+  char structure_player_base[32] = "0x0";
+  char structure_enemy_a_base[32] = "0x0";
+  char structure_enemy_b_base[32] = "0x0";
+  int structure_compare_size = 0x200;
+  int structure_compare_type = MEMDBG_VALUE_U32;
+  bool structure_compare_show_all = false;
+  bool structure_compare_has_enemy_b = false;
+  bool structure_compare_pending = false;
+  double structure_compare_start_time = 0.0;
+  std::future<bool> structure_compare_future;
+  std::mutex structure_compare_mtx;
+  std::vector<StructureCompareField> structure_compare_fields;
+  std::vector<StructureCompareField> structure_compare_temp_fields;
+  std::string structure_compare_error;
+  char structure_compare_status[256] = "Ready to compare structures";
 
   char map_filter[96] = "";
   bool map_filter_readable = true;
@@ -702,6 +720,7 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
+         state.structure_compare_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||
          state.plugin_gui_starting;

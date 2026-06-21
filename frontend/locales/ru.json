@@ -358,6 +358,8 @@
   "memory.exploit.long_run": "длинная серия ",
 
   "scanner.exact_scan": "Точный скан",
+  "scanner.structure_compare": "Сравнение структур",
+  "scanner.structure_compare_desc": "Считывает структуру игрока и одну или две структуры врагов. Игрок против врагов выделяет поля, где игрок отличается, а оба врага совпадают.",
   "scanner.active_pid": "Активный PID: %d",
   "scanner.value_type": "Тип значения",
   "scanner.value": "Значение",

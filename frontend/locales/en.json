@@ -359,6 +359,8 @@
   "memory.exploit.long_run": "long run ",
 
   "scanner.exact_scan": "Exact Scan",
+  "scanner.structure_compare": "Structure Compare",
+  "scanner.structure_compare_desc": "Read a player structure and one or two enemy structures. Player vs enemies highlights fields where the player differs while both enemies agree.",
   "scanner.active_pid": "Active PID: %d",
   "scanner.value_type": "Value type",
   "scanner.value": "Value",

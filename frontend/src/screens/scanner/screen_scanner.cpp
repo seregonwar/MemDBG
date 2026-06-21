@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "scanner/heuristics/auto_search.hpp"
+#include "scanner/structure_compare.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,7 +16,9 @@
 #include <cstdio>
 #include <exception>
 #include <future>
+#include <limits>
 #include <mutex>
+#include <utility>
 
 namespace memdbg::frontend {
 
@@ -63,6 +66,217 @@ static const char *refine_mode_name(RefineMode mode) {
 
 static bool has_batch_read(const AppState &state) {
   return (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
+}
+
+/* ---- Structure Compare ---- */
+
+static uint32_t structure_field_width(int value_type) {
+  switch (value_type) {
+  case MEMDBG_VALUE_U8:
+    return 1U;
+  case MEMDBG_VALUE_U16:
+    return 2U;
+  case MEMDBG_VALUE_U32:
+  case MEMDBG_VALUE_F32:
+    return 4U;
+  case MEMDBG_VALUE_U64:
+  case MEMDBG_VALUE_F64:
+  case MEMDBG_VALUE_POINTER:
+    return 8U;
+  default:
+    return 0U;
+  }
+}
+
+static std::string structure_field_value(const std::vector<uint8_t> &bytes,
+                                         int value_type) {
+  char value[64] = {};
+  switch (value_type) {
+  case MEMDBG_VALUE_U8:
+    if (bytes.size() >= sizeof(uint8_t))
+      std::snprintf(value, sizeof(value), "%u", static_cast<unsigned>(read_scalar<uint8_t>(bytes)));
+    break;
+  case MEMDBG_VALUE_U16:
+    if (bytes.size() >= sizeof(uint16_t))
+      std::snprintf(value, sizeof(value), "%u", static_cast<unsigned>(read_scalar<uint16_t>(bytes)));
+    break;
+  case MEMDBG_VALUE_U32:
+    if (bytes.size() >= sizeof(uint32_t))
+      std::snprintf(value, sizeof(value), "%u", read_scalar<uint32_t>(bytes));
+    break;
+  case MEMDBG_VALUE_U64:
+    if (bytes.size() >= sizeof(uint64_t))
+      std::snprintf(value, sizeof(value), "%llu",
+                    static_cast<unsigned long long>(read_scalar<uint64_t>(bytes)));
+    break;
+  case MEMDBG_VALUE_POINTER:
+    if (bytes.size() >= sizeof(uint64_t))
+      return hex_u64(read_scalar<uint64_t>(bytes));
+    break;
+  case MEMDBG_VALUE_F32:
+    if (bytes.size() >= sizeof(float))
+      std::snprintf(value, sizeof(value), "%.6g", static_cast<double>(read_scalar<float>(bytes)));
+    break;
+  case MEMDBG_VALUE_F64:
+    if (bytes.size() >= sizeof(double))
+      std::snprintf(value, sizeof(value), "%.12g", read_scalar<double>(bytes));
+    break;
+  default:
+    break;
+  }
+  return value[0] == '\0' ? "?" : std::string(value);
+}
+
+static const char *structure_relation_name(StructureFieldRelation relation) {
+  switch (relation) {
+  case StructureFieldRelation::Common:
+    return "Common";
+  case StructureFieldRelation::PlayerVsEnemies:
+    return "Player vs enemies";
+  case StructureFieldRelation::EnemyAOutlier:
+    return "Enemy A outlier";
+  case StructureFieldRelation::EnemyBOutlier:
+    return "Enemy B outlier";
+  case StructureFieldRelation::AllDifferent:
+    return "All different";
+  case StructureFieldRelation::Different:
+    return "Different";
+  }
+  return "Unknown";
+}
+
+static ImVec4 structure_relation_color(StructureFieldRelation relation) {
+  switch (relation) {
+  case StructureFieldRelation::PlayerVsEnemies:
+    return ui::colors().success;
+  case StructureFieldRelation::Common:
+    return ui::colors().dim;
+  case StructureFieldRelation::EnemyAOutlier:
+  case StructureFieldRelation::EnemyBOutlier:
+    return ui::colors().warning;
+  case StructureFieldRelation::AllDifferent:
+  case StructureFieldRelation::Different:
+    return ui::colors().muted;
+  }
+  return ui::colors().muted;
+}
+
+static void poll_structure_compare(AppState &state) {
+  if (!state.structure_compare_pending || !state.structure_compare_future.valid()) return;
+  if (state.structure_compare_future.wait_for(std::chrono::milliseconds(0)) !=
+      std::future_status::ready) return;
+
+  state.structure_compare_pending = false;
+  bool ok = false;
+  try {
+    ok = state.structure_compare_future.get();
+  } catch (const std::exception &ex) {
+    state.structure_compare_error = ex.what();
+  } catch (...) {
+    state.structure_compare_error = "Unknown structure comparison error";
+  }
+
+  std::lock_guard<std::mutex> lock(state.structure_compare_mtx);
+  if (!ok) {
+    const std::string error = state.structure_compare_error.empty()
+        ? "Structure comparison failed" : state.structure_compare_error;
+    std::snprintf(state.structure_compare_status, sizeof(state.structure_compare_status),
+                  "%s", error.c_str());
+    set_status(state, error);
+    push_notification(state, error, 5.0);
+    state.structure_compare_error.clear();
+    return;
+  }
+
+  state.structure_compare_fields = std::move(state.structure_compare_temp_fields);
+  std::snprintf(state.structure_compare_status, sizeof(state.structure_compare_status),
+                "Compared %zu fields", state.structure_compare_fields.size());
+  set_status(state, state.structure_compare_status);
+  push_notification(state, std::string("Structure comparison complete: ") +
+                           std::to_string(state.structure_compare_fields.size()) + " fields");
+}
+
+static void start_structure_compare(AppState &state) {
+  constexpr int kMaxStructureBytes = 64 * 1024;
+  if (state.structure_compare_pending) return;
+  if (!state.client.connected()) {
+    set_status(state, "Connect a console before comparing structures");
+    return;
+  }
+  if (state.selected_pid <= 0) {
+    set_status(state, "Select a process before comparing structures");
+    return;
+  }
+  if (!payload_supports(state, MEMDBG_CAP_MEMORY_READ)) {
+    set_status(state, "Payload does not support memory reads");
+    return;
+  }
+
+  uint64_t player_base = 0U;
+  uint64_t enemy_a_base = 0U;
+  uint64_t enemy_b_base = 0U;
+  if (!parse_u64(state.structure_player_base, player_base) || player_base == 0U ||
+      !parse_u64(state.structure_enemy_a_base, enemy_a_base) || enemy_a_base == 0U ||
+      (state.structure_compare_has_enemy_b &&
+       (!parse_u64(state.structure_enemy_b_base, enemy_b_base) || enemy_b_base == 0U))) {
+    set_status(state, "Enter valid player and enemy structure addresses");
+    return;
+  }
+
+  const uint32_t field_width = structure_field_width(state.structure_compare_type);
+  if (field_width == 0U || state.structure_compare_size < static_cast<int>(field_width) ||
+      state.structure_compare_size > kMaxStructureBytes ||
+      static_cast<uint32_t>(state.structure_compare_size) % field_width != 0U) {
+    set_status(state, "Structure size must be a field-width multiple between 1 and 65536 bytes");
+    return;
+  }
+
+  const int32_t pid = state.selected_pid;
+  const uint32_t read_size = static_cast<uint32_t>(state.structure_compare_size);
+  const bool has_enemy_b = state.structure_compare_has_enemy_b;
+  auto &client = state.client;
+  auto &temp_fields = state.structure_compare_temp_fields;
+  auto &error_out = state.structure_compare_error;
+  state.structure_compare_pending = true;
+  state.structure_compare_start_time = ImGui::GetTime();
+  std::snprintf(state.structure_compare_status, sizeof(state.structure_compare_status),
+                "Reading player and enemy structures...");
+
+  state.structure_compare_future = std::async(
+      std::launch::async,
+      [&client, pid, player_base, enemy_a_base, enemy_b_base, read_size,
+       field_width, has_enemy_b, &temp_fields, &error_out,
+       &mtx = state.structure_compare_mtx]() -> bool {
+        std::vector<uint8_t> player;
+        std::vector<uint8_t> enemy_a;
+        std::vector<uint8_t> enemy_b;
+        if (!client.memory_read(pid, player_base, read_size, player) ||
+            player.size() != read_size) {
+          error_out = "Could not read player structure: " + client.last_error();
+          return false;
+        }
+        if (!client.memory_read(pid, enemy_a_base, read_size, enemy_a) ||
+            enemy_a.size() != read_size) {
+          error_out = "Could not read enemy A structure: " + client.last_error();
+          return false;
+        }
+        if (has_enemy_b &&
+            (!client.memory_read(pid, enemy_b_base, read_size, enemy_b) ||
+             enemy_b.size() != read_size)) {
+          error_out = "Could not read enemy B structure: " + client.last_error();
+          return false;
+        }
+
+        auto fields = StructureCompareEngine::compare(player, enemy_a, enemy_b, field_width);
+        if (fields.empty()) {
+          error_out = "Could not split the captured structures into fields";
+          return false;
+        }
+
+        std::lock_guard<std::mutex> lock(mtx);
+        temp_fields = std::move(fields);
+        return true;
+      });
 }
 
 /* ---- Scan session ---- */
@@ -736,6 +950,7 @@ static void scan_unknown_process(AppState &state) {
 
 void draw_scanner(AppState &state, ImVec2 avail) {
   poll_scanner_async(state);
+  poll_structure_compare(state);
 
   const float gap = 16.0f;
   const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
@@ -1067,6 +1282,145 @@ void draw_scanner(AppState &state, ImVec2 avail) {
           ImGui::TextColored(ui::colors().muted, "%s", c.reason().c_str());
           if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s: %s", locale::tr("scanner.value_type"), value_type_name(c.value_type));
+        }
+        ImGui::EndTable();
+      }
+    }
+  }
+
+  /* ---- Structure Compare ---- */
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  if (ImGui::CollapsingHeader(locale::tr("scanner.structure_compare"),
+                              ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("%s", locale::tr("scanner.structure_compare_desc"));
+    ImGui::Spacing();
+    ImGui::InputText("Player base", state.structure_player_base,
+                     sizeof(state.structure_player_base));
+    ImGui::InputText("Enemy A base", state.structure_enemy_a_base,
+                     sizeof(state.structure_enemy_a_base));
+    ImGui::Checkbox("Compare a second enemy", &state.structure_compare_has_enemy_b);
+    if (state.structure_compare_has_enemy_b) {
+      ImGui::InputText("Enemy B base", state.structure_enemy_b_base,
+                       sizeof(state.structure_enemy_b_base));
+    }
+    ImGui::InputInt("Structure size (bytes)", &state.structure_compare_size);
+    state.structure_compare_size = std::clamp(state.structure_compare_size, 1, 64 * 1024);
+
+    static const int structure_types[] = {
+        MEMDBG_VALUE_U8, MEMDBG_VALUE_U16, MEMDBG_VALUE_U32, MEMDBG_VALUE_U64,
+        MEMDBG_VALUE_F32, MEMDBG_VALUE_F64, MEMDBG_VALUE_POINTER,
+    };
+    static const char *structure_type_names[] = {
+        "u8", "u16", "u32", "u64", "float", "double", "pointer",
+    };
+    int type_index = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(structure_types); ++i) {
+      if (state.structure_compare_type == structure_types[i]) {
+        type_index = i;
+        break;
+      }
+    }
+    if (ImGui::Combo("Field type", &type_index, structure_type_names,
+                     IM_ARRAYSIZE(structure_type_names))) {
+      state.structure_compare_type = structure_types[type_index];
+    }
+
+    const bool can_compare = state.client.connected() && state.selected_pid > 0 &&
+                             payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
+                             !client_async_busy(state);
+    ImGui::BeginDisabled(!can_compare);
+    if (ui::primary_button((std::string(icons::kTarget) +
+                            "  Compare player vs enemies").c_str(),
+                           ui::full_button(38))) {
+      start_structure_compare(state);
+    }
+    ImGui::EndDisabled();
+
+    if (state.structure_compare_pending) {
+      ui::draw_scan_progress("Comparing structures", icons::kTarget,
+                             ImGui::GetTime() - state.structure_compare_start_time,
+                             ImGui::GetContentRegionAvail().x);
+    }
+    ImGui::TextColored(ui::colors().dim, "%s", state.structure_compare_status);
+
+    if (!state.structure_compare_fields.empty()) {
+      const size_t player_vs_enemies = static_cast<size_t>(std::count_if(
+          state.structure_compare_fields.begin(), state.structure_compare_fields.end(),
+          [](const StructureCompareField &field) {
+            return field.relation == StructureFieldRelation::PlayerVsEnemies;
+          }));
+      const bool has_second_enemy = std::any_of(
+          state.structure_compare_fields.begin(), state.structure_compare_fields.end(),
+          [](const StructureCompareField &field) { return !field.enemy_b.empty(); });
+      if (has_second_enemy) {
+        ImGui::TextColored(ui::colors().success,
+                           "%zu high-confidence player-vs-enemies fields", player_vs_enemies);
+      } else {
+        ImGui::TextColored(ui::colors().warning,
+                           "Two-way comparison: add a second enemy to isolate player-only fields");
+      }
+      ImGui::Checkbox("Show all fields", &state.structure_compare_show_all);
+
+      std::vector<size_t> visible_fields;
+      visible_fields.reserve(state.structure_compare_fields.size());
+      for (size_t i = 0U; i < state.structure_compare_fields.size(); ++i) {
+        const auto &field = state.structure_compare_fields[i];
+        const bool focus = field.relation == StructureFieldRelation::PlayerVsEnemies ||
+                           (field.enemy_b.empty() &&
+                            field.relation == StructureFieldRelation::Different);
+        if (state.structure_compare_show_all || focus) visible_fields.push_back(i);
+      }
+
+      if (visible_fields.empty()) {
+        ImGui::TextColored(ui::colors().warning,
+                           "No player-vs-enemies fields. Try two enemies of the same type or show all fields.");
+      } else if (ImGui::BeginTable("StructureCompareResults", 5,
+                                   ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+                                   ImVec2(0, 220.0f))) {
+        ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+        ImGui::TableSetupColumn("Player");
+        ImGui::TableSetupColumn("Enemy A");
+        ImGui::TableSetupColumn("Enemy B");
+        ImGui::TableSetupColumn("Relation");
+        ImGui::TableHeadersRow();
+
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(visible_fields.size()));
+        while (clipper.Step()) {
+          for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+            const auto &field = state.structure_compare_fields[
+                visible_fields[static_cast<size_t>(row)]];
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            const std::string offset = "+" + hex_u64(field.offset, 4) + "##struct" +
+                                       std::to_string(visible_fields[static_cast<size_t>(row)]);
+            if (ImGui::Selectable(offset.c_str(), false,
+                                  ImGuiSelectableFlags_SpanAllColumns)) {
+              uint64_t player_base = 0U;
+              if (parse_u64(state.structure_player_base, player_base) &&
+                  player_base <= std::numeric_limits<uint64_t>::max() - field.offset) {
+                const std::string address = hex_u64(player_base + field.offset);
+                std::snprintf(state.read_address, sizeof(state.read_address), "%s", address.c_str());
+                std::snprintf(state.write_address, sizeof(state.write_address), "%s", address.c_str());
+                state.screen = Screen::Memory;
+              }
+            }
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(structure_field_value(field.player,
+                                                          state.structure_compare_type).c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(structure_field_value(field.enemy_a,
+                                                          state.structure_compare_type).c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextUnformatted(field.enemy_b.empty() ? "-" :
+                structure_field_value(field.enemy_b, state.structure_compare_type).c_str());
+            ImGui::TableSetColumnIndex(4);
+            ImGui::TextColored(structure_relation_color(field.relation), "%s",
+                               structure_relation_name(field.relation));
+          }
         }
         ImGui::EndTable();
       }
