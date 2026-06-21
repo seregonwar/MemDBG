@@ -833,6 +833,9 @@ static void poll_tracer(AppState &state) {
     }
   }
 
+  /* Skip polling when no tracer session was ever started. */
+  if (state.tracer_target_pid <= 0) return;
+
   const double now = ImGui::GetTime();
   if (!state.tracer_status_pending && !state.tracer_events_pending &&
       now >= state.tracer_next_poll) {

@@ -15,6 +15,7 @@
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/tracer/memdbg_tracer_daemon.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef __cplusplus
@@ -66,23 +67,39 @@ static inline memdbg_status_t handle_tracer_poll(
     const memdbg_packet_header_t *req,
     int (*send_fn)(int, const memdbg_packet_header_t *,
                    memdbg_status_t, const void *, uint32_t)) {
-  memdbg_tracer_event_t events[256];
+  memdbg_tracer_event_t *events =
+      (memdbg_tracer_event_t *)malloc(
+          256 * sizeof(memdbg_tracer_event_t));
+  if (events == NULL) return MEMDBG_ERR_NOMEM;
+
   uint32_t count = memdbg_tracer_daemon_poll_events(events, 256);
 
-  /* Build response: prefix + event records. */
-  uint8_t buf[sizeof(memdbg_tracer_poll_response_prefix_t) +
-              256 * sizeof(memdbg_tracer_event_t)];
+  const uint32_t prefix_size =
+      (uint32_t)sizeof(memdbg_tracer_poll_response_prefix_t);
+  const uint32_t payload_size =
+      prefix_size + count * (uint32_t)sizeof(memdbg_tracer_event_t);
+
+  uint8_t *buf = (uint8_t *)malloc(payload_size);
+  if (buf == NULL) {
+    free(events);
+    return MEMDBG_ERR_NOMEM;
+  }
+
   memdbg_tracer_poll_response_prefix_t *pfx =
       (memdbg_tracer_poll_response_prefix_t *)buf;
   pfx->count = count;
   pfx->reserved = 0;
   if (count > 0)
-    memcpy(buf + sizeof(*pfx), events, count * sizeof(memdbg_tracer_event_t));
+    memcpy(buf + prefix_size, events,
+           count * sizeof(memdbg_tracer_event_t));
 
-  return send_fn(fd, req, MEMDBG_OK, buf,
-                 sizeof(*pfx) + count * sizeof(memdbg_tracer_event_t)) == 0
-             ? MEMDBG_OK
-             : MEMDBG_ERR_NET;
+  free(events);
+  memdbg_status_t st =
+      send_fn(fd, req, MEMDBG_OK, buf, payload_size) == 0
+          ? MEMDBG_OK
+          : MEMDBG_ERR_NET;
+  free(buf);
+  return st;
 }
 
 /* ---- TRACER_STATUS ---- */
