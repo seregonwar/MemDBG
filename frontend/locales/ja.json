@@ -34,6 +34,7 @@
   "nav.telemetry": "テレメトリ",
   "nav.taskmgr": "タスク管理",
   "nav.debugger": "デバッガ",
+  "nav.tracer": "トレーサー",
   "nav.settings": "設定",
   "nav.credits": "クレジット",
 
@@ -783,5 +784,23 @@
   "debugger.confirm_clear_wp": "すべてのウォッチポイントを削除しますか？元に戻せません。",
   "debugger.confirm_detach": "デタッチするとすべてのブレークポイントとウォッチポイントがクリアされます。続行しますか？",
   "debugger.confirm_remove_bp": "このブレークポイントを削除しますか？",
-  "debugger.confirm_remove_wp": "このウォッチポイントを削除しますか？"
+  "debugger.confirm_remove_wp": "このウォッチポイントを削除しますか？",
+
+  "tracer.title": "トレーサー",
+  "tracer.status": "ステータス",
+  "tracer.pid": "PID:",
+  "tracer.attach": "アタッチしてトレース",
+  "tracer.detach": "トレースを停止",
+  "tracer.busy": "処理中...",
+  "tracer.events": "イベント",
+  "tracer.events_total": "合計イベント:",
+  "tracer.events_shown": "表示中",
+  "tracer.crashes": "クラッシュ",
+  "tracer.dump": "Dump:",
+  "tracer.col_type": "タイプ",
+  "tracer.col_syscall": "システムコール",
+  "tracer.col_args": "引数",
+  "tracer.col_thread": "スレッド",
+  "tracer.col_ret": "戻り値",
+  "tracer.col_signal": "シグナル"
 }

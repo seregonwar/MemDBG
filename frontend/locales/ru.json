@@ -34,6 +34,7 @@
   "nav.telemetry": "Телеметрия",
   "nav.taskmgr": "Диспетчер",
   "nav.debugger": "Отладчик",
+  "nav.tracer": "Трассировщик",
   "nav.settings": "Настройки",
   "nav.credits": "Авторы",
 
@@ -781,5 +782,23 @@
   "debugger.confirm_clear_wp": "Удалить все точки наблюдения? Это необратимо.",
   "debugger.confirm_detach": "Отсоединение очистит все точки останова и наблюдения. Продолжить?",
   "debugger.confirm_remove_bp": "Удалить эту точку останова?",
-  "debugger.confirm_remove_wp": "Удалить эту точку наблюдения?"
+  "debugger.confirm_remove_wp": "Удалить эту точку наблюдения?",
+
+  "tracer.title": "Трассировщик",
+  "tracer.status": "Статус",
+  "tracer.pid": "PID:",
+  "tracer.attach": "Подключить и трассировать",
+  "tracer.detach": "Остановить трассировку",
+  "tracer.busy": "Работает...",
+  "tracer.events": "события",
+  "tracer.events_total": "всего событий:",
+  "tracer.events_shown": "Показано",
+  "tracer.crashes": "сбои",
+  "tracer.dump": "Dump:",
+  "tracer.col_type": "Тип",
+  "tracer.col_syscall": "Системный вызов",
+  "tracer.col_args": "Аргументы",
+  "tracer.col_thread": "Поток",
+  "tracer.col_ret": "Возвр",
+  "tracer.col_signal": "Сигнал"
 }

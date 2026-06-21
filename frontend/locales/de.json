@@ -32,6 +32,7 @@
   "nav.telemetry": "Telemetrie",
   "nav.taskmgr": "Task-Manager",
   "nav.debugger": "Debugger",
+  "nav.tracer": "Tracer",
   "nav.settings": "Einstellungen",
   "nav.credits": "Credits",
   "status.connecting": "Verbinde...",
@@ -754,5 +755,23 @@
   "debugger.confirm_clear_wp": "Alle Watchpoints löschen? Dies kann nicht rückgängig gemacht werden.",
   "debugger.confirm_detach": "Detach löscht alle Breakpoints und Watchpoints. Fortfahren?",
   "debugger.confirm_remove_bp": "Diesen Breakpoint entfernen?",
-  "debugger.confirm_remove_wp": "Diesen Watchpoint entfernen?"
+  "debugger.confirm_remove_wp": "Diesen Watchpoint entfernen?",
+
+  "tracer.title": "Tracer",
+  "tracer.status": "Status",
+  "tracer.pid": "PID:",
+  "tracer.attach": "Anhängen & Trace",
+  "tracer.detach": "Trace beenden",
+  "tracer.busy": "Arbeitet...",
+  "tracer.events": "Ereignisse",
+  "tracer.events_total": "Ereignisse gesamt:",
+  "tracer.events_shown": "Angezeigt",
+  "tracer.crashes": "Abstürze",
+  "tracer.dump": "Dump:",
+  "tracer.col_type": "Typ",
+  "tracer.col_syscall": "Syscall",
+  "tracer.col_args": "Args",
+  "tracer.col_thread": "Thread",
+  "tracer.col_ret": "Ret",
+  "tracer.col_signal": "Signal"
 }

@@ -33,6 +33,7 @@
   "nav.telemetry": "텔레메트리",
   "nav.taskmgr": "작업 관리자",
   "nav.debugger": "디버거",
+  "nav.tracer": "트레이서",
   "nav.settings": "설정",
   "nav.credits": "정보",
   "status.connecting": "연결 중",
@@ -755,5 +756,23 @@
   "debugger.confirm_clear_wp": "모든 왓치포인트를 지우시겠습니까? 이 작업은 취소할 수 없습니다.",
   "debugger.confirm_detach": "연결을 해제하면 모든 브레이크포인트와 왓치포인트가 지워집니다. 계속하시겠습니까?",
   "debugger.confirm_remove_bp": "이 브레이크포인트를 제거하시겠습니까?",
-  "debugger.confirm_remove_wp": "이 왓치포인트를 제거하시겠습니까?"
+  "debugger.confirm_remove_wp": "이 왓치포인트를 제거하시겠습니까?",
+
+  "tracer.title": "트레이서",
+  "tracer.status": "상태",
+  "tracer.pid": "PID:",
+  "tracer.attach": " 연결 및 추적",
+  "tracer.detach": "추적 중지",
+  "tracer.busy": "작업 중...",
+  "tracer.events": "이벤트",
+  "tracer.events_total": "전체 이벤트:",
+  "tracer.events_shown": "표시 중",
+  "tracer.crashes": "크래시",
+  "tracer.dump": "덤프:",
+  "tracer.col_type": "유형",
+  "tracer.col_syscall": "시스템 호출",
+  "tracer.col_args": "인자",
+  "tracer.col_thread": "스레드",
+  "tracer.col_ret": "반환값",
+  "tracer.col_signal": "시그널"
 }

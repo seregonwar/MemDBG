@@ -32,6 +32,7 @@
   "nav.telemetry": "Télémétrie",
   "nav.taskmgr": "Gestionnaire",
   "nav.debugger": "Débogueur",
+  "nav.tracer": "Tracer",
   "nav.settings": "Paramètres",
   "nav.credits": "Crédits",
   "status.connecting": "Connexion",
@@ -754,5 +755,23 @@
   "debugger.confirm_clear_wp": "Supprimer tous les watchpoints ? Cette action est irréversible.",
   "debugger.confirm_detach": "Le détachement effacera tous les points d'arrêt et watchpoints. Continuer ?",
   "debugger.confirm_remove_bp": "Supprimer ce point d'arrêt ?",
-  "debugger.confirm_remove_wp": "Supprimer ce watchpoint ?"
+  "debugger.confirm_remove_wp": "Supprimer ce watchpoint ?",
+
+  "tracer.title": "Tracer",
+  "tracer.status": "Statut",
+  "tracer.pid": "PID :",
+  "tracer.attach": "Attacher et tracer",
+  "tracer.detach": "Arrêter le traçage",
+  "tracer.busy": "En cours...",
+  "tracer.events": "événements",
+  "tracer.events_total": "événements totaux :",
+  "tracer.events_shown": "Affichage",
+  "tracer.crashes": "crashes",
+  "tracer.dump": "Dump :",
+  "tracer.col_type": "Type",
+  "tracer.col_syscall": "Appel système",
+  "tracer.col_args": "Args",
+  "tracer.col_thread": "Thread",
+  "tracer.col_ret": "Ret",
+  "tracer.col_signal": "Signal"
 }
