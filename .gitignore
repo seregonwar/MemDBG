@@ -66,3 +66,4 @@ docs/x_project_article.md
 *.pyc
 /plugin-repository
 /PoC
+*.log
