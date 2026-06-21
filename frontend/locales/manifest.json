@@ -58,6 +58,15 @@
       "embedded": false
     },
     {
+      "code": "ko",
+      "name": "한국어",
+      "filename": "ko.json",
+      "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/ko.json",
+      "size": 42914,
+      "sha256": "9665b396ce92050934bc135a28e6ce06f73c341289ad5263d30d5478752fb2ee",
+      "embedded": false
+    },
+    {
       "code": "pt",
       "name": "Português",
       "filename": "pt.json",
