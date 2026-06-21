@@ -360,6 +360,8 @@
   "memory.exploit.long_run": "長連続 ",
 
   "scanner.exact_scan": "正確スキャン",
+  "scanner.structure_compare": "構造体比較",
+  "scanner.structure_compare_desc": "プレイヤー構造体と1つまたは2つの敵構造体を読み取ります。プレイヤー対敵は、プレイヤーだけが異なり、両方の敵が一致するフィールドを強調表示します。",
   "scanner.active_pid": "アクティブPID: %d",
   "scanner.value_type": "値タイプ",
   "scanner.value": "値",

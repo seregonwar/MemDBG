@@ -342,6 +342,8 @@
   "memory.exploit.dominant_byte": "byte dominante ",
   "memory.exploit.long_run": "racha larga ",
   "scanner.exact_scan": "Escaneo Exacto",
+  "scanner.structure_compare": "Comparación de estructuras",
+  "scanner.structure_compare_desc": "Lee una estructura del jugador y una o dos estructuras enemigas. Jugador frente a enemigos resalta los campos donde el jugador difiere mientras ambos enemigos coinciden.",
   "scanner.active_pid": "PID Activo: %d",
   "scanner.value_type": "Tipo de valor",
   "scanner.value": "Valor",
