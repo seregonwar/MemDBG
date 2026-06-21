@@ -27,6 +27,7 @@
 #include <sys/ptrace.h>
 #include <sys/signal.h>
 #include <sys/sysctl.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/user.h>
 #include <sys/wait.h>
@@ -41,18 +42,16 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
 
 static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
   /*
-   * Do not call __syscall() directly here.  The PS4/PS5 libc ptrace wrapper
-   * translates the kernel error return into errno; __syscall() deliberately
-   * exposes the raw ABI and can leave errno unchanged.  In particular, a
-   * rejected PT_ATTACH was being reported as "errno=0 (No error)", making a
-   * permission or an already-traced target look like a generic I/O failure.
+   * Use __syscall() to bypass the libc ptrace wrapper.  The libc wrapper on
+   * PS4 can corrupt the tracing state of the target process, causing crashes
+   * in subsequent mdbg_copyout/mdbg_copyin calls.  __syscall() exposes the
+   * raw ABI, so we must handle the errno=0 case explicitly: the kernel
+   * rejects a denied PT_ATTACH without setting errno, so we synthesize
+   * EPERM to give callers an actionable error instead of "No error".
    */
   errno = 0;
-  long result = (long)ptrace(op, (pid_t)pid, (caddr_t)addr, (int)data);
+  long result = (long)__syscall((quad_t)SYS_ptrace, op, pid, addr, data);
   if (result == -1 && errno == 0) {
-    /* A console libc without an errno translation is still a real failure.
-     * EPERM is the normal result for a denied PS4/PS5 ptrace attach and lets
-     * callers present an actionable error instead of "No error". */
     errno = EPERM;
   }
   return result;

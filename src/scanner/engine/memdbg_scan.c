@@ -42,6 +42,7 @@
 #endif
 
 #define MEMDBG_SCAN_MIN_READ_CHUNK 4096U
+#define MEMDBG_SCAN_MAX_LENGTH (32ULL * 1024ULL * 1024ULL * 1024ULL)
 #define MEMDBG_SCAN_INITIAL_CAPACITY 256U
 #define MEMDBG_MAP_PROT_READ 1U
 
@@ -253,6 +254,7 @@ static size_t scan_fault_skip_size(size_t requested) {
 static bool scan_bounds_valid(uint64_t start, uint64_t length,
                               uint64_t min_length, uint64_t *end_out) {
   if (length == 0U || length < min_length) return false;
+  if (length > MEMDBG_SCAN_MAX_LENGTH) return false;
   if (UINT64_MAX - start < length) return false;
   if (end_out != NULL) *end_out = start + length;
   return true;
