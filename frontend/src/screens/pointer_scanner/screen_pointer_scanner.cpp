@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -167,8 +168,15 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   ImGui::BeginDisabled(!can_scan);
   if (ui::primary_button((std::string(icons::kPointer) + "  " + locale::tr("pointer_scanner.scan_pointers")).c_str(),
                          ui::full_button(42)))
-    run_pointer_scan(state);
+    ImGui::OpenPopup("ConfirmPointerScan");
   ImGui::EndDisabled();
+  static bool skip_pointer_scan_confirm = false;
+  if (ui::confirm_modal("ConfirmPointerScan",
+                        "Run pointer scan over this range?",
+                        "Pointer scans read mapped regions inside the requested range. Keep the range narrow on unstable targets.",
+                        &skip_pointer_scan_confirm, true)) {
+    run_pointer_scan(state);
+  }
 
   /* Progress bar for async pointer scans */
   if (state.scan_async_pending)

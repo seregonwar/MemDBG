@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 #include "scanner/heuristics/auto_search.hpp"
 #include "scanner/structure_compare.hpp"
 
@@ -985,7 +986,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_PROCESS_EXACT);
   ImGui::BeginDisabled(!can_launch_process);
-  if (ui::soft_button((std::string(icons::kTarget) + "  " + locale::tr("scanner.scan_process")).c_str(), ui::full_button(40))) scan_process(state);
+  if (ui::soft_button((std::string(icons::kTarget) + "  " + locale::tr("scanner.scan_process")).c_str(), ui::full_button(40))) ImGui::OpenPopup("ConfirmProcessScan");
   ImGui::EndDisabled();
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
@@ -995,7 +996,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_UNKNOWN);
   ImGui::BeginDisabled(!can_launch_unknown);
-  if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("scanner.unknown_scan")).c_str(), ui::full_button(40))) scan_unknown_process(state);
+  if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("scanner.unknown_scan")).c_str(), ui::full_button(40))) ImGui::OpenPopup("ConfirmUnknownScan");
   ImGui::EndDisabled();
 
   /* Progress bar for async scans */
@@ -1064,11 +1065,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     ImGui::BeginDisabled(!can_baseline);
     if (ui::soft_button((std::string(icons::kTarget) + "  " + locale::tr("scanner.capture_baseline")).c_str(),
                         ui::full_button(38))) {
-      state.auto_search_has_baseline = false;
-      state.auto_search_pass = 0;
-      /* Run an Unknown Value Scan — the async worker will store the snapshot
-       * as the baseline via the auto_search_has_baseline flag */
-      scan_unknown_process(state);
+      ImGui::OpenPopup("ConfirmAutoBaselineScan");
     }
     ImGui::EndDisabled();
 
@@ -1286,6 +1283,30 @@ void draw_scanner(AppState &state, ImVec2 avail) {
         ImGui::EndTable();
       }
     }
+  }
+
+  static bool skip_process_scan_confirm = false;
+  static bool skip_unknown_scan_confirm = false;
+  static bool skip_auto_baseline_confirm = false;
+  if (ui::confirm_modal("ConfirmProcessScan",
+                        "Scan the selected process maps?",
+                        "Process-wide scans walk the target map list and can stress unstable console sessions. Prefer a selected map or tight start/end filter first.",
+                        &skip_process_scan_confirm, true)) {
+    scan_process(state);
+  }
+  if (ui::confirm_modal("ConfirmUnknownScan",
+                        "Start an unknown-value process scan?",
+                        "Unknown-value scans snapshot many addresses for later refinement. Keep filters readable-only and narrow on fragile targets.",
+                        &skip_unknown_scan_confirm, true)) {
+    scan_unknown_process(state);
+  }
+  if (ui::confirm_modal("ConfirmAutoBaselineScan",
+                        "Capture an auto-search baseline?",
+                        "This runs an unknown-value scan and keeps a baseline snapshot. Use a narrow window if the target has caused read faults before.",
+                        &skip_auto_baseline_confirm, true)) {
+    state.auto_search_has_baseline = false;
+    state.auto_search_pass = 0;
+    scan_unknown_process(state);
   }
 
   /* ---- Structure Compare ---- */

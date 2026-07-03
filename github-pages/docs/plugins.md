@@ -51,3 +51,23 @@ stable integration point.
 Python plugins can include `sdk/memdbg.py` as `memdbg.py` and call
 `MemDBG.from_context()` to access process, map, and memory APIs. The SDK also
 contains `run_mcp_stdio()` for MCP stdio bridge plugins.
+
+## GUI Layout JSON
+
+Interactive Python GUI plugins can move the ImGui widget tree out of Python and
+into a sibling `*.ui.json` file. Python keeps the event handling and MemDBG API
+calls; the JSON describes the widgets rendered by the native frontend.
+
+```json
+{
+  "schema": 1,
+  "widgets": [
+    { "type": "text_colored", "text": "My Plugin", "color": "primary2" },
+    { "type": "combo", "id": "process", "label": "Process", "items_from": "$processes" },
+    { "type": "button", "id": "refresh", "label": "Refresh", "variant": "soft" }
+  ]
+}
+```
+
+Use `mcp_server.gui_layout.GuiLayout` to load and render the file with a view
+model. The default `example_gui_plugin` shows the complete pattern.

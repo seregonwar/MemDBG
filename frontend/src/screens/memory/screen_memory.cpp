@@ -597,9 +597,19 @@ static void draw_exploit_tools(AppState &state) {
   ImGui::BeginDisabled(client_async_busy(state));
   if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("memory.exploit.find_gadgets")).c_str(),
                          ui::full_button(36))) {
-    find_gadgets(state);
+    if (state.gadget_selected_map_only)
+      find_gadgets(state);
+    else
+      ImGui::OpenPopup("ConfirmFindGadgets");
   }
   ImGui::EndDisabled();
+  static bool skip_gadget_scan_confirm = false;
+  if (ui::confirm_modal("ConfirmFindGadgets",
+                        "Scan all readable gadget maps?",
+                        "Whole-process gadget scans read many executable/readable maps. Use selected-map mode first on unstable targets.",
+                        &skip_gadget_scan_confirm, true)) {
+    find_gadgets(state);
+  }
 
   const GadgetMatch *pop_rdi = find_gadget(state, "pop rdi; ret");
   const GadgetMatch *pop_rsi = find_gadget(state, "pop rsi; ret");
@@ -724,8 +734,15 @@ void draw_memory(AppState &state, ImVec2 avail) {
                        payload_supports(state, MEMDBG_CAP_MEMORY_WRITE);
       ImGui::BeginDisabled(!can_write);
       if (ui::danger_button((std::string(icons::kEdit) + "  " + locale::tr("memory.write_memory")).c_str(),
-                            ui::full_button(40))) write_memory(state);
+                            ui::full_button(40))) ImGui::OpenPopup("ConfirmMemoryWrite");
       ImGui::EndDisabled();
+      static bool skip_write_confirm = false;
+      if (ui::confirm_modal("ConfirmMemoryWrite",
+                            "Write bytes to process memory?",
+                            "A bad address or wrong value can freeze the game or crash the console. Verify PID, address, and byte order before continuing.",
+                            &skip_write_confirm, true)) {
+        write_memory(state);
+      }
 
       ImGui::Spacing();
       ui::text_dim(locale::tr("memory.byte_format_hint"));

@@ -71,6 +71,33 @@ int json_int(const nlohmann::json &obj, const char *key, int fallback = 0) {
   return fallback;
 }
 
+uint64_t json_u64(const nlohmann::json &obj, const char *key,
+                  uint64_t fallback = 0U) {
+  auto it = obj.find(key);
+  if (it == obj.end()) return fallback;
+  if (it->is_number_unsigned()) return it->get<uint64_t>();
+  if (it->is_number_integer()) {
+    const int64_t value = it->get<int64_t>();
+    return value < 0 ? fallback : static_cast<uint64_t>(value);
+  }
+  if (it->is_string()) {
+    std::string text = it->get<std::string>();
+    auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+    text.erase(text.begin(), std::find_if(text.begin(), text.end(),
+        [&](char c) { return !is_space(static_cast<unsigned char>(c)); }));
+    text.erase(std::find_if(text.rbegin(), text.rend(),
+        [&](char c) { return !is_space(static_cast<unsigned char>(c)); }).base(),
+        text.end());
+    try {
+      size_t used = 0;
+      const int base = starts_with(lower_copy(text), "0x") ? 16 : 10;
+      uint64_t value = std::stoull(text, &used, base);
+      return used == text.size() ? value : fallback;
+    } catch (...) {}
+  }
+  return fallback;
+}
+
 float json_float(const nlohmann::json &obj, const char *key, float fallback = 0.0f) {
   auto it = obj.find(key);
   if (it != obj.end() && it->is_number()) return it->get<float>();
@@ -556,7 +583,7 @@ void GuiBridge::render_widget(const std::shared_ptr<GuiWidget> &widget) {
       for (const auto &child : widget->children) {
         if (child->type == "batch_item") {
           nlohmann::json item;
-          item["address"] = child->int_value;
+          item["address"] = child->address_value;
           item["length"] = child->step > 0 ? child->step : 4;
           addrs.push_back(item);
         }
@@ -590,7 +617,7 @@ void GuiBridge::render_widget(const std::shared_ptr<GuiWidget> &widget) {
           ImGui::TextUnformatted(child->label.c_str());
           ImGui::TableSetColumnIndex(1);
           ImGui::TextColored(ui::colors().link, "0x%llX",
-                             static_cast<unsigned long long>(child->int_value));
+                             static_cast<unsigned long long>(child->address_value));
           ImGui::TableSetColumnIndex(2);
           ImGui::TextUnformatted(child->text_value.c_str());
           ImGui::TableSetColumnIndex(3);
@@ -945,7 +972,7 @@ std::shared_ptr<GuiWidget> GuiBridge::parse_widget(const nlohmann::json &obj) {
         auto child = std::make_shared<GuiWidget>();
         child->type = "batch_item";
         child->label = json_string(item, "label", json_string(item, "name"));
-        child->int_value = json_int(item, "address");
+        child->address_value = json_u64(item, "address");
         child->text_value = json_string(item, "value", "...");
         child->text = json_string(item, "value_type", "hex");
         child->step = json_int(item, "length", 4);

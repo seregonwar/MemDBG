@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "file_picker.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -527,11 +528,25 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_selected_map")).c_str(), ImVec2(170, 38))) dump_selected_map(state);
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_selected_map")).c_str(), ImVec2(170, 38))) ImGui::OpenPopup("ConfirmDumpSelectedMap");
     if (ui::soft_button((std::string(icons::kSearch) + "  " + locale::tr("processes.analyze_process")).c_str(), ImVec2(170, 38))) analyze_process(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_filtered_maps")).c_str(), ImVec2(190, 38))) dump_filtered_maps(state);
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_filtered_maps")).c_str(), ImVec2(190, 38))) ImGui::OpenPopup("ConfirmDumpFilteredMaps");
     ImGui::EndDisabled();
+    static bool skip_dump_selected_confirm = false;
+    static bool skip_dump_filtered_confirm = false;
+    if (ui::confirm_modal("ConfirmDumpSelectedMap",
+                          "Dump selected memory map?",
+                          "This reads the selected map from the console. Large or unstable regions can stall or crash weak payload sessions.",
+                          &skip_dump_selected_confirm, true)) {
+      dump_selected_map(state);
+    }
+    if (ui::confirm_modal("ConfirmDumpFilteredMaps",
+                          "Dump all filtered readable maps?",
+                          "This can read a large portion of the process address space. Tighten filters and keep the cap low on unstable consoles.",
+                          &skip_dump_filtered_confirm, true)) {
+      dump_filtered_maps(state);
+    }
     ImGui::Spacing();
     ImGui::InputText(locale::tr("processes.dump_output"), state.dump_path, sizeof(state.dump_path));
     ImGui::SameLine();

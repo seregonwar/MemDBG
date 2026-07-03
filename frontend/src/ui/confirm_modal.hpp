@@ -32,19 +32,23 @@ namespace memdbg::frontend::ui {
  *                     *skipConfirm is set to true AND the action is confirmed.
  * @param dangerYes    If true, the Yes button is styled as danger (red).
  *                     If false, it's styled as primary (green).
- * @return             true if the user confirmed (or auto-skipped).
+ * @return             true only for the frame where the user confirmed, or
+ *                     where the popup was opened with skipConfirm already set.
  */
 inline bool confirm_modal(const char *popupId, const char *message,
                           const char *detail, bool *skipConfirm,
                           bool dangerYes = true) {
-  /* Auto-confirm if the user previously checked "don't show again". */
-  if (skipConfirm != nullptr && *skipConfirm)
-    return true;
-
   /* Not open yet — caller must have called OpenPopup. */
   if (!ImGui::BeginPopupModal(popupId, nullptr,
                               ImGuiWindowFlags_AlwaysAutoResize))
     return false;
+
+  /* Auto-confirm only in response to an explicit popup open. */
+  if (skipConfirm != nullptr && *skipConfirm) {
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    return true;
+  }
 
   ImGui::TextWrapped("%s", message);
 

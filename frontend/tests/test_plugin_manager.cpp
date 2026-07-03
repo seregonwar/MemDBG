@@ -6,7 +6,6 @@
 
 #include "plugins/repository/plugin_manager.hpp"
 
-#include <cassert>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -53,6 +52,12 @@ std::filesystem::path unique_temp_dir() {
           std::to_string(ticks));
 }
 
+void require(bool condition, const char *message) {
+  if (condition) return;
+  std::cerr << "FAIL: " << message << "\n";
+  std::exit(1);
+}
+
 } // namespace
 
 int main() {
@@ -67,34 +72,39 @@ int main() {
   manager.set_bundle_root(fs::path(MEMDBG_TEST_SOURCE_DIR));
 
   std::string error;
-  assert(manager.load(&error));
+  require(manager.load(&error), "manager.load");
 
   const std::string normalized =
       plugins::normalize_source_url("https://github.com/seregonwar/MemDBG-Plugin");
-  assert(normalized == plugins::kDefaultSourceUrl);
+  require(normalized == plugins::kDefaultSourceUrl, "normalize GitHub source URL");
 
   const auto catalog = manager.catalog();
-  assert(!catalog.empty());
+  require(!catalog.empty(), "catalog is not empty");
 
   auto it = std::find_if(catalog.begin(), catalog.end(), [](const auto &pkg) {
     return pkg.id == "io.github.seregonwar.memdbg.context-dump";
   });
-  assert(it != catalog.end());
-  assert(it->language == plugins::PluginLanguage::Python);
-  assert(it->download_count == 0);
-  assert(it->icon_url.find("context-dump.png") != std::string::npos);
-  assert(it->short_description.find("runtime context") != std::string::npos);
-  assert(it->description.find("automation plugins") != std::string::npos);
+  require(it != catalog.end(), "context dump package exists");
+  require(it->language == plugins::PluginLanguage::Python, "context dump language");
+  require(it->download_count == 0, "context dump download count");
+  require(it->icon_url.find("context-dump.png") != std::string::npos,
+          "context dump icon URL");
+  require(it->short_description.find("runtime context") != std::string::npos,
+          "context dump short description");
+  require(it->description.find("automation plugins") != std::string::npos,
+          "context dump description");
 
-  assert(manager.install_package(it->id, it->source_id, &error));
+  require(manager.install_package(it->id, it->source_id, &error),
+          "install context dump package");
   const auto installed_catalog = manager.catalog();
   auto installed = std::find_if(installed_catalog.begin(), installed_catalog.end(),
       [](const auto &pkg) {
         return pkg.id == "io.github.seregonwar.memdbg.context-dump";
       });
-  assert(installed != installed_catalog.end());
-  assert(installed->installed);
-  assert(fs::exists(installed->installed_path / "context_dump.py"));
+  require(installed != installed_catalog.end(), "installed context dump exists");
+  require(installed->installed, "context dump installed flag");
+  require(fs::exists(installed->installed_path / "context_dump.py"),
+          "context dump entry installed");
 
   plugins::PluginRunContext context;
   context.host = "127.0.0.1";
@@ -111,12 +121,15 @@ int main() {
 
   const plugins::PluginRunResult run = manager.run_plugin(installed->id, context);
   if (run.error.find("interpreter not found") == std::string::npos) {
-    assert(run.ok);
-    assert(run.output.find("MemDBG Python plugin context") != std::string::npos);
-    assert(run.output.find("pid=1234") != std::string::npos);
+    require(run.ok, "run context dump plugin");
+    require(run.output.find("MemDBG Python plugin context") != std::string::npos,
+            "context dump output header");
+    require(run.output.find("pid=1234") != std::string::npos,
+            "context dump output PID");
   }
 
-  assert(manager.uninstall_package(installed->id, &error));
+  require(manager.uninstall_package(installed->id, &error),
+          "uninstall context dump package");
 
   fs::remove_all(temp);
   std::cout << "plugin_manager tests passed\n";

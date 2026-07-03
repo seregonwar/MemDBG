@@ -85,7 +85,9 @@ memdbg_status_t partition_maps_by_bytes(
     if (mbytes < (uint64_t)min_map_len) continue;
     eff_indices[ei] = i;
     eff_bytes[ei]   = mbytes;
-    total_bytes    += mbytes;
+    total_bytes = UINT64_MAX - total_bytes < mbytes
+        ? UINT64_MAX
+        : total_bytes + mbytes;
     ++ei;
   }
 
