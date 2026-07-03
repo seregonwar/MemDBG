@@ -8,6 +8,7 @@
  *     wildcard patterns, good-suffix shift.
  *   - Process-wide AOB scanner: map iteration, protection filtering,
  *     start/end range filtering, multi-map results.
+ *   - Pointer scanner: chunk-boundary alignment and readable-map filtering.
  */
 
 #include "memdbg/scanner/memdbg_scan.h"
@@ -118,6 +119,11 @@ void memdbg_process_maps_free(memdbg_map_list_t *maps) {
 memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
   if (out == NULL) return MEMDBG_ERR_PARAM;
   memset(out, 0, sizeof(*out));
+  out->entries = (memdbg_process_entry_t *)calloc(1U, sizeof(*out->entries));
+  if (out->entries == NULL) return MEMDBG_ERR_NOMEM;
+  out->entries[0].pid = 1;
+  memcpy(out->entries[0].name, "mock-process", sizeof("mock-process"));
+  out->count = 1U;
   return MEMDBG_OK;
 }
 
@@ -313,6 +319,107 @@ static int test_exact_range_scan_skip_fault(
   }
   if (result.read_errors == 0U) {
     printf("FAIL [%s]: expected at least one read error\n", test_name);
+    failures++;
+  }
+
+  memdbg_scan_result_free(&result);
+  return failures;
+}
+
+static int test_process_exact_large_map_is_segmented(
+    const unsigned char *buf, size_t buf_size, const char *test_name) {
+  g_mock_buffer = buf;
+  g_mock_size   = buf_size;
+
+  memdbg_scan_process_exact_request_t request;
+  memset(&request, 0, sizeof(request));
+  request.pid             = 1;
+  request.value_type      = MEMDBG_VALUE_U32;
+  request.value_length    = sizeof(uint32_t);
+  request.alignment       = 4U;
+  request.max_results     = 8U;
+  request.protection_mask = 0U;
+
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_process_exact(&request, &result);
+
+  if (status != MEMDBG_OK) {
+    printf("FAIL [%s]: expected large map to be segmented, got status %d\n",
+           test_name, (int)status);
+    return 1;
+  }
+
+  int failures = 0;
+  if (result.count != 0U) {
+    printf("FAIL [%s]: expected 0 hits for unmapped mock range, got %zu\n",
+           test_name, result.count);
+    failures++;
+  }
+  if (result.regions_scanned < 2U) {
+    printf("FAIL [%s]: expected a huge map to scan as multiple safe segments\n",
+           test_name);
+    failures++;
+  }
+
+  memdbg_scan_result_free(&result);
+  return failures;
+}
+
+static int test_pointer_scan(
+    const unsigned char *buf, size_t buf_size, uint64_t target,
+    uint64_t expected_count, const uint64_t *expected_addrs,
+    uint32_t expected_regions, uint32_t expected_read_calls,
+    const char *test_name) {
+  g_mock_buffer = buf;
+  g_mock_size   = buf_size;
+
+  memdbg_scan_pointer_request_t request;
+  memset(&request, 0, sizeof(request));
+  request.pid            = 1;
+  request.start          = 0U;
+  request.length         = buf_size;
+  request.target_address = target;
+  request.max_depth      = 1U;
+  request.max_results    = 8U;
+  request.alignment      = 8U;
+
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_pointer(&request, &result);
+
+  if (status != MEMDBG_OK) {
+    printf("FAIL [%s]: pointer scan returned status %d\n",
+           test_name, (int)status);
+    return 1;
+  }
+
+  int failures = 0;
+  if (result.count != expected_count) {
+    printf("FAIL [%s]: expected %llu pointer hits, got %zu\n",
+           test_name, (unsigned long long)expected_count, result.count);
+    failures++;
+  }
+  for (uint64_t ei = 0U; expected_addrs != NULL && ei < expected_count; ++ei) {
+    int found = 0;
+    for (size_t ri = 0U; ri < result.count; ++ri) {
+      if (result.entries[ri].address == expected_addrs[ei]) {
+        found = 1;
+        break;
+      }
+    }
+    if (!found) {
+      printf("FAIL [%s]: missing pointer address 0x%llx\n",
+             test_name, (unsigned long long)expected_addrs[ei]);
+      failures++;
+    }
+  }
+  if (result.regions_scanned != expected_regions) {
+    printf("FAIL [%s]: expected %u scanned region(s), got %u\n",
+           test_name, expected_regions, result.regions_scanned);
+    failures++;
+  }
+  if (result.read_calls != expected_read_calls) {
+    printf("FAIL [%s]: expected %u read call(s), got %u\n",
+           test_name, expected_read_calls, result.read_calls);
     failures++;
   }
 
@@ -665,14 +772,54 @@ int main(void) {
     mock_read_fail_reset();
   }
 
+  /* Test 19 — Process exact scan: huge virtual maps are segmented rather
+     than rejected as one over-limit range. */
+  {
+    mock_maps_reset();
+    const uint64_t huge_start = 1ULL << 40;
+    const uint64_t huge_len =
+        (32ULL * 1024ULL * 1024ULL * 1024ULL) + 65536ULL;
+    mock_maps_add(huge_start, huge_start + huge_len, 1U);
+    memset(buf, 0x00, buf_size);
+    failures += test_process_exact_large_map_is_segmented(
+        buf, buf_size, "PW exact: huge map segmented");
+  }
+
+  /* Test 20 — Pointer scan: a pointer starting exactly at the read chunk
+     boundary is still found after carry bytes are prepended to the next
+     window. */
+  {
+    mock_maps_reset();
+    mock_maps_add(0U, buf_size, 1U);
+    memset(buf, 0x00, buf_size);
+    uint64_t target = 0xfeedfacecafebeefULL;
+    uint64_t pos = MEMDBG_PROTOCOL_MAX_READ;
+    memcpy(buf + pos, &target, sizeof(target));
+    uint64_t expected[] = {pos};
+    failures += test_pointer_scan(buf, buf_size, target, 1U, expected, 1U, 2U,
+                                  "pointer: chunk-boundary aligned hit");
+  }
+
+  /* Test 21 — Pointer scan: non-readable maps are skipped before any memory
+     read is attempted. */
+  {
+    mock_maps_reset();
+    mock_maps_add(0U, 65536U, 0U);
+    memset(buf, 0x00, buf_size);
+    uint64_t target = 0x1122334455667788ULL;
+    memcpy(buf + 128U, &target, sizeof(target));
+    failures += test_pointer_scan(buf, buf_size, target, 0U, NULL, 0U, 0U,
+                                  "pointer: skip non-readable maps");
+  }
+
   /* ---- Summary ---- */
   mock_maps_reset();
   mock_read_fail_reset();
 
   if (failures == 0) {
-    printf("\nAll AOB boundary tests PASSED (18/18).\n");
+    printf("\nAll AOB boundary tests PASSED (21/21).\n");
   } else {
-    printf("\n%d test(s) FAILED out of 18.\n", failures);
+    printf("\n%d test(s) FAILED out of 21.\n", failures);
   }
 
   free(buf);

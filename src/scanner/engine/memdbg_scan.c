@@ -542,6 +542,7 @@ typedef struct {
   uint64_t              bytes_scanned;
   uint32_t              regions_scanned;
   memdbg_status_t       status;
+  bool                  threaded;
 } parallel_worker_t;
 
 static void *parallel_worker_thread(void *arg) {
@@ -585,13 +586,22 @@ static void *parallel_worker_thread(void *arg) {
     uint64_t map_len = scan_end - scan_start;
     if (map_len < w->min_map_len) continue;
 
-    w->regions_scanned++;
-    w->status = w->scan_fn(w->ctx, w->pid, scan_start, map_len,
-                           buffer, &builder);
+    uint64_t cursor = scan_start;
+    uint64_t remaining = map_len;
+    while (remaining != 0U && !w->result.truncated) {
+      uint64_t segment_len = remaining > MEMDBG_SCAN_MAX_LENGTH
+          ? MEMDBG_SCAN_MAX_LENGTH
+          : remaining;
+      if (segment_len < (uint64_t)w->min_map_len) break;
 
-    /* Accumulate per-map metrics.  read_calls/errors/bytes are
-       updated by scan_range/scan_aob_range inside the callback
-       via builder.result, so we just snapshot them here. */
+      w->regions_scanned++;
+      w->status = w->scan_fn(w->ctx, w->pid, cursor, segment_len,
+                             buffer, &builder);
+
+      if (w->status != MEMDBG_OK) break;
+      cursor += segment_len;
+      remaining -= segment_len;
+    }
     if (w->status != MEMDBG_OK) break;
   }
 
@@ -725,6 +735,8 @@ static memdbg_status_t scan_maps_parallel(
                          parallel_worker_thread, &workers[t]) != 0) {
         spawn_ok = false;
         workers[t].status = MEMDBG_ERR_NET;
+      } else {
+        workers[t].threaded = true;
       }
     } else {
       /* Run inline for single-thread or empty range. */
@@ -733,8 +745,8 @@ static memdbg_status_t scan_maps_parallel(
   }
 
   /* Join all spawned threads. */
-  for (size_t t = 0U; t < actual_workers && spawn_ok && actual_workers > 1U; ++t) {
-    if (workers[t].status != MEMDBG_ERR_NET)
+  for (size_t t = 0U; t < actual_workers; ++t) {
+    if (workers[t].threaded)
       (void)pthread_join(threads[t], NULL);
   }
 
@@ -1234,11 +1246,14 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
   for (size_t mi = 0U; mi < maps.count && !out->truncated; ++mi) {
     const memdbg_map_entry_t *map = &maps.entries[mi];
     if (map->end <= map->start) continue;
+    if ((map->protection & MEMDBG_MAP_PROT_READ) != MEMDBG_MAP_PROT_READ)
+      continue;
     if (map->start >= scan_end || map->end <= request->start) continue;
 
     uint64_t mstart = map->start > request->start ? map->start : request->start;
     uint64_t mend   = map->end < scan_end ? map->end : scan_end;
     if (mend <= mstart) continue;
+    scan_metric_inc(&out->regions_scanned);
 
     size_t carry = 0U;
     uint64_t scanned = 0U;
@@ -1262,17 +1277,24 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
       size_t window = carry + read_len;
       uint64_t base_addr = mstart + scanned - (uint64_t)carry;
 
-      for (size_t i = 0U; i + sizeof(uint64_t) <= window && !out->truncated; i += alignment) {
-        uint64_t candidate;
-        memcpy(&candidate, buffer + i, sizeof(candidate));
-        if (candidate == request->target_address) {
-          uint64_t addr = base_addr + i;
-          memdbg_status_t as = scan_builder_append(&builder, addr);
-          if (as != MEMDBG_OK) {
-            free(buffer);
-            memdbg_process_maps_free(&maps);
-            process_scan_guard_end();
-            return as;
+      size_t first = first_aligned_offset(base_addr, mstart, mstart, alignment);
+      if (first < window) {
+        for (size_t i = first;
+             i + sizeof(uint64_t) <= window && !out->truncated;
+             i += alignment) {
+          uint64_t addr = base_addr + (uint64_t)i;
+          if (addr > mend || sizeof(uint64_t) > mend - addr) break;
+
+          uint64_t candidate;
+          memcpy(&candidate, buffer + i, sizeof(candidate));
+          if (candidate == request->target_address) {
+            memdbg_status_t as = scan_builder_append(&builder, addr);
+            if (as != MEMDBG_OK) {
+              free(buffer);
+              memdbg_process_maps_free(&maps);
+              process_scan_guard_end();
+              return as;
+            }
           }
         }
       }
@@ -1287,7 +1309,6 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
 
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
-  out->regions_scanned = (uint32_t)maps.count;
   free(buffer);
   memdbg_process_maps_free(&maps);
   process_scan_guard_end();

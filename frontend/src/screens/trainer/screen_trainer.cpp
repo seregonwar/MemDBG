@@ -213,6 +213,15 @@ static void apply_locked_cheats(AppState &state) {
   }
 }
 
+static void apply_enabled_cheats(AppState &state) {
+  int applied = 0;
+  for (auto &cheat : state.cheats) {
+    if (cheat.enabled && apply_cheat(state, cheat)) applied++;
+  }
+  set_status(state, "Applied " + std::to_string(applied) + " trainer entries");
+  push_notification(state, "Applied " + std::to_string(applied) + " trainer entries");
+}
+
 /* ---- Main draw ---- */
 void draw_trainer(AppState &state, ImVec2 avail) {
   const float scl = ui::dpi_scale();
@@ -326,6 +335,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   /* Apply locked cheats automatically */
   apply_locked_cheats(state);
 
+  static bool skip_apply_enabled = false;
   static bool skip_clear_disabled = false;
   ImGui::BeginDisabled(!state.client.connected() || client_async_busy(state));
   if (ImGui::BeginTable("TrainerListActions", 3,
@@ -337,10 +347,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     if (ui::soft_button((std::string(icons::kPlay) + "  " + locale::tr("trainer.apply_enabled")).c_str(), ImVec2(-1, 38.0f * scl))) {
-      int applied=0;
-      for (auto &cheat : state.cheats) if (cheat.enabled && apply_cheat(state,cheat)) applied++;
-      set_status(state, "Applied "+std::to_string(applied)+" trainer entries");
-      push_notification(state, "Applied " + std::to_string(applied) + " trainer entries");
+      ImGui::OpenPopup("ConfirmApplyEnabledTrainer");
     }
     ImGui::EndDisabled();
     ImGui::TableSetColumnIndex(1);
@@ -353,6 +360,12 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     ImGui::EndTable();
   } else {
     ImGui::EndDisabled();
+  }
+  if (ui::confirm_modal("ConfirmApplyEnabledTrainer",
+                        "Apply all enabled trainer entries?",
+                        "This can write several process addresses in one action. Validate the PID and loaded trainer before continuing.",
+                        &skip_apply_enabled, true)) {
+    apply_enabled_cheats(state);
   }
   if (ui::confirm_modal("ConfirmClearDisabled",
                         locale::tr("trainer.confirm_clear_disabled"), nullptr,

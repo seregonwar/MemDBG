@@ -1282,7 +1282,6 @@ static void draw_gui_plugin_dropdown(AppState &state) {
   if (gui_plugins.empty()) return;
 
   const float scl = ui::dpi_scale();
-  const float row_h = 28.0f * scl;
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f * scl, 4.0f * scl));
 
   /* Determine current preview text */

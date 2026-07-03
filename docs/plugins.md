@@ -15,6 +15,8 @@ MemDBG-Plugin/
 ├── manifest.json
 └── plugins/
     ├── context_dump.py
+    ├── example_gui_plugin.py
+    ├── example_gui_plugin.ui.json
     └── session_brief.lua
 ```
 
@@ -107,3 +109,26 @@ The SDK reads `MEMDBG_CONTEXT` or the context path passed as argv[1]. It exposes
 `hello`, `process_list`, `process_maps`, `process_info`, `memory_read`, and
 `memory_write`. It also includes `run_mcp_stdio(api)` for building MCP stdio
 servers that expose MemDBG tools to external clients.
+
+## Declarative GUI Layouts
+
+Python GUI plugins can keep their runtime logic in Python while moving the
+widget tree to an external JSON file. Include `mcp_server/gui_layout.py`, ship a
+layout next to the plugin, then render it with a small view model:
+
+```python
+from mcp_server.gui import GuiBuilder
+from mcp_server.gui_layout import GuiLayout
+
+gui = GuiBuilder()
+layout = GuiLayout.from_file("my_plugin.ui.json")
+layout.render(gui, {
+    "status": "Ready",
+    "items": ["PID 1: game"],
+})
+```
+
+The JSON uses the same widget names the native bridge already understands, such
+as `text`, `button`, `checkbox`, `combo`, `input_text`, `table`, and
+`batch_read_table`. It also supports lightweight helpers for `if`, `row`, and
+`repeat` blocks plus `$name` bindings into the view model.

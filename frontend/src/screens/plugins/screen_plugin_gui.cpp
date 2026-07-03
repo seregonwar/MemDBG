@@ -37,8 +37,6 @@ std::string find_python_interpreter() {
 
 
 void draw_plugin_gui(AppState &state, ImVec2 avail) {
-  const float scl = ui::dpi_scale();
-
   if (state.plugin_gui_active_id.empty()) {
     ImGui::BeginChild("PluginGUIPlaceholder", avail, false);
     ui::draw_empty_state("No Plugin Selected",

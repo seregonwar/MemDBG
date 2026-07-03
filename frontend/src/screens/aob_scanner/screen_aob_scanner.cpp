@@ -7,6 +7,7 @@
 #include "app_state.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "confirm_modal.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -302,9 +303,21 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
                                           ? MEMDBG_CAP_SCAN_PROCESS_AOB
                                           : MEMDBG_CAP_SCAN_AOB);
   ImGui::BeginDisabled(!can_scan);
-  if (ui::primary_button(scan_label.c_str(), ui::full_button(42)))
-    run_aob_scan(state);
+  if (ui::primary_button(scan_label.c_str(), ui::full_button(42))) {
+    if (state.aob_process_wide)
+      ImGui::OpenPopup("ConfirmProcessAOBScan");
+    else
+      run_aob_scan(state);
+  }
   ImGui::EndDisabled();
+  static bool skip_process_aob_confirm = false;
+  if (ui::confirm_modal("ConfirmProcessAOBScan",
+                        state.aob_text_mode ? "Search text across the process?"
+                                            : "Scan AOB across the process?",
+                        "Process-wide pattern scans read many memory maps. Prefer a selected range first when a title or payload session is unstable.",
+                        &skip_process_aob_confirm, true)) {
+    run_aob_scan(state);
+  }
 
   /* Progress bar for async AOB scans */
   if (state.scan_async_pending)

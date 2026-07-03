@@ -81,6 +81,7 @@ struct GuiWidget {
   bool        current_checked = false;
   int         current_selected = 0;
   int         current_combo_selected = 0;
+  uint64_t    address_value = 0;  /* batch_item memory address */
 };
 
 /* ------------------------------------------------------------------ */
