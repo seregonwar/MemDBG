@@ -30,6 +30,10 @@ extern "C" {
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
 #define MEMDBG_BATCH_READ_MAX_ITEMS 64U
+/* Per-item byte cap for batch reads. Kept well below 1 GiB so the running
+ * offset + item length arithmetic in memdbg_memory_batch_read() cannot
+ * overflow a uint32_t, while still covering any practical single read. */
+#define MEMDBG_BATCH_READ_MAX_ITEM_BYTES (64U * 1024U * 1024U)
 #define MEMDBG_BATCH_WRITE_MAX_ITEMS 64U
 #define MEMDBG_SCAN_VALUE_MAX 16U
 #define MEMDBG_MAP_PROT_READ 1U

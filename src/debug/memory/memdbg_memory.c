@@ -158,7 +158,17 @@ memdbg_status_t memdbg_memory_batch_read(
 
     uint32_t len = items[i].length;
     if (len == 0U) { results[i].status = (uint32_t)MEMDBG_OK; continue; }
-    if (offset + len > data_capacity) {
+    /* Validate len against a sane per-item limit before the offset arithmetic to
+     * avoid 32-bit wrap when len is near UINT32_MAX. Each item is capped at the
+     * well below-4 GiB range MEMDBG_BATCH_READ_MAX_ITEM_BYTES. */
+    if (len > MEMDBG_BATCH_READ_MAX_ITEM_BYTES) {
+      results[i].status = (uint32_t)MEMDBG_ERR_PARAM;
+      overall = MEMDBG_ERR_PARAM;
+      continue;
+    }
+    /* Compute in size_t (>= 32 bit, 64 bit on the supported payloads) so the
+     * addition cannot overflow before the capacity comparison. */
+    if ((size_t)offset + (size_t)len > (size_t)data_capacity) {
       results[i].status = (uint32_t)MEMDBG_ERR_OVERFLOW;
       overall = MEMDBG_ERR_OVERFLOW;
       continue;
