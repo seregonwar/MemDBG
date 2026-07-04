@@ -102,6 +102,11 @@ void apply_theme() {
   style.ScrollbarRounding = 2.0f;
   style.GrabRounding = 2.0f;
   style.TabRounding = 2.0f;
+  style.AntiAliasedLines = true;
+  style.AntiAliasedLinesUseTex = true;
+  style.AntiAliasedFill = true;
+  style.CurveTessellationTol = 1.05f;
+  style.CircleTessellationMaxError = 0.20f;
 }
 
 void draw_background(ImDrawList *draw_list, ImVec2 pos, ImVec2 size) {

@@ -142,6 +142,44 @@ public:
   bool process_stop(int32_t pid);
   bool process_continue(int32_t pid);
   bool process_kill(int32_t pid);
+  struct ProcessProtectResult {
+    uint32_t old_protection = 0;
+    uint32_t new_protection = 0;
+  };
+  struct ProcessAllocResult {
+    uint64_t address = 0;
+    uint64_t length = 0;
+  };
+  struct StackFrame {
+    uint64_t frame_pointer = 0;
+    uint64_t saved_frame_pointer = 0;
+    uint64_t return_address = 0;
+    uint64_t stack_address = 0;
+    uint64_t code_address = 0;
+    std::vector<uint8_t> stack_bytes;
+    std::vector<uint8_t> code_bytes;
+  };
+  struct KernelBase {
+    uint64_t text_base = 0;
+    uint64_t data_base = 0;
+  };
+  bool process_protect(int32_t pid, uint64_t address, uint64_t length,
+                       uint32_t protection, ProcessProtectResult &out);
+  bool process_alloc(int32_t pid, uint64_t hint, uint64_t length,
+                     uint32_t protection, uint32_t flags,
+                     ProcessAllocResult &out);
+  bool process_free(int32_t pid, uint64_t address, uint64_t length);
+  bool process_stack(const memdbg_process_stack_request_t &request,
+                     std::vector<StackFrame> &out, bool &truncated);
+  bool process_call(const memdbg_process_call_request_t &request,
+                    memdbg_process_call_response_t &out);
+  bool kernel_base(KernelBase &out);
+  bool kernel_read(uint64_t address, uint32_t length,
+                   std::vector<uint8_t> &out);
+  bool kernel_write(uint64_t address, const std::vector<uint8_t> &data);
+  bool console_notify(const std::string &text);
+  bool console_print(const std::string &text);
+  bool console_reboot();
 
   /* ---- Debugger ---- */
   struct DebugThreadEntry {
@@ -159,6 +197,12 @@ public:
   };
   struct DebugDbregs {
     memdbg_debug_dbregs_t dbregs{};
+  };
+  struct DebugFpregs {
+    memdbg_debug_fpregs_t fpregs{};
+  };
+  struct DebugFsGsBase {
+    memdbg_debug_fsgsbase_t base{};
   };
   struct DebugBreakpointEntry {
     uint64_t address = 0;
@@ -187,6 +231,10 @@ public:
   bool debug_set_regs(int32_t lwp, const DebugRegs &in);
   bool debug_get_dbregs(int32_t lwp, DebugDbregs &out);
   bool debug_set_dbregs(int32_t lwp, const DebugDbregs &in);
+  bool debug_get_fpregs(int32_t lwp, DebugFpregs &out);
+  bool debug_set_fpregs(int32_t lwp, const DebugFpregs &in);
+  bool debug_get_fsgsbase(int32_t lwp, DebugFsGsBase &out);
+  bool debug_set_fsgsbase(int32_t lwp, const DebugFsGsBase &in);
   bool debug_set_breakpoint(uint64_t address, uint32_t kind);
   bool debug_set_breakpoint_cond(uint64_t address, uint32_t kind,
                                  uint32_t cond_reg, uint32_t cond_op,

@@ -40,7 +40,7 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
   if (state.plugin_gui_active_id.empty()) {
     ImGui::BeginChild("PluginGUIPlaceholder", avail, false);
     ui::draw_empty_state("No Plugin Selected",
-                         "Choose a GUI plugin from the Plugins sidebar dropdown.");
+                         "Choose a GUI plugin from the sidebar Plugin Apps launcher.");
     ImGui::EndChild();
     return;
   }

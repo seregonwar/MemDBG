@@ -246,6 +246,14 @@ jobs:
           sha=${{ github.sha }}
           EOF
                 (cd "dist/$pkg" && ditto -c -k --sequesterRsrc --keepParent "MemDBG.app" "../$pkg.app.zip")
+                ln -s /Applications "dist/$pkg/Applications"
+                hdiutil create \
+                  -volname "MemDBG ${MEMDBG_RELEASE_VERSION}" \
+                  -srcfolder "dist/$pkg" \
+                  -ov \
+                  -format UDZO \
+                  "dist/$pkg.dmg"
+                rm -f "dist/$pkg/Applications"
                 rm -rf "dist/$pkg"
               else
                 mkdir -p "dist/$pkg/assets"
@@ -260,6 +268,12 @@ jobs:
                 cp "$probe_bin" "dist/$pkg/"
                 chmod +x "dist/$pkg/$(basename "$frontend_bin")" "dist/$pkg/$(basename "$probe_bin")"
                 cp assets/app-icon.png "dist/$pkg/assets/app-icon.png"
+                plugin_repo="$(dirname "$frontend_bin")/plugin-repository"
+                if [ -d "$plugin_repo" ]; then
+                  cp -R "$plugin_repo" "dist/$pkg/plugin-repository"
+                elif [ -d plugin-repository ]; then
+                  cp -R plugin-repository "dist/$pkg/plugin-repository"
+                fi
                 if [ "${{ matrix.platform }}" = "windows" ]; then
                   cp assets/app-icon.ico "dist/$pkg/assets/app-icon.ico"
                 fi
@@ -317,10 +331,133 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  mobile-ios:
+    name: Mobile iOS/iPadOS IPA
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Detect iOS project
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d mobile/ios/MemDBG.xcworkspace ]; then
+            echo "enabled=workspace" >> "$GITHUB_OUTPUT"
+          elif [ -d mobile/ios/MemDBG.xcodeproj ]; then
+            echo "enabled=project" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=none" >> "$GITHUB_OUTPUT"
+            echo "iOS project not present yet; see mobile/ios/README.md"
+          fi
+
+      - name: Build unsigned IPA
+        if: steps.detect.outputs.enabled != 'none'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios dist
+          if [ "${{ steps.detect.outputs.enabled }}" = "workspace" ]; then
+            xcodebuild \
+              -workspace mobile/ios/MemDBG.xcworkspace \
+              -scheme MemDBGMobile \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath build/ios/MemDBG.xcarchive \
+              CODE_SIGNING_ALLOWED=NO \
+              archive
+          else
+            xcodebuild \
+              -project mobile/ios/MemDBG.xcodeproj \
+              -scheme MemDBGMobile \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath build/ios/MemDBG.xcarchive \
+              CODE_SIGNING_ALLOWED=NO \
+              archive
+          fi
+          app_path=$(find build/ios/MemDBG.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)
+          if [ -z "$app_path" ]; then
+            echo "Archived iOS app not found" >&2
+            find build/ios -maxdepth 6 -print | sort
+            exit 1
+          fi
+          mkdir -p build/ios/Payload
+          cp -R "$app_path" build/ios/Payload/MemDBG.app
+          (cd build/ios && zip -qry "../../dist/MemDBG-mobile-ios.ipa" Payload)
+
+      - name: Upload iOS artifact
+        if: steps.detect.outputs.enabled != 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MemDBG-mobile-ios
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+  mobile-android:
+    name: Mobile Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Detect Android project
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x mobile/android/gradlew ]; then
+            echo "enabled=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=0" >> "$GITHUB_OUTPUT"
+            echo "Android Gradle project not present yet; see mobile/android/README.md"
+          fi
+
+      - name: Set up JDK
+        if: steps.detect.outputs.enabled == '1'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        if: steps.detect.outputs.enabled == '1'
+        uses: android-actions/setup-android@v3
+
+      - name: Build release APK
+        if: steps.detect.outputs.enabled == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mobile/android
+          ./gradlew --no-daemon assembleRelease
+          cd ../..
+          mkdir -p dist
+          find mobile/android -type f -path '*/build/outputs/apk/release/*.apk' \
+            -exec cp {} dist/ \;
+
+      - name: Upload Android artifact
+        if: steps.detect.outputs.enabled == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MemDBG-mobile-android
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - build
+      - mobile-ios
+      - mobile-android
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -340,11 +477,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          find release-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.elf' -o -name '*.a' \) \
+          find release-artifacts -type f \( \
+            -name '*.tar.gz' -o \
+            -name '*.zip' -o \
+            -name '*.dmg' -o \
+            -name '*.ipa' -o \
+            -name '*.apk' -o \
+            -name '*.aab' -o \
+            -name '*.AppImage' -o \
+            -name '*.elf' -o \
+            -name '*.a' \
+          \) \
             -exec cp {} release-assets/ \;
           cd release-assets
           shopt -s nullglob
-          assets=( *.tar.gz *.zip *.elf *.a )
+          assets=( *.tar.gz *.zip *.dmg *.ipa *.apk *.aab *.AppImage *.elf *.a )
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "No release assets found" >&2
             exit 1

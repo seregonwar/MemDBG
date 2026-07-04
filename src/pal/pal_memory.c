@@ -13,6 +13,7 @@
  */
 
 #include "memdbg/pal/pal_memory.h"
+#include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_fileio.h"
 
 #include <errno.h>
@@ -210,6 +211,27 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
   return MEMDBG_OK;
 }
 
+memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
+                                   uint32_t protection,
+                                   uint32_t *old_protection) {
+  (void)pid; (void)address; (void)length; (void)protection;
+  if (old_protection != NULL) *old_protection = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
+                                 uint32_t protection, uint32_t flags,
+                                 uint64_t *address_out) {
+  (void)pid; (void)hint; (void)length; (void)protection; (void)flags;
+  if (address_out != NULL) *address_out = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length) {
+  (void)pid; (void)address; (void)length;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
 /* Batch uses the fd cache for /proc/pid/mem — avoids opening duplicate
    fds when a scan already cached the fd for this PID. */
 struct pal_memory_batch { int fd; int pid; bool cached_fd; };
@@ -302,6 +324,27 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
     return errno == EACCES || errno == EPERM ? MEMDBG_ERR_PERMISSION : MEMDBG_ERR_IO;
   if (written_out != NULL) *written_out = length - io.piod_len;
   return MEMDBG_OK;
+}
+
+memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
+                                   uint32_t protection,
+                                   uint32_t *old_protection) {
+  (void)pid; (void)address; (void)length; (void)protection;
+  if (old_protection != NULL) *old_protection = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
+                                 uint32_t protection, uint32_t flags,
+                                 uint64_t *address_out) {
+  (void)pid; (void)hint; (void)length; (void)protection; (void)flags;
+  if (address_out != NULL) *address_out = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length) {
+  (void)pid; (void)address; (void)length;
+  return MEMDBG_ERR_UNSUPPORTED;
 }
 
 /* FreeBSD batch falls back to individual ptrace calls. */
@@ -431,6 +474,64 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
   return MEMDBG_OK;
 }
 
+#if defined(MEMDBG_PAL_PS5)
+static int memdbg_prot_to_native(uint32_t protection) {
+  int native = 0;
+  if ((protection & MEMDBG_MAP_PROT_READ) != 0U) native |= PROT_READ;
+  if ((protection & MEMDBG_MAP_PROT_WRITE) != 0U) native |= PROT_WRITE;
+  if ((protection & MEMDBG_MAP_PROT_EXEC) != 0U) native |= PROT_EXEC;
+  return native;
+}
+
+static uint32_t native_prot_to_memdbg(int protection) {
+  uint32_t out = 0U;
+  if ((protection & PROT_READ) != 0) out |= MEMDBG_MAP_PROT_READ;
+  if ((protection & PROT_WRITE) != 0) out |= MEMDBG_MAP_PROT_WRITE;
+  if ((protection & PROT_EXEC) != 0) out |= MEMDBG_MAP_PROT_EXEC;
+  return out;
+}
+#endif
+
+memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
+                                   uint32_t protection,
+                                   uint32_t *old_protection) {
+  if (old_protection != NULL) *old_protection = 0U;
+  if (pid <= 1 || address == 0U || length == 0U)
+    return MEMDBG_ERR_PARAM;
+
+#if defined(MEMDBG_PAL_PS5)
+  int old_native = kernel_get_vmem_protection((pid_t)pid, (intptr_t)address,
+                                              length);
+  if (old_native < 0) return mdbg_errno_status();
+  if (old_protection != NULL)
+    *old_protection = native_prot_to_memdbg(old_native);
+
+  int new_native = memdbg_prot_to_native(protection);
+  if (kernel_mprotect((pid_t)pid, (intptr_t)address, length, new_native) != 0 &&
+      kernel_set_vmem_protection((pid_t)pid, (intptr_t)address, length,
+                                 new_native) != 0) {
+    return mdbg_errno_status();
+  }
+  return MEMDBG_OK;
+#else
+  (void)protection;
+  return MEMDBG_ERR_UNSUPPORTED;
+#endif
+}
+
+memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
+                                 uint32_t protection, uint32_t flags,
+                                 uint64_t *address_out) {
+  (void)pid; (void)hint; (void)length; (void)protection; (void)flags;
+  if (address_out != NULL) *address_out = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length) {
+  (void)pid; (void)address; (void)length;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
 struct pal_memory_batch { int pid; };
 pal_memory_batch_t *pal_memory_batch_begin(int pid) {
   if (pid <= 1) return NULL;
@@ -488,6 +589,27 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
                                  size_t *written_out) {
   (void)pid; (void)address; (void)buffer; (void)length;
   if (written_out != NULL) *written_out = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
+                                   uint32_t protection,
+                                   uint32_t *old_protection) {
+  (void)pid; (void)address; (void)length; (void)protection;
+  if (old_protection != NULL) *old_protection = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
+                                 uint32_t protection, uint32_t flags,
+                                 uint64_t *address_out) {
+  (void)pid; (void)hint; (void)length; (void)protection; (void)flags;
+  if (address_out != NULL) *address_out = 0U;
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length) {
+  (void)pid; (void)address; (void)length;
   return MEMDBG_ERR_UNSUPPORTED;
 }
 

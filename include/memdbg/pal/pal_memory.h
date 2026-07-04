@@ -31,6 +31,21 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
                                  const void *buffer, size_t length,
                                  size_t *written_out);
 
+/* Change protection for a target process range.  `protection` uses the
+   MEMDBG_MAP_PROT_* bitmask from memdbg_protocol.h.  When available,
+   old_protection receives the previous platform protection bits mapped back
+   to MEMDBG_MAP_PROT_*. */
+memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
+                                   uint32_t protection,
+                                   uint32_t *old_protection);
+
+/* Remote allocation/free are exposed through the protocol but only platforms
+   with a safe remote syscall bridge should implement them. */
+memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
+                                 uint32_t protection, uint32_t flags,
+                                 uint64_t *address_out);
+memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length);
+
 /* Maximum number of items in a single batch read request. */
 #define PAL_MEMORY_BATCH_MAX 64U
 

@@ -9,14 +9,17 @@
 #include "ui_icons.hpp"
 #include "confirm_modal.hpp"
 #include "debugger_disassembly.hpp"
+#include "trainer_format.hpp"
 
 #include <algorithm>
 #include <cinttypes>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <future>
+#include <sstream>
 #include <string>
 
 namespace memdbg::frontend {
@@ -63,12 +66,61 @@ struct DebuggerState {
   char bp_filename[256] = "breakpoints.mbp";
   char wp_filename[256] = "watchpoints.mwp";
 
+  /* Patch Studio */
+  struct PatchEntry {
+    uint64_t address = 0;
+    uint32_t original_protection = 0;
+    uint32_t applied_protection = 0;
+    bool has_protection = false;
+    bool applied = false;
+    std::string label;
+    std::vector<uint8_t> original;
+    std::vector<uint8_t> patched;
+    std::string status;
+  };
+  char patch_name[96] = "Code patch";
+  char patch_addr_input[32] = "0x0";
+  char patch_bytes_input[512] = "90";
+  char patch_filename[256] = "patches.mpatch";
+  int patch_mode = 0; /* 0 = bytes, 1 = NOP fill, 2 = INT3 fill */
+  int patch_length = 1;
+  bool patch_use_mprotect = true;
+  bool patch_restore_protection = true;
+  std::vector<PatchEntry> patches;
+
+  /* IDE analysis notebook */
+  struct NotebookEntry {
+    uint64_t id = 0;
+    uint64_t address = 0;
+    std::string kind;
+    std::string label;
+    std::string note;
+    std::string bytes;
+  };
+  char notebook_label[96] = "Bookmark";
+  char notebook_addr_input[32] = "0x0";
+  char notebook_note[512] = "";
+  char notebook_filename[256] = "debugger.workspace";
+  char notebook_report_filename[256] = "debugger_report.md";
+  int notebook_kind = 0; /* 0=code, 1=data, 2=stack, 3=patch, 4=note */
+  uint64_t notebook_next_id = 1;
+  std::vector<NotebookEntry> notebook;
+
 
 
   /* Stack view */
   std::vector<uint8_t> stack_bytes;
+  std::vector<Client::StackFrame> stack_frames;
   uint64_t stack_base = 0;
+  uint64_t stack_refresh_sp = 0;
+  bool stack_truncated = false;
+  bool stack_walk_used = false;
   bool stack_needs_refresh = true;
+
+  Client::DebugFpregs fpregs{};
+  Client::DebugFsGsBase fsgsbase{};
+  bool has_fpregs = false;
+  bool has_fsgsbase = false;
 };
 
 static DebuggerState s_dbg_state;
@@ -482,6 +534,50 @@ static int64_t reg_input_cell(const char *label, int64_t value) {
   return value;
 }
 
+static void draw_hex_blob_table(const char *id, const uint8_t *data,
+                                size_t length, float height) {
+  if (data == nullptr || length == 0) {
+    ImGui::TextColored(ui::colors().dim, "%s", "No bytes");
+    return;
+  }
+
+  const float scl = ui::dpi_scale();
+  if (ImGui::BeginTable(id, 3,
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+                        ImVec2(0, height))) {
+    ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed,
+                            76.0f * scl);
+    ImGui::TableSetupColumn("Hex", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("ASCII", ImGuiTableColumnFlags_WidthFixed,
+                            150.0f * scl);
+    ImGui::TableHeadersRow();
+
+    for (size_t off = 0; off < length; off += 16) {
+      const size_t row_len = std::min<size_t>(16, length - off);
+      char hex[16 * 3 + 1] = {};
+      char ascii[17] = {};
+      size_t hp = 0;
+      for (size_t i = 0; i < row_len; ++i) {
+        hp += static_cast<size_t>(std::snprintf(hex + hp, sizeof(hex) - hp,
+                                                "%02X ", data[off + i]));
+        const uint8_t c = data[off + i];
+        ascii[i] = (c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '.';
+      }
+      ascii[row_len] = '\0';
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextColored(ui::colors().dim, "+0x%04zX", off);
+      ImGui::TableSetColumnIndex(1);
+      ImGui::TextUnformatted(hex);
+      ImGui::TableSetColumnIndex(2);
+      ImGui::TextColored(ui::colors().muted, "%s", ascii);
+    }
+    ImGui::EndTable();
+  }
+}
+
 enum class RegField {
   RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP,
   R8, R9, R10, R11, R12, R13, R14, R15, RIP, RFLAGS,
@@ -577,16 +673,1074 @@ static void refresh_stack(AppState &state) {
   if (!ds.stopped || ds.selected_lwp == 0) return;
 
   uint64_t rsp = (uint64_t)ds.regs.regs.r_rsp;
-  if (rsp == ds.stack_base && !ds.stack_needs_refresh) return;
+  if (rsp == ds.stack_refresh_sp && !ds.stack_needs_refresh) return;
 
   ds.stack_bytes.clear();
+  ds.stack_frames.clear();
   ds.stack_base = rsp;
+  ds.stack_refresh_sp = rsp;
+  ds.stack_truncated = false;
+  ds.stack_walk_used = false;
   ds.stack_needs_refresh = false;
 
-  /* Read 64 quadwords (512 bytes) above RSP */
-  if (!state.client.memory_read(ds.pid, rsp, 512, ds.stack_bytes) || ds.stack_bytes.empty()) {
-    ds.stack_needs_refresh = true;
+  if (payload_supports(state, MEMDBG_CAP_STACK_WALK)) {
+    memdbg_process_stack_request_t request{};
+    request.pid = ds.pid;
+    request.lwp = ds.selected_lwp;
+    request.frame_pointer = (uint64_t)ds.regs.regs.r_rbp;
+    request.stack_pointer = rsp;
+    request.max_frames = MEMDBG_STACK_MAX_FRAMES;
+    request.max_bytes_per_frame = 512;
+    request.code_window = 64;
+
+    if (state.client.process_stack(request, ds.stack_frames, ds.stack_truncated)) {
+      ds.stack_walk_used = true;
+      if (!ds.stack_frames.empty() && !ds.stack_frames.front().stack_bytes.empty()) {
+        ds.stack_base = ds.stack_frames.front().stack_address;
+        ds.stack_bytes = ds.stack_frames.front().stack_bytes;
+      }
+    } else {
+      set_status(state, "Stack walk: " + state.client.last_error());
+    }
+  }
+
+  /* Read 64 quadwords (512 bytes) above RSP when stack walking is unavailable
+   * or the walked frame did not include a raw stack window. */
+  if (ds.stack_bytes.empty()) {
+    ds.stack_base = rsp;
+    if (!state.client.memory_read(ds.pid, rsp, 512, ds.stack_bytes) ||
+        ds.stack_bytes.empty()) {
+      ds.stack_needs_refresh = true;
+      return;
+    }
+  }
+}
+
+static void refresh_extended_regs(AppState &state) {
+  auto &ds = dstate(state);
+  if (!state.client.connected() || !ds.attached || ds.selected_lwp == 0) return;
+  if (client_async_busy(state)) return;
+
+  ds.has_fpregs = false;
+  ds.has_fsgsbase = false;
+  if (payload_supports(state, MEMDBG_CAP_DEBUG_FPREGS)) {
+    Client::DebugFpregs fpregs{};
+    if (state.client.debug_get_fpregs(ds.selected_lwp, fpregs)) {
+      ds.fpregs = fpregs;
+      ds.has_fpregs = true;
+    } else {
+      set_status(state, "FPU regs: " + state.client.last_error());
+    }
+  }
+  if (payload_supports(state, MEMDBG_CAP_DEBUG_FSGS)) {
+    Client::DebugFsGsBase fsgsbase{};
+    if (state.client.debug_get_fsgsbase(ds.selected_lwp, fsgsbase)) {
+      ds.fsgsbase = fsgsbase;
+      ds.has_fsgsbase = true;
+    } else {
+      set_status(state, "FS/GS base: " + state.client.last_error());
+    }
+  }
+}
+
+static constexpr size_t kPatchStudioMaxBytes = 256U;
+
+static size_t visible_disasm_byte_count(const std::string &bytes) {
+  std::istringstream in(bytes);
+  std::string token;
+  size_t count = 0U;
+  while (in >> token) {
+    while (!token.empty() && (token.back() == ',' || token.back() == ';'))
+      token.pop_back();
+    if (token.size() != 2U || !is_hex_digit_string(token)) break;
+    ++count;
+  }
+  return count;
+}
+
+static std::string disasm_bytes_compact(const std::string &bytes) {
+  std::istringstream in(bytes);
+  std::string token;
+  std::string out;
+  while (in >> token) {
+    while (!token.empty() && (token.back() == ',' || token.back() == ';'))
+      token.pop_back();
+    if (token.size() != 2U || !is_hex_digit_string(token)) break;
+    out += token;
+  }
+  return out;
+}
+
+static void set_patch_address(DebuggerState &ds, uint64_t address) {
+  std::snprintf(ds.patch_addr_input, sizeof(ds.patch_addr_input),
+                "0x%016" PRIX64, address);
+}
+
+static void set_patch_bytes(DebuggerState &ds,
+                            const std::vector<uint8_t> &bytes) {
+  const std::string hex = bytes_to_hex(bytes);
+  std::snprintf(ds.patch_bytes_input, sizeof(ds.patch_bytes_input), "%s",
+                hex.c_str());
+}
+
+static void stage_patch_from_disasm_line(AppState &state, DebuggerState &ds,
+                                         const debugger::DisassemblyLine &line,
+                                         bool nop_fill) {
+  const size_t byte_count = std::clamp(visible_disasm_byte_count(line.bytes),
+                                       size_t{1U}, kPatchStudioMaxBytes);
+  set_patch_address(ds, line.address);
+  std::snprintf(ds.patch_name, sizeof(ds.patch_name), "%s",
+                line.mnemonic.empty() ? "Code patch" : line.mnemonic.c_str());
+  ds.patch_length = static_cast<int>(byte_count);
+  if (nop_fill) {
+    ds.patch_mode = 1;
+    std::vector<uint8_t> nop(byte_count, 0x90U);
+    set_patch_bytes(ds, nop);
+    set_status(state, "Patch Studio staged NOP at " + hex_u64(line.address));
+  } else {
+    ds.patch_mode = 0;
+    const std::string compact = disasm_bytes_compact(line.bytes);
+    std::snprintf(ds.patch_bytes_input, sizeof(ds.patch_bytes_input), "%s",
+                  compact.empty() ? "90" : compact.c_str());
+    set_status(state, "Patch Studio staged " + hex_u64(line.address));
+  }
+}
+
+static bool build_patch_bytes(const DebuggerState &ds,
+                              std::vector<uint8_t> &out,
+                              std::string &error) {
+  out.clear();
+  const int length = std::clamp(ds.patch_length, 1,
+                                static_cast<int>(kPatchStudioMaxBytes));
+  switch (ds.patch_mode) {
+  case 0:
+    if (!parse_hex_bytes(ds.patch_bytes_input, out)) {
+      error = "Invalid patch bytes";
+      return false;
+    }
+    if (out.size() > kPatchStudioMaxBytes) {
+      error = "Patch is larger than 256 bytes";
+      return false;
+    }
+    return true;
+  case 1:
+    out.assign(static_cast<size_t>(length), 0x90U);
+    return true;
+  case 2:
+    out.assign(static_cast<size_t>(length), 0xCCU);
+    return true;
+  default:
+    error = "Unknown patch mode";
+    return false;
+  }
+}
+
+static bool read_patch_original(AppState &state, DebuggerState &ds,
+                                uint64_t address, size_t length,
+                                std::vector<uint8_t> &out,
+                                std::string &error) {
+  out.clear();
+  if (length == 0U || length > kPatchStudioMaxBytes) {
+    error = "Invalid patch length";
+    return false;
+  }
+  if (!state.client.memory_read(ds.pid, address, static_cast<uint32_t>(length),
+                                out) ||
+      out.size() != length) {
+    error = "Read original bytes: " + state.client.last_error();
+    return false;
+  }
+  return true;
+}
+
+static bool write_patch_bytes(AppState &state, DebuggerState &ds,
+                              uint64_t address,
+                              const std::vector<uint8_t> &bytes,
+                              DebuggerState::PatchEntry *entry,
+                              std::string &error) {
+  if (bytes.empty()) {
+    error = "Patch is empty";
+    return false;
+  }
+
+  bool protected_write = false;
+  uint32_t old_protection = 0U;
+  uint32_t new_protection = 0U;
+  if (ds.patch_use_mprotect &&
+      payload_supports(state, MEMDBG_CAP_MEMORY_PROTECT)) {
+    Client::ProcessProtectResult protection{};
+    if (state.client.process_protect(
+            ds.pid, address, static_cast<uint64_t>(bytes.size()),
+            MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE |
+                MEMDBG_MAP_PROT_EXEC,
+            protection)) {
+      protected_write = true;
+      old_protection = protection.old_protection;
+      new_protection = protection.new_protection;
+      if (entry != nullptr) {
+        entry->original_protection = old_protection;
+        entry->applied_protection = new_protection;
+        entry->has_protection = true;
+      }
+    }
+  }
+
+  uint32_t written = 0U;
+  if (!state.client.memory_write(ds.pid, address, bytes, written) ||
+      written != bytes.size()) {
+    error = "Write patch: " + state.client.last_error();
+    if (protected_write && ds.patch_restore_protection &&
+        old_protection != 0U) {
+      Client::ProcessProtectResult ignored{};
+      (void)state.client.process_protect(
+          ds.pid, address, static_cast<uint64_t>(bytes.size()),
+          old_protection, ignored);
+    }
+    return false;
+  }
+
+  if (protected_write && ds.patch_restore_protection &&
+      old_protection != 0U) {
+    Client::ProcessProtectResult restored{};
+    if (!state.client.process_protect(
+            ds.pid, address, static_cast<uint64_t>(bytes.size()),
+            old_protection, restored)) {
+      error = "Patch written, protection restore failed: " +
+              state.client.last_error();
+      if (entry != nullptr) entry->status = error;
+      return true;
+    }
+  }
+
+  if (entry != nullptr) {
+    entry->status = "Wrote " + std::to_string(written) + " bytes";
+  }
+  return true;
+}
+
+static bool compose_patch_entry(AppState &state, DebuggerState &ds,
+                                DebuggerState::PatchEntry &entry,
+                                std::string &error) {
+  uint64_t address = 0;
+  if (!parse_input_u64(ds.patch_addr_input, address)) {
+    error = "Invalid patch address";
+    return false;
+  }
+  std::vector<uint8_t> patched;
+  if (!build_patch_bytes(ds, patched, error)) return false;
+
+  entry = DebuggerState::PatchEntry{};
+  entry.address = address;
+  entry.label = ds.patch_name[0] != '\0' ? ds.patch_name : "Code patch";
+  entry.patched = std::move(patched);
+  if (!read_patch_original(state, ds, entry.address, entry.patched.size(),
+                           entry.original, error)) {
+    return false;
+  }
+  entry.status = "Captured " + std::to_string(entry.original.size()) +
+                 " original bytes";
+  return true;
+}
+
+static void capture_patch(AppState &state, DebuggerState &ds) {
+  DebuggerState::PatchEntry entry;
+  std::string error;
+  if (!compose_patch_entry(state, ds, entry, error)) {
+    set_status(state, "Patch capture: " + error);
     return;
+  }
+  ds.patches.push_back(std::move(entry));
+  set_status(state, "Patch captured");
+}
+
+static void apply_composed_patch(AppState &state, DebuggerState &ds) {
+  DebuggerState::PatchEntry entry;
+  std::string error;
+  if (!compose_patch_entry(state, ds, entry, error)) {
+    set_status(state, "Patch apply: " + error);
+    return;
+  }
+  if (!write_patch_bytes(state, ds, entry.address, entry.patched, &entry,
+                         error)) {
+    set_status(state, "Patch apply: " + error);
+    return;
+  }
+  entry.applied = true;
+  ds.patches.push_back(std::move(entry));
+  ds.disasm_needs_refresh = true;
+  refresh_disasm(state);
+  set_status(state, "Patch applied");
+  push_notification(state, "Patch applied at " + hex_u64(ds.patches.back().address));
+}
+
+static void reapply_patch(AppState &state, DebuggerState &ds,
+                          DebuggerState::PatchEntry &entry) {
+  std::string error;
+  if (!write_patch_bytes(state, ds, entry.address, entry.patched, &entry,
+                         error)) {
+    entry.status = error;
+    set_status(state, "Patch reapply: " + error);
+    return;
+  }
+  entry.applied = true;
+  ds.disasm_needs_refresh = true;
+  refresh_disasm(state);
+  set_status(state, "Patch reapplied");
+}
+
+static void restore_patch(AppState &state, DebuggerState &ds,
+                          DebuggerState::PatchEntry &entry) {
+  if (entry.original.empty()) {
+    entry.status = "No original bytes captured";
+    set_status(state, entry.status);
+    return;
+  }
+  std::string error;
+  if (!write_patch_bytes(state, ds, entry.address, entry.original, &entry,
+                         error)) {
+    entry.status = error;
+    set_status(state, "Patch restore: " + error);
+    return;
+  }
+  entry.applied = false;
+  entry.status = "Original bytes restored";
+  ds.disasm_needs_refresh = true;
+  refresh_disasm(state);
+  set_status(state, "Patch restored");
+}
+
+static void add_patch_to_trainer(AppState &state, DebuggerState &ds,
+                                 const DebuggerState::PatchEntry &entry) {
+  if (entry.patched.empty() || entry.original.empty()) {
+    set_status(state, "Patch must have ON and OFF bytes before trainer export");
+    return;
+  }
+  CheatEntry cheat;
+  cheat.description = entry.label.empty() ? "Patch Studio" : entry.label;
+  cheat.pid = ds.pid;
+  cheat.address = entry.address;
+  cheat.value_type = MEMDBG_VALUE_BYTES;
+  cheat.value_text = bytes_to_hex(entry.patched);
+  cheat.bytes = entry.patched;
+  cheat.off_bytes = entry.original;
+  cheat.has_off_bytes = true;
+  cheat.enabled = true;
+  cheat.locked = false;
+  cheat.status = "Created from Patch Studio";
+  state.cheats.push_back(std::move(cheat));
+  set_status(state, "Patch exported to Trainer");
+  push_notification(state, "Trainer entry added from Patch Studio");
+}
+
+static const char *notebook_kind_name(int kind) {
+  switch (kind) {
+  case 0: return "code";
+  case 1: return "data";
+  case 2: return "stack";
+  case 3: return "patch";
+  case 4: return "note";
+  default: return "note";
+  }
+}
+
+static std::string workspace_escape(const std::string &value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char ch : value) {
+    switch (ch) {
+    case '\\': out += "\\\\"; break;
+    case '\t': out += "\\t"; break;
+    case '\n': out += "\\n"; break;
+    case '\r': out += "\\r"; break;
+    default: out.push_back(ch); break;
+    }
+  }
+  return out;
+}
+
+static std::string workspace_unescape(const std::string &value) {
+  std::string out;
+  out.reserve(value.size());
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (value[i] != '\\' || i + 1U >= value.size()) {
+      out.push_back(value[i]);
+      continue;
+    }
+    const char next = value[++i];
+    switch (next) {
+    case '\\': out.push_back('\\'); break;
+    case 't': out.push_back('\t'); break;
+    case 'n': out.push_back('\n'); break;
+    case 'r': out.push_back('\r'); break;
+    default:
+      out.push_back('\\');
+      out.push_back(next);
+      break;
+    }
+  }
+  return out;
+}
+
+static std::vector<std::string> split_tab_fields(const std::string &line) {
+  std::vector<std::string> fields;
+  size_t start = 0U;
+  while (start <= line.size()) {
+    const size_t pos = line.find('\t', start);
+    if (pos == std::string::npos) {
+      fields.push_back(line.substr(start));
+      break;
+    }
+    fields.push_back(line.substr(start, pos - start));
+    start = pos + 1U;
+  }
+  return fields;
+}
+
+static std::string markdown_cell(std::string value) {
+  value = trim_copy(std::move(value));
+  for (char &ch : value) {
+    if (ch == '|') ch = '/';
+    else if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+  }
+  return value.empty() ? "-" : value;
+}
+
+static bool parse_notebook_bytes(const std::string &text,
+                                 std::vector<uint8_t> &out) {
+  if (parse_hex_bytes(text.c_str(), out)) return true;
+  const std::string compact = disasm_bytes_compact(text);
+  return !compact.empty() && parse_hex_bytes(compact.c_str(), out);
+}
+
+static void add_notebook_entry(AppState &state, DebuggerState &ds,
+                               uint64_t address, const std::string &kind,
+                               const std::string &label,
+                               const std::string &bytes,
+                               const std::string &note) {
+  DebuggerState::NotebookEntry entry;
+  entry.id = ds.notebook_next_id++;
+  entry.address = address;
+  entry.kind = kind.empty() ? "note" : kind;
+  entry.label = label.empty() ? "Bookmark" : label;
+  entry.bytes = bytes;
+  entry.note = note;
+  ds.notebook.push_back(std::move(entry));
+  set_status(state, "Notebook bookmark added at " + hex_u64(address));
+}
+
+static void add_notebook_from_register(AppState &state, DebuggerState &ds,
+                                       const char *reg_name,
+                                       uint64_t address) {
+  char note[128];
+  std::snprintf(note, sizeof(note), "Captured from %s while LWP %d was selected",
+                reg_name, static_cast<int>(ds.selected_lwp));
+  add_notebook_entry(state, ds, address,
+                     std::strcmp(reg_name, "RSP") == 0 ||
+                             std::strcmp(reg_name, "RBP") == 0
+                         ? "stack"
+                         : "code",
+                     reg_name, "", note);
+}
+
+static void save_notebook_to_file(AppState &state, DebuggerState &ds,
+                                  const char *path) {
+  std::ofstream out(path);
+  if (!out) {
+    set_status(state, std::string("Cannot write: ") + path);
+    return;
+  }
+  out << "# MemDBG Debugger Notebook\n";
+  out << "# format: address kind label bytes note\n";
+  for (const auto &entry : ds.notebook) {
+    out << hex_u64(entry.address) << "\t"
+        << workspace_escape(entry.kind) << "\t"
+        << workspace_escape(entry.label) << "\t"
+        << workspace_escape(entry.bytes) << "\t"
+        << workspace_escape(entry.note) << "\n";
+  }
+  set_status(state, "Saved " + std::to_string(ds.notebook.size()) +
+                    " notebook item(s) to " + path);
+}
+
+static void load_notebook_from_file(AppState &state, DebuggerState &ds,
+                                    const char *path) {
+  std::ifstream in(path);
+  if (!in) {
+    set_status(state, std::string("Cannot read: ") + path);
+    return;
+  }
+  size_t loaded = 0U;
+  std::string line;
+  while (std::getline(in, line)) {
+    line = trim_copy(std::move(line));
+    if (line.empty() || line[0] == '#') continue;
+    const auto fields = split_tab_fields(line);
+    if (fields.size() < 5U) continue;
+    uint64_t address = 0;
+    if (!parse_input_u64(fields[0].c_str(), address)) continue;
+    DebuggerState::NotebookEntry entry;
+    entry.id = ds.notebook_next_id++;
+    entry.address = address;
+    entry.kind = workspace_unescape(fields[1]);
+    entry.label = workspace_unescape(fields[2]);
+    entry.bytes = workspace_unescape(fields[3]);
+    entry.note = workspace_unescape(fields[4]);
+    ds.notebook.push_back(std::move(entry));
+    ++loaded;
+  }
+  set_status(state, "Loaded " + std::to_string(loaded) +
+                    " notebook item(s) from " + path);
+}
+
+static void export_notebook_report(AppState &state, DebuggerState &ds,
+                                   const char *path) {
+  std::ofstream out(path);
+  if (!out) {
+    set_status(state, std::string("Cannot write report: ") + path);
+    return;
+  }
+  out << "# MemDBG Debugger Report\n\n";
+  out << "- PID: " << ds.pid << "\n";
+  out << "- Selected LWP: " << ds.selected_lwp << "\n";
+  out << "- State: " << (ds.stopped ? "stopped" : "running") << "\n";
+  out << "- RIP: " << hex_u64(static_cast<uint64_t>(ds.regs.regs.r_rip)) << "\n";
+  out << "- RSP: " << hex_u64(static_cast<uint64_t>(ds.regs.regs.r_rsp)) << "\n";
+  out << "- RBP: " << hex_u64(static_cast<uint64_t>(ds.regs.regs.r_rbp)) << "\n";
+  out << "- Threads: " << ds.threads.size() << "\n";
+  out << "- Breakpoints: " << ds.breakpoints.size() << "\n";
+  out << "- Watchpoints: " << ds.watchpoints.size() << "\n";
+  out << "- Patches: " << ds.patches.size() << "\n";
+  out << "- Notebook items: " << ds.notebook.size() << "\n\n";
+
+  out << "## Notebook\n\n";
+  out << "| Kind | Address | Label | Bytes | Note |\n";
+  out << "|---|---:|---|---|---|\n";
+  for (const auto &entry : ds.notebook) {
+    out << "| " << markdown_cell(entry.kind)
+        << " | `" << hex_u64(entry.address) << "`"
+        << " | " << markdown_cell(entry.label)
+        << " | `" << markdown_cell(entry.bytes) << "`"
+        << " | " << markdown_cell(entry.note) << " |\n";
+  }
+
+  out << "\n## Patches\n\n";
+  out << "| State | Address | Label | Original | Patch | Status |\n";
+  out << "|---|---:|---|---|---|---|\n";
+  for (const auto &patch : ds.patches) {
+    out << "| " << (patch.applied ? "applied" : "captured")
+        << " | `" << hex_u64(patch.address) << "`"
+        << " | " << markdown_cell(patch.label)
+        << " | `" << bytes_to_hex(patch.original) << "`"
+        << " | `" << bytes_to_hex(patch.patched) << "`"
+        << " | " << markdown_cell(patch.status) << " |\n";
+  }
+
+  set_status(state, std::string("Notebook report exported to ") + path);
+}
+
+static void save_patches_to_file(AppState &state, DebuggerState &ds,
+                                 const char *path) {
+  std::ofstream out(path);
+  if (!out) {
+    set_status(state, std::string("Cannot write: ") + path);
+    return;
+  }
+  out << "# MemDBG Patch Studio\n";
+  out << "# format: address applied original_hex patched_hex label\n";
+  for (const auto &patch : ds.patches) {
+    std::string label = patch.label;
+    std::replace(label.begin(), label.end(), '\t', ' ');
+    out << hex_u64(patch.address) << "\t"
+        << (patch.applied ? 1 : 0) << "\t"
+        << bytes_to_hex(patch.original) << "\t"
+        << bytes_to_hex(patch.patched) << "\t"
+        << label << "\n";
+  }
+  set_status(state, "Saved " + std::to_string(ds.patches.size()) +
+                    " patch(es) to " + path);
+}
+
+static void load_patches_from_file(AppState &state, DebuggerState &ds,
+                                   const char *path) {
+  std::ifstream in(path);
+  if (!in) {
+    set_status(state, std::string("Cannot read: ") + path);
+    return;
+  }
+
+  size_t loaded = 0U;
+  std::string line;
+  while (std::getline(in, line)) {
+    line = trim_copy(std::move(line));
+    if (line.empty() || line[0] == '#') continue;
+
+    std::istringstream row(line);
+    std::string addr_text;
+    std::string applied_text;
+    std::string original_text;
+    std::string patched_text;
+    if (!(row >> addr_text >> applied_text >> original_text >> patched_text))
+      continue;
+    std::string label;
+    std::getline(row, label);
+    label = trim_copy(std::move(label));
+
+    uint64_t address = 0;
+    std::vector<uint8_t> original;
+    std::vector<uint8_t> patched;
+    if (!parse_input_u64(addr_text.c_str(), address) ||
+        !parse_hex_bytes(original_text.c_str(), original) ||
+        !parse_hex_bytes(patched_text.c_str(), patched) ||
+        original.empty() || patched.empty()) {
+      continue;
+    }
+
+    DebuggerState::PatchEntry entry;
+    entry.address = address;
+    entry.label = label.empty() ? "Loaded patch" : label;
+    entry.original = std::move(original);
+    entry.patched = std::move(patched);
+    entry.applied = applied_text == "1" || applied_text == "true";
+    entry.status = "Loaded from patch manifest";
+    ds.patches.push_back(std::move(entry));
+    ++loaded;
+  }
+
+  set_status(state, "Loaded " + std::to_string(loaded) +
+                    " patch(es) from " + path);
+}
+
+static void draw_patch_studio(AppState &state, DebuggerState &ds,
+                              bool client_busy, float scl) {
+  ImGui::TextColored(ui::colors().muted, "Patch Studio  PID %d", ds.pid);
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "%s",
+                     payload_supports(state, MEMDBG_CAP_MEMORY_PROTECT)
+                         ? "mprotect available"
+                         : "write-only protection path");
+  ImGui::Spacing();
+
+  const char *modes[] = {"Bytes", "NOP fill", "INT3 fill"};
+  ImGui::BeginDisabled(client_busy || !ds.stopped || ds.selected_lwp == 0);
+  if (ImGui::BeginTable("PatchStudioEditor", 5,
+                        ImGuiTableFlags_SizingStretchProp |
+                            ImGuiTableFlags_PadOuterX)) {
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed,
+                            170.0f * scl);
+    ImGui::TableSetupColumn("Mode", ImGuiTableColumnFlags_WidthFixed,
+                            112.0f * scl);
+    ImGui::TableSetupColumn("Length", ImGuiTableColumnFlags_WidthFixed,
+                            74.0f * scl);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed,
+                            188.0f * scl);
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    set_table_item_width(150.0f * scl);
+    ImGui::InputText("##patchname", ds.patch_name, sizeof(ds.patch_name));
+    ImGui::TableSetColumnIndex(1);
+    set_table_item_width(150.0f * scl);
+    ImGui::InputText("##patchaddr", ds.patch_addr_input,
+                     sizeof(ds.patch_addr_input),
+                     ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::TableSetColumnIndex(2);
+    set_table_item_width(104.0f * scl);
+    ImGui::Combo("##patchmode", &ds.patch_mode, modes, IM_ARRAYSIZE(modes));
+    ImGui::TableSetColumnIndex(3);
+    set_table_item_width(62.0f * scl);
+    ImGui::InputInt("##patchlength", &ds.patch_length);
+    ds.patch_length = std::clamp(ds.patch_length, 1,
+                                 static_cast<int>(kPatchStudioMaxBytes));
+    ImGui::TableSetColumnIndex(4);
+    if (ui::soft_button((std::string(icons::kSave) + "  Capture").c_str(),
+                        ImVec2(88.0f * scl, 0))) {
+      capture_patch(state, ds);
+    }
+    ImGui::SameLine();
+    if (ui::primary_button((std::string(icons::kEdit) + "  Apply").c_str(),
+                           ImVec2(90.0f * scl, 0))) {
+      apply_composed_patch(state, ds);
+    }
+    ImGui::EndTable();
+  }
+
+  ImGui::Spacing();
+  if (ds.patch_mode == 0) {
+    ImGui::TextColored(ui::colors().muted, "%s", "Patch bytes");
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("##patchbytes", ds.patch_bytes_input,
+                     sizeof(ds.patch_bytes_input));
+  } else {
+    std::vector<uint8_t> preview(static_cast<size_t>(ds.patch_length),
+                                 ds.patch_mode == 1 ? 0x90U : 0xCCU);
+    set_patch_bytes(ds, preview);
+    ImGui::TextColored(ui::colors().dim, "Generated bytes: %s",
+                       ds.patch_bytes_input);
+  }
+
+  ImGui::Checkbox("Use mprotect when available", &ds.patch_use_mprotect);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "Temporarily adds write permission for code maps when the payload supports PROCESS_PROTECT");
+  ImGui::SameLine();
+  ImGui::Checkbox("Restore protection", &ds.patch_restore_protection);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "Restore the previous map protection after writing the patch");
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  ImGui::BeginDisabled(client_busy);
+  ImGui::SetNextItemWidth(220.0f * scl);
+  ImGui::InputText("##patchfile", ds.patch_filename,
+                   sizeof(ds.patch_filename));
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kSave) + "  Save").c_str(),
+                      ImVec2(88.0f * scl, 0))) {
+    save_patches_to_file(state, ds, ds.patch_filename);
+  }
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kLoad) + "  Load").c_str(),
+                      ImVec2(88.0f * scl, 0))) {
+    load_patches_from_file(state, ds, ds.patch_filename);
+  }
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  if (ds.patches.empty()) {
+    ui::draw_empty_state("No patches staged",
+                         "Right-click disassembly rows to stage code patches, then capture or apply them here.");
+    return;
+  }
+
+  const float table_h =
+      std::max(200.0f * scl, ImGui::GetContentRegionAvail().y - 8.0f * scl);
+  if (ImGui::BeginTable("PatchStudioTable", 8,
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_ScrollX |
+                            ImGuiTableFlags_Resizable,
+                        ImVec2(0, table_h))) {
+    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed,
+                            44.0f * scl);
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+    ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed,
+                            158.0f * scl);
+    ImGui::TableSetupColumn("Original", ImGuiTableColumnFlags_WidthFixed,
+                            170.0f * scl);
+    ImGui::TableSetupColumn("Patch", ImGuiTableColumnFlags_WidthFixed,
+                            170.0f * scl);
+    ImGui::TableSetupColumn("Prot", ImGuiTableColumnFlags_WidthFixed,
+                            80.0f * scl);
+    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed,
+                            330.0f * scl);
+    ImGui::TableHeadersRow();
+    for (size_t i = 0; i < ds.patches.size(); ++i) {
+      auto &patch = ds.patches[i];
+      ImGui::PushID(static_cast<int>(i));
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextColored(patch.applied ? ui::colors().success
+                                       : ui::colors().dim,
+                         "%s", patch.applied ? "ON" : "OFF");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::TextUnformatted(patch.label.c_str());
+      if (ImGui::IsItemHovered() && !patch.label.empty())
+        ImGui::SetTooltip("%s", patch.label.c_str());
+      ImGui::TableSetColumnIndex(2);
+      ImGui::TextUnformatted(hex_u64(patch.address).c_str());
+      ImGui::TableSetColumnIndex(3);
+      const std::string original = bytes_to_hex(patch.original);
+      ImGui::TextUnformatted(original.c_str());
+      if (ImGui::IsItemHovered() && !original.empty())
+        ImGui::SetTooltip("%s", original.c_str());
+      ImGui::TableSetColumnIndex(4);
+      const std::string patched = bytes_to_hex(patch.patched);
+      ImGui::TextUnformatted(patched.c_str());
+      if (ImGui::IsItemHovered() && !patched.empty())
+        ImGui::SetTooltip("%s", patched.c_str());
+      ImGui::TableSetColumnIndex(5);
+      if (patch.has_protection)
+        ImGui::Text("%s>%s", prot_text(patch.original_protection).c_str(),
+                    prot_text(patch.applied_protection).c_str());
+      else
+        ImGui::TextColored(ui::colors().dim, "%s", "-");
+      ImGui::TableSetColumnIndex(6);
+      ImGui::TextColored(patch.status.find("failed") != std::string::npos
+                             ? ui::colors().warning
+                             : ui::colors().muted,
+                         "%s", patch.status.c_str());
+      ImGui::TableSetColumnIndex(7);
+      ImGui::BeginDisabled(client_busy || !ds.stopped);
+      if (ImGui::SmallButton("Apply"))
+        reapply_patch(state, ds, patch);
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Restore"))
+        restore_patch(state, ds, patch);
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Trainer"))
+        add_patch_to_trainer(state, ds, patch);
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Notebook")) {
+        add_notebook_entry(state, ds, patch.address, "patch",
+                           patch.label, bytes_to_hex(patch.patched),
+                           "Original " + bytes_to_hex(patch.original) +
+                               "; " + patch.status);
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Stage")) {
+        set_patch_address(ds, patch.address);
+        std::snprintf(ds.patch_name, sizeof(ds.patch_name), "%s",
+                      patch.label.c_str());
+        ds.patch_mode = 0;
+        ds.patch_length = static_cast<int>(patch.patched.size());
+        set_patch_bytes(ds, patch.patched);
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Forget")) {
+        ds.patches.erase(ds.patches.begin() + static_cast<std::ptrdiff_t>(i));
+        ImGui::PopID();
+        break;
+      }
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
+  }
+}
+
+static void set_notebook_address(DebuggerState &ds, uint64_t address) {
+  std::snprintf(ds.notebook_addr_input, sizeof(ds.notebook_addr_input),
+                "0x%016" PRIX64, address);
+}
+
+static void draw_analysis_notebook(AppState &state, DebuggerState &ds,
+                                   bool client_busy, float scl) {
+  static const char *kind_names[] = {"code", "data", "stack", "patch", "note"};
+
+  ImGui::TextColored(ui::colors().muted, "Analysis Notebook  PID %d",
+                     ds.pid);
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "%zu item(s)", ds.notebook.size());
+  ImGui::Spacing();
+
+  ImGui::BeginDisabled(client_busy);
+  if (ImGui::BeginTable("NotebookEditor", 5,
+                        ImGuiTableFlags_SizingStretchProp |
+                            ImGuiTableFlags_PadOuterX)) {
+    ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed,
+                            96.0f * scl);
+    ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed,
+                            170.0f * scl);
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch,
+                            1.0f);
+    ImGui::TableSetupColumn("Note", ImGuiTableColumnFlags_WidthStretch,
+                            1.4f);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed,
+                            116.0f * scl);
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    set_table_item_width(88.0f * scl);
+    ImGui::Combo("##notekind", &ds.notebook_kind, kind_names,
+                 IM_ARRAYSIZE(kind_names));
+    ImGui::TableSetColumnIndex(1);
+    set_table_item_width(150.0f * scl);
+    ImGui::InputText("##noteaddr", ds.notebook_addr_input,
+                     sizeof(ds.notebook_addr_input),
+                     ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::TableSetColumnIndex(2);
+    set_table_item_width(140.0f * scl);
+    ImGui::InputText("##notelabel", ds.notebook_label,
+                     sizeof(ds.notebook_label));
+    ImGui::TableSetColumnIndex(3);
+    set_table_item_width(180.0f * scl);
+    ImGui::InputText("##notenote", ds.notebook_note,
+                     sizeof(ds.notebook_note));
+    ImGui::TableSetColumnIndex(4);
+    if (ui::primary_button((std::string(icons::kAdd) + "  Add").c_str(),
+                           ImVec2(-1, 0))) {
+      uint64_t address = 0;
+      if (parse_input_u64(ds.notebook_addr_input, address)) {
+        add_notebook_entry(state, ds, address,
+                           notebook_kind_name(ds.notebook_kind),
+                           ds.notebook_label, "", ds.notebook_note);
+      } else {
+        set_status(state, "Notebook: invalid address");
+      }
+    }
+    ImGui::EndTable();
+  }
+
+  ImGui::Spacing();
+  ImGui::BeginDisabled(!ds.stopped || ds.selected_lwp == 0);
+  if (ui::soft_button("RIP", ImVec2(58.0f * scl, 0))) {
+    const uint64_t value = static_cast<uint64_t>(ds.regs.regs.r_rip);
+    set_notebook_address(ds, value);
+    add_notebook_from_register(state, ds, "RIP", value);
+  }
+  ImGui::SameLine();
+  if (ui::soft_button("RSP", ImVec2(58.0f * scl, 0))) {
+    const uint64_t value = static_cast<uint64_t>(ds.regs.regs.r_rsp);
+    set_notebook_address(ds, value);
+    add_notebook_from_register(state, ds, "RSP", value);
+  }
+  ImGui::SameLine();
+  if (ui::soft_button("RBP", ImVec2(58.0f * scl, 0))) {
+    const uint64_t value = static_cast<uint64_t>(ds.regs.regs.r_rbp);
+    set_notebook_address(ds, value);
+    add_notebook_from_register(state, ds, "RBP", value);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(190.0f * scl);
+  ImGui::InputText("##notebookfile", ds.notebook_filename,
+                   sizeof(ds.notebook_filename));
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kSave) + "  Save").c_str(),
+                      ImVec2(86.0f * scl, 0))) {
+    save_notebook_to_file(state, ds, ds.notebook_filename);
+  }
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kLoad) + "  Load").c_str(),
+                      ImVec2(86.0f * scl, 0))) {
+    load_notebook_from_file(state, ds, ds.notebook_filename);
+  }
+
+  ImGui::Spacing();
+  ImGui::SetNextItemWidth(190.0f * scl);
+  ImGui::InputText("##notebookreport", ds.notebook_report_filename,
+                   sizeof(ds.notebook_report_filename));
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kExport) + "  Report").c_str(),
+                      ImVec2(106.0f * scl, 0))) {
+    export_notebook_report(state, ds, ds.notebook_report_filename);
+  }
+  ImGui::SameLine();
+  static bool skip_clear_notebook = false;
+  if (ui::danger_button((std::string(icons::kTrash) + "  Clear").c_str(),
+                        ImVec2(94.0f * scl, 0))) {
+    ImGui::OpenPopup("ConfirmClearNotebook");
+  }
+  if (ui::confirm_modal("ConfirmClearNotebook",
+                        "Clear the debugger notebook?",
+                        "This removes the in-memory notebook items. Save first if you want to keep the workspace.",
+                        &skip_clear_notebook, true)) {
+    ds.notebook.clear();
+    set_status(state, "Notebook cleared");
+  }
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  if (ds.notebook.empty()) {
+    ui::draw_empty_state("No notebook items",
+                         "Use the quick register buttons, manual address field, or right-click disassembly and stack rows.");
+    return;
+  }
+
+  const float table_h =
+      std::max(210.0f * scl, ImGui::GetContentRegionAvail().y - 8.0f * scl);
+  if (ImGui::BeginTable("NotebookTable", 7,
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_ScrollX |
+                            ImGuiTableFlags_Resizable,
+                        ImVec2(0, table_h))) {
+    ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed,
+                            78.0f * scl);
+    ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed,
+                            158.0f * scl);
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch,
+                            1.0f);
+    ImGui::TableSetupColumn("Bytes", ImGuiTableColumnFlags_WidthFixed,
+                            170.0f * scl);
+    ImGui::TableSetupColumn("Note", ImGuiTableColumnFlags_WidthStretch,
+                            1.2f);
+    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed,
+                            58.0f * scl);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed,
+                            256.0f * scl);
+    ImGui::TableHeadersRow();
+
+    for (size_t i = 0; i < ds.notebook.size(); ++i) {
+      auto &entry = ds.notebook[i];
+      ImGui::PushID(static_cast<int>(entry.id));
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextColored(entry.kind == "patch" ? ui::colors().warning
+                                               : ui::colors().muted,
+                         "%s", entry.kind.c_str());
+      ImGui::TableSetColumnIndex(1);
+      const std::string addr = hex_u64(entry.address);
+      if (ImGui::Selectable(addr.c_str(), false,
+                            ImGuiSelectableFlags_SpanAllColumns)) {
+        ds.disasm_nav_addr = entry.address;
+        ds.disasm_reg_sel = 0;
+        ds.disasm_follow_rip = false;
+        ds.disasm_needs_refresh = true;
+        refresh_disasm(state);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", "Click to navigate disassembly");
+      ImGui::TableSetColumnIndex(2);
+      ImGui::TextUnformatted(entry.label.c_str());
+      if (ImGui::IsItemHovered() && !entry.label.empty())
+        ImGui::SetTooltip("%s", entry.label.c_str());
+      ImGui::TableSetColumnIndex(3);
+      ImGui::TextUnformatted(entry.bytes.empty() ? "-" : entry.bytes.c_str());
+      if (ImGui::IsItemHovered() && !entry.bytes.empty())
+        ImGui::SetTooltip("%s", entry.bytes.c_str());
+      ImGui::TableSetColumnIndex(4);
+      ImGui::TextUnformatted(entry.note.empty() ? "-" : entry.note.c_str());
+      if (ImGui::IsItemHovered() && !entry.note.empty())
+        ImGui::SetTooltip("%s", entry.note.c_str());
+      ImGui::TableSetColumnIndex(5);
+      ImGui::Text("%" PRIu64, entry.id);
+      ImGui::TableSetColumnIndex(6);
+      ImGui::BeginDisabled(client_busy);
+      if (ImGui::SmallButton("Disasm")) {
+        ds.disasm_nav_addr = entry.address;
+        ds.disasm_reg_sel = 0;
+        ds.disasm_follow_rip = false;
+        ds.disasm_needs_refresh = true;
+        refresh_disasm(state);
+      }
+      ImGui::SameLine();
+      std::vector<uint8_t> parsed_bytes;
+      const bool has_bytes = parse_notebook_bytes(entry.bytes, parsed_bytes);
+      ImGui::BeginDisabled(!has_bytes);
+      if (ImGui::SmallButton("Patch")) {
+        set_patch_address(ds, entry.address);
+        std::snprintf(ds.patch_name, sizeof(ds.patch_name), "%s",
+                      entry.label.empty() ? "Notebook patch"
+                                          : entry.label.c_str());
+        ds.patch_mode = 0;
+        ds.patch_length = static_cast<int>(parsed_bytes.size());
+        set_patch_bytes(ds, parsed_bytes);
+        set_status(state, "Patch Studio staged from notebook");
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Copy")) {
+        std::string text = entry.kind + " " + hex_u64(entry.address) +
+                           " " + entry.label;
+        if (!entry.note.empty()) text += " - " + entry.note;
+        ImGui::SetClipboardText(text.c_str());
+        set_status(state, "Notebook item copied");
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Delete")) {
+        ds.notebook.erase(ds.notebook.begin() +
+                          static_cast<std::ptrdiff_t>(i));
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        break;
+      }
+      ImGui::EndDisabled();
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
   }
 }
 
@@ -1222,6 +2376,78 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::EndTabItem();
     }
 
+    if (ImGui::BeginTabItem("Extended Registers")) {
+      const bool has_fp_cap = payload_supports(state, MEMDBG_CAP_DEBUG_FPREGS);
+      const bool has_fsgs_cap = payload_supports(state, MEMDBG_CAP_DEBUG_FSGS);
+      ImGui::TextColored(ui::colors().muted, "Extended registers (LWP %d)",
+                         (int)ds.selected_lwp);
+      ImGui::Spacing();
+      ImGui::BeginDisabled(client_busy || ds.selected_lwp == 0 || !ds.stopped ||
+                           (!has_fp_cap && !has_fsgs_cap));
+      if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh").c_str(),
+                          ImVec2(118.0f * scl, 0))) {
+        refresh_extended_regs(state);
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::TextColored(ui::colors().dim, "%s%s",
+                         has_fp_cap ? "FPU/YMM" : "FPU/YMM unsupported",
+                         has_fsgs_cap ? " + FS/GS" : "");
+      ImGui::Spacing();
+
+      if (!has_fp_cap && !has_fsgs_cap) {
+        ui::draw_empty_state("Extended registers unavailable",
+                             "The connected payload does not expose FPU/YMM or FS/GS register access.");
+      } else {
+        if (has_fsgs_cap) {
+          if (ds.has_fsgsbase) {
+            if (ImGui::BeginTable("DebuggerFsGsTable", 2,
+                                  ImGuiTableFlags_SizingStretchProp |
+                                      ImGuiTableFlags_RowBg)) {
+              ImGui::TableSetupColumn("Register");
+              ImGui::TableSetupColumn("Base");
+              ImGui::TableHeadersRow();
+              ImGui::TableNextRow();
+              ImGui::TableSetColumnIndex(0);
+              ImGui::TextUnformatted("FS");
+              ImGui::TableSetColumnIndex(1);
+              ImGui::Text("0x%016" PRIX64, ds.fsgsbase.base.fs_base);
+              ImGui::TableNextRow();
+              ImGui::TableSetColumnIndex(0);
+              ImGui::TextUnformatted("GS");
+              ImGui::TableSetColumnIndex(1);
+              ImGui::Text("0x%016" PRIX64, ds.fsgsbase.base.gs_base);
+              ImGui::EndTable();
+            }
+          } else {
+            ImGui::TextColored(ui::colors().dim, "%s", "Refresh to read FS/GS base values");
+          }
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::Spacing();
+        }
+
+        if (has_fp_cap) {
+          if (ds.has_fpregs) {
+            const uint32_t length = std::min<uint32_t>(
+                ds.fpregs.fpregs.length, MEMDBG_DEBUG_FPREGS_MAX);
+            ImGui::TextColored(ui::colors().muted,
+                               "FPU/YMM blob  length=%u  flags=0x%08X",
+                               length, ds.fpregs.fpregs.flags);
+            ImGui::Spacing();
+            const float table_h =
+                std::max(220.0f * scl, ImGui::GetContentRegionAvail().y - 8.0f * scl);
+            draw_hex_blob_table("DebuggerFpregsBlob", ds.fpregs.fpregs.data,
+                                length, table_h);
+          } else {
+            ImGui::TextColored(ui::colors().dim, "%s",
+                               "Refresh to read the FPU/YMM register blob");
+          }
+        }
+      }
+      ImGui::EndTabItem();
+    }
+
     static const char *cond_reg_names[] = {
       "None", "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
       "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15", "RIP"
@@ -1601,6 +2827,18 @@ void draw_debugger(AppState &state, ImVec2 avail) {
               }
               ImGui::EndDisabled();
               ImGui::Separator();
+              if (ImGui::MenuItem("Bookmark in Notebook")) {
+                add_notebook_entry(state, ds, dl.address, "code",
+                                   dl.mnemonic, dl.bytes,
+                                   "Captured from disassembly");
+              }
+              if (ImGui::MenuItem("Stage in Patch Studio")) {
+                stage_patch_from_disasm_line(state, ds, dl, false);
+              }
+              if (ImGui::MenuItem("Stage NOP patch")) {
+                stage_patch_from_disasm_line(state, ds, dl, true);
+              }
+              ImGui::Separator();
               ImGui::BeginDisabled(client_busy);
               if (has_bp) {
                 if (ImGui::MenuItem("Remove Breakpoint")) {
@@ -1680,6 +2918,16 @@ void draw_debugger(AppState &state, ImVec2 avail) {
           ImGui::EndTable();
         }
       }
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Patch Studio")) {
+      draw_patch_studio(state, ds, client_busy, scl);
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Notebook")) {
+      draw_analysis_notebook(state, ds, client_busy, scl);
       ImGui::EndTabItem();
     }
 
@@ -1839,6 +3087,81 @@ void draw_debugger(AppState &state, ImVec2 avail) {
         ImGui::SetTooltip("%s", locale::tr("debugger.auto_refresh_on_stop_tip"));
 
       ImGui::Spacing();
+      if (ds.stack_walk_used) {
+        ImGui::TextColored(ui::colors().muted, "Frames: %zu%s",
+                           ds.stack_frames.size(),
+                           ds.stack_truncated ? " (truncated)" : "");
+        ImGui::Spacing();
+        if (ds.stack_frames.empty()) {
+          ImGui::TextColored(ui::colors().dim, "%s",
+                             "No RBP-linked frames were recovered");
+        } else if (ImGui::BeginTable("##stackframetable", 6,
+                   ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                       ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+          ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed,
+                                  38.0f * scl);
+          ImGui::TableSetupColumn("RBP", ImGuiTableColumnFlags_WidthFixed,
+                                  158.0f * scl);
+          ImGui::TableSetupColumn("Saved RBP", ImGuiTableColumnFlags_WidthFixed,
+                                  158.0f * scl);
+          ImGui::TableSetupColumn("Return", ImGuiTableColumnFlags_WidthFixed,
+                                  158.0f * scl);
+          ImGui::TableSetupColumn("Stack", ImGuiTableColumnFlags_WidthFixed,
+                                  76.0f * scl);
+          ImGui::TableSetupColumn("Code", ImGuiTableColumnFlags_WidthFixed,
+                                  76.0f * scl);
+          ImGui::TableHeadersRow();
+          for (size_t i = 0; i < ds.stack_frames.size(); ++i) {
+            const auto &frame = ds.stack_frames[i];
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%zu", i);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("0x%016" PRIX64, frame.frame_pointer);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("0x%016" PRIX64, frame.saved_frame_pointer);
+            ImGui::TableSetColumnIndex(3);
+            const std::string ret_label =
+                hex_u64(frame.return_address) + "##ret" + std::to_string(i);
+            if (ImGui::Selectable(ret_label.c_str(), false,
+                                  ImGuiSelectableFlags_SpanAllColumns)) {
+              ds.disasm_nav_addr = frame.return_address;
+              ds.disasm_reg_sel = 0;
+              ds.disasm_needs_refresh = true;
+              refresh_disasm(state);
+            }
+            if (ImGui::IsItemHovered())
+              ImGui::SetTooltip("%s", "Disassemble at return address");
+            if (ImGui::BeginPopupContextItem()) {
+              if (ImGui::MenuItem("Bookmark return address")) {
+                add_notebook_entry(state, ds, frame.return_address,
+                                   "stack",
+                                   "Return frame " + std::to_string(i),
+                                   bytes_to_hex(frame.code_bytes),
+                                   "RBP " + hex_u64(frame.frame_pointer));
+              }
+              if (ImGui::MenuItem("Stage return address in Patch Studio")) {
+                set_patch_address(ds, frame.return_address);
+                std::snprintf(ds.patch_name, sizeof(ds.patch_name),
+                              "Return frame %zu", i);
+                ds.patch_mode = 1;
+                ds.patch_length = 1;
+                set_patch_bytes(ds, std::vector<uint8_t>{0x90U});
+              }
+              ImGui::EndPopup();
+            }
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%zu B", frame.stack_bytes.size());
+            ImGui::TableSetColumnIndex(5);
+            ImGui::Text("%zu B", frame.code_bytes.size());
+          }
+          ImGui::EndTable();
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+      }
+
       if (ds.stack_bytes.empty() && ds.stopped && ds.selected_lwp != 0) {
         ImGui::TextColored(ui::colors().dim, "%s", "Refresh to read the stack");
       } else if (ds.stack_bytes.empty()) {

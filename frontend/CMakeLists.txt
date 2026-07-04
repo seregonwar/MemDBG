@@ -34,6 +34,7 @@ project(memdbg_frontend VERSION ${MEMDBG_VERSION_NUMERIC} LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(MEMDBG_PLUGIN_REPOSITORY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../plugin-repository")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config} ${CMAKE_BINARY_DIR}/bin)
@@ -248,6 +249,11 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
             "$<TARGET_FILE_DIR:memdbg_frontend>/assets/app-icon.png"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${MEMDBG_PLUGIN_REPOSITORY_DIR}"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/plugin-repository"
+    COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:memdbg_frontend>/plugin-repository/.DS_Store"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/assets"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
@@ -259,6 +265,11 @@ else()
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
             "$<TARGET_FILE_DIR:memdbg_frontend>/assets/app-icon.png"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${MEMDBG_PLUGIN_REPOSITORY_DIR}"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/plugin-repository"
+    COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:memdbg_frontend>/plugin-repository/.DS_Store"
   )
 endif()
 

@@ -64,6 +64,5 @@ dkms.conf
 /.commandcode
 docs/x_project_article.md
 *.pyc
-/plugin-repository
 /PoC
 *.log

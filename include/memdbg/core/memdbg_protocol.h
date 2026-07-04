@@ -32,6 +32,9 @@ extern "C" {
 #define MEMDBG_BATCH_READ_MAX_ITEMS 64U
 #define MEMDBG_BATCH_WRITE_MAX_ITEMS 64U
 #define MEMDBG_SCAN_VALUE_MAX 16U
+#define MEMDBG_MAP_PROT_READ 1U
+#define MEMDBG_MAP_PROT_WRITE 2U
+#define MEMDBG_MAP_PROT_EXEC 4U
 
 typedef enum memdbg_command {
   MEMDBG_CMD_HELLO = 0x0001U,
@@ -75,6 +78,10 @@ typedef enum memdbg_command {
   MEMDBG_CMD_DEBUG_SET_BREAKPOINT_COND = 0x0613U,
   MEMDBG_CMD_DEBUG_CLEAR_ALL_BREAKPOINTS = 0x0614U,
   MEMDBG_CMD_DEBUG_CLEAR_ALL_WATCHPOINTS = 0x0615U,
+  MEMDBG_CMD_DEBUG_GET_FPREGS = 0x0616U,
+  MEMDBG_CMD_DEBUG_SET_FPREGS = 0x0617U,
+  MEMDBG_CMD_DEBUG_GET_FSGSBASE = 0x0618U,
+  MEMDBG_CMD_DEBUG_SET_FSGSBASE = 0x0619U,
 
   /* Tracer (syscall tracing, crash dump) */
   MEMDBG_CMD_TRACER_ATTACH = 0x0700U,
@@ -85,8 +92,20 @@ typedef enum memdbg_command {
   MEMDBG_CMD_BATCH_READ = 0x0202U,
   MEMDBG_CMD_BATCH_WRITE = 0x0203U,
   MEMDBG_CMD_BATCH_PROCESS_INFO = 0x0107U,
+  MEMDBG_CMD_PROCESS_PROTECT = 0x0108U,
+  MEMDBG_CMD_PROCESS_ALLOC = 0x0109U,
+  MEMDBG_CMD_PROCESS_FREE = 0x010AU,
+  MEMDBG_CMD_PROCESS_STACK = 0x010BU,
+  MEMDBG_CMD_PROCESS_CALL = 0x010CU,
+  MEMDBG_CMD_PROCESS_ELF_LOAD = 0x010DU,
   MEMDBG_CMD_TELEMETRY = 0x0400U,
   MEMDBG_CMD_DISCOVERY = 0x0500U,
+  MEMDBG_CMD_KERNEL_BASE = 0x0800U,
+  MEMDBG_CMD_KERNEL_READ = 0x0801U,
+  MEMDBG_CMD_KERNEL_WRITE = 0x0802U,
+  MEMDBG_CMD_CONSOLE_NOTIFY = 0x0900U,
+  MEMDBG_CMD_CONSOLE_PRINT = 0x0901U,
+  MEMDBG_CMD_CONSOLE_REBOOT = 0x0902U,
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
 
@@ -119,8 +138,19 @@ typedef enum memdbg_capability {
   MEMDBG_CAP_SCAN_PROCESS_AOB = 1U << 18,
   MEMDBG_CAP_DISCOVERY = 1U << 19,
   MEMDBG_CAP_DEBUGGER = 1U << 20,
-  MEMDBG_CAP_TRACER = 1U << 21
+  MEMDBG_CAP_TRACER = 1U << 21,
+  MEMDBG_CAP_MEMORY_PROTECT = 1U << 22,
+  MEMDBG_CAP_MEMORY_ALLOC = 1U << 23,
+  MEMDBG_CAP_STACK_WALK = 1U << 24,
+  MEMDBG_CAP_REMOTE_CALL = 1U << 25,
+  MEMDBG_CAP_KERNEL_ACCESS = 1U << 26,
+  MEMDBG_CAP_CONSOLE_UI = 1U << 27,
+  MEMDBG_CAP_DEBUG_FPREGS = 1U << 28,
+  MEMDBG_CAP_DEBUG_FSGS = 1U << 29,
+  MEMDBG_CAP_DISASSEMBLY = 1U << 30
 } memdbg_capability_t;
+
+#define MEMDBG_CAP_KLOG_FORWARD (1U << 31)
 
 typedef enum memdbg_value_type {
   MEMDBG_VALUE_BYTES = 0U,
@@ -291,6 +321,112 @@ typedef struct MEMDBG_PACKED memdbg_process_control_request {
   uint32_t action;
 } memdbg_process_control_request_t;
 
+typedef struct MEMDBG_PACKED memdbg_process_protect_request {
+  int32_t pid;
+  uint32_t protection; /* MEMDBG_MAP_PROT_* bitmask: 1=R, 2=W, 4=X */
+  uint64_t address;
+  uint64_t length;
+} memdbg_process_protect_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_protect_response {
+  uint32_t old_protection;
+  uint32_t new_protection;
+} memdbg_process_protect_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_alloc_request {
+  int32_t pid;
+  uint32_t protection; /* MEMDBG_MAP_PROT_* bitmask */
+  uint64_t hint;
+  uint64_t length;
+  uint32_t flags; /* bit 0 = honor hint when platform supports it */
+  uint32_t reserved;
+} memdbg_process_alloc_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_alloc_response {
+  uint64_t address;
+  uint64_t length;
+} memdbg_process_alloc_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_free_request {
+  int32_t pid;
+  uint32_t reserved;
+  uint64_t address;
+  uint64_t length;
+} memdbg_process_free_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_call_request {
+  int32_t pid;
+  uint32_t reserved;
+  uint64_t function_address;
+  uint64_t args[6];
+} memdbg_process_call_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_call_response {
+  uint64_t rax;
+} memdbg_process_call_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_elf_load_request {
+  int32_t pid;
+  uint32_t flags; /* bit 0 = jump to entry immediately */
+  uint64_t image_size;
+} memdbg_process_elf_load_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_elf_load_response {
+  uint64_t entry_address;
+  uint64_t load_base;
+} memdbg_process_elf_load_response_t;
+
+#define MEMDBG_STACK_MAX_FRAMES 64U
+#define MEMDBG_STACK_DEFAULT_CODE_WINDOW 200U
+#define MEMDBG_STACK_MAX_FRAME_BYTES 4096U
+
+typedef struct MEMDBG_PACKED memdbg_process_stack_request {
+  int32_t pid;
+  int32_t lwp;
+  uint64_t frame_pointer; /* 0 = use selected thread RBP when attached */
+  uint64_t stack_pointer; /* optional; used for frame 0 locals when RBP is 0 */
+  uint32_t max_frames;
+  uint32_t max_bytes_per_frame;
+  uint32_t code_window;
+  uint32_t flags;
+} memdbg_process_stack_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_stack_response_prefix {
+  uint32_t count;
+  uint32_t truncated;
+  uint32_t entry_size;
+  uint32_t data_size;
+} memdbg_process_stack_response_prefix_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_stack_frame {
+  uint64_t frame_pointer;
+  uint64_t saved_frame_pointer;
+  uint64_t return_address;
+  uint64_t stack_address;
+  uint64_t code_address;
+  uint32_t stack_size;
+  uint32_t code_size;
+  uint32_t stack_data_offset;
+  uint32_t code_data_offset;
+} memdbg_process_stack_frame_t;
+
+typedef struct MEMDBG_PACKED memdbg_kernel_base_response {
+  uint64_t text_base;
+  uint64_t data_base;
+} memdbg_kernel_base_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_kernel_memory_request {
+  uint64_t address;
+  uint32_t length;
+  uint32_t reserved;
+} memdbg_kernel_memory_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_console_text_request {
+  uint32_t length;
+  uint32_t reserved;
+  /* followed by 'length' bytes of UTF-8 text, NUL not required */
+} memdbg_console_text_request_t;
+
 /* ---- Batch process info (fetch title_id/path/name for many PIDs) ---- */
 
 typedef struct MEMDBG_PACKED memdbg_batch_process_info_request {
@@ -436,6 +572,20 @@ typedef struct MEMDBG_PACKED memdbg_debug_regs {
 typedef struct MEMDBG_PACKED memdbg_debug_dbregs {
   uint64_t dr[16];
 } memdbg_debug_dbregs_t;
+
+#define MEMDBG_DEBUG_FPREGS_MAX 1024U
+#define MEMDBG_DEBUG_FPREGS_FLAG_XSTATE 0x00000001U
+
+typedef struct MEMDBG_PACKED memdbg_debug_fpregs {
+  uint32_t length;
+  uint32_t flags;
+  uint8_t data[MEMDBG_DEBUG_FPREGS_MAX];
+} memdbg_debug_fpregs_t;
+
+typedef struct MEMDBG_PACKED memdbg_debug_fsgsbase {
+  uint64_t fs_base;
+  uint64_t gs_base;
+} memdbg_debug_fsgsbase_t;
 
 typedef struct MEMDBG_PACKED memdbg_debug_breakpoint_request {
   uint64_t address;

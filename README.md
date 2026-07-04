@@ -13,7 +13,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-black?style=flat-square)](LICENSE)
 [![Platform: PS4 / PS5](https://img.shields.io/badge/Platform-PS4%20%2F%20PS5-blue?style=flat-square)](#supported-platforms)
-[![Status: release](https://img.shields.io/badge/Status-release-green?style=flat-square)](#repository-status)
+[![Status: active development](https://img.shields.io/badge/Status-active%20development-orange?style=flat-square)](#repository-status)
 [![Downloads](https://img.shields.io/github/downloads/seregonwar/MemDBG/total?style=flat-square&color=brightgreen)](https://github.com/seregonwar/MemDBG/releases)
 [![Language: C11 / C++17](https://img.shields.io/badge/Language-C11%20%2F%20C%2B%2B17-red?style=flat-square)](#building)
 
@@ -55,7 +55,8 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 - **Single-binary payload** for PS4 (Orbis) and PS5 (Prospero), plus a Linux/macOS host build for offline development.
 - **Native desktop frontend** in C++17 with Dear ImGui, OpenGL, and GLFW — packaged as `.app` on macOS, `.exe` on Windows, and a `.desktop` entry on Linux.
 - **Capability-aware protocol** — the frontend adapts gracefully to older or partial payloads without crashing.
-- **Five scanner modes**: exact value, process-wide exact, process-wide AOB, pointer chain, unknown initial value, plus a heuristic **Smart Auto-Search** engine tuned for common game values (health, ammo, resources).
+- **Six payload scanner paths**: range exact, process-wide exact, range AOB, process-wide AOB, pointer chain, and unknown initial value, plus a heuristic **Smart Auto-Search** engine tuned for common game values (health, ammo, resources).
+- **Native debugger core** with attach/detach, stop/continue/step, thread control, software breakpoints, hardware breakpoints/watchpoints, register access, stack walking, and compact disassembly.
 - **Non-blocking UI** — connect, scan, and telemetry requests run on worker threads and stream results back via `std::future` polling.
 - **Repository-backed localization** — English is embedded, while additional languages are listed, downloaded, validated, and cached from the project repository.
 - **Lua / Python plugin system** — desktop-side scripts install from  `manifest.json` repositories, with a forkable default source at `seregonwar/MemDBG-Plugin` and a bundled local fallback under `plugin-repository/`.
@@ -83,7 +84,7 @@ MemDBG
 │   │   └── process/          Process metadata, map cache, map enrichment
 │   ├── privilege/            Sandbox escape + per-process elevation
 │   ├── telemetry/            UDP broadcast logger + discovery responder
-│   └── pal/                  Platform abstraction (network, memory, fileio, notify, lz4)
+│   └── pal/                  Platform abstraction (network, memory, kernel, debug, fileio, notify, lz4)
 ├── libmemdbg.a               Static library target (PS4 / PS5) for embedded use
 ├── memdbg-host               Host validation build (same C sources, host toolchain)
 └── frontend/                 C++17 + Dear ImGui desktop app
@@ -132,6 +133,7 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 | **Pointer Scan** | Trace pointer chains back from a target address with adjustable depth and alignment. |
 | **AOB Scan** | `48 8B ?? ??`-style pattern search with wildcards, process-wide or range mode, and per-map protection filtering. |
 | **Trainer** | Build cheats (name, address, type, ON/OFF/lock); import batchcodes (`offset`, `value`, `size`, AOB tokens); capture OFF values from live memory; set per-entry lock intervals; save and load `.cht`-style trainer files. |
+| **Debugger** | Attach to a process, inspect threads and GPR/debug/FPU registers, step/stop/continue, manage software breakpoints and hardware watchpoints, disassemble around live registers, walk stack frames, and view FS/GS or XSTATE-backed register blobs when the payload supports them. Patch Studio and Analysis Notebook are always available inside the debugger for reversible byte/NOP/INT3 code patches, bookmarks, notes, workspace save/load, Markdown reports, and trainer export. |
 | **Plugins** | Add  plugin sources by URL, refresh manifests, install/update/remove packages, and run desktop-side Lua/Python scripts with a MemDBG JSON context. |
 | **Logs** | Live UDP telemetry feed with start / stop / clear / copy; sender endpoint; bind-retry counter; received / dropped / evicted message stats. |
 | **Telemetry** | Payload runtime metrics (requires `PERF_TELEMETRY` capability): uptime, active connections, thread-pool size, total read/write bytes and call counts, throughput, scan-map LRU cache hit/miss rate, last-poll age. |
@@ -143,12 +145,21 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 - Global hotkeys: **F1** Home · **F5** Connect/Disconnect · **F6** Processes · **F7** Scanner · **F8** Memory · **F9** Trainer · **F10** Logs.
 - Toast notifications with auto fade-out and manual dismiss.
 - Sidebar grouped into **Main / Tools / Observe / System** sections.
-- Top bar with live chips for session state, loaded maps, scan hits, and active cheats.
+- Top bar with live chips for session state, loaded maps, scan hits, active cheats, update state, and connection actions.
+- Debugger workspace: stage patches from disassembly, bookmark code/stack/patch evidence, save notebook workspaces, and export Markdown reports for sharing reverse-engineering notes.
+- GUI plugin apps open from a dedicated sidebar launcher with active-plugin status and quick access to plugin management.
 - Status bar showing FPS, session state, target PID, and UDP listener stats.
 - File picker for dump directory and trainer file save/load.
 - Embedded logo, native window icon (`.icns` macOS · `.ico` Windows · `.desktop` Linux), and a `ResizeToFit`-friendly layout that handles live window resize.
 - Full Unicode font stack: base Latin + Cyrillic ranges in the primary font, with OS-specific CJK fallback chains (Apple SD Gothic Neo / Hiragino Sans GB on macOS, Malgun Gothic / Arial Unicode MS on Windows) for Japanese, Korean, and Chinese glyphs.
 - DPI-aware rendering — monitor content scale is auto-detected via GLFW; all sizes, fonts, spacings, and rounding radii scale proportionally for crisp rendering on HiDPI displays.
+
+### Mobile and release packaging
+
+- Mobile work has started under [`mobile/`](mobile/) with an iOS/iPadOS Metal plan, an Android NDK/OpenGL ES plan, and a touch-first UI contract.
+- Release CI builds desktop artifacts for Linux, macOS, and Windows, including Windows `.exe` bundles, macOS `.app.zip` plus `.dmg`, Linux `.tar.gz`, and payload `.elf`/`.a` artifacts.
+- Mobile release jobs are wired for `.ipa` and `.apk` output and activate automatically when the native iOS and Android project files land.
+- See [`docs/mobile_architecture.md`](docs/mobile_architecture.md) and [`docs/release_packaging.md`](docs/release_packaging.md) for the current implementation contract.
 
 <br/>
 
@@ -164,6 +175,7 @@ A compact binary protocol (`MEMDBG_PACKET_MAGIC = "MDBG"`, little-endian, versio
 | Max `MEMORY_READ` size | 1 MiB |
 | `BATCH_READ` / `BATCH_WRITE` items per call | 64 |
 | Max scan value payload | 16 bytes |
+| Max extended register blob | 1024 bytes (`DEBUG_FPREGS`; flag `0x1` means XSTATE/XSAVE layout) |
 | Optional result compression | LZ4 (advertised via `MEMDBG_CAP_LZ4`) |
 
 ### Commands
@@ -177,6 +189,10 @@ A compact binary protocol (`MEMDBG_PACKET_MAGIC = "MDBG"`, little-endian, versio
 | `0x0102` | `PROCESS_INFO` | Name, executable path, Title ID, Content ID. |
 | `0x0103` | `FOREGROUND_APP` | Metadata for the currently focused application. |
 | `0x0104` / `0x0105` | `PROCESS_STOP` / `PROCESS_CONTINUE` | Suspend / resume a target process. |
+| `0x0108` | `PROCESS_PROTECT` | Change target process memory protection. |
+| `0x0109` / `0x010A` | `PROCESS_ALLOC` / `PROCESS_FREE` | Protocol endpoints for remote allocation lifecycle; platforms without a safe syscall bridge return `UNSUPPORTED`. |
+| `0x010B` | `PROCESS_STACK` | Server-side RBP stack walk, including stack and code windows per frame. |
+| `0x010C` / `0x010D` | `PROCESS_CALL` / `PROCESS_ELF_LOAD` | Reserved remote execution endpoints; currently validate requests and return `UNSUPPORTED`. |
 | `0x0200` / `0x0201` | `MEMORY_READ` / `MEMORY_WRITE` | Single-address I/O. |
 | `0x0202` / `0x0203` | `BATCH_READ` / `BATCH_WRITE` | Multi-address I/O in one round-trip (used by Auto-Search and trainer lock writes). |
 | `0x0300` / `0x0301` | `SCAN_EXACT` / `SCAN_PROCESS_EXACT` | Value scan, range or process-wide. |
@@ -185,6 +201,9 @@ A compact binary protocol (`MEMDBG_PACKET_MAGIC = "MDBG"`, little-endian, versio
 | `0x0304` | `SCAN_UNKNOWN` | Baseline every aligned value for later refinement. |
 | `0x0400` | `TELEMETRY` | Runtime performance metrics. |
 | `0x0500` | `DISCOVERY` | UDP broadcast ping/pong for console auto-detection. |
+| `0x0600`-`0x0619` | `DEBUG_*` | Attach/detach, stop/continue/step, thread control, GPR/debug/FPU register access, breakpoints, watchpoints, and event polling. |
+| `0x0800`-`0x0802` | `KERNEL_*` | Kernel base discovery and kernel memory read/write on supported console payloads. |
+| `0x0900`-`0x0902` | `CONSOLE_*` | System notification, kernel-console print, and platform-supported reboot. |
 | `0x7f00` | `SHUTDOWN` | Clean payload termination. |
 
 Every `SCAN_*` response opens with a `memdbg_scan_response_prefix_t` carrying hit count, truncation flag, bytes scanned, elapsed time, and read/region/error counts — the same numbers the frontend surfaces on screen.
@@ -422,10 +441,16 @@ Pre-release / active development. Wire protocol is version `1`; breaking changes
 **Completed:**
 - ✅ Console process / map / memory primitives, all scan types, batch I/O, telemetry, discovery.
 - ✅ Native desktop frontend on Linux, macOS, Windows, with full localization.
+- ✅ Release packaging pipeline for desktop/frontend/payload artifacts, including DMG output and bundled plugin repository assets.
+- ✅ Debugger lifecycle, thread control, GPR/debug register access, software breakpoints, hardware watchpoints, single-step, stack walk, and compact disassembly.
+- ✅ Debugger Patch Studio and Analysis Notebook are always available, with reversible patches, mprotect-assisted writes, manifest/workspace save-load, disassembly/stack bookmarking, Markdown report export, and trainer export.
+- ✅ PS4/PS5 kernel base/read/write endpoints and console notification/print commands, advertised only when supported by the payload.
 
 **In progress:**
-- 🛠 Pointer chain tooling and extended trainer formats (relative / pointer trainers, GoldHEN JSON) — tracked in [`docs/feature_research.md`](docs/feature_research.md).
-- 🛠 Native debugger tooling (attach / detach, breakpoints, disassembler) — tracked in the same document.
+- 🛠 Mobile app implementation for iOS/iPadOS and Android; architecture, UX contract, and CI hooks are in place, native shells are next.
+- 🛠 Remote allocation/free, remote function calls, and ELF loading are protocol-reserved but intentionally return `UNSUPPORTED` until a safe remote syscall bridge exists.
+- 🛠 Turbo SIMD scan paths, alias compare acceleration, assembler integration, and a dedicated klog forwarder are tracked in [`docs/feature_research.md`](docs/feature_research.md).
+- 🛠 Some advanced debugger capabilities are platform-gated: PS5 exposes FS/GS base when the SDK ptrace requests are available; PS4 does not advertise that capability.
 
 <br/>
 

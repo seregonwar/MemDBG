@@ -61,6 +61,25 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
 
 bool pal_debug_supported(void) { return true; }
 
+bool pal_debug_fpregs_supported(void) {
+#if (defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE) &&                 \
+     defined(PT_SETXSTATE)) ||                                               \
+    (defined(PT_GETFPREGS) && defined(PT_SETFPREGS))
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool pal_debug_fsgsbase_supported(void) {
+#if defined(PT_GETFSBASE) && defined(PT_SETFSBASE) &&                         \
+    defined(PT_GETGSBASE) && defined(PT_SETGSBASE)
+  return true;
+#else
+  return false;
+#endif
+}
+
 long pal_debug_ptrace(int op, int pid, void *addr, long data) {
   return pal_debug_ptrace_raw(op, pid, addr, data);
 }
@@ -273,6 +292,133 @@ int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs) {
   memset(&r, 0, sizeof(r));
   pal_debug_regs_to_native(regs, &r);
   return (pal_debug_ptrace_raw(PT_SETREGS, (int)lwp, &r, 0) == -1) ? -1 : 0;
+}
+
+int pal_debug_get_fpregs(int pid, int32_t lwp,
+                         memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  if (fpregs == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+#if defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE)
+  {
+    struct ptrace_xstate_info info;
+    memset(&info, 0, sizeof(info));
+    if (pal_debug_ptrace_raw(PT_GETXSTATE_INFO, (int)lwp, &info,
+                             (long)sizeof(info)) == 0 &&
+        info.xsave_len > 0U &&
+        info.xsave_len <= MEMDBG_DEBUG_FPREGS_MAX) {
+      memset(fpregs, 0, sizeof(*fpregs));
+      if (pal_debug_ptrace_raw(PT_GETXSTATE, (int)lwp, fpregs->data,
+                               (long)info.xsave_len) == 0) {
+        fpregs->length = info.xsave_len;
+        fpregs->flags = MEMDBG_DEBUG_FPREGS_FLAG_XSTATE;
+        return 0;
+      }
+    }
+  }
+#endif
+#if defined(PT_GETFPREGS)
+  struct fpreg f;
+  memset(&f, 0, sizeof(f));
+  if (sizeof(f) > MEMDBG_DEBUG_FPREGS_MAX) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  if (pal_debug_ptrace_raw(PT_GETFPREGS, (int)lwp, &f, 0) == -1)
+    return -1;
+  memset(fpregs, 0, sizeof(*fpregs));
+  fpregs->length = (uint32_t)sizeof(f);
+  memcpy(fpregs->data, &f, sizeof(f));
+  return 0;
+#else
+  errno = ENOTSUP;
+  return -1;
+#endif
+}
+
+int pal_debug_set_fpregs(int pid, int32_t lwp,
+                         const memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  if (fpregs == NULL || fpregs->length == 0U ||
+      fpregs->length > MEMDBG_DEBUG_FPREGS_MAX) {
+    errno = EINVAL;
+    return -1;
+  }
+#if defined(PT_SETXSTATE)
+  if ((fpregs->flags & MEMDBG_DEBUG_FPREGS_FLAG_XSTATE) != 0U) {
+    return (pal_debug_ptrace_raw(PT_SETXSTATE, (int)lwp,
+                                 (void *)fpregs->data,
+                                 (long)fpregs->length) == -1)
+               ? -1
+               : 0;
+  }
+#endif
+#if defined(PT_SETFPREGS)
+  struct fpreg f;
+  if (fpregs->length != sizeof(f)) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(&f, 0, sizeof(f));
+  memcpy(&f, fpregs->data, sizeof(f));
+  return (pal_debug_ptrace_raw(PT_SETFPREGS, (int)lwp, &f, 0) == -1) ? -1 : 0;
+#else
+  errno = ENOTSUP;
+  return -1;
+#endif
+}
+
+int pal_debug_get_fsgsbase(int pid, int32_t lwp,
+                           memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  if (base == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(base, 0, sizeof(*base));
+#if defined(PT_GETFSBASE) && defined(PT_GETGSBASE)
+  unsigned long fs_base = 0;
+  unsigned long gs_base = 0;
+  if (pal_debug_ptrace_raw(PT_GETFSBASE, (int)lwp, &fs_base, 0) == -1)
+    return -1;
+  if (pal_debug_ptrace_raw(PT_GETGSBASE, (int)lwp, &gs_base, 0) == -1)
+    return -1;
+  base->fs_base = (uint64_t)fs_base;
+  base->gs_base = (uint64_t)gs_base;
+  return 0;
+#else
+  (void)lwp;
+  errno = ENOTSUP;
+  return -1;
+#endif
+}
+
+int pal_debug_set_fsgsbase(int pid, int32_t lwp,
+                           const memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  if (base == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+#if defined(PT_SETFSBASE) && defined(PT_SETGSBASE)
+  unsigned long fs_base = (unsigned long)base->fs_base;
+  unsigned long gs_base = (unsigned long)base->gs_base;
+  if ((uint64_t)fs_base != base->fs_base || (uint64_t)gs_base != base->gs_base) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  if (pal_debug_ptrace_raw(PT_SETFSBASE, (int)lwp, &fs_base, 0) == -1)
+    return -1;
+  if (pal_debug_ptrace_raw(PT_SETGSBASE, (int)lwp, &gs_base, 0) == -1)
+    return -1;
+  return 0;
+#else
+  (void)lwp;
+  errno = ENOTSUP;
+  return -1;
+#endif
 }
 
 int pal_debug_get_dbregs(int pid, int32_t lwp,
@@ -494,6 +640,8 @@ int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count
 #endif
 
 bool pal_debug_supported(void) { return true; }
+bool pal_debug_fpregs_supported(void) { return false; }
+bool pal_debug_fsgsbase_supported(void) { return false; }
 
 long pal_debug_ptrace(int op, int pid, void *addr, long data) {
   return ptrace(op, pid, (caddr_t)addr, data);
@@ -711,6 +859,42 @@ int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs) {
   return -1;
 }
 
+int pal_debug_get_fpregs(int pid, int32_t lwp,
+                         memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  (void)lwp;
+  if (fpregs != NULL) memset(fpregs, 0, sizeof(*fpregs));
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_set_fpregs(int pid, int32_t lwp,
+                         const memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  (void)lwp;
+  (void)fpregs;
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_get_fsgsbase(int pid, int32_t lwp,
+                           memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  (void)lwp;
+  if (base != NULL) memset(base, 0, sizeof(*base));
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_set_fsgsbase(int pid, int32_t lwp,
+                           const memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  (void)lwp;
+  (void)base;
+  errno = ENOTSUP;
+  return -1;
+}
+
 int pal_debug_get_dbregs(int pid, int32_t lwp,
                          memdbg_debug_dbregs_t *dbregs) {
   (void)pid;
@@ -772,6 +956,8 @@ int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count
 #else /* Unsupported platform */
 
 bool pal_debug_supported(void) { return false; }
+bool pal_debug_fpregs_supported(void) { return false; }
+bool pal_debug_fsgsbase_supported(void) { return false; }
 
 long pal_debug_ptrace(int op, int pid, void *addr, long data) {
   (void)op;
@@ -867,6 +1053,42 @@ int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs) {
   (void)pid;
   (void)lwp;
   (void)regs;
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_get_fpregs(int pid, int32_t lwp,
+                         memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  (void)lwp;
+  if (fpregs != NULL) memset(fpregs, 0, sizeof(*fpregs));
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_set_fpregs(int pid, int32_t lwp,
+                         const memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  (void)lwp;
+  (void)fpregs;
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_get_fsgsbase(int pid, int32_t lwp,
+                           memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  (void)lwp;
+  if (base != NULL) memset(base, 0, sizeof(*base));
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_set_fsgsbase(int pid, int32_t lwp,
+                           const memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  (void)lwp;
+  (void)base;
   errno = ENOTSUP;
   return -1;
 }

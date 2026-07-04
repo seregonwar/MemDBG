@@ -791,6 +791,207 @@ bool Client::process_kill(int32_t pid) {
   return request(MEMDBG_CMD_PROCESS_KILL, &body, sizeof(body), response);
 }
 
+bool Client::process_protect(int32_t pid, uint64_t address, uint64_t length,
+                             uint32_t protection,
+                             ProcessProtectResult &out) {
+  memdbg_process_protect_request_t body{};
+  body.pid = pid;
+  body.address = address;
+  body.length = length;
+  body.protection = protection;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_PROTECT, &body, sizeof(body), response))
+    return false;
+  memdbg_process_protect_response_t wire{};
+  if (!read_object(response, wire)) {
+    set_error("short process protect response");
+    return false;
+  }
+  out.old_protection = wire.old_protection;
+  out.new_protection = wire.new_protection;
+  return true;
+}
+
+bool Client::process_alloc(int32_t pid, uint64_t hint, uint64_t length,
+                           uint32_t protection, uint32_t flags,
+                           ProcessAllocResult &out) {
+  memdbg_process_alloc_request_t body{};
+  body.pid = pid;
+  body.hint = hint;
+  body.length = length;
+  body.protection = protection;
+  body.flags = flags;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_ALLOC, &body, sizeof(body), response))
+    return false;
+  memdbg_process_alloc_response_t wire{};
+  if (!read_object(response, wire)) {
+    set_error("short process alloc response");
+    return false;
+  }
+  out.address = wire.address;
+  out.length = wire.length;
+  return true;
+}
+
+bool Client::process_free(int32_t pid, uint64_t address, uint64_t length) {
+  memdbg_process_free_request_t body{};
+  body.pid = pid;
+  body.address = address;
+  body.length = length;
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_PROCESS_FREE, &body, sizeof(body), response);
+}
+
+bool Client::process_stack(const memdbg_process_stack_request_t &request_body,
+                           std::vector<StackFrame> &out, bool &truncated) {
+  out.clear();
+  truncated = false;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_STACK, &request_body,
+               sizeof(request_body), response)) {
+    return false;
+  }
+  if (response.size() < sizeof(memdbg_process_stack_response_prefix_t)) {
+    set_error("short stack response");
+    return false;
+  }
+  const auto *prefix =
+      reinterpret_cast<const memdbg_process_stack_response_prefix_t *>(
+          response.data());
+  if (prefix->entry_size != sizeof(memdbg_process_stack_frame_t)) {
+    set_error("unsupported stack frame entry size");
+    return false;
+  }
+  const size_t entries_size =
+      static_cast<size_t>(prefix->count) * sizeof(memdbg_process_stack_frame_t);
+  const size_t header_size = sizeof(*prefix);
+  if (response.size() < header_size + entries_size ||
+      response.size() < header_size + entries_size + prefix->data_size) {
+    set_error("truncated stack response");
+    return false;
+  }
+  const auto *entries =
+      reinterpret_cast<const memdbg_process_stack_frame_t *>(
+          response.data() + header_size);
+  const uint8_t *blob = response.data() + header_size + entries_size;
+  const size_t blob_size = prefix->data_size;
+  out.reserve(prefix->count);
+  for (uint32_t i = 0; i < prefix->count; ++i) {
+    const auto &wire = entries[i];
+    StackFrame frame;
+    frame.frame_pointer = wire.frame_pointer;
+    frame.saved_frame_pointer = wire.saved_frame_pointer;
+    frame.return_address = wire.return_address;
+    frame.stack_address = wire.stack_address;
+    frame.code_address = wire.code_address;
+    if (wire.stack_data_offset <= blob_size &&
+        wire.stack_size <= blob_size - wire.stack_data_offset) {
+      frame.stack_bytes.assign(blob + wire.stack_data_offset,
+                               blob + wire.stack_data_offset + wire.stack_size);
+    }
+    if (wire.code_data_offset <= blob_size &&
+        wire.code_size <= blob_size - wire.code_data_offset) {
+      frame.code_bytes.assign(blob + wire.code_data_offset,
+                              blob + wire.code_data_offset + wire.code_size);
+    }
+    out.push_back(std::move(frame));
+  }
+  truncated = prefix->truncated != 0U;
+  return true;
+}
+
+bool Client::process_call(const memdbg_process_call_request_t &request_body,
+                          memdbg_process_call_response_t &out) {
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_CALL, &request_body,
+               sizeof(request_body), response))
+    return false;
+  return read_object(response, out);
+}
+
+bool Client::kernel_base(KernelBase &out) {
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_KERNEL_BASE, nullptr, 0, response))
+    return false;
+  memdbg_kernel_base_response_t wire{};
+  if (!read_object(response, wire)) {
+    set_error("short kernel base response");
+    return false;
+  }
+  out.text_base = wire.text_base;
+  out.data_base = wire.data_base;
+  return true;
+}
+
+bool Client::kernel_read(uint64_t address, uint32_t length,
+                         std::vector<uint8_t> &out) {
+  memdbg_kernel_memory_request_t body{};
+  body.address = address;
+  body.length = length;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_KERNEL_READ, &body, sizeof(body), response))
+    return false;
+  out = std::move(response);
+  return true;
+}
+
+bool Client::kernel_write(uint64_t address, const std::vector<uint8_t> &data) {
+  if (data.size() > MEMDBG_PROTOCOL_MAX_READ) {
+    set_error("kernel write payload too large");
+    return false;
+  }
+  std::vector<uint8_t> payload(sizeof(memdbg_kernel_memory_request_t) +
+                               data.size());
+  auto *body = reinterpret_cast<memdbg_kernel_memory_request_t *>(payload.data());
+  body->address = address;
+  body->length = static_cast<uint32_t>(data.size());
+  if (!data.empty())
+    std::memcpy(payload.data() + sizeof(*body), data.data(), data.size());
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_KERNEL_WRITE, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::console_notify(const std::string &text) {
+  if (text.size() > 4096U) {
+    set_error("console notification text too long");
+    return false;
+  }
+  std::vector<uint8_t> payload(sizeof(memdbg_console_text_request_t) +
+                               text.size());
+  auto *body = reinterpret_cast<memdbg_console_text_request_t *>(payload.data());
+  body->length = static_cast<uint32_t>(text.size());
+  body->reserved = 0;
+  if (!text.empty())
+    std::memcpy(payload.data() + sizeof(*body), text.data(), text.size());
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_CONSOLE_NOTIFY, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::console_print(const std::string &text) {
+  if (text.size() > 4096U) {
+    set_error("console print text too long");
+    return false;
+  }
+  std::vector<uint8_t> payload(sizeof(memdbg_console_text_request_t) +
+                               text.size());
+  auto *body = reinterpret_cast<memdbg_console_text_request_t *>(payload.data());
+  body->length = static_cast<uint32_t>(text.size());
+  body->reserved = 0;
+  if (!text.empty())
+    std::memcpy(payload.data() + sizeof(*body), text.data(), text.size());
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_CONSOLE_PRINT, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::console_reboot() {
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_CONSOLE_REBOOT, nullptr, 0, response);
+}
+
 bool Client::debug_attach(int32_t pid) {
   memdbg_debug_attach_request_t body{pid, 0};
   std::vector<uint8_t> response;
@@ -942,6 +1143,56 @@ bool Client::debug_set_dbregs(int32_t lwp, const DebugDbregs &in) {
   std::memcpy(payload.data() + sizeof(*body), &in.dbregs, sizeof(in.dbregs));
   std::vector<uint8_t> response;
   return request(MEMDBG_CMD_DEBUG_SET_DBREGS, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::debug_get_fpregs(int32_t lwp, DebugFpregs &out) {
+  memdbg_debug_thread_request_t body{0, lwp};
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_FPREGS, &body, sizeof(body), response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_fpregs_t)) {
+    set_error("short fpregs response");
+    return false;
+  }
+  std::memcpy(&out.fpregs, response.data(), sizeof(out.fpregs));
+  return true;
+}
+
+bool Client::debug_set_fpregs(int32_t lwp, const DebugFpregs &in) {
+  std::vector<uint8_t> payload(sizeof(memdbg_debug_thread_request_t) +
+                               sizeof(memdbg_debug_fpregs_t));
+  auto *body = reinterpret_cast<memdbg_debug_thread_request_t *>(payload.data());
+  body->pid = 0;
+  body->lwp = lwp;
+  std::memcpy(payload.data() + sizeof(*body), &in.fpregs, sizeof(in.fpregs));
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_FPREGS, payload.data(),
+                 static_cast<uint32_t>(payload.size()), response);
+}
+
+bool Client::debug_get_fsgsbase(int32_t lwp, DebugFsGsBase &out) {
+  memdbg_debug_thread_request_t body{0, lwp};
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_DEBUG_GET_FSGSBASE, &body, sizeof(body), response))
+    return false;
+  if (response.size() < sizeof(memdbg_debug_fsgsbase_t)) {
+    set_error("short fs/gs base response");
+    return false;
+  }
+  std::memcpy(&out.base, response.data(), sizeof(out.base));
+  return true;
+}
+
+bool Client::debug_set_fsgsbase(int32_t lwp, const DebugFsGsBase &in) {
+  std::vector<uint8_t> payload(sizeof(memdbg_debug_thread_request_t) +
+                               sizeof(memdbg_debug_fsgsbase_t));
+  auto *body = reinterpret_cast<memdbg_debug_thread_request_t *>(payload.data());
+  body->pid = 0;
+  body->lwp = lwp;
+  std::memcpy(payload.data() + sizeof(*body), &in.base, sizeof(in.base));
+  std::vector<uint8_t> response;
+  return request(MEMDBG_CMD_DEBUG_SET_FSGSBASE, payload.data(),
                  static_cast<uint32_t>(payload.size()), response);
 }
 
@@ -1335,6 +1586,19 @@ std::string capability_text(uint32_t capabilities) {
       {MEMDBG_CAP_BATCH_WRITE, "batch write"},
       {MEMDBG_CAP_LZ4, "lz4 compression"},
       {MEMDBG_CAP_SCAN_PROCESS_AOB, "process aob scan"},
+      {MEMDBG_CAP_DISCOVERY, "discovery"},
+      {MEMDBG_CAP_DEBUGGER, "debugger"},
+      {MEMDBG_CAP_TRACER, "tracer"},
+      {MEMDBG_CAP_MEMORY_PROTECT, "mprotect"},
+      {MEMDBG_CAP_MEMORY_ALLOC, "remote alloc"},
+      {MEMDBG_CAP_STACK_WALK, "stack walk"},
+      {MEMDBG_CAP_REMOTE_CALL, "remote call"},
+      {MEMDBG_CAP_KERNEL_ACCESS, "kernel access"},
+      {MEMDBG_CAP_CONSOLE_UI, "console ui"},
+      {MEMDBG_CAP_DEBUG_FPREGS, "fpu/ymm regs"},
+      {MEMDBG_CAP_DEBUG_FSGS, "fs/gs base"},
+      {MEMDBG_CAP_DISASSEMBLY, "disassembly"},
+      {MEMDBG_CAP_KLOG_FORWARD, "klog"},
   };
 
   std::ostringstream oss;

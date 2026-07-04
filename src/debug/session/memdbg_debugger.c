@@ -779,6 +779,82 @@ memdbg_status_t memdbg_debugger_set_dbregs(int32_t lwp,
   return st;
 }
 
+memdbg_status_t memdbg_debugger_get_fpregs(int32_t lwp,
+                                           memdbg_debug_fpregs_t *fpregs) {
+  debugger_lock();
+  if (fpregs == NULL) {
+    debugger_unlock();
+    return MEMDBG_ERR_PARAM;
+  }
+  if (!g_dbg.attached) {
+    debugger_unlock();
+    return MEMDBG_ERR_STATE;
+  }
+  memdbg_status_t st = MEMDBG_OK;
+  if (pal_debug_get_fpregs((int)g_dbg.pid, lwp, fpregs) != 0) {
+    st = pal_status_from_errno();
+  }
+  debugger_unlock();
+  return st;
+}
+
+memdbg_status_t memdbg_debugger_set_fpregs(
+    int32_t lwp, const memdbg_debug_fpregs_t *fpregs) {
+  debugger_lock();
+  if (fpregs == NULL) {
+    debugger_unlock();
+    return MEMDBG_ERR_PARAM;
+  }
+  if (!g_dbg.attached) {
+    debugger_unlock();
+    return MEMDBG_ERR_STATE;
+  }
+  memdbg_status_t st = MEMDBG_OK;
+  if (pal_debug_set_fpregs((int)g_dbg.pid, lwp, fpregs) != 0) {
+    st = pal_status_from_errno();
+  }
+  debugger_unlock();
+  return st;
+}
+
+memdbg_status_t memdbg_debugger_get_fsgsbase(
+    int32_t lwp, memdbg_debug_fsgsbase_t *base) {
+  debugger_lock();
+  if (base == NULL) {
+    debugger_unlock();
+    return MEMDBG_ERR_PARAM;
+  }
+  if (!g_dbg.attached) {
+    debugger_unlock();
+    return MEMDBG_ERR_STATE;
+  }
+  memdbg_status_t st = MEMDBG_OK;
+  if (pal_debug_get_fsgsbase((int)g_dbg.pid, lwp, base) != 0) {
+    st = pal_status_from_errno();
+  }
+  debugger_unlock();
+  return st;
+}
+
+memdbg_status_t memdbg_debugger_set_fsgsbase(
+    int32_t lwp, const memdbg_debug_fsgsbase_t *base) {
+  debugger_lock();
+  if (base == NULL) {
+    debugger_unlock();
+    return MEMDBG_ERR_PARAM;
+  }
+  if (!g_dbg.attached) {
+    debugger_unlock();
+    return MEMDBG_ERR_STATE;
+  }
+  memdbg_status_t st = MEMDBG_OK;
+  if (pal_debug_set_fsgsbase((int)g_dbg.pid, lwp, base) != 0) {
+    st = pal_status_from_errno();
+  }
+  debugger_unlock();
+  return st;
+}
+
 memdbg_status_t memdbg_debugger_set_breakpoint(uint64_t address,
                                                uint32_t kind) {
   return memdbg_debugger_set_breakpoint_cond(address, kind,
