@@ -66,6 +66,8 @@ static struct {
 
   /* Debug registers (shared across threads in this mock) */
   memdbg_debug_dbregs_t dbregs;
+  memdbg_debug_fpregs_t fpregs;
+  memdbg_debug_fsgsbase_t fsgsbase;
 
   /* 4 KiB simulated process memory */
   uint8_t  memory[MOCK_MEM_SIZE];
@@ -109,6 +111,12 @@ static void mock_reset(void) {
 
   mock.regs[1].r_rip    = 0x7FFF56780000LL;
   mock.regs[1].r_rsp    = 0x7FFEE0002000LL;
+
+  mock.fpregs.length = 32U;
+  mock.fpregs.data[0] = 0xAAU;
+  mock.fpregs.data[31] = 0x55U;
+  mock.fsgsbase.fs_base = 0x700000001000ULL;
+  mock.fsgsbase.gs_base = 0x700000002000ULL;
 }
 
 static int mock_find_regs_idx(int32_t lwp) {
@@ -279,6 +287,41 @@ int pal_debug_set_dbregs(int pid, int32_t lwp, const memdbg_debug_dbregs_t *dbre
   (void)lwp;
   if (dbregs == NULL) { errno = EINVAL; return -1; }
   memcpy(&mock.dbregs, dbregs, sizeof(*dbregs));
+  return 0;
+}
+
+int pal_debug_get_fpregs(int pid, int32_t lwp, memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  (void)lwp;
+  if (fpregs == NULL) { errno = EINVAL; return -1; }
+  memcpy(fpregs, &mock.fpregs, sizeof(*fpregs));
+  return 0;
+}
+
+int pal_debug_set_fpregs(int pid, int32_t lwp,
+                         const memdbg_debug_fpregs_t *fpregs) {
+  (void)pid;
+  (void)lwp;
+  if (fpregs == NULL) { errno = EINVAL; return -1; }
+  memcpy(&mock.fpregs, fpregs, sizeof(*fpregs));
+  return 0;
+}
+
+int pal_debug_get_fsgsbase(int pid, int32_t lwp,
+                           memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  (void)lwp;
+  if (base == NULL) { errno = EINVAL; return -1; }
+  memcpy(base, &mock.fsgsbase, sizeof(*base));
+  return 0;
+}
+
+int pal_debug_set_fsgsbase(int pid, int32_t lwp,
+                           const memdbg_debug_fsgsbase_t *base) {
+  (void)pid;
+  (void)lwp;
+  if (base == NULL) { errno = EINVAL; return -1; }
+  memcpy(&mock.fsgsbase, base, sizeof(*base));
   return 0;
 }
 
@@ -607,6 +650,48 @@ static void test_debug_registers(void) {
   TEST_OK("get_dbregs after set succeeds", st);
   TEST_EQ_LL("dr0 persisted", dbregs.dr[0], 0x1000ULL);
   TEST_EQ_LL("dr7 persisted", dbregs.dr[7], 0x155ULL);
+
+  TEST_OK("detach", memdbg_debugger_detach());
+}
+
+/* ---- 5b. Extended register access ---- */
+
+static void test_extended_registers(void) {
+  printf("\n--- Extended Register Access ---\n");
+
+  mock_reset();
+  TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
+
+  memdbg_debug_fpregs_t fpregs;
+  memset(&fpregs, 0, sizeof(fpregs));
+  memdbg_status_t st = memdbg_debugger_get_fpregs(MOCK_LWP_MAIN, &fpregs);
+  TEST_OK("get_fpregs succeeds", st);
+  TEST_EQ_U("fpregs length", fpregs.length, 32U);
+  TEST_EQ_U("fpregs first byte", fpregs.data[0], 0xAAU);
+  TEST_EQ_U("fpregs last byte", fpregs.data[31], 0x55U);
+
+  fpregs.data[1] = 0x42U;
+  st = memdbg_debugger_set_fpregs(MOCK_LWP_MAIN, &fpregs);
+  TEST_OK("set_fpregs succeeds", st);
+  memset(&fpregs, 0, sizeof(fpregs));
+  st = memdbg_debugger_get_fpregs(MOCK_LWP_MAIN, &fpregs);
+  TEST_OK("get_fpregs after set succeeds", st);
+  TEST_EQ_U("fpregs byte persisted", fpregs.data[1], 0x42U);
+
+  memdbg_debug_fsgsbase_t base;
+  memset(&base, 0, sizeof(base));
+  st = memdbg_debugger_get_fsgsbase(MOCK_LWP_MAIN, &base);
+  TEST_OK("get_fsgsbase succeeds", st);
+  TEST_EQ_LL("fs base", base.fs_base, 0x700000001000ULL);
+  TEST_EQ_LL("gs base", base.gs_base, 0x700000002000ULL);
+
+  base.fs_base = 0x710000001000ULL;
+  st = memdbg_debugger_set_fsgsbase(MOCK_LWP_MAIN, &base);
+  TEST_OK("set_fsgsbase succeeds", st);
+  memset(&base, 0, sizeof(base));
+  st = memdbg_debugger_get_fsgsbase(MOCK_LWP_MAIN, &base);
+  TEST_OK("get_fsgsbase after set succeeds", st);
+  TEST_EQ_LL("fs base persisted", base.fs_base, 0x710000001000ULL);
 
   TEST_OK("detach", memdbg_debugger_detach());
 }
@@ -1200,6 +1285,7 @@ int main(void) {
   test_thread_enumeration_eio_fallback();
   test_register_access();
   test_debug_registers();
+  test_extended_registers();
   test_software_breakpoint();
   test_hardware_breakpoint();
   test_watchpoint();

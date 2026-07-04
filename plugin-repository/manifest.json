@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "MemDBG Bundled Plugins",
+  "identifier": "io.github.seregonwar.memdbg.plugins",
+  "homepage": "https://github.com/seregonwar/memDBG",
+  "plugins": [
+    {
+      "id": "io.github.seregonwar.memdbg.context-dump",
+      "name": "Context Dump",
+      "version": "1.0.0",
+      "language": "python",
+      "entry": "context_dump.py",
+      "summary": "Print the current MemDBG runtime context for automation plugins.",
+      "description": "A tiny diagnostics plugin that prints the selected console, process, paths, state counters, and MemDBG protocol metadata. It is useful when building or debugging automation plugins because it shows exactly what context the desktop app passes to plugin scripts.",
+      "author": "SeregonWar",
+      "license": "GPL-3.0-or-later",
+      "icon": "https://raw.githubusercontent.com/seregonwar/MemDBG-Plugin/main/assets/context-dump.png",
+      "tags": ["python", "diagnostics", "automation"],
+      "permissions": ["read_context"],
+      "files": [
+        {
+          "path": "context_dump.py",
+          "url": "plugins/context_dump.py"
+        }
+      ]
+    }
+  ]
+}

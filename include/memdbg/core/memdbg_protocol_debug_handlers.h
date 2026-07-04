@@ -232,6 +232,74 @@ static inline memdbg_status_t handle_debug_set_dbregs(int fd,
   return send_response_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
+/* ---- FPU/YMM registers ---- */
+
+static inline memdbg_status_t handle_debug_get_fpregs(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len,
+    int (*send_response_fn)(int, const memdbg_packet_header_t *,
+                            memdbg_status_t, const void *, uint32_t)) {
+  if (body_len != sizeof(memdbg_debug_thread_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  const memdbg_debug_thread_request_t *tr =
+      (const memdbg_debug_thread_request_t *)body;
+  memdbg_debug_fpregs_t fpregs;
+  memset(&fpregs, 0, sizeof(fpregs));
+  memdbg_status_t st = memdbg_debugger_get_fpregs(tr->lwp, &fpregs);
+  return send_response_fn(fd, req, st, &fpregs, sizeof(fpregs)) == 0
+             ? MEMDBG_OK
+             : MEMDBG_ERR_NET;
+}
+
+static inline memdbg_status_t handle_debug_set_fpregs(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len,
+    int (*send_response_fn)(int, const memdbg_packet_header_t *,
+                            memdbg_status_t, const void *, uint32_t)) {
+  if (body_len != sizeof(memdbg_debug_thread_request_t) + sizeof(memdbg_debug_fpregs_t))
+    return MEMDBG_ERR_PROTOCOL;
+  const memdbg_debug_thread_request_t *tr =
+      (const memdbg_debug_thread_request_t *)body;
+  const memdbg_debug_fpregs_t *fpregs =
+      (const memdbg_debug_fpregs_t *)((const uint8_t *)body + sizeof(*tr));
+  memdbg_status_t st = memdbg_debugger_set_fpregs(tr->lwp, fpregs);
+  return send_response_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+/* ---- FS/GS base ---- */
+
+static inline memdbg_status_t handle_debug_get_fsgsbase(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len,
+    int (*send_response_fn)(int, const memdbg_packet_header_t *,
+                            memdbg_status_t, const void *, uint32_t)) {
+  if (body_len != sizeof(memdbg_debug_thread_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  const memdbg_debug_thread_request_t *tr =
+      (const memdbg_debug_thread_request_t *)body;
+  memdbg_debug_fsgsbase_t base;
+  memset(&base, 0, sizeof(base));
+  memdbg_status_t st = memdbg_debugger_get_fsgsbase(tr->lwp, &base);
+  return send_response_fn(fd, req, st, &base, sizeof(base)) == 0
+             ? MEMDBG_OK
+             : MEMDBG_ERR_NET;
+}
+
+static inline memdbg_status_t handle_debug_set_fsgsbase(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len,
+    int (*send_response_fn)(int, const memdbg_packet_header_t *,
+                            memdbg_status_t, const void *, uint32_t)) {
+  if (body_len != sizeof(memdbg_debug_thread_request_t) + sizeof(memdbg_debug_fsgsbase_t))
+    return MEMDBG_ERR_PROTOCOL;
+  const memdbg_debug_thread_request_t *tr =
+      (const memdbg_debug_thread_request_t *)body;
+  const memdbg_debug_fsgsbase_t *base =
+      (const memdbg_debug_fsgsbase_t *)((const uint8_t *)body + sizeof(*tr));
+  memdbg_status_t st = memdbg_debugger_set_fsgsbase(tr->lwp, base);
+  return send_response_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
 /* ---- Breakpoints ---- */
 
 static inline memdbg_status_t handle_debug_set_breakpoint(int fd,

@@ -21,6 +21,8 @@ extern "C" {
 
 /* Returns true if the current platform supports debugger operations. */
 bool pal_debug_supported(void);
+bool pal_debug_fpregs_supported(void);
+bool pal_debug_fsgsbase_supported(void);
 
 /* Raw ptrace-style call.  On success returns the ptrace return value (often 0);
  * on error returns -1 and sets errno. */
@@ -61,6 +63,13 @@ int pal_debug_get_thread_list(int pid, int32_t *lwps, int max_count);
 /* Register access.  lwp is the kernel thread id (not the pid). */
 int pal_debug_get_regs(int pid, int32_t lwp, memdbg_debug_regs_t *regs);
 int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs);
+int pal_debug_get_fpregs(int pid, int32_t lwp, memdbg_debug_fpregs_t *fpregs);
+int pal_debug_set_fpregs(int pid, int32_t lwp,
+                         const memdbg_debug_fpregs_t *fpregs);
+int pal_debug_get_fsgsbase(int pid, int32_t lwp,
+                           memdbg_debug_fsgsbase_t *base);
+int pal_debug_set_fsgsbase(int pid, int32_t lwp,
+                           const memdbg_debug_fsgsbase_t *base);
 
 /* Attempt to retrieve the kernel thread name for the given LWP.
  * On platforms that support it (FreeBSD 13+), uses PT_GET_THREAD_NAME.

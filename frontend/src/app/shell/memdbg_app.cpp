@@ -1260,7 +1260,7 @@ static void stop_gui_plugin_if_idle(AppState &state) {
   }
 }
 
-static void draw_gui_plugin_dropdown(AppState &state) {
+static void draw_gui_plugin_launcher(AppState &state) {
   /* Stop GUI plugin when navigating away */
   stop_gui_plugin_if_idle(state);
 
@@ -1282,25 +1282,60 @@ static void draw_gui_plugin_dropdown(AppState &state) {
   if (gui_plugins.empty()) return;
 
   const float scl = ui::dpi_scale();
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f * scl, 4.0f * scl));
+  const auto &palette = ui::colors();
+  const float width =
+      std::max(96.0f * scl, ImGui::GetContentRegionAvail().x - 8.0f * scl);
 
-  /* Determine current preview text */
-  std::string preview = "GUI Tools";
+  std::string active_name;
   for (const auto &pkg : gui_plugins) {
     if (state.plugin_gui_active_id == pkg.id &&
         state.screen == Screen::PluginGUI) {
-      preview = pkg.name;
+      active_name = pkg.name;
       break;
     }
   }
+  const bool bridge_running =
+      state.plugin_gui_bridge && state.plugin_gui_bridge->running();
+
+  ImGui::Dummy(ImVec2(0, 2.0f * scl));
+  ImGui::SetCursorPosX(10.0f * scl);
+  ImGui::TextColored(alpha(palette.primary2, 0.70f), "PLUGIN APPS");
 
   ImGui::SetCursorPosX(10.0f * scl);
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 8.0f * scl);
-  if (ImGui::BeginCombo("##GuiPluginDropdown", preview.c_str())) {
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(11.0f * scl, 5.0f * scl));
+  ImGui::PushStyleColor(ImGuiCol_Button, active_name.empty()
+                                           ? palette.bg3
+                                           : alpha(palette.primary, 0.58f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, alpha(palette.primary2, 0.34f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, alpha(palette.primary, 0.82f));
+  const std::string launcher_label =
+      std::string(icons::kPlugins) + " Open plugin UI##GuiPluginLauncher";
+  if (ImGui::Button(launcher_label.c_str(), ImVec2(width, 31.0f * scl))) {
+    ImGui::OpenPopup("GuiPluginLauncherPopup");
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", "Open an installed GUI plugin without leaving the sidebar");
+  }
+  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar();
+
+  if (!active_name.empty()) {
+    std::string status = bridge_running ? "Running: " : "Selected: ";
+    status += active_name;
+    ImGui::SetCursorPosX(14.0f * scl);
+    text_ellipsis(status.c_str(), width - 8.0f * scl, palette.muted);
+  } else {
+    ImGui::SetCursorPosX(14.0f * scl);
+    ImGui::TextColored(palette.dim, "%zu installed", gui_plugins.size());
+  }
+
+  if (ImGui::BeginPopup("GuiPluginLauncherPopup")) {
+    ImGui::TextColored(palette.primary2, "%s Plugin apps", icons::kPlugins);
+    ImGui::Separator();
     for (const auto &pkg : gui_plugins) {
       bool is_selected = (state.plugin_gui_active_id == pkg.id &&
                           state.screen == Screen::PluginGUI);
-      std::string label = pkg.name;
+      std::string label = pkg.name + "##gui-plugin-" + pkg.id;
       if (ImGui::Selectable(label.c_str(), is_selected)) {
         /* Stop previous GUI plugin if running */
         if (state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
@@ -1315,10 +1350,23 @@ static void draw_gui_plugin_dropdown(AppState &state) {
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", pkg.short_description.c_str());
       }
+      if (!pkg.version.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(palette.dim, "%s", pkg.version.c_str());
+      }
     }
-    ImGui::EndCombo();
+    ImGui::Separator();
+    if (ImGui::MenuItem("Manage plugins")) {
+      state.screen = Screen::Plugins;
+    }
+    if (bridge_running && ImGui::MenuItem("Stop active plugin")) {
+      state.plugin_gui_bridge->stop();
+      state.plugin_gui_starting = false;
+      state.plugin_gui_error.clear();
+      set_status(state, "GUI plugin stopped");
+    }
+    ImGui::EndPopup();
   }
-  ImGui::PopStyleVar();
 
   ImGui::Dummy(ImVec2(0, 2));
 }
@@ -1449,8 +1497,8 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
     nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
 
-    /* GUI plugin dropdown */
-    draw_gui_plugin_dropdown(state);
+    /* GUI plugin launcher */
+    draw_gui_plugin_launcher(state);
 
     if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
       nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
@@ -1749,7 +1797,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
 
   const bool has_update = !update_tag.empty();
-  const float right_group_w = 376.0f * scl;
+  const float right_group_w = 392.0f * scl;
   const float right_w = right_group_w + (has_update ? 126.0f * scl : 0.0f);
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 8.0f * scl, topbar_w - right_w));
   if (has_update) {
@@ -2181,6 +2229,7 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   base_cfg.OversampleH = 3;
   base_cfg.OversampleV = 2;
   base_cfg.PixelSnapH = false;
+  base_cfg.RasterizerMultiply = 1.08f;
   base_cfg.GlyphRanges = glyph_ranges.Data;
 
   bool loaded_base = false;
@@ -2212,6 +2261,7 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
     fallback_cfg.SizePixels = text_size;
     fallback_cfg.OversampleH = 3;
     fallback_cfg.OversampleV = 2;
+    fallback_cfg.RasterizerMultiply = 1.08f;
     fallback_cfg.GlyphRanges = glyph_ranges.Data;
     io.Fonts->AddFontDefault(&fallback_cfg);
   }
@@ -2329,6 +2379,9 @@ int run_frontend(int, char **argv) {
 
   IMGUI_CHECKVERSION(); ImGui::CreateContext();
   ImGuiIO &io = ImGui::GetIO(); io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.FontGlobalScale = 1.0f;
+  io.FontAllowUserScaling = false;
+  io.ConfigWindowsMoveFromTitleBarOnly = true;
   ui::apply_theme();
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);

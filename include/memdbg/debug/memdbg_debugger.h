@@ -82,6 +82,14 @@ memdbg_status_t memdbg_debugger_get_dbregs(int32_t lwp,
                                            memdbg_debug_dbregs_t *dbregs);
 memdbg_status_t memdbg_debugger_set_dbregs(int32_t lwp,
                                            const memdbg_debug_dbregs_t *dbregs);
+memdbg_status_t memdbg_debugger_get_fpregs(int32_t lwp,
+                                           memdbg_debug_fpregs_t *fpregs);
+memdbg_status_t memdbg_debugger_set_fpregs(
+    int32_t lwp, const memdbg_debug_fpregs_t *fpregs);
+memdbg_status_t memdbg_debugger_get_fsgsbase(
+    int32_t lwp, memdbg_debug_fsgsbase_t *base);
+memdbg_status_t memdbg_debugger_set_fsgsbase(
+    int32_t lwp, const memdbg_debug_fsgsbase_t *base);
 
 memdbg_status_t memdbg_debugger_set_breakpoint(uint64_t address,
                                                uint32_t kind);

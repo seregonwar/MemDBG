@@ -8,6 +8,10 @@ The default source is:
 A bundled fallback copy lives in `plugin-repository/` so the frontend has a
 working catalog even before the remote source is reachable.
 
+Installed GUI plugins tagged with `gui` appear in the sidebar **Plugin Apps**
+launcher. The launcher shows the active plugin state, opens GUI plugins without
+leaving the navigation flow, and links back to the full Plugins manager.
+
 ## Repository Layout
 
 ```text
