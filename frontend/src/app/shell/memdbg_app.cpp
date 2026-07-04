@@ -2173,6 +2173,286 @@ static void handle_global_shortcuts(AppState &state) {
   }
 }
 
+/* ---- Mobile layout ---- */
+
+static bool is_mobile_viewport() {
+  const ImVec2 ws = ImGui::GetMainViewport()->Size;
+  return ws.x < 768.0f;
+}
+
+static void draw_mobile_top_bar(AppState &state, ImVec2 size) {
+  const float scl = ui::dpi_scale();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 0));
+  ImGui::BeginChild("MobileTopBar", size, true, ImGuiWindowFlags_NoScrollbar);
+
+  const float topbar_w = ImGui::GetWindowWidth();
+  const float bar_h = size.y;
+
+  /* Logo */
+  load_texture_png_from_memory(s_logo_texture,
+                               assets::kLogoNobgPng,
+                               assets::kLogoNobgPngLen);
+  const float logo_h = bar_h - 6.0f * scl;
+  const int logo_content_w = s_logo_texture.content_width > 0 ? s_logo_texture.content_width : s_logo_texture.width;
+  const int logo_content_h = s_logo_texture.content_height > 0 ? s_logo_texture.content_height : s_logo_texture.height;
+  const float logo_w = logo_content_h > 0
+      ? logo_h * (static_cast<float>(logo_content_w) / static_cast<float>(logo_content_h))
+      : 80.0f * scl;
+
+  if (static_cast<bool>(s_logo_texture.texture)) {
+    const float logo_y = (bar_h - logo_h) * 0.5f;
+    ImGui::SetCursorPosY(logo_y);
+    ImGui::Image(texture_id(s_logo_texture.texture), ImVec2(logo_w, logo_h),
+                 s_logo_texture.uv0, s_logo_texture.uv1);
+  } else {
+    ImGui::TextColored(ui::colors().primary2, "MemDBG");
+  }
+  ImGui::SameLine(0.0f, 8.0f * scl);
+
+  const bool connected = state.client.connected();
+
+  /* Process combo */
+  if (connected && state.selected_pid > 0) {
+    std::string preview = std::to_string(state.selected_pid) + "  " + selected_process_name(state);
+    const float combo_w = std::min(topbar_w * 0.40f, 200.0f * scl);
+    const float frame_pad_y = std::max(0.0f, (bar_h - ImGui::GetFontSize()) * 0.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, frame_pad_y));
+    ImGui::SetNextItemWidth(combo_w);
+    if (ImGui::BeginCombo("##MobileProcessCombo", preview.c_str())) {
+      for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+        const auto &process = state.processes[i];
+        const bool sel = i == state.selected_process_row;
+        std::string label = std::to_string(process.pid) + "  " + process.name;
+        if (ImGui::Selectable(label.c_str(), sel)) topbar_select_process(state, i);
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::PopStyleVar();
+    ImGui::SameLine();
+  }
+
+  /* Right-aligned connect/disconnect */
+  ImGui::SetCursorPosX(topbar_w - 90.0f * scl);
+  ImGui::BeginDisabled(client_async_busy(state));
+  if (connected) {
+    if (ui::danger_button((std::string(icons::kDisconnect)).c_str(),
+                          ImVec2(36.0f * scl, bar_h - 6.0f * scl))) {
+      disconnect_console(state);
+    }
+  } else {
+    if (ui::primary_button((std::string(icons::kConnect)).c_str(),
+                           ImVec2(36.0f * scl, bar_h - 6.0f * scl))) {
+      connect_console(state);
+    }
+  }
+  ImGui::EndDisabled();
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor();
+}
+
+static void draw_bottom_tab_bar(AppState &state, ImVec2 pos, ImVec2 size) {
+  const float scl = ui::dpi_scale();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 2));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  ImGui::SetNextWindowPos(pos);
+  ImGui::SetNextWindowSize(size);
+  ImGui::Begin("##MobileTabBar", nullptr,
+               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+               ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
+               ImGuiWindowFlags_NoScrollWithMouse);
+
+  const float tab_w = size.x / 6.0f;
+  const float tab_h = size.y;
+
+  struct TabEntry {
+    Screen screen;
+    const char *icon;
+    const char *label;
+  };
+  static const TabEntry tabs[] = {
+    { Screen::Home,     icons::kHome,     "Session" },
+    { Screen::Memory,   icons::kMemory,   "Memory" },
+    { Screen::Scanner,  icons::kScanner,  "Scanner" },
+    { Screen::Debugger, icons::kBug,      "Debug" },
+    { Screen::Trainer,  icons::kTrainer,  "Trainer" },
+  };
+
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+
+  for (int i = 0; i < 5; ++i) {
+    const ImVec2 tab_min(pos.x + tab_w * i, pos.y);
+    const ImVec2 tab_max(pos.x + tab_w * (i + 1), pos.y + tab_h);
+    const bool selected = state.screen == tabs[i].screen;
+
+    ImVec4 bg = selected ? ImVec4(32.0f/255.0f, 58.0f/255.0f, 45.0f/255.0f, 1.0f)
+                         : ImVec4(0, 0, 0, 0);
+    dl->AddRectFilled(tab_min, tab_max, ui::color_u32(bg));
+
+    if (selected) {
+      dl->AddRectFilled(ImVec2(tab_min.x + 4.0f * scl, tab_min.y),
+                        ImVec2(tab_max.x - 4.0f * scl, tab_min.y + 2.0f * scl),
+                        ui::color_u32(ui::colors().primary2), 1.0f * scl);
+    }
+
+    const ImVec4 icon_col = selected ? ui::colors().primary2 : ui::colors().muted;
+    const ImVec2 icon_size = ImGui::CalcTextSize(tabs[i].icon);
+    const float icon_x = tab_min.x + (tab_w - icon_size.x) * 0.5f;
+    const float icon_y = tab_min.y + (tab_h - icon_size.y) * 0.45f;
+    dl->AddText(ImVec2(icon_x, icon_y), ui::color_u32(icon_col), tabs[i].icon);
+
+    const ImVec2 label_size = ImGui::CalcTextSize(tabs[i].label);
+    const float label_x = tab_min.x + (tab_w - label_size.x) * 0.5f;
+    const float label_y = icon_y + icon_size.y + 1.0f * scl;
+    dl->AddText(ImVec2(label_x, label_y), ui::color_u32(icon_col), tabs[i].label);
+
+    ImGui::SetCursorPos(ImVec2(tab_w * i, 0));
+    ImGui::InvisibleButton(("##tab" + std::to_string(i)).c_str(), ImVec2(tab_w, tab_h));
+    if (ImGui::IsItemClicked()) state.screen = tabs[i].screen;
+  }
+
+  /* 6th tab: overflow menu */
+  {
+    const ImVec2 tab_min(pos.x + tab_w * 5, pos.y);
+    const ImVec2 tab_max(pos.x + tab_w * 6, pos.y + tab_h);
+    const bool is_overflow_active =
+        state.screen == Screen::Plugins || state.screen == Screen::Logs ||
+        state.screen == Screen::Settings || state.screen == Screen::TaskMgr ||
+        state.screen == Screen::Telemetry || state.screen == Screen::Tracer ||
+        state.screen == Screen::PointerScanner || state.screen == Screen::AOBScanner ||
+        state.screen == Screen::Credits || state.screen == Screen::PluginGUI;
+
+    ImVec4 bg = is_overflow_active ? ImVec4(32.0f/255.0f, 58.0f/255.0f, 45.0f/255.0f, 1.0f)
+                                   : ImVec4(0, 0, 0, 0);
+    dl->AddRectFilled(tab_min, tab_max, ui::color_u32(bg));
+
+    const ImVec4 icon_col = is_overflow_active ? ui::colors().primary2 : ui::colors().muted;
+    const ImVec2 icon_size = ImGui::CalcTextSize(icons::kMore);
+    const float icon_x = tab_min.x + (tab_w - icon_size.x) * 0.5f;
+    const float icon_y = tab_min.y + (tab_h - icon_size.y) * 0.45f;
+    dl->AddText(ImVec2(icon_x, icon_y), ui::color_u32(icon_col), icons::kMore);
+
+    const ImVec2 label_size = ImGui::CalcTextSize("More");
+    const float label_x = tab_min.x + (tab_w - label_size.x) * 0.5f;
+    const float label_y = icon_y + icon_size.y + 1.0f * scl;
+    dl->AddText(ImVec2(label_x, label_y), ui::color_u32(icon_col), "More");
+
+    ImGui::SetCursorPos(ImVec2(tab_w * 5, 0));
+    if (ImGui::InvisibleButton("##tab_more", ImVec2(tab_w, tab_h))) {
+      ImGui::OpenPopup("MobileOverflowMenu");
+    }
+
+    if (ImGui::BeginPopup("MobileOverflowMenu")) {
+      const auto &palette = ui::colors();
+      ImGui::TextColored(palette.primary2, "%s  More Tools", icons::kMore);
+      ImGui::Separator();
+
+      auto overflow_item = [&](Screen scr, const char *icon, const char *label) {
+        bool active = state.screen == scr;
+        if (active) ImGui::PushStyleColor(ImGuiCol_Text, palette.primary2);
+        std::string item_label = std::string(icon) + "  " + label;
+        if (ImGui::Selectable(item_label.c_str(), active))
+          state.screen = scr;
+        if (active) ImGui::PopStyleColor();
+      };
+
+      overflow_item(Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
+      overflow_item(Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
+      ImGui::Separator();
+      overflow_item(Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
+      overflow_item(Screen::TaskMgr, icons::kGauge, locale::tr("nav.taskmgr"));
+      overflow_item(Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
+      overflow_item(Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
+      overflow_item(Screen::Tracer, icons::kSearch, locale::tr("nav.tracer"));
+      ImGui::Separator();
+      overflow_item(Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
+      overflow_item(Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
+
+      ImGui::EndPopup();
+    }
+  }
+
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor();
+}
+
+static void draw_mobile_status_bar(AppState &state, ImVec2 size) {
+  const float scl = ui::dpi_scale();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 2));
+  ImGui::BeginChild("MobileStatusBar", size, true, ImGuiWindowFlags_NoScrollbar);
+
+  const bool connected = state.client.connected();
+  ui::status_dot(connected ? ui::colors().success : ui::colors().muted);
+  ImGui::SameLine();
+
+  const float rhs_w = 80.0f * scl;
+  float avail_w = ImGui::GetWindowWidth() - rhs_w - 20.0f * scl;
+  if (avail_w < 60.0f * scl) avail_w = 60.0f * scl;
+  text_ellipsis(state.status, avail_w, ui::colors().text);
+
+  ImGui::SameLine();
+  ImGui::SetCursorPosX(ImGui::GetWindowWidth() - rhs_w);
+  ImGui::TextColored(ui::colors().dim, "FPS %.0f", ImGui::GetIO().Framerate);
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+}
+
+void draw_mobile_app(AppState &state) {
+  poll_locale_repository(state);
+  poll_connect(state);
+  poll_taskmgr_prefetch(state);
+  poll_telemetry(state);
+  poll_map_refresh(state);
+  poll_tracer(state);
+  poll_plugin_tasks(state);
+  poll_session_health(state);
+
+  ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(viewport->WorkPos);
+  ImGui::SetNextWindowSize(viewport->WorkSize);
+
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
+  ImGui::Begin("MemDBG Mobile", nullptr, flags);
+
+  ImVec2 win_pos = ImGui::GetWindowPos(), win_size = ImGui::GetWindowSize();
+  ui::draw_background(ImGui::GetWindowDrawList(), win_pos, win_size);
+
+  const float scl = ui::dpi_scale();
+  const float top_h = 40.0f * scl;
+  const float status_h = 22.0f * scl;
+  const float tab_h = 50.0f * scl;
+  const float gap = 4.0f * scl;
+  const float content_h = win_size.y - top_h - status_h - tab_h;
+
+  ImGui::SetCursorPos(ImVec2(0, 0));
+  draw_mobile_top_bar(state, ImVec2(win_size.x, top_h));
+
+  ImGui::SetCursorPos(ImVec2(0, top_h + gap));
+  draw_screen(state, ImVec2(win_size.x, content_h - gap));
+
+  ImGui::SetCursorPos(ImVec2(0, win_size.y - status_h - tab_h));
+  draw_mobile_status_bar(state, ImVec2(win_size.x, status_h));
+
+  draw_bottom_tab_bar(state,
+     ImVec2(0, win_size.y - tab_h),
+     ImVec2(win_size.x, tab_h));
+
+  draw_notifications(state);
+  draw_connect_spinner(state);
+
+  ImGui::End();
+}
+
 /* ---- Main app draw ---- */
 
 void draw_app(AppState &state) {

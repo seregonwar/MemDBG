@@ -66,6 +66,7 @@ constexpr const char *kLink       = u8"\uf0c1"; /* link */
 constexpr const char *kTelemetry  = u8"\uf201"; /* chart-line */
 constexpr const char *kNotify     = u8"\uf0f3"; /* bell */
 constexpr const char *kGauge      = u8"\uf3fd"; /* gauge-high */
+constexpr const char *kMore       = u8"\uf142"; /* ellipsis-vertical */
 
 } // namespace memdbg::frontend::icons
 

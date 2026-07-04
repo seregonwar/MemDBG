@@ -89,7 +89,12 @@
 
   ImGui_ImplMetal_NewFrame(renderPass);
   ImGui::NewFrame();
-  memdbg::frontend::draw_app(*_state);
+  CGSize bounds = view.bounds.size;
+  if (bounds.width < 768.0) {
+    memdbg::frontend::draw_mobile_app(*_state);
+  } else {
+    memdbg::frontend::draw_app(*_state);
+  }
   ImGui::Render();
 
   id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPass];
