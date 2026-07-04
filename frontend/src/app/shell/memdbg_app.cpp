@@ -19,9 +19,12 @@
 #include "memdbg/core/memdbg_version.h"
 
 #include "imgui.h"
+
+#if !defined(MEMDBG_PLATFORM_IOS)
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -41,18 +44,28 @@
 #include <unordered_map>
 #include <vector>
 
+#include "stb_image.h"
+
+#if !defined(MEMDBG_PLATFORM_IOS)
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
-
-#include "stb_image.h"
+#endif
 
 namespace memdbg::frontend {
 
 namespace {
 
+#if defined(MEMDBG_PLATFORM_IOS)
+/* Metal texture handle (id<MTLTexture>) stored as void*; the iOS shell owns
+ * the real upload via ImGui_ImplMetal, so the desktop OpenGL path is skipped. */
+using TextureHandle = void *;
+#else
+using TextureHandle = GLuint;
+#endif
+
 struct TextureAsset {
-  GLuint texture = 0;
+  TextureHandle texture{};
   int width = 0;
   int height = 0;
   int content_width = 0;
@@ -65,8 +78,12 @@ struct TextureAsset {
 static TextureAsset s_logo_texture;
 static std::filesystem::path s_executable_dir;
 
-static ImTextureID texture_id(GLuint texture) {
+static ImTextureID texture_id(TextureHandle texture) {
+#if defined(MEMDBG_PLATFORM_IOS)
+  return reinterpret_cast<ImTextureID>(texture);
+#else
   return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(texture));
+#endif
 }
 
 static void init_executable_dir(const char *argv0) {
@@ -153,7 +170,7 @@ static void compute_content_uv(TextureAsset &asset, const unsigned char *pixels)
 static bool load_texture_png_from_memory(TextureAsset &asset,
                                          const std::uint8_t *data,
                                          std::size_t data_size) {
-  if (asset.texture != 0U) return true;
+  if (static_cast<bool>(asset.texture)) return true;
   if (asset.attempted) return false;
   asset.attempted = true;
 
@@ -175,6 +192,7 @@ static bool load_texture_png_from_memory(TextureAsset &asset,
   asset.height = height;
   compute_content_uv(asset, pixels);
 
+#if !defined(MEMDBG_PLATFORM_IOS)
   GLuint texture = 0;
   glGenTextures(1, &texture);
   glBindTexture(GL_TEXTURE_2D, texture);
@@ -186,20 +204,24 @@ static bool load_texture_png_from_memory(TextureAsset &asset,
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
                GL_UNSIGNED_BYTE, pixels);
   glBindTexture(GL_TEXTURE_2D, 0);
+  asset.texture = texture;
+#endif
 
   stbi_image_free(pixels);
-  asset.texture = texture;
   return true;
 }
 
 static void shutdown_texture(TextureAsset &asset) {
-  if (asset.texture != 0U) {
-    GLuint texture = asset.texture;
+#if !defined(MEMDBG_PLATFORM_IOS)
+  if (static_cast<bool>(asset.texture)) {
+    GLuint texture = static_cast<GLuint>(asset.texture);
     glDeleteTextures(1, &texture);
   }
+#endif
   asset = TextureAsset{};
 }
 
+#if !defined(MEMDBG_PLATFORM_IOS)
 static void set_window_icon(GLFWwindow *window) {
 #if defined(__APPLE__)
   (void)window;
@@ -225,6 +247,7 @@ static void set_window_icon(GLFWwindow *window) {
   } catch (...) { /* icon load is non-fatal */ }
 #endif
 }
+#endif
 
 } // namespace
 
@@ -1734,7 +1757,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
       ? logo_h * (static_cast<float>(logo_content_w) / static_cast<float>(logo_content_h))
       : 136.0f * scl;
 
-  if (s_logo_texture.texture != 0U) {
+  if (static_cast<bool>(s_logo_texture.texture)) {
     topbar_align(logo_h);
     ImGui::Image(texture_id(s_logo_texture.texture), ImVec2(logo_w, logo_h),
                  s_logo_texture.uv0, s_logo_texture.uv1);
@@ -2152,7 +2175,7 @@ static void handle_global_shortcuts(AppState &state) {
 
 /* ---- Main app draw ---- */
 
-static void draw_app(AppState &state) {
+void draw_app(AppState &state) {
   poll_locale_repository(state);
   poll_connect(state);
   poll_taskmgr_prefetch(state);
@@ -2335,67 +2358,26 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   io.Fonts->Build();
 }
 
-int run_frontend(int, char **argv) {
-  init_executable_dir(argv != nullptr ? argv[0] : nullptr);
+void init_app_shared(AppState &state, float dpi_scale) {
 #if !defined(_WIN32)
   signal(SIGPIPE, SIG_IGN);
 #endif
-  if (!glfwInit()) return 1;
-
-  glfwWindowHintString(GLFW_COCOA_FRAME_NAME, "MemDBG");
-
-  float xscale = 1.0f, yscale = 1.0f;
-  GLFWmonitor *monitor = glfwGetPrimaryMonitor();
-  if (monitor) glfwGetMonitorContentScale(monitor, &xscale, &yscale);
-  float raw_scale = std::max(xscale, yscale);
-  if (raw_scale < 1.0f) raw_scale = 1.0f;
-
-  // Keep the compact reference look by default (1.0x) and only nudge the
-  // scale up gently for HiDPI monitors. Large high-res screens get a small
-  // extra boost so the UI remains usable without becoming oversized.
-  float dpi_scale = 1.0f + (raw_scale - 1.0f) * 0.15f;
-  const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
-  if (mode) {
-    float diag = std::sqrt(static_cast<float>(mode->width * mode->width +
-                                              mode->height * mode->height));
-    if (diag > 2200.0f) {
-      dpi_scale *= 1.0f + (diag - 2200.0f) * 0.0001f;
-    }
-  }
-  if (dpi_scale > 1.5f) dpi_scale = 1.5f;
-  ui::set_dpi_scale(dpi_scale);
-#if defined(__APPLE__)
-  const char *glsl_version = "#version 150";
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#else
-  const char *glsl_version = "#version 130";
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-#endif
-  GLFWwindow *window = glfwCreateWindow(1400, 900, "MemDBG", nullptr, nullptr);
-  if (!window) { glfwTerminate(); return 1; }
-  set_window_icon(window);
-  glfwMakeContextCurrent(window); glfwSwapInterval(1);
-
-  IMGUI_CHECKVERSION(); ImGui::CreateContext();
-  ImGuiIO &io = ImGui::GetIO(); io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  ImGuiIO &io = ImGui::GetIO();
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.FontGlobalScale = 1.0f;
   io.FontAllowUserScaling = false;
   io.ConfigWindowsMoveFromTitleBarOnly = true;
+  ui::set_dpi_scale(dpi_scale);
   ui::apply_theme();
-
-  ImGui_ImplGlfw_InitForOpenGL(window, true);
-  ImGui_ImplOpenGL3_Init(glsl_version);
 
   setup_fonts(io, dpi_scale);
   ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
-  auto state = std::make_unique<AppState>();
-  state->plugin_manager.set_bundle_root(s_executable_dir);
+  state.plugin_manager.set_bundle_root(s_executable_dir);
   {
     std::string plugin_error;
-    if (!state->plugin_manager.load(&plugin_error) && !plugin_error.empty()) {
-      set_status(*state, plugin_error);
+    if (!state.plugin_manager.load(&plugin_error) && !plugin_error.empty()) {
+      set_status(state, plugin_error);
     }
   }
 
@@ -2404,7 +2386,7 @@ int run_frontend(int, char **argv) {
     std::filesystem::path log_path = s_executable_dir.empty()
         ? std::filesystem::path("memdbg_crash.log")
         : s_executable_dir / "memdbg_crash.log";
-    state->crash_logger.open(log_path.string().c_str());
+    state.crash_logger.open(log_path.string().c_str());
   } catch (...) {
     // crash logger failure is non-fatal
   }
@@ -2412,13 +2394,13 @@ int run_frontend(int, char **argv) {
   bool settings_loaded = false;
   {
     std::string config_error;
-    settings_loaded = load_frontend_settings(*state, &config_error);
+    settings_loaded = load_frontend_settings(state, &config_error);
     if (settings_loaded && config_error.empty()) {
-      set_status(*state, "Settings loaded");
+      set_status(state, "Settings loaded");
     } else if (!config_error.empty()) {
-      if (state->crash_logging_enabled)
-        state->crash_logger.log("error", ("Config load error: " + config_error).c_str());
-      set_status(*state, config_error);
+      if (state.crash_logging_enabled)
+        state.crash_logger.log("error", ("Config load error: " + config_error).c_str());
+      set_status(state, config_error);
     }
   }
 
@@ -2448,30 +2430,100 @@ int run_frontend(int, char **argv) {
   // Set language from saved preference, or auto-detect from OS.
   locale::Lang requested_lang = locale::Lang::EN;
   if (settings_loaded &&
-      state->language >= 0 &&
-      state->language < static_cast<int>(locale::Lang::COUNT)) {
-    requested_lang = static_cast<locale::Lang>(state->language);
+      state.language >= 0 &&
+      state.language < static_cast<int>(locale::Lang::COUNT)) {
+    requested_lang = static_cast<locale::Lang>(state.language);
   } else {
     requested_lang = locale::detect_system_lang();
   }
   if (loc.set_active(requested_lang)) {
-    state->language = static_cast<int>(requested_lang);
+    state.language = static_cast<int>(requested_lang);
   } else {
-    state->pending_language = static_cast<int>(requested_lang);
-    state->language = static_cast<int>(locale::Lang::EN);
+    state.pending_language = static_cast<int>(requested_lang);
+    state.language = static_cast<int>(locale::Lang::EN);
     (void)loc.set_active(locale::Lang::EN);
   }
   (void)locale_repo.start_startup_sync(requested_lang);
-  github_profile_start(state->github_profile);
-  release_check_start(state->release_check, MEMDBG_VERSION_STRING);
+  github_profile_start(state.github_profile);
+  release_check_start(state.release_check, MEMDBG_VERSION_STRING);
   {
     std::string udp_error;
-    if (!ensure_udp_listener(*state, udp_error))
-      set_status(*state, "UDP: " + udp_error);
+    if (!ensure_udp_listener(state, udp_error))
+      set_status(state, "UDP: " + udp_error);
   }
 
-  if (state->crash_logging_enabled)
-    state->crash_logger.log("startup", "MemDBG frontend started");
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("startup", "MemDBG frontend started");
+
+  push_notification(state, "MemDBG mobile session started", 6.0);
+}
+
+void shutdown_app_shared(AppState &state) {
+  if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
+  state.taskmgr_resource_pending = false;
+  if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
+  state.taskmgr_prefetch_pending = false;
+  if (state.plugin_refresh_future.valid()) state.plugin_refresh_future.wait();
+  state.plugin_refresh_pending = false;
+  if (state.plugin_run_future.valid()) state.plugin_run_future.wait();
+  state.plugin_run_pending = false;
+  if (state.plugin_gui_bridge && state.plugin_gui_bridge->running())
+    state.plugin_gui_bridge->stop();
+  state.udp_listener.stop(); state.client.disconnect();
+  release_check_shutdown(state.release_check);
+  github_profile_shutdown(state.github_profile);
+  locale::Repository::instance().shutdown();
+  shutdown_texture(s_logo_texture);
+  state.crash_logger.close();
+}
+
+#if !defined(MEMDBG_PLATFORM_IOS)
+int run_frontend(int, char **argv) {
+  init_executable_dir(argv != nullptr ? argv[0] : nullptr);
+#if !defined(_WIN32)
+  signal(SIGPIPE, SIG_IGN);
+#endif
+  if (!glfwInit()) return 1;
+
+  glfwWindowHintString(GLFW_COCOA_FRAME_NAME, "MemDBG");
+
+  float xscale = 1.0f, yscale = 1.0f;
+  GLFWmonitor *monitor = glfwGetPrimaryMonitor();
+  if (monitor) glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+  float raw_scale = std::max(xscale, yscale);
+  if (raw_scale < 1.0f) raw_scale = 1.0f;
+
+  // Keep the compact reference look by default (1.0x) and only nudge the
+  // scale up gently for HiDPI monitors. Large high-res screens get a small
+  // extra boost so the UI remains usable without becoming oversized.
+  float dpi_scale = 1.0f + (raw_scale - 1.0f) * 0.15f;
+  const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+  if (mode) {
+    float diag = std::sqrt(static_cast<float>(mode->width * mode->width +
+                                              mode->height * mode->height));
+    if (diag > 2200.0f) {
+      dpi_scale *= 1.0f + (diag - 2200.0f) * 0.0001f;
+    }
+  }
+  if (dpi_scale > 1.5f) dpi_scale = 1.5f;
+#if defined(__APPLE__)
+  const char *glsl_version = "#version 150";
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#else
+  const char *glsl_version = "#version 130";
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
+  GLFWwindow *window = glfwCreateWindow(1400, 900, "MemDBG", nullptr, nullptr);
+  if (!window) { glfwTerminate(); return 1; }
+  set_window_icon(window);
+  glfwMakeContextCurrent(window); glfwSwapInterval(1);
+
+  auto state = std::make_unique<AppState>();
+  IMGUI_CHECKVERSION(); ImGui::CreateContext();
+  ImGui_ImplGlfw_InitForOpenGL(window, true);
+  ImGui_ImplOpenGL3_Init(glsl_version);
+  init_app_shared(*state, dpi_scale);
 
   push_notification(*state, "MemDBG by seregonwar started", 6.0);
 
@@ -2518,27 +2570,13 @@ int run_frontend(int, char **argv) {
   while (!glfwWindowShouldClose(window))
     render_frame();
 
-  if (state->taskmgr_resource_future.valid()) state->taskmgr_resource_future.wait();
-  state->taskmgr_resource_pending = false;
-  if (state->taskmgr_prefetch_future.valid()) state->taskmgr_prefetch_future.wait();
-  state->taskmgr_prefetch_pending = false;
-  if (state->plugin_refresh_future.valid()) state->plugin_refresh_future.wait();
-  state->plugin_refresh_pending = false;
-  if (state->plugin_run_future.valid()) state->plugin_run_future.wait();
-  state->plugin_run_pending = false;
-  if (state->plugin_gui_bridge && state->plugin_gui_bridge->running())
-    state->plugin_gui_bridge->stop();
-  state->udp_listener.stop(); state->client.disconnect();
-  release_check_shutdown(state->release_check);
-  github_profile_shutdown(state->github_profile);
-  locale::Repository::instance().shutdown();
-  shutdown_texture(s_logo_texture);
-  state->crash_logger.close();
+  shutdown_app_shared(*state);
   ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext(); glfwDestroyWindow(window); glfwTerminate();
   s_render_state = nullptr;
   s_render_window = nullptr;
   return 0;
 }
+#endif // !MEMDBG_PLATFORM_IOS
 
 } // namespace memdbg::frontend

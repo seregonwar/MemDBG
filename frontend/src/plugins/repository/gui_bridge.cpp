@@ -20,7 +20,9 @@
 #include <sstream>
 #include <thread>
 
-#if defined(_WIN32)
+#if defined(MEMDBG_PLATFORM_IOS)
+/* iOS does not support fork/exec or popen; GUI plugin hosting is disabled. */
+#elif defined(_WIN32)
 #include <process.h>
 #define MEMDBG_POPEN  _popen
 #define MEMDBG_PCLOSE _pclose
@@ -28,12 +30,50 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/types.h>
 #include <unistd.h>
 #define MEMDBG_POPEN  popen
 #define MEMDBG_PCLOSE pclose
 #endif
 
 namespace memdbg::frontend::plugins {
+
+#if defined(MEMDBG_PLATFORM_IOS)
+
+/* iOS does not allow fork/exec/popen — GUI plugin hosting is disabled.
+ * Provide stub implementations so the linker is satisfied and draw_app can
+ * safely call into us (no plugin will ever start). */
+
+GuiBridge::GuiBridge() = default;
+GuiBridge::~GuiBridge() = default;
+
+bool GuiBridge::start(const std::filesystem::path &python_exe,
+                     const std::filesystem::path &script_path,
+                     const std::filesystem::path &context_path) {
+  (void)python_exe; (void)script_path; (void)context_path;
+  return false;
+}
+
+void GuiBridge::stop() {}
+void GuiBridge::begin_frame() {}
+void GuiBridge::end_frame() {}
+void GuiBridge::render_widgets() {}
+void GuiBridge::render_widget(const std::shared_ptr<GuiWidget> &) {}
+void GuiBridge::post_event(const GuiEvent &) {}
+void GuiBridge::flush_events() {}
+void GuiBridge::reader_thread() {}
+void GuiBridge::writer_thread() {}
+void GuiBridge::write_message_to_pipe(FILE *, const nlohmann::json &) {}
+void GuiBridge::stderr_thread() {}
+void GuiBridge::parse_ui_update(const nlohmann::json &) {}
+std::shared_ptr<GuiWidget> GuiBridge::parse_widget(const nlohmann::json &) {
+  return nullptr;
+}
+std::string GuiBridge::stderr_text() const { return {}; }
+std::string GuiBridge::debug_info() const { return "iOS stub (gui plugins disabled)"; }
+ImVec4 GuiBridge::widget_color(const std::string &) const { return ImVec4(1, 1, 1, 1); }
+
+#else
 
 namespace {
 
@@ -1018,5 +1058,7 @@ ImVec4 GuiBridge::widget_color(const std::string &color_name) const {
   if (color_name == "link")     return ui::colors().link;
   return ui::colors().text;
 }
+
+#endif // !MEMDBG_PLATFORM_IOS
 
 } // namespace memdbg::frontend::plugins

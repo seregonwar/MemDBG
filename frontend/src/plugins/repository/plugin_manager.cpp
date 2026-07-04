@@ -273,12 +273,16 @@ std::string first_command_token(const std::string &command) {
 bool command_exists(const std::string &command) {
   const std::string token = first_command_token(command);
   if (token.empty()) return false;
-#if defined(_WIN32)
+#if defined(MEMDBG_PLATFORM_IOS)
+  (void)token;
+  return false;
+#elif defined(_WIN32)
   const std::string check = "where " + shell_quote_windows(token) + " >NUL 2>NUL";
+  return std::system(check.c_str()) == 0;
 #else
   const std::string check = "command -v " + shell_quote_posix(token) + " >/dev/null 2>&1";
-#endif
   return std::system(check.c_str()) == 0;
+#endif
 }
 
 std::string find_interpreter(PluginLanguage language) {

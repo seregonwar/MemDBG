@@ -9,7 +9,9 @@
 #include "ui_icons.hpp"
 #include "platform.hpp"
 
+#if !defined(MEMDBG_PLATFORM_IOS)
 #include <GLFW/glfw3.h>
+#endif
 #include "stb_image.h"
 
 #include <algorithm>
@@ -23,8 +25,10 @@
 #include <unordered_map>
 #include <vector>
 
+#if !defined(MEMDBG_PLATFORM_IOS)
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
+#endif
 #endif
 
 namespace memdbg::frontend {
@@ -105,6 +109,7 @@ PluginIconTexture *plugin_icon_texture(const PluginPackage &pkg) {
     return nullptr;
   }
 
+  #if !defined(MEMDBG_PLATFORM_IOS)
   GLuint tex = 0;
   glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
@@ -116,9 +121,10 @@ PluginIconTexture *plugin_icon_texture(const PluginPackage &pkg) {
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
                GL_UNSIGNED_BYTE, pixels);
   glBindTexture(GL_TEXTURE_2D, 0);
+  asset.texture = static_cast<uint32_t>(tex);
+#endif
   stbi_image_free(pixels);
 
-  asset.texture = static_cast<uint32_t>(tex);
   asset.width = width;
   asset.height = height;
   return &asset;

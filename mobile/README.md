@@ -6,10 +6,11 @@ plugin catalog logic while giving mobile users a native touch-first shell.
 
 Current status:
 
-- iOS / iPadOS renderer target: Metal.
+- iOS / iPadOS shell is implemented with Metal + Dear ImGui (see `ios/`).
+  The `mobile-ios` CI job generates the Xcode project via CMake and produces an
+  unsigned `.ipa`.
 - Android renderer target: OpenGL ES 3 through the NDK first, Vulkan later.
-- Mobile CI jobs are wired in the release workflow and activate when native
-  project files are added.
+  The `mobile-android` CI job stays disabled until the Gradle project is added.
 - Mobile UI is specified in `docs/mobile_architecture.md`.
 
 Directory layout:
@@ -19,6 +20,12 @@ mobile/
 ├── android/
 │   └── README.md
 ├── ios/
+│   ├── CMakeLists.txt
+│   ├── main.ios.mm
+│   ├── AppDelegate.h / .mm
+│   ├── ViewController.h / .mm
+│   ├── Info.plist
+│   ├── LaunchScreen.storyboard
 │   └── README.md
 └── shared/
     └── mobile_ui_contract.md

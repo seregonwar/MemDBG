@@ -8,7 +8,9 @@
 
 #include "platform.hpp"
 
+#if !defined(MEMDBG_PLATFORM_IOS)
 #include <GLFW/glfw3.h>
+#endif
 
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
@@ -126,6 +128,7 @@ void github_profile_pump_texture(GitHubProfile &profile) {
     return;
   }
 
+  #if !defined(MEMDBG_PLATFORM_IOS)
   GLuint tex = 0;
   glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
@@ -139,6 +142,7 @@ void github_profile_pump_texture(GitHubProfile &profile) {
                profile.pixels.data());
   glBindTexture(GL_TEXTURE_2D, 0);
   profile.texture = static_cast<uint32_t>(tex);
+#endif
   profile.pixels.clear();
   profile.pixels.shrink_to_fit();
 }
@@ -147,11 +151,13 @@ void github_profile_shutdown(GitHubProfile &profile) {
   if (profile.worker.joinable()) {
     profile.worker.join();
   }
+#if !defined(MEMDBG_PLATFORM_IOS)
   if (profile.texture != 0U) {
     GLuint tex = static_cast<GLuint>(profile.texture);
     glDeleteTextures(1, &tex);
     profile.texture = 0U;
   }
+#endif
 }
 
 ImTextureID github_profile_texture_id(const GitHubProfile &profile) {

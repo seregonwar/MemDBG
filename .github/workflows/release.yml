@@ -345,47 +345,66 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -d mobile/ios/MemDBG.xcworkspace ]; then
-            echo "enabled=workspace" >> "$GITHUB_OUTPUT"
-          elif [ -d mobile/ios/MemDBG.xcodeproj ]; then
-            echo "enabled=project" >> "$GITHUB_OUTPUT"
+          if [ -f mobile/ios/CMakeLists.txt ]; then
+            echo "enabled=cmake" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=none" >> "$GITHUB_OUTPUT"
             echo "iOS project not present yet; see mobile/ios/README.md"
           fi
+
+      - name: Resolve build version
+        if: steps.detect.outputs.enabled != 'none'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' VERSION)"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          fi
+          version="${version#v}"
+          version="${version#V}"
+          printf '%s\n' "${version}" > VERSION
+          echo "MEMDBG_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+
+      - name: Generate Xcode project
+        if: steps.detect.outputs.enabled != 'none'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          cmake -S mobile/ios -B build/ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
 
       - name: Build unsigned IPA
         if: steps.detect.outputs.enabled != 'none'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/ios dist
-          if [ "${{ steps.detect.outputs.enabled }}" = "workspace" ]; then
-            xcodebuild \
-              -workspace mobile/ios/MemDBG.xcworkspace \
-              -scheme MemDBGMobile \
-              -configuration Release \
-              -sdk iphoneos \
-              -archivePath build/ios/MemDBG.xcarchive \
-              CODE_SIGNING_ALLOWED=NO \
-              archive
-          else
-            xcodebuild \
-              -project mobile/ios/MemDBG.xcodeproj \
-              -scheme MemDBGMobile \
-              -configuration Release \
-              -sdk iphoneos \
-              -archivePath build/ios/MemDBG.xcarchive \
-              CODE_SIGNING_ALLOWED=NO \
-              archive
+          xcodebuild \
+            -project build/ios/memdbg_mobile.xcodeproj \
+            -scheme MemDBGMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ios/derived \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          app_path="build/ios/Release-iphoneos/MemDBG.app"
+          if [ ! -d "$app_path" ]; then
+            app_path=$(find build/ios/derived -maxdepth 8 -type d -name 'MemDBG.app' -print -quit)
           fi
-          app_path=$(find build/ios/MemDBG.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)
-          if [ -z "$app_path" ]; then
-            echo "Archived iOS app not found" >&2
+          if [ ! -d "$app_path" ]; then
+            echo "MemDBG.app not found" >&2
             find build/ios -maxdepth 6 -print | sort
             exit 1
           fi
-          mkdir -p build/ios/Payload
+          echo "Using built app: $app_path"
+          mkdir -p build/ios/Payload dist
+          rm -rf build/ios/Payload/MemDBG.app
           cp -R "$app_path" build/ios/Payload/MemDBG.app
           (cd build/ios && zip -qry "../../dist/MemDBG-mobile-ios.ipa" Payload)
 

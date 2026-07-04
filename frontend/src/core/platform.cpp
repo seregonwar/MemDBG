@@ -356,7 +356,10 @@ std::filesystem::path app_data_dir() {
 }
 
 bool open_url(const std::string &url) {
-#if defined(_WIN32)
+#if defined(MEMDBG_PLATFORM_IOS)
+  (void)url;
+  return false;
+#elif defined(_WIN32)
   HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr,
                                    nullptr, SW_SHOWNORMAL);
   return reinterpret_cast<intptr_t>(result) > 32;
@@ -370,18 +373,25 @@ bool open_url(const std::string &url) {
 }
 
 bool download_file(const std::string &url, const std::filesystem::path &out) {
+#if defined(MEMDBG_PLATFORM_IOS)
+  (void)url;
+  (void)out;
+  return false;
+#else
+  std::string command;
 #if defined(_WIN32)
-  std::string command =
+  command =
       "curl.exe -LfsS --max-time 8 -H " +
       shell_quote_windows("Accept: application/vnd.github+json") + " " +
       shell_quote_windows(url) + " -o " + shell_quote_windows(out.string());
 #else
-  std::string command =
+  command =
       "curl -LfsS --max-time 8 -H " +
       shell_quote_posix("Accept: application/vnd.github+json") + " " +
       shell_quote_posix(url) + " -o " + shell_quote_posix(out.string());
 #endif
   return std::system(command.c_str()) == 0;
+#endif
 }
 
 } // namespace memdbg::frontend::platform
