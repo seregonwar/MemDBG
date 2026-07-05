@@ -13,6 +13,12 @@ avoiding desktop-only layout assumptions.
   width.
 - Debugger editing actions require a confirmation sheet when they write memory,
   change protection, or alter thread execution.
+- The frontend owns the layout in dp; the native shell forwards the device safe
+  area every frame via `set_mobile_safe_area(left, top, right, bottom)` (iOS
+  uses `safeAreaInsets`, Android uses `WindowInsets` systemBars + displayCutout).
+- Touch input is mapped to a single ImGui pointer with the left mouse button
+  held while the user is touching; both iOS and Android forward raw dp
+  coordinates (no framebuffer-scale doubling).
 
 ## Required Screens
 

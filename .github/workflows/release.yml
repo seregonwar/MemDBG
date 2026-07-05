@@ -449,6 +449,15 @@ jobs:
         if: steps.detect.outputs.enabled == '1'
         uses: android-actions/setup-android@v3
 
+      - name: Install NDK and CMake
+        if: steps.detect.outputs.enabled == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          yes | "${SDK}/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.1.10909125" "cmake;3.22.1" >/dev/null || true
+
       - name: Build release APK
         if: steps.detect.outputs.enabled == '1'
         shell: bash

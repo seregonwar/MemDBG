@@ -66,3 +66,13 @@ docs/x_project_article.md
 *.pyc
 /PoC
 *.log
+
+# Android / Gradle
+/local.properties
+/.idea
+/mobile/android/.gradle
+/mobile/android/.cxx
+/mobile/android/app/.cxx
+/mobile/android/app/build
+/mobile/android/build
+/mobile/android/captures

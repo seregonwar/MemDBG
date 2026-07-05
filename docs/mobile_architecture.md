@@ -8,8 +8,8 @@ layout that can be operated with one hand during live console sessions.
 
 | Platform | Renderer | Native Shell | Package | Status |
 |---|---|---|---|---|
-| iOS / iPadOS | Metal | Xcode app target with `MTKView` | `.ipa` | Scaffolded |
-| Android | OpenGL ES 3 first, Vulkan later | Kotlin/Java activity plus NDK CMake library | `.apk`, later `.aab` | Scaffolded |
+| iOS / iPadOS | Metal | CMake → Xcode app target with `MTKView` (`UIViewController`) | `.ipa` | Implemented |
+| Android | OpenGL ES 3 (Vulkan later) | Gradle + NDK CMake + Kotlin activity + `GLSurfaceView` (`libmemdbg.so`) | `.apk` (later `.aab`) | Implemented |
 | Desktop | OpenGL 3 via GLFW | Existing CMake frontend | `.exe`, `.dmg`, `.tar.gz` | Implemented |
 
 Metal is the right first-class path for iPhone and iPad because it gives
@@ -19,17 +19,23 @@ ImGui with OpenGL ES 3. Vulkan can follow once the app shell is stable.
 
 ## Shared Code
 
-The mobile apps should reuse these desktop modules directly:
+The mobile apps reuse these desktop modules directly via the same CMake source
+list used by the iOS shell:
 
 - `frontend/src/core/client`: MDBG protocol client and async-safe host calls.
 - `frontend/src/trainer`: trainer import/export and batchcode parsing.
 - `frontend/src/scanner`: auto-search heuristics and structure comparison.
 - `frontend/src/locale`: translation repository and locale selection.
-- `frontend/src/plugins/repository`: catalog parsing and install metadata.
+- `frontend/src/plugins/repository`: catalog parsing, install metadata, and
+  the **embedded Lua 5.4 runtime** (`MEMDBG_ENABLE_EMBEDDED_LUA`) so plugins
+  run on-device without an external interpreter.
+- `frontend/src/app/shell/memdbg_app.cpp`: `draw_mobile_app()` and
+  `set_mobile_safe_area()` drive the touch layout on both platforms.
 
-Desktop-only UI code stays behind the current GLFW/OpenGL shell. Mobile shells
-should add a new presentation layer rather than bending the desktop sidebar into
-a phone layout.
+Desktop-only UI paths (GLFW window, `imgui_impl_glfw`, `std::system`/`popen`
+plugin hosting) are gated out by the `MEMDBG_PLATFORM_IOS` guard, which both
+the iOS CMake and the Android NDK CMake define on the shared frontend sources.
+A follow-up refactor can promote that to a `MEMDBG_PLATFORM_MOBILE` umbrella.
 
 ## Mobile UX Model
 
@@ -73,12 +79,16 @@ Target frame budget:
 
 ## CI Contract
 
-The release workflow already packages desktop builds. Mobile jobs are wired to
-look for native projects under:
+The release workflow (`.github/workflows/release.yml`) packages desktop, iOS,
+and Android builds on every tag (`v*`) or manual `workflow_dispatch`:
 
-- `mobile/ios/MemDBG.xcodeproj` or `mobile/ios/MemDBG.xcworkspace`
-- `mobile/android/gradlew`
+- `mobile-ios` — CMake (Xcode generator) + `xcodebuild archive`, emits an
+  unsigned `.ipa` at `dist/MemDBG-mobile-ios.ipa`.
+- `mobile-android` — Gradle wrapper (`mobile/android/gradlew`) + NDK CMake,
+  emits a release `.apk` at `dist/` (debug-signed so it installs out of the
+  box). The job installs `ndk;26.1.10909125` and `cmake;3.22.1` via
+  `sdkmanager` before building.
 
-Until those projects exist, the mobile jobs report a clear skip message and do
-not fail the release. Once the native projects land, the same workflow emits
-`.ipa` and `.apk` artifacts.
+Both mobile jobs were previously guarded by a `gradlew` / Xcode project probe
+and skipped with a clear message; the probes now resolve to the real projects
+and the jobs build unconditionally on tag/manual dispatch.

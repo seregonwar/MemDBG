@@ -154,12 +154,10 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 - Full Unicode font stack: base Latin + Cyrillic ranges in the primary font, with OS-specific CJK fallback chains (Apple SD Gothic Neo / Hiragino Sans GB on macOS, Malgun Gothic / Arial Unicode MS on Windows) for Japanese, Korean, and Chinese glyphs.
 - DPI-aware rendering — monitor content scale is auto-detected via GLFW; all sizes, fonts, spacings, and rounding radii scale proportionally for crisp rendering on HiDPI displays.
 
-### Mobile and release packaging
-
-- Mobile work has started under [`mobile/`](mobile/) with an iOS/iPadOS Metal plan, an Android NDK/OpenGL ES plan, and a touch-first UI contract.
+- Mobile shells for **iOS/iPadOS (Metal)** and **Android (OpenGL ES 3)** ship under [`mobile/`](mobile/); both reuse the desktop frontend's `draw_mobile_app()` touch layout, forward system safe areas via `set_mobile_safe_area()`, and run the same embedded Lua 5.4 plugin runtime as the desktop build.
 - Release CI builds desktop artifacts for Linux, macOS, and Windows, including Windows `.exe` bundles, macOS `.app.zip` plus `.dmg`, Linux `.tar.gz`, and payload `.elf`/`.a` artifacts.
-- Mobile release jobs are wired for `.ipa` and `.apk` output and activate automatically when the native iOS and Android project files land.
-- See [`docs/mobile_architecture.md`](docs/mobile_architecture.md) and [`docs/release_packaging.md`](docs/release_packaging.md) for the current implementation contract.
+- Mobile release jobs produce the unsigned iOS `.ipa` (CMake + Xcode archive) and the Android release `.apk` (Gradle + NDK CMake) on every tag/manual dispatch.
+- See [`docs/mobile_architecture.md`](docs/mobile_architecture.md) and [`docs/release_packaging.md`](docs/release_packaging.md) for the implementation contract.
 
 <br/>
 
@@ -222,6 +220,8 @@ Every `SCAN_*` response opens with a `memdbg_scan_response_prefix_t` carrying hi
 | Frontend — Linux | Supported |
 | Frontend — macOS | Supported (universal `.app` bundle) |
 | Frontend — Windows | Supported (`.exe` + `.ico`) |
+| Mobile — iOS / iPadOS | Supported (Metal + Dear ImGui, `.ipa`) |
+| Mobile — Android | Supported (OpenGL ES 3 + Dear ImGui, `.apk`) |
 
 The frontend connects to the payload over TCP (default port `9020`). Telemetry and discovery use UDP (`9023` and `9022` respectively). The host build requires all three ports to be free at startup.
 
@@ -327,6 +327,25 @@ open build/frontend/bin/MemDBG.app        # macOS
 
 On macOS this produces a `MemDBG.app` bundle with `Resources/assets/app-icon.png` and a custom `.icns` icon. On Linux a `MemDBG.desktop` file is placed alongside the binary.
 
+### Mobile shells
+
+The mobile shells reuse the desktop frontend and only swap the render backend + lifecycle glue.
+
+```sh
+# iOS / iPadOS — Metal + MTKView (unsigned .ipa)
+cmake -S mobile/ios -B build/ios -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DMEMDBG_RELEASE_VERSION=0.2.0
+xcodebuild -project build/ios/memdbg_mobile.xcodeproj -scheme MemDBGMobile \
+  -configuration Release -sdk iphoneos -archivePath build/ios/MemDBG.xcarchive \
+  CODE_SIGNING_ALLOWED=NO archive
+
+# Android — OpenGL ES 3 + GLSurfaceView (release .apk)
+cd mobile/android && ./gradlew --no-daemon assembleRelease
+```
+
+See [`mobile/ios/README.md`](mobile/ios/README.md) and [`mobile/android/README.md`](mobile/android/README.md) for full instructions.
+
 ### Protocol probe CLI
 
 ```sh
@@ -416,7 +435,7 @@ Host build CLI flags:
 
 ## Release Pipeline
 
-Every tag (`v*`) or manual `workflow_dispatch` triggers a matrix build of seven artifacts:
+Every tag (`v*`) or manual `workflow_dispatch` triggers a matrix build of nine artifacts:
 
 | Job | Artifact |
 |---|---|
@@ -427,6 +446,8 @@ Every tag (`v*`) or manual `workflow_dispatch` triggers a matrix build of seven 
 | `frontend-windows` | `MemDBG-frontend-windows.zip` |
 | `payload-ps4` | `MemDBG-ps4.elf` + `libmemdbg-ps4.a` |
 | `payload-ps5` | `MemDBG-ps5.elf` + `libmemdbg-ps5.a` |
+| `mobile-ios` | `MemDBG-mobile-ios.ipa` (unsigned) |
+| `mobile-android` | `MemDBG-mobile-android.apk` (debug-signed release) |
 
 `VERSION` is the single checked-in source for local builds. During GitHub Actions releases, the workflow resolves the version from the tag or manual input, writes it to `VERSION` in the build workspace, and passes it into CMake/Make so the payload, frontend UI, app bundle metadata, and `BUILD_INFO.txt` agree.
 
@@ -445,9 +466,7 @@ Pre-release / active development. Wire protocol is version `1`; breaking changes
 - ✅ Debugger lifecycle, thread control, GPR/debug register access, software breakpoints, hardware watchpoints, single-step, stack walk, and compact disassembly.
 - ✅ Debugger Patch Studio and Analysis Notebook are always available, with reversible patches, mprotect-assisted writes, manifest/workspace save-load, disassembly/stack bookmarking, Markdown report export, and trainer export.
 - ✅ PS4/PS5 kernel base/read/write endpoints and console notification/print commands, advertised only when supported by the payload.
-
-**In progress:**
-- 🛠 Mobile app implementation for iOS/iPadOS and Android; architecture, UX contract, and CI hooks are in place, native shells are next.
+- ✅ Mobile shells for iOS/iPadOS (Metal + MTKView) and Android (OpenGL ES 3 + GLSurfaceView) reusing the shared `draw_mobile_app()` touch layout, safe-area insets bridge, and embedded Lua 5.4 plugin runtime.
 - 🛠 Remote allocation/free, remote function calls, and ELF loading are protocol-reserved but intentionally return `UNSUPPORTED` until a safe remote syscall bridge exists.
 - 🛠 Turbo SIMD scan paths, alias compare acceleration, assembler integration, and a dedicated klog forwarder are tracked in [`docs/feature_research.md`](docs/feature_research.md).
 - 🛠 Some advanced debugger capabilities are platform-gated: PS5 exposes FS/GS base when the SDK ptrace requests are available; PS4 does not advertise that capability.
