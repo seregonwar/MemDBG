@@ -112,20 +112,22 @@ static bool deactivate_cheat(AppState &state, CheatEntry &cheat) {
 }
 
 static void add_cheat_from_fields(AppState &state) {
-  if (state.selected_pid<=0) { set_status(state,"Select a process before adding a trainer entry"); return; }
-  if (client_async_busy(state)) { set_status(state, "Wait for the active operation to finish"); return; }
+  if (state.selected_pid<=0) { set_status(state, locale::tr("trainer.select_process_first")); return; }
+  if (client_async_busy(state)) { set_status(state, locale::tr("trainer.wait_active")); return; }
   uint64_t address=0;
   std::vector<uint8_t> bytes;
-  if (!parse_u64(state.cheat_address, address)) { set_status(state,"Invalid cheat address"); return; }
-  if (!build_value_bytes(state.cheat_type, state.cheat_value, bytes)) { set_status(state,"Invalid cheat value"); return; }
+  if (!parse_u64(state.cheat_address, address)) { set_status(state, locale::tr("trainer.invalid_cheat_addr")); return; }
+  if (!build_value_bytes(state.cheat_type, state.cheat_value, bytes)) { set_status(state, locale::tr("trainer.invalid_cheat_value")); return; }
   CheatEntry cheat;
   cheat.description = state.cheat_description[0]!='\0'?state.cheat_description:"Cheat";
   cheat.pid=state.selected_pid; cheat.address=address; cheat.value_type=state.cheat_type;
   cheat.value_text=state.cheat_value; cheat.bytes=std::move(bytes); cheat.locked=state.cheat_lock;
   if (state.client.connected()) (void)capture_off_value(state, cheat);
   state.cheats.push_back(std::move(cheat));
-  set_status(state, "Trainer entry added");
-  push_notification(state, "Trainer entry added: " + std::string(state.cheat_description));
+  set_status(state, locale::tr("trainer.entry_added"));
+  char notify_buf[512];
+  std::snprintf(notify_buf, sizeof(notify_buf), locale::tr("trainer.entry_added_notify"), state.cheat_description);
+  push_notification(state, notify_buf);
 }
 
 /* ---- load/save now in trainer_format.cpp ---- */
@@ -133,14 +135,14 @@ static void add_cheat_from_fields(AppState &state) {
 /* ---- Batchcode ---- */
 static void import_batchcode(AppState &state) {
   if (state.selected_pid <= 0) {
-    set_status(state, "Select a process before importing batchcode");
+    set_status(state, locale::tr("trainer.select_process_for_batch"));
     return;
   }
   std::string error;
   std::vector<BatchcodeEntry> entries;
   int imported = parse_batchcode(state.batchcode_text, entries, error);
   if (imported < 0) {
-    set_status(state, "Batchcode error: " + error);
+    char bce_buf[256]; std::snprintf(bce_buf, sizeof(bce_buf), locale::tr("trainer.batchcode_error"), error.c_str()); set_status(state, bce_buf);
     return;
   }
   for (size_t i = 0; i < entries.size(); ++i) {
@@ -154,9 +156,13 @@ static void import_batchcode(AppState &state) {
     cheat.enabled = true;
     state.cheats.push_back(std::move(cheat));
   }
-  set_status(state, imported > 0
-                        ? "Imported " + std::to_string(imported) + " batchcode entries"
-                        : "No batchcode entries imported");
+    char import_buf[256];
+    if (imported > 0) {
+      std::snprintf(import_buf, sizeof(import_buf), locale::tr("trainer.imported_n"), imported);
+    } else {
+      std::snprintf(import_buf, sizeof(import_buf), "%s", locale::tr("trainer.no_batchcode"));
+    }
+    set_status(state, import_buf);
 }
 
 /* ---- Locked cheats timer ---- */
@@ -218,12 +224,44 @@ static void apply_enabled_cheats(AppState &state) {
   for (auto &cheat : state.cheats) {
     if (cheat.enabled && apply_cheat(state, cheat)) applied++;
   }
-  set_status(state, "Applied " + std::to_string(applied) + " trainer entries");
-  push_notification(state, "Applied " + std::to_string(applied) + " trainer entries");
+  char applied_buf[256];
+  std::snprintf(applied_buf, sizeof(applied_buf), locale::tr("trainer.applied"), applied);
+  set_status(state, applied_buf);
+  push_notification(state, applied_buf);
 }
 
 /* ---- Main draw ---- */
 void draw_trainer(AppState &state, ImVec2 avail) {
+  /* Process trainer files dropped from the OS onto the window */
+  if (!state.dropped_files.empty()) {
+    for (const auto &path : state.dropped_files) {
+      std::string lower = path;
+      std::transform(lower.begin(), lower.end(), lower.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      const bool is_trainer_ext =
+          (lower.size() >= 4U && (lower.compare(lower.size() - 4U, 4U, ".cht") == 0 ||
+                                  lower.compare(lower.size() - 4U, 4U, ".shn") == 0)) ||
+          (lower.size() >= 5U && lower.compare(lower.size() - 5U, 5U, ".json") == 0) ||
+          (lower.size() >= 8U && lower.compare(lower.size() - 8U, 8U, ".trainer") == 0);
+      if (is_trainer_ext) {
+        std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+                      "%s", path.c_str());
+        const int loaded = load_trainer_file(state, path);
+        if (loaded >= 0) {
+          char buf[512];
+          std::snprintf(buf, sizeof(buf),
+                        locale::tr("trainer.drop_loaded"), loaded,
+                        path.c_str());
+          set_status(state, buf);
+          push_notification(state, buf, 5.0);
+        }
+        /* On error, load_trainer_file already sets the status */
+        break;  /* only consume the first matching file */
+      }
+    }
+    state.dropped_files.clear();
+  }
+
   const float scl = ui::dpi_scale();
   const float gap = 12.0f * scl;
   const bool stacked = avail.x < 900.0f * scl;
@@ -287,7 +325,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     ImGui::InputText("##TrainerPath", state.trainer_file_path, sizeof(state.trainer_file_path));
     ImGui::TableSetColumnIndex(1);
     if (ImGui::SmallButton((std::string(icons::kLoad) + "##trainerpath").c_str())) {
-      std::string picked = memdbg::frontend::ui::pickFile(locale::tr("file_picker.open_trainer"), locale::tr("file_picker.trainer_files"), "*.cht;*.shn;*.json");
+      std::string picked = memdbg::frontend::ui::pickFile(locale::tr("file_picker.open_trainer"), locale::tr("file_picker.trainer_files"), "*.cht;*.shn;*.json;*.trainer");
       if (!picked.empty())
         std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path), "%s", picked.c_str());
     }
@@ -444,17 +482,17 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       ImGui::TableSetColumnIndex(9);
       ImGui::BeginDisabled(client_async_busy(state));
       if (ImGui::SmallButton(locale::tr("trainer.btn_on"))) {
-        if (apply_cheat(state,cheat)) { set_status(state, cheat.description+" applied"); push_notification(state, cheat.description + " applied"); }
+        if (apply_cheat(state,cheat)) { char ca_buf[256]; std::snprintf(ca_buf, sizeof(ca_buf), locale::tr("trainer.cheat_applied"), cheat.description.c_str()); set_status(state, ca_buf); push_notification(state, ca_buf); }
         else set_status(state, cheat.status);
       }
       ImGui::SameLine();
       if (ImGui::SmallButton(locale::tr("trainer.btn_off"))) {
-        if (deactivate_cheat(state,cheat)) { set_status(state, cheat.description+" restored"); push_notification(state, cheat.description + " restored"); }
+        if (deactivate_cheat(state,cheat)) { char cr_buf[256]; std::snprintf(cr_buf, sizeof(cr_buf), locale::tr("trainer.cheat_restored"), cheat.description.c_str()); set_status(state, cr_buf); push_notification(state, cr_buf); }
         else set_status(state, cheat.status);
       }
       ImGui::SameLine();
       if (ImGui::SmallButton(locale::tr("trainer.btn_cap"))) {
-        if (capture_off_value(state,cheat)) set_status(state, cheat.description+" OFF captured");
+        if (capture_off_value(state,cheat)) { char coc_buf[256]; std::snprintf(coc_buf, sizeof(coc_buf), locale::tr("trainer.off_captured"), cheat.description.c_str()); set_status(state, coc_buf); }
         else set_status(state, cheat.status);
       }
       ImGui::EndDisabled();

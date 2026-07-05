@@ -28,7 +28,7 @@ static void persist_console_targets(AppState &state, const std::string &ok_messa
     push_notification(state, ok_message, 3.0);
   } else {
     set_status(state, error);
-    push_notification(state, "Cannot save console targets: " + error, 5.0);
+    push_notification(state, std::string(locale::tr("consoles.cannot_save_targets")) + ": " + error, 5.0);
   }
 }
 
@@ -120,17 +120,17 @@ void draw_consoles(AppState &state, ImVec2 avail) {
   const float action_w = (ImGui::GetContentRegionAvail().x - action_gap * 2.0f) / 3.0f;
   if (ui::soft_button((std::string(icons::kSave) + "  Update").c_str(), ImVec2(action_w, 38.0f))) {
     save_current_console_target(state);
-    persist_console_targets(state, "Console target updated");
+    persist_console_targets(state, locale::tr("consoles.console_target_updated"));
   }
   ImGui::SameLine(0, action_gap);
   if (ui::primary_button((std::string(icons::kAdd) + "  Add").c_str(), ImVec2(action_w, 38.0f))) {
     add_console_target(state);
-    persist_console_targets(state, "Console target added");
+    persist_console_targets(state, locale::tr("consoles.console_target_added"));
   }
   ImGui::SameLine(0, action_gap);
   if (ui::danger_button((std::string(icons::kTrash) + "  Remove").c_str(), ImVec2(action_w, 38.0f))) {
     remove_selected_console_target(state);
-    persist_console_targets(state, "Console target removed");
+    persist_console_targets(state, locale::tr("consoles.console_target_removed"));
   }
   ImGui::EndDisabled();
 
@@ -163,7 +163,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     ImGui::BeginDisabled(client_async_busy(state));
     if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("consoles.ping_payload")).c_str(),
                         ui::full_button(40))) {
-      set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
+      set_status(state, state.client.ping() ? locale::tr("consoles.ping_ok") : state.client.last_error());
     }
     if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("consoles.shutdown_payload")).c_str(),
                           ui::full_button(40))) {
@@ -173,7 +173,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     if (ui::confirm_modal("ConfirmShutdownPayload",
                           locale::tr("consoles.confirm_shutdown"), nullptr,
                           &skip_shutdown, true)) {
-      set_status(state, state.client.shutdown_payload() ? "Shutdown sent" : state.client.last_error());
+      set_status(state, state.client.shutdown_payload() ? locale::tr("consoles.shutdown_sent") : state.client.last_error());
     }
     ImGui::EndDisabled();
   }
@@ -198,9 +198,11 @@ void draw_consoles(AppState &state, ImVec2 avail) {
       if (!ok && !state.discovery_error.empty()) {
         set_status(state, state.discovery_error);
       } else if (ok && state.discovered_consoles.empty()) {
-        set_status(state, "No MemDBG payloads found on the local network.");
+        set_status(state, locale::tr("consoles.no_payloads_found"));
       } else if (ok) {
-        set_status(state, "Found " + std::to_string(state.discovered_consoles.size()) + " payload(s).");
+        char disc_buf[128];
+        std::snprintf(disc_buf, sizeof(disc_buf), locale::tr("consoles.found_n_payloads"), state.discovered_consoles.size());
+        set_status(state, disc_buf);
       }
     }
   }
@@ -293,7 +295,9 @@ void draw_consoles(AppState &state, ImVec2 avail) {
         const std::string use_id = "Use##Discovered" + std::to_string(i);
         if (ui::soft_button(use_id.c_str(), ImVec2(-1, 30.0f))) {
           use_discovered_console(state, console);
-          set_status(state, "Selected discovered target " + console.ip);
+          char sel_buf[128];
+          std::snprintf(sel_buf, sizeof(sel_buf), locale::tr("consoles.selected_discovered"), console.ip.c_str());
+          set_status(state, sel_buf);
         }
         ImGui::EndDisabled();
 
@@ -303,7 +307,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
         if (ui::primary_button(add_id.c_str(), ImVec2(-1, 30.0f))) {
           use_discovered_console(state, console);
           add_console_target(state);
-          persist_console_targets(state, "Discovered target saved");
+          persist_console_targets(state, locale::tr("consoles.discovered_target_saved"));
         }
         ImGui::EndDisabled();
       }

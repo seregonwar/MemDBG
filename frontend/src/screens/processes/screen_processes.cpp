@@ -80,7 +80,7 @@ static bool add_saturating(uint64_t &total, uint64_t value) {
 
 static void analyze_process(AppState &state) {
   if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
-  if (state.maps.empty()) { set_status(state, "Refresh process maps first"); return; }
+  if (state.maps.empty()) { set_status(state, locale::tr("processes.refresh_maps_first")); return; }
 
   uint64_t total_bytes = 0;
   uint64_t readable_bytes = 0;
@@ -220,19 +220,19 @@ static void dump_selected_map(AppState &state) {
     }
     if (bytes.empty()) break;
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    if (!out) { set_status(state, "Dump file write failed"); return; }
+    if (!out) { set_status(state, locale::tr("processes.dump_failed")); return; }
     address += bytes.size();
     remaining -= bytes.size();
     written_total += bytes.size();
   }
-  set_status(state, "Dumped " + std::to_string(written_total) + " bytes to " + out_path.string());
-  push_notification(state, "Map dumped to " + out_path.string(), 5.0);
+  char dp_buf[512]; std::snprintf(dp_buf, sizeof(dp_buf), locale::tr("processes.dumped_bytes"), written_total, out_path.string().c_str()); set_status(state, dp_buf);
+  char md_buf[512]; std::snprintf(md_buf, sizeof(md_buf), locale::tr("processes.map_dumped"), out_path.string().c_str()); push_notification(state, md_buf, 5.0);
 }
 
 static void dump_filtered_maps(AppState &state) {
   if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
   if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
-  if (state.maps.empty()) { set_status(state, "Refresh process maps first"); return; }
+  if (state.maps.empty()) { set_status(state, locale::tr("processes.refresh_maps_first")); return; }
 
   state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
   std::filesystem::path base_dir = trim_copy(state.dump_path);
@@ -245,10 +245,10 @@ static void dump_filtered_maps(AppState &state) {
       ("pid_" + std::to_string(state.selected_pid) + "_" + process_name + "_maps");
   std::error_code ec;
   std::filesystem::create_directories(out_dir, ec);
-  if (ec) { set_status(state, "Failed to create process dump directory"); return; }
+  if (ec) { set_status(state, locale::tr("processes.dump_dir_failed")); return; }
 
   std::ofstream manifest(out_dir / "manifest.txt", std::ios::binary);
-  if (!manifest) { set_status(state, "Failed to create dump manifest"); return; }
+  if (!manifest) { set_status(state, locale::tr("processes.dump_manifest_failed")); return; }
   manifest << "MemDBG process dump\n";
   manifest << "pid=" << state.selected_pid << "\n";
   manifest << "process=" << selected_process_name(state) << "\n";
@@ -333,7 +333,7 @@ static void dump_filtered_maps(AppState &state) {
            << "\ndumped_bytes=" << dumped_total << "\n";
   set_status(state, "Dumped " + std::to_string(dumped_maps) + " filtered map(s) to " +
                     out_dir.string());
-  push_notification(state, "Process dump written to " + out_dir.string(), 5.0);
+  char pdw_buf[512]; std::snprintf(pdw_buf, sizeof(pdw_buf), locale::tr("processes.dump_written"), out_dir.string().c_str()); push_notification(state, pdw_buf, 5.0);
 }
 
 /* ---- Process selection ---- */

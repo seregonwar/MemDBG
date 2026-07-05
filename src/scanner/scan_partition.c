@@ -31,7 +31,6 @@ memdbg_status_t partition_maps_by_bytes(
 
   memset(slots, 0, num_threads * sizeof(*slots));
 
-  /* Count qualifying maps so we know the effective workload. */
   for (size_t i = 0U; i < map_count; ++i) {
     const memdbg_map_entry_t *map = &maps[i];
     if ((map->protection & prot_mask) != prot_mask || map->end <= map->start)
@@ -44,7 +43,6 @@ memdbg_status_t partition_maps_by_bytes(
     effective_maps++;
   }
 
-  /* Single-thread or not enough maps: one slot gets everything. */
   if (num_threads <= 1U || effective_maps < 4U) {
     slots[0].map_start = 0U;
     slots[0].map_end   = map_count;
@@ -56,12 +54,10 @@ memdbg_status_t partition_maps_by_bytes(
     return MEMDBG_OK;
   }
 
-  /* Clamp threads to effective maps. */
   if (num_threads > effective_maps / 2U)
     num_threads = effective_maps / 2U;
   if (num_threads < 1U) num_threads = 1U;
 
-  /* Allocate effective index and byte arrays. */
   eff_indices = (size_t *)malloc(effective_maps * sizeof(size_t));
   eff_bytes   = (uint64_t *)malloc(effective_maps * sizeof(uint64_t));
   if (eff_indices == NULL || eff_bytes == NULL) {
@@ -70,7 +66,6 @@ memdbg_status_t partition_maps_by_bytes(
     return MEMDBG_ERR_NOMEM;
   }
 
-  /* Build filtered map index + byte size arrays. */
   ei = 0U;
   total_bytes = 0U;
   for (size_t i = 0U; i < map_count; ++i) {
@@ -91,7 +86,6 @@ memdbg_status_t partition_maps_by_bytes(
     ++ei;
   }
 
-  /* Size-weighted boundary walk. */
   bytes_per_thread = total_bytes / (uint64_t)num_threads;
   if (bytes_per_thread == 0U) bytes_per_thread = 1U;
 
@@ -111,7 +105,6 @@ memdbg_status_t partition_maps_by_bytes(
   }
   slots[t].map_end = map_count;
 
-  /* Fill any unused slots with empty ranges. */
   for (u = t + 1U; u < num_threads; ++u) {
     slots[u].map_start = map_count;
     slots[u].map_end   = map_count;

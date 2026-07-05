@@ -193,23 +193,22 @@ static void poll_structure_compare(AppState &state) {
   std::snprintf(state.structure_compare_status, sizeof(state.structure_compare_status),
                 "Compared %zu fields", state.structure_compare_fields.size());
   set_status(state, state.structure_compare_status);
-  push_notification(state, std::string("Structure comparison complete: ") +
-                           std::to_string(state.structure_compare_fields.size()) + " fields");
+  char sc_buf[256]; std::snprintf(sc_buf, sizeof(sc_buf), locale::tr("scanner.structure_compare_complete"), state.structure_compare_fields.size()); push_notification(state, sc_buf);
 }
 
 static void start_structure_compare(AppState &state) {
   constexpr int kMaxStructureBytes = 64 * 1024;
   if (state.structure_compare_pending) return;
   if (!state.client.connected()) {
-    set_status(state, "Connect a console before comparing structures");
+    set_status(state, locale::tr("scanner.structure_compare.connect_first"));
     return;
   }
   if (state.selected_pid <= 0) {
-    set_status(state, "Select a process before comparing structures");
+    set_status(state, locale::tr("scanner.structure_compare.select_process_first"));
     return;
   }
   if (!payload_supports(state, MEMDBG_CAP_MEMORY_READ)) {
-    set_status(state, "Payload does not support memory reads");
+    set_status(state, locale::tr("scanner.structure_compare.no_mem_reads"));
     return;
   }
 
@@ -220,7 +219,7 @@ static void start_structure_compare(AppState &state) {
       !parse_u64(state.structure_enemy_a_base, enemy_a_base) || enemy_a_base == 0U ||
       (state.structure_compare_has_enemy_b &&
        (!parse_u64(state.structure_enemy_b_base, enemy_b_base) || enemy_b_base == 0U))) {
-    set_status(state, "Enter valid player and enemy structure addresses");
+    set_status(state, locale::tr("scanner.structure_compare.invalid_addresses"));
     return;
   }
 
@@ -228,7 +227,7 @@ static void start_structure_compare(AppState &state) {
   if (field_width == 0U || state.structure_compare_size < static_cast<int>(field_width) ||
       state.structure_compare_size > kMaxStructureBytes ||
       static_cast<uint32_t>(state.structure_compare_size) % field_width != 0U) {
-    set_status(state, "Structure size must be a field-width multiple between 1 and 65536 bytes");
+    set_status(state, locale::tr("scanner.structure_compare.invalid_size"));
     return;
   }
 
@@ -691,14 +690,14 @@ static void scan_range(AppState &state) {
 
 static void scan_process(AppState &state) {
   if (state.scan_async_pending) return;
-  if (!state.client.connected()) { set_status(state,"Connect a console first"); push_notification(state, "Connect a console before scanning processes", 4.0); return; }
-  if (state.selected_pid <= 0) { set_status(state,"Select a process first"); push_notification(state, "Select a process before scanning", 4.0); return; }
+  if (!state.client.connected()) { set_status(state,locale::tr("scanner.connect_first")); push_notification(state, locale::tr("scanner.scan_connect_first_notify"), 4.0); return; }
+  if (state.selected_pid <= 0) { set_status(state,locale::tr("scanner.select_process_first")); push_notification(state, locale::tr("scanner.scan_select_process_notify"), 4.0); return; }
   uint64_t start=0, end=0;
   std::array<uint8_t,16> value{};
   uint32_t value_len=0;
   if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
   if (end != 0U && end <= start) { set_status(state, locale::tr("scanner.end_filter_error")); return; }
-  if (!build_scan_value(state.scan_type,state.scan_value,value,value_len)) { set_status(state,"Invalid scan value"); return; }
+  if (!build_scan_value(state.scan_type,state.scan_value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
   state.scan_alignment=std::max(state.scan_alignment,1);
   state.scan_max_results=std::max(state.scan_max_results,1);
   memdbg_scan_process_exact_request_t request{};
@@ -819,14 +818,14 @@ static void scan_process(AppState &state) {
 
 static void scan_unknown_process(AppState &state) {
   if (state.scan_async_pending) return;
-  if (!state.client.connected()) { set_status(state,"Connect a console first"); push_notification(state, "Connect a console before scanning", 4.0); return; }
-  if (state.selected_pid <= 0) { set_status(state,"Select a process first"); push_notification(state, "Select a process before scanning", 4.0); return; }
+  if (!state.client.connected()) { set_status(state,locale::tr("scanner.connect_first")); push_notification(state, locale::tr("scanner.scan_select_process_notify"), 4.0); return; }
+  if (state.selected_pid <= 0) { set_status(state,locale::tr("scanner.select_process_first")); push_notification(state, locale::tr("scanner.scan_select_process_notify"), 4.0); return; }
   if (!(state.hello.capabilities & MEMDBG_CAP_SCAN_UNKNOWN)) {
     set_status(state,locale::tr("scanner.no_unknown_cap")); return;
   }
   uint64_t start=0, end=0;
-  if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_end,end)) { set_status(state,"Invalid scan window"); return; }
-  if (end != 0U && end <= start) { set_status(state, "End filter must be greater than start, or 0x0"); return; }
+  if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
+  if (end != 0U && end <= start) { set_status(state, locale::tr("scanner.end_filter_error")); return; }
   state.scan_alignment=std::max(state.scan_alignment,1);
   state.scan_max_results=std::max(state.scan_max_results,1);
   memdbg_scan_process_exact_request_t request{};
@@ -1479,8 +1478,10 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     for (uint64_t addr : state.scan_result.addresses)
       all += hex_u64(addr) + "\n";
     ImGui::SetClipboardText(all.c_str());
-    set_status(state, "Copied " + std::to_string(state.scan_result.addresses.size()) + " addresses");
-    push_notification(state, "Copied " + std::to_string(state.scan_result.addresses.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+    char copy_buf[128];
+    std::snprintf(copy_buf, sizeof(copy_buf), locale::tr("notify.copied_n_addresses"), state.scan_result.addresses.size());
+    set_status(state, copy_buf);
+    push_notification(state, copy_buf + (suffix ? std::string(suffix) : std::string("")));
   };
 
   if (!state.scan_result.addresses.empty()) {

@@ -34,6 +34,9 @@ MemDBG is a high-performance memory debugging suite for PlayStation 4 and PlaySt
 - [Highlights](#highlights)
 - [Architecture](#architecture)
 - [Features](#features)
+- [Quick Start (host)](#quick-start-host)
+- [Quick Start (PS5)](#quick-start-ps5)
+- [Comparison](#comparison)
 - [Wire Protocol](#wire-protocol)
 - [Supported Platforms](#supported-platforms)
 - [Localization](#localization)
@@ -109,6 +112,186 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 
 <br/>
 
+## Quick Start (host)
+
+**Run MemDBG on your laptop in under 5 minutes — no console required.**
+
+The host validation build is a full protocol server (`MemDBG-host`) that opens real TCP/UDP sockets and serves the identical wire protocol as the console payload. You can explore every screen in the frontend without needing a jailbroken PS4 or PS5.
+
+### 1. Prerequisites
+
+- **C11 compiler** (`cc`, `clang`, or `gcc`)
+- **CMake 3.24+** and a C++17 toolchain
+- **macOS** or **Linux** (the host build works on both)
+
+```sh
+which cc cmake     # both should resolve
+```
+
+### 2. Build the host payload (one command)
+
+```sh
+make host
+```
+
+Compiles every C source from `src/` with the host toolchain into a single binary: `build/MemDBG-host`.
+
+### 3. Build the frontend (one command)
+
+```sh
+make frontend
+```
+
+The CMake build pulls in Dear ImGui, GLFW, and nlohmann/json via `FetchContent` and produces a native binary:
+
+| OS | Binary |
+|---|---|
+| macOS | `build/frontend/bin/MemDBG.app` |
+| Linux | `build/frontend/bin/memdbg_frontend` |
+
+### 4. Start both in two terminals
+
+**Terminal 1 — payload server:**
+
+```sh
+./build/MemDBG-host --bind=127.0.0.1 --debug-port=9020 --udp-port=9023 --data-root=/tmp/MemDBG
+```
+
+The payload logs its startup to stdout: `MemDBG <version> starting debug=127.0.0.1:9020 udp_log=127.0.0.1:9023 pool=4`.
+
+**Terminal 2 — frontend:**
+
+```sh
+# macOS
+open build/frontend/bin/MemDBG.app
+
+# Linux
+./build/frontend/bin/memdbg_frontend
+```
+
+### 5. Connect and explore
+
+In the frontend, open the **Consoles** screen, enter host `127.0.0.1` and port `9020`, then press **Connect**. Once connected:
+
+| Screen | What you can do on host |
+|---|---|
+| **Processes** | List your running processes, inspect memory maps, dump a map to disk. |
+| **Memory** | Read/write any mapped address; try the hex view and ROP gadget finder. |
+| **Scanner** | Run an exact-value scan on your own process memory. |
+| **AOB Scan** | Search for byte patterns like `48 8B ?? ??` across a process. |
+| **Pointer Scan** | Trace pointer chains from a target address with adjustable depth. |
+| **Trainer** | Build cheat entries and save `.cht` files (addresses are real on host). |
+| **Debugger** | Attach to a process, set breakpoints and watchpoints, inspect registers, step through code. (Linux works out of the box; macOS may require disabling SIP or codesigning the binary for `ptrace`.) |
+| **Logs** (`F10`) | Watch the live UDP telemetry feed from the payload. |
+| **Plugins** | Install and run Lua/Python scripts from the bundled `plugin-repository/`. |
+
+> **Tip:** Hotkeys make navigation fast — `F5` Connect, `F6` Processes, `F7` Scanner, `F8` Memory, `F9` Trainer, `F10` Logs.
+
+Want to go deeper? Run the full test suite:
+
+```sh
+make test                          # all C payload tests (host-side)
+make check-locales                 # validate locale completeness
+make check-headers                 # verify header-source correspondence
+
+# Frontend unit tests:
+./build/frontend/bin/memdbg_auto_search_test        # Auto-Search heuristic engine
+./build/frontend/bin/memdbg_trainer_formats_test    # Trainer/batchcode parser
+./build/frontend/bin/memdbg_locale_manager_test     # Locale loading & validation
+```
+
+If something doesn't work, start with `make host` and `./build/MemDBG-host` — the test suite and CI workflow both exercise this exact path.
+
+> **One-command shortcut:** `./tools/quick_start.sh` automates all five steps above — builds, launches, and opens a tmux session with the payload and frontend side by side. Pass `--no-build` to skip the build, `--host-only` for payload only, or `--help` for all options.
+
+<br/>
+
+## Quick Start (PS5)
+
+**Deploy the payload to a jailbroken PS5 and run your first memory scan in under 10 minutes.**
+
+> **Prerequisite:** Your PS5 must be jailbroken (e.g., via [GoldHEN](https://github.com/GoldHEN)) and reachable over your local network. The PS5 Payload SDK ships with the repository under `external/ps5-payload-sdk/` — no extra SDK downloads needed.
+
+### 1. Prerequisites
+
+- **Jailbroken PS5** with GoldHEN or equivalent CFW enabler
+- **PS5 on the same LAN** as your PC (note the PS5 IP address)
+- **C11 compiler + PS5 Payload SDK** (bundled in `external/ps5-payload-sdk/`)
+- **CMake 3.24+** and C++17 toolchain (for the frontend)
+
+### 2. Build the PS5 payload
+
+```sh
+make payload-ps5
+```
+
+Produces `build/ps5/MemDBG-ps5.elf` — a single-binary payload ready for deployment.
+
+### 3. Deploy to the PS5
+
+```sh
+make deploy-ps5 PS5_HOST=192.168.1.100 PS5_PORT=9021
+```
+
+Replace `192.168.1.100` with your PS5's actual IP address. `PS5_PORT=9021` is the payload receiver port (separate from the debug port `9020` the frontend connects to). The deploy tool sends the ELF to the console's payload receiver. You should see a notification on the PS5: "MemDBG by seregonwar started".
+
+### 4. Build and launch the frontend
+
+If you haven't already built the frontend (same binary as the host Quick Start):
+
+```sh
+make frontend
+
+# macOS
+open build/frontend/bin/MemDBG.app
+
+# Linux
+./build/frontend/bin/memdbg_frontend
+
+# Windows
+build\frontend\bin\MemDBG.exe
+```
+
+This produces a native Dear ImGui app — the same one used for host development, now pointing at your PS5.
+
+### 5. Connect to the PS5
+
+In the frontend:
+
+1. Open the **Consoles** screen.
+2. Enter your PS5's IP address (e.g., `192.168.1.100`) and the debug port `9020`.
+3. Press **Connect** — the status bar turns green when the handshake completes.
+
+> If the payload doesn't appear automatically, make sure ports `9020` (TCP) and `9023` (UDP) are open between your PC and the PS5, and that no firewall is blocking them.
+
+### 6. Run your first scan
+
+1. **Processes** — press **Refresh** to list running processes on the PS5. Select a game process from the dropdown.
+2. **Memory Maps** — press **Maps** to load the process memory layout. Double-click a writable map to populate the scanner range.
+3. **Scanner** — pick a value type (e.g., `u32` for a 32-bit integer), enter a known value (e.g., your current ammo count), and press **Scan**.
+4. **Refine** — change the value in-game (shoot once), then press **Refine → Decreased**. Repeat until you have a single candidate address.
+5. **Trainer** — click **Use First Hit** in the Trainer tab, give it a name, and press **Add to Trainer**. Toggle it ON to lock the value.
+
+> **Pro tip:** Use **Smart Auto-Search → Health / Ammo / Resources** for a heuristic pass that scores candidates by common game-value patterns. This often finds your target in fewer refinement steps.
+
+### PS5 vs Host
+
+| Capability | Host build | PS5 payload |
+|---|---|---|
+| Process list / maps | ✅ (host processes) | ✅ (console processes) |
+| Memory read/write | ✅ | ✅ |
+| All scan types | ✅ | ✅ |
+| Debugger (attach, BPs, WPs) | ✅ (Linux) / ⚠️ (macOS, SIP) | ✅ (full ptrace) |
+| Kernel R/W | ❌ | ✅ |
+| Console notifications | ❌ | ✅ |
+| FS/GS base registers | ❌ | ✅ |
+| ELF load / process hijack | ✅ (host ELFs) | ✅ (PS5 ELFs) |
+| Discovery (UDP broadcast) | ✅ | ✅ |
+
+The PS5 payload unlocks the full feature set. Develop and test on host first, then deploy to console for live game debugging.
+
+<br/>
+
 ## Features
 
 ### Scanner engine (payload-side)
@@ -127,7 +310,7 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 |---|---|
 | **Home (Command Center)** | Dashboard tiles for every workflow; live session and UDP status; recent map/hit/cheat chips. |
 | **Consoles** | Direct payload session management: connect, disconnect, ping, shutdown, and start/stop the UDP log listener from one place. |
-| **Processes** | Refresh the process list (PID / name / Title ID / Content ID / path), inspect memory maps, filter by protection flags, hide system maps, set a minimum-size and dump cap, dump selected or filtered maps to disk, run a basic process analysis. |
+| **Processes** | Refresh the process list (PID / name / Title ID / Content ID / path), inspect memory maps, filter by protection flags, hide system maps, set a minimum-size and dump cap, dump selected or filtered maps to disk, run a basic process analysis, load or hijack ELF binaries with configurable region matching (Exact / Case-Sensitive / Regex / Full Path flags) and double-click-to-populate region name. |
 | **Memory** | Address-range read/write with a hex view; byte-patch input; watchpoints (polling) with overlay marks; allocation tracking with importable event streams and double-free detection; **Exploit Lab** with ROP gadget finder and heap-spray entropy analyzer. |
 | **Scanner** | Exact-value scan, process-wide scan, unknown initial value scan, refinement pipeline (changed / unchanged / increased / decreased), and **Smart Auto-Search** with target presets (Health / Ammo / Resources) and a scored candidate list. |
 | **Pointer Scan** | Trace pointer chains back from a target address with adjustable depth and alignment. |
@@ -161,6 +344,82 @@ The payload binds a TCP debug port and exposes process enumeration, map inspecti
 
 <br/>
 
+## Comparison
+
+MemDBG is not the only debugging tool in the PlayStation homebrew ecosystem. The tables below compare it against the two most direct debugger payloads — [ps5debug-NG](https://github.com/OpenSourcereR-dev/ps5debug-NG) and [ps4debug](https://github.com/GoldHEN/ps4debug).
+
+> **Note on other tools:** [GoldHEN](https://github.com/GoldHEN) is a CFW/homebrew enabler (not a debugger) — it provides the jailbreak environment that makes payloads like MemDBG, ps5debug-NG, and ps4debug possible. [libdebug](https://github.com/GoldHEN/libdebug) is a Python/C# client library that wraps the ps4debug/ps5debug wire protocols; it is not a payload itself.
+
+### Payload-level comparison (what runs on the console)
+
+| Feature | **MemDBG** | [ps5debug-NG](https://github.com/OpenSourcereR-dev/ps5debug-NG) | [ps4debug](https://github.com/GoldHEN/ps4debug) |
+|---|---|---|---|
+| **Platforms** | PS4 · PS5 · Linux · macOS (host) | PS5 only | PS4 only |
+| **Architecture** | C11 daemon, injected as standalone payload or library | C, injected as `SceShellCore` thread | C, injected as userland server |
+| **Wire protocol** | Custom `MDBG` binary protocol, capability-aware, LZ4 compression | `ps5debug` wire protocol v1.0b5 | `ps4debug` wire protocol |
+| **Embeddable library** | ✅ `libmemdbg.a` (PS4 + PS5) | ❌ | ❌ |
+| **Host validation build** | ✅ Linux/macOS host build for offline dev and CI testing | ❌ | ❌ |
+| **Process management** | List, info, maps, stop/continue/kill, protect, alloc/free | List, info, maps, attach control via ptrace | List, info, maps, basic control |
+| **Memory I/O** | Single + batch read/write (64 items/call), LZ4 framing | Single + "Turbo" batch read/write | Single read/write |
+| **Scanner — exact value** | ✅ u8/u16/u32/u64/f32/f64/bytes/pointer, range + process-wide | ✅ via client-side tools | ✅ via client-side tools |
+| **Scanner — AOB** | ✅ Wildcard byte-pattern, range + process-wide | ✅ via client-side tools | ✅ via client-side tools |
+| **Scanner — unknown value** | ✅ Baseline snapshot + refinement pipeline | ✅ via client tools | ❌ |
+| **Scanner — pointer chain** | ✅ Configurable depth + alignment | ✅ via client tools | ❌ |
+| **Scanner — SIMD acceleration** | ✅ AVX2/SSE exact-match fast paths (runtime-detected) | ✅ AVX2 "TurboScan" paths | ❌ |
+| **Scanner — server-resident (FlashScan)** | ✅ Snapshot-based iterative scanning with on-disk spill, alias-accelerated rescans, and parallel workers | ✅ Server-resident session scanning | ❌ |
+| **Smart Auto-Search** | ✅ Heuristic engine with Health/Ammo/Resources presets and scored candidates | ❌ | ❌ |
+| **Debugger — attach/detach** | ✅ Full lifecycle (attach, detach, stop, continue, step) | ✅ Full lifecycle | ✅ Full lifecycle |
+| **Debugger — threads** | ✅ Enumerate, suspend, resume, signal info | ✅ Enumerate, suspend, resume | ✅ Basic thread control |
+| **Debugger — breakpoints** | ✅ SW + HW breakpoints, conditional BP (reg + op + value), persistent save/load `.mbp` | ✅ SW + HW breakpoints (30 SW slots, 4 HW slots) | ✅ SW + HW breakpoints |
+| **Debugger — watchpoints** | ✅ Exec/read/write/RW, persistent save/load `.mwp` | ✅ 4 hardware watchpoint slots | ✅ Hardware watchpoints |
+| **Debugger — registers** | ✅ GPR, debug regs, FPU/YMM, FS/GS base (capability-gated) | ✅ GPR, debug, FPU, FS/GS | ✅ Basic register access |
+| **Debugger — stack walk** | ✅ Server-side RBP walk with per-frame code/stack windows | ✅ Stack walk via client | ❌ |
+| **Debugger — disassembly** | ✅ Integrated x86-64 decoder, CFG view, register-based navigation | ✅ Zydis disassembler (client-side) | ❌ |
+| **Debugger — assembler** | 🛠 Planned (Keystone integration tracked in feature research) | ✅ Keystone assembler embedded in payload | ❌ |
+| **Debugger — Patch Studio** | ✅ Reversible byte/NOP/INT3 patches, mprotect-assisted writes, manifest save/load, trainer export | ❌ | ❌ |
+| **Debugger — Analysis Notebook** | ✅ Bookmark code/stack/patch evidence, Markdown report export, workspace save/load | ❌ | ❌ |
+| **Kernel access** | ✅ Base discovery, kernel R/W (capability-gated, PS4/PS5 only) | ✅ Kernel R/W, klog forwarder | ✅ Kernel R/W (PS4) |
+| **Console notifications** | ✅ System notification, kernel-console print, platform-supported reboot | ✅ System notification | ✅ Basic notification |
+| **ELF load / hijack** | ✅ Load ELF into target, spawn threads, region matching (Exact/Case-Sensitive/Regex/FullPath) | ✅ ELF load and remote call | ✅ ELF load |
+| **Remote function call** | 🛠 Protocol reserved, returns `UNSUPPORTED` | ✅ `call()` support | ❌ |
+| **Discovery** | ✅ Zero-config UDP broadcast/pong auto-detection | ✅ via client tools | ❌ |
+| **UDP telemetry / logging** | ✅ Ring-buffered event log, crash-resilient, signal-safe flush | Klog stream (no UDP log) | ❌ |
+| **Rest-mode resilience** | 🛠 Planned | ✅ Auto-restarting supervisory loop | ❌ |
+
+### Client-side comparison (what runs on your PC)
+
+| Feature | **MemDBG Frontend** | Typical ps5debug/ps4debug clients |
+|---|---|---|
+| **UI framework** | Native C++17 + Dear ImGui (OpenGL/GLFW), DPI-aware, HiDPI fonts | Python/C# GUI tools (e.g., PS4 Cheater, Reaper Studio, custom clients) |
+| **Desktop platforms** | Windows · macOS · Linux (`.app`/`.exe`/`.desktop` bundles) | Varies (mostly Windows) |
+| **Mobile shells** | ✅ iOS/iPadOS (Metal) + Android (OpenGL ES 3) | ❌ |
+| **Non-blocking async UI** | ✅ `std::future`-based worker threads, streaming scan results | Client-dependent |
+| **Localization (i18n)** | ✅ 9 languages (en/es/it/fr/pt/de/ja/ru/ko), repository-backed cache, validation tooling | ❌ |
+| **Plugin system** | ✅ Lua 5.4 / Python scripts, repository-backed install/update, JSON context API | ❌ (GoldHEN has plugin system but for console, not debugger) |
+| **Trainer builder** | ✅ Cheat entries with ON/OFF/lock, batchcode import, `.cht` save/load, trainer export from Patch Studio | Client-dependent |
+| **Workspace persistence** | ✅ Settings saved per-platform, breakpoint/watchpoint files, notebook workspaces, patch manifests | Client-dependent |
+| **Protocol probe CLI** | ✅ Standalone `memdbg_probe` for exercising the payload without GUI | ❌ |
+| **Release packaging** | ✅ CI pipeline: 9 artifacts (desktop + payload + mobile), SHA256SUMS, locale validation gate | Varies |
+
+### When to use what
+
+| Use case | Recommendation |
+|---|---|
+| You want a single tool that works on **both PS4 and PS5** with a unified frontend | **MemDBG** |
+| You need **in-console assembler** (Keystone) for live code patching | ps5debug-NG (MemDBG has this on the roadmap) |
+| You need **remote function call** (`call()`) support | ps5debug-NG |
+| You need **rest-mode resilience** on PS5 | ps5debug-NG |
+| You want a **native desktop frontend** with HiDPI, i18n, and plugin scripting | **MemDBG** |
+| You want **Patch Studio + Analysis Notebook** for reversible code patching with evidence tracking | **MemDBG** |
+| You use **existing PS4 cheater clients** and need wire compatibility | ps4debug |
+| You want a **mobile debugging interface** on iPad or Android | **MemDBG** |
+| You want **offline host development** without a console (CI, testing, bring-up) | **MemDBG** |
+| You want a **fully localized UI** in your language | **MemDBG** |
+
+> **Note:** MemDBG, ps5debug-NG, and ps4debug all require the console to be jailbroken (e.g., via GoldHEN or equivalent). None of these tools can operate on a stock/unmodified retail console.
+
+<br/>
+
 ## Wire Protocol
 
 A compact binary protocol (`MEMDBG_PACKET_MAGIC = "MDBG"`, little-endian, version 1). All multi-byte fields are packed. Payloads declare capabilities via the `HELLO` response bitmap, so the frontend stays forward-compatible with older or platform-specific builds.
@@ -190,7 +449,9 @@ A compact binary protocol (`MEMDBG_PACKET_MAGIC = "MDBG"`, little-endian, versio
 | `0x0108` | `PROCESS_PROTECT` | Change target process memory protection. |
 | `0x0109` / `0x010A` | `PROCESS_ALLOC` / `PROCESS_FREE` | Protocol endpoints for remote allocation lifecycle; platforms without a safe syscall bridge return `UNSUPPORTED`. |
 | `0x010B` | `PROCESS_STACK` | Server-side RBP stack walk, including stack and code windows per frame. |
-| `0x010C` / `0x010D` | `PROCESS_CALL` / `PROCESS_ELF_LOAD` | Reserved remote execution endpoints; currently validate requests and return `UNSUPPORTED`. |
+| `0x010C` | `PROCESS_CALL` | Reserved remote execution endpoint; validates requests and returns `UNSUPPORTED`. |
+| `0x010D` | `PROCESS_ELF_LOAD` | Load an ELF binary into a target process, optionally matching a VM region by name. Supports `target_region` with wildcards (`*`), substring fallback, and `match_flags`: `EXACT` (0x1), `CASE_SENSITIVE` (0x2), `REGEX` (0x4 — POSIX ERE), `FULLPATH` (0x8 — match full path instead of basename). |
+| `0x010E` | `PROCESS_HIJACK` | Inject an ELF payload by spawning a thread inside the target process, with the same `target_region` and `match_flags` controls. Bit 0 of flags = spawn thread, bit 1 = resume target after injection. |
 | `0x0200` / `0x0201` | `MEMORY_READ` / `MEMORY_WRITE` | Single-address I/O. |
 | `0x0202` / `0x0203` | `BATCH_READ` / `BATCH_WRITE` | Multi-address I/O in one round-trip (used by Auto-Search and trainer lock writes). |
 | `0x0300` / `0x0301` | `SCAN_EXACT` / `SCAN_PROCESS_EXACT` | Value scan, range or process-wide. |
@@ -246,6 +507,7 @@ Adding a new language is as simple as dropping a `<code>.json` file, regeneratin
 
 ```sh
 make check-locales   # fails if any locale is missing a key present in en.json
+make check-headers   # verifies every include/memdbg/ header has a matching source file
 python3 tools/generate_locale_manifest.py
 ```
 
@@ -372,6 +634,8 @@ make test-debugger         # Mocked debugger backend tests
 make test-debugger-e2e     # Live host debugger protocol smoke test
 make test-lz4              # Internal LZ4 codec round-trip/corruption tests
 make test                  # Full host test suite
+make check-locales         # Validate locale files
+make check-headers         # Verify header-source correspondence
 ```
 
 - **`test_aob_boundary`** mocks the memory backend and map table to verify that the scanner correctly carries pending bytes across 1 MiB chunk boundaries, handles wildcards, applies the good-suffix shift, and survives faulting pages.
@@ -390,12 +654,13 @@ A typical MemDBG session:
 2. Launch the frontend (`make frontend && ./build/frontend/memdbg_frontend`).
 3. In **Consoles**, enter the console IP and ports, then press **Connect**.
 4. In **Processes**, refresh the list and select a target — Title ID, Content ID, and executable path are all surfaced.
-5. **Memory** — read/write raw bytes; place watchpoints to detect value changes; import allocation events to track heap lifetime.
-6. **Scanner** — run an exact-value scan; change the value in-game; refine (changed / unchanged / increased / decreased) until the candidate list is short. Or use **Smart Auto-Search → Health / Ammo / Resources** for a heuristic pass.
-7. **AOB Scan** or **Pointer Scan** to derive stable addresses that survive ASLR across sessions.
-8. **Trainer** — build a cheat entry (name, address, type, ON/OFF values, lock interval), then save as a `.cht` file or import a batchcode string.
-9. **Telemetry** — watch throughput and scan-cache hit rate to catch overly aggressive read patterns.
-10. **Logs** (`F10`) — scroll the live UDP feed for console-side diagnostics.
+5. Optionally use **ELF Load** to inject a custom binary into the target process (with region matching via Exact / Case-Sensitive / Regex / Full Path flags) or **Hijack** to spawn a thread running a payload.
+6. **Memory** — read/write raw bytes; place watchpoints to detect value changes; import allocation events to track heap lifetime.
+7. **Scanner** — run an exact-value scan; change the value in-game; refine (changed / unchanged / increased / decreased) until the candidate list is short. Or use **Smart Auto-Search → Health / Ammo / Resources** for a heuristic pass.
+8. **AOB Scan** or **Pointer Scan** to derive stable addresses that survive ASLR across sessions.
+9. **Trainer** — build a cheat entry (name, address, type, ON/OFF values, lock interval), then save as a `.cht` file or import a batchcode string.
+10. **Telemetry** — watch throughput and scan-cache hit rate to catch overly aggressive read patterns.
+11. **Logs** (`F10`) — scroll the live UDP feed for console-side diagnostics.
 
 <br/>
 
@@ -467,7 +732,10 @@ Pre-release / active development. Wire protocol is version `1`; breaking changes
 - ✅ Debugger Patch Studio and Analysis Notebook are always available, with reversible patches, mprotect-assisted writes, manifest/workspace save-load, disassembly/stack bookmarking, Markdown report export, and trainer export.
 - ✅ PS4/PS5 kernel base/read/write endpoints and console notification/print commands, advertised only when supported by the payload.
 - ✅ Mobile shells for iOS/iPadOS (Metal + MTKView) and Android (OpenGL ES 3 + GLSurfaceView) reusing the shared `draw_mobile_app()` touch layout, safe-area insets bridge, and embedded Lua 5.4 plugin runtime.
-- 🛠 Remote allocation/free, remote function calls, and ELF loading are protocol-reserved but intentionally return `UNSUPPORTED` until a safe remote syscall bridge exists.
+- ✅ ELF load into target process with configurable region matching (Exact, Case-Sensitive, Regex, Full Path flags, wildcard/glob, substring fallback) and non-blocking async frontend dispatch with ELF magic validation.
+- ✅ Process hijack (ELF injection via thread spawn) with the same region matching controls and confirmation modal.
+- ✅ Frontend ELF Load / Hijack UI with file picker, match-flag checkboxes, double-click map → target_region, and async `std::future`-based submission.
+- 🛠 Remote allocation/free and remote function calls are protocol-reserved but intentionally return `UNSUPPORTED` until a safe remote syscall bridge exists.
 - 🛠 Turbo SIMD scan paths, alias compare acceleration, assembler integration, and a dedicated klog forwarder are tracked in [`docs/feature_research.md`](docs/feature_research.md).
 - 🛠 Some advanced debugger capabilities are platform-gated: PS5 exposes FS/GS base when the SDK ptrace requests are available; PS4 does not advertise that capability.
 

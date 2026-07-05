@@ -1,0 +1,111 @@
+# memDBG - clang-format configuration
+# Based on the project's existing code style conventions:
+#   - 2-space indent, K&R braces, type *name pointer style
+#   - C11 standard, column alignment where used, compact code
+
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 2
+IndentCaseLabels: false
+IndentGotoLabels: false
+IndentPPDirectives: None
+NamespaceIndentation: None
+
+# Braces
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# Line breaking
+ColumnLimit: 100
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: false
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakStringLiterals: true
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 1
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInConditionalStatement: false
+SpacesInContainerLiterals: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Pointers and references
+DerivePointerAlignment: false
+PointerAlignment: Right
+
+# Includes
+IncludeBlocks: Preserve
+IncludeCategories:
+  - Regex: '^"(memdbg|flashscan|pt_walker|page_alias|scan_simd|scan_partition)/'
+    Priority: 1
+    SortPriority: 0
+  - Regex: '^"memdbg/'
+    Priority: 1
+    SortPriority: 1
+  - Regex: '^<'
+    Priority: 2
+    SortPriority: 0
+SortIncludes: true
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveBitFields: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: false
+
+# Comments
+ReflowComments: false
+
+# Misc
+AccessModifierOffset: -2
+ConstructorInitializerIndentWidth: 2
+FixNamespaceComments: false
+MaxEmptyLinesToKeep: 1
+SortUsingDeclarations: false
+KeepEmptyLinesAtTheStartOfBlocks: false

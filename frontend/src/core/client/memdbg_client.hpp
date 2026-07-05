@@ -169,6 +169,16 @@ public:
                      uint32_t protection, uint32_t flags,
                      ProcessAllocResult &out);
   bool process_free(int32_t pid, uint64_t address, uint64_t length);
+  struct ProcessElfLoadResult {
+    uint64_t entry_address = 0;
+    uint64_t load_base = 0;
+  };
+  bool process_elf_load(int32_t pid, const std::vector<uint8_t> &elf_data,
+                        uint32_t flags, const std::string &target_region,
+                        uint32_t match_flags, ProcessElfLoadResult &out);
+  bool process_hijack(int32_t pid, const std::vector<uint8_t> &elf_data,
+                      uint32_t flags, const std::string &target_region,
+                      uint32_t match_flags, bool &accepted);
   bool process_stack(const memdbg_process_stack_request_t &request,
                      std::vector<StackFrame> &out, bool &truncated);
   bool process_call(const memdbg_process_call_request_t &request,

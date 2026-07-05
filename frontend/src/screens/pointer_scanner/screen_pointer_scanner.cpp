@@ -48,7 +48,7 @@ static void poll_pointer_async(AppState &state) {
     set_status(state, error_local);
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Pointer scan failed: " + error_local).c_str());
-    push_notification(state, "Pointer scan failed: " + error_local, 5.0);
+    char ps_buf[256]; std::snprintf(ps_buf, sizeof(ps_buf), locale::tr("pointer.scan_failed"), error_local.c_str()); push_notification(state, ps_buf, 5.0);
     return;
   }
 
@@ -69,16 +69,16 @@ static void poll_pointer_async(AppState &state) {
 /* ---- Pointer scan execution ---- */
 static void run_pointer_scan(AppState &state) {
   if (state.scan_async_pending) return;
-  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.connected()) { set_status(state, locale::tr("pointer_scanner.connect_first")); return; }
+  if (state.selected_pid <= 0) { set_status(state, locale::tr("pointer_scanner.select_process_first")); return; }
 
   uint64_t start = 0, length = 0, target = 0;
   if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_length, length)) {
-    set_status(state, "Invalid scan range"); return;
+    set_status(state, locale::tr("scanner.invalid_range")); return;
   }
-  if (length == 0U) { set_status(state, "Scan length must be greater than zero"); return; }
+  if (length == 0U) { set_status(state, locale::tr("scanner.length_zero")); return; }
   if (!parse_u64(state.pointer_target_address, target)) {
-    set_status(state, "Invalid target address"); return;
+    set_status(state, locale::tr("pointer_scanner.invalid_target")); return;
   }
 
   state.pointer_max_depth   = std::max(state.pointer_max_depth, 1);
@@ -210,8 +210,10 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
     for (uint64_t addr : result.addresses)
       all += hex_u64(addr) + "\n";
     ImGui::SetClipboardText(all.c_str());
-    set_status(state, "Copied " + std::to_string(result.addresses.size()) + " addresses");
-    push_notification(state, "Copied " + std::to_string(result.addresses.size()) + " addresses to clipboard" + (suffix ? suffix : ""));
+    char copy_buf[128];
+    std::snprintf(copy_buf, sizeof(copy_buf), locale::tr("notify.copied_n_addresses"), result.addresses.size());
+    set_status(state, copy_buf);
+    push_notification(state, copy_buf + (suffix ? std::string(suffix) : std::string("")));
   };
 
   if (!result.addresses.empty()) {

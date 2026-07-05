@@ -24,68 +24,51 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 
-/* ---- Network send helpers (pass through to pal_socket_write_all) ---- */
-
-static int net_send_int32(socket_t fd, int32_t val) {
+static int socket_send_int32(socket_t fd, int32_t val) {
   return (int)pal_socket_write_all(fd, &val, sizeof(val));
 }
 
-static int net_send_all(socket_t fd, const void *buf, size_t len) {
+static int socket_send_all(socket_t fd, const void *buf, size_t len) {
   return (len > 0U) ? (int)pal_socket_write_all(fd, buf, len) : 0;
 }
 
-static int net_recv_all(socket_t fd, void *buf, size_t len) {
+static int socket_recv_all(socket_t fd, void *buf, size_t len) {
   return (len > 0U) ? (int)pal_socket_read_exact(fd, buf, len) : 0;
 }
 
-static inline void *anon_mmap(uint64_t n) {
+static inline void *mmap_anonymous(uint64_t n) {
   void *m = mmap(NULL, (size_t)n, PROT_READ | PROT_WRITE,
                   MAP_PRIVATE | MAP_ANON, -1, 0);
   return (m == MAP_FAILED) ? NULL : m;
 }
 
-static inline void anon_munmap(void *p, uint64_t n) {
+static inline void munmap_anonymous(void *p, uint64_t n) {
   if (p) munmap(p, (size_t)n);
 }
-
-/* ================================================================
- *  Constants
- * ================================================================ */
 
 #define FS_RESCAN_GAP_MAX    0x8000ULL
 #define FS_RESCAN_WIN_CAP    0x100000ULL
 #define FS_RESCAN_ALIAS_MIN  0x10000ULL
-#define FS_SNAP_BITMAP_MAX   (448ULL << 20)
-#define FS_WORKERS           4U
-#define FS_PAR_WORKERS       2U
-#define FS_PAR_MAX_WORKERS   2U
-#define FS_PAR_RESULT_CAP    (8ULL << 20)
-#define FS_PAR_ARENA         (16ULL << 20)
+#define FLASHSCAN_SNAPSHOT_BITMAP_MAX   (448ULL << 20)
+#define FLASHSCAN_WORKERS           4U
+#define FLASHSCAN_PARALLEL_WORKERS       2U
+#define FLASHSCAN_PARALLEL_MAX_WORKERS   2U
+#define FLASHSCAN_PARALLEL_RESULT_CAP    (8ULL << 20)
+#define FLASHSCAN_PARALLEL_ARENA         (16ULL << 20)
 
-/* ================================================================
- *  Session modes
- * ================================================================ */
-
-#define FS_MODE_NONE     0
-#define FS_MODE_LIST     1
-#define FS_MODE_SNAPSHOT 2
-
-/* ================================================================
- *  Per-segment descriptor for multi-segment sessions
- * ================================================================ */
+#define FLASHSCAN_MODE_NONE     0
+#define FLASHSCAN_MODE_LIST     1
+#define FLASHSCAN_MODE_SNAPSHOT 2
 
 struct fs_seg {
   uint64_t addr;
   uint64_t slot_start;
   uint64_t nslots;
 };
-
-/* ================================================================
- *  Session state
- * ================================================================ */
 
 struct flashscan_sess {
   int      in_use;
@@ -127,9 +110,7 @@ static char     g_fs_spill_dir[64] = "/data";
 static int      g_fs_force_fail    = 0;
 static uint64_t g_fs_mat_max       = 1ULL << 20;
 
-/* ---- File I/O helpers ---- */
-
-static int fs_pread_all(int fd, void *buf, uint64_t len, uint64_t off) {
+static int flashscan_pread_all(int fd, void *buf, uint64_t len, uint64_t off) {
   uint8_t *p = (uint8_t *)buf;
   uint64_t pos = 0;
   while (pos < len) {
@@ -140,7 +121,7 @@ static int fs_pread_all(int fd, void *buf, uint64_t len, uint64_t off) {
   return 1;
 }
 
-static int fs_pwrite_all(int fd, const void *buf, uint64_t len, uint64_t off) {
+static int flashscan_pwrite_all(int fd, const void *buf, uint64_t len, uint64_t off) {
   const uint8_t *p = (const uint8_t *)buf;
   uint64_t pos = 0;
   while (pos < len) {
@@ -151,50 +132,44 @@ static int fs_pwrite_all(int fd, const void *buf, uint64_t len, uint64_t off) {
   return 1;
 }
 
-/* ---- Hybrid store (RAM + spill file) read/write ---- */
-
-static int snap_read(struct flashscan_sess *s, uint8_t *dst,
+static int snapshot_store_read(struct flashscan_sess *s, uint8_t *dst,
                      uint64_t off, uint64_t len) {
   if (off >= s->snap_bytes)
-    return fs_pread_all(s->snap_fd, dst, len, off - s->snap_bytes);
+    return flashscan_pread_all(s->snap_fd, dst, len, off - s->snap_bytes);
   if (off + len <= s->snap_bytes) {
     memcpy(dst, s->snap_ram + off, len);
     return 1;
   }
   uint64_t a = s->snap_bytes - off;
   memcpy(dst, s->snap_ram + off, a);
-  return fs_pread_all(s->snap_fd, dst + a, len - a, 0);
+  return flashscan_pread_all(s->snap_fd, dst + a, len - a, 0);
 }
 
-static int snap_write(struct flashscan_sess *s, const uint8_t *src,
+static int snapshot_store_write(struct flashscan_sess *s, const uint8_t *src,
                       uint64_t off, uint64_t len) {
   if (off >= s->snap_bytes)
-    return fs_pwrite_all(s->snap_fd, src, len, off - s->snap_bytes);
+    return flashscan_pwrite_all(s->snap_fd, src, len, off - s->snap_bytes);
   if (off + len <= s->snap_bytes) {
     memcpy(s->snap_ram + off, src, len);
     return 1;
   }
   uint64_t a = s->snap_bytes - off;
   memcpy(s->snap_ram + off, src, a);
-  return fs_pwrite_all(s->snap_fd, src + a, len - a, 0);
+  return flashscan_pwrite_all(s->snap_fd, src + a, len - a, 0);
 }
 
-/* ---- Spill file paths ---- */
-
-static void snap_path_for(unsigned slot, char *out, const char *tag) {
+static void snapshot_store_path(unsigned slot, char *out, const char *tag) {
   int n = snprintf(out, 96, "%s/%s%02u.bin",
                    g_fs_spill_dir, tag, slot);
   (void)n;
 }
 
-/* ---- Slot resolution ---- */
-
-static struct flashscan_sess *sess_get(unsigned slot) {
+static struct flashscan_sess *session_get(unsigned slot) {
   if (slot >= FLASHSCAN_MAX_SESSIONS) return NULL;
   return &g_sessions[slot];
 }
 
-static void alias_free_slot(unsigned slot) {
+static void alias_context_free_slot(unsigned slot) {
   if (slot >= FLASHSCAN_MAX_SESSIONS) return;
   if (g_alias_ctxs[slot]) {
     page_alias_end(g_alias_ctxs[slot]);
@@ -202,7 +177,7 @@ static void alias_free_slot(unsigned slot) {
   }
 }
 
-static page_alias_ctx_t *alias_get(unsigned slot, uint32_t pid) {
+static page_alias_ctx_t *alias_context_get(unsigned slot, uint32_t pid) {
   if (slot >= FLASHSCAN_MAX_SESSIONS) return NULL;
   if (!g_alias_ctxs[slot])
     g_alias_ctxs[slot] = page_alias_begin(pid, 0);
@@ -210,8 +185,6 @@ static page_alias_ctx_t *alias_get(unsigned slot, uint32_t pid) {
     page_alias_rebind(g_alias_ctxs[slot], pid);
   return g_alias_ctxs[slot];
 }
-
-/* ---- Initialisation ---- */
 
 void flashscan_init(void) {
   memset(g_sessions, 0, sizeof(g_sessions));
@@ -223,7 +196,7 @@ void flashscan_cleanup_orphans(void) {
   const char *tags[] = {"qs_snap_", "qs_first_", "qs_prev_", NULL};
   for (unsigned slot = 0; slot < FLASHSCAN_MAX_SESSIONS; slot++) {
     for (const char **t = tags; *t; t++) {
-      snap_path_for(slot, path, *t);
+      snapshot_store_path(slot, path, *t);
       unlink(path);
     }
   }
@@ -232,29 +205,27 @@ void flashscan_cleanup_orphans(void) {
 void flashscan_free_slot(unsigned int slot) {
   if (slot >= FLASHSCAN_MAX_SESSIONS) return;
   struct flashscan_sess *s = &g_sessions[slot];
-  anon_munmap(s->buf,      s->buf_cap);
-  anon_munmap(s->snap_ram, s->snap_bytes);
-  anon_munmap(s->bitmap,   s->bitmap_bytes);
+  munmap_anonymous(s->buf,      s->buf_cap);
+  munmap_anonymous(s->snap_ram, s->snap_bytes);
+  munmap_anonymous(s->bitmap,   s->bitmap_bytes);
   if (s->seg) { free(s->seg); s->seg = NULL; }
-  if (s->mode == FS_MODE_SNAPSHOT) {
+  if (s->mode == FLASHSCAN_MODE_SNAPSHOT) {
     if (s->snap_fd > 0) { close(s->snap_fd); s->snap_fd = -1; }
     char path[96];
-    snap_path_for(slot, path, "qs_snap_");  unlink(path);
+    snapshot_store_path(slot, path, "qs_snap_");  unlink(path);
     if (s->first_fd > 0) { close(s->first_fd); s->first_fd = -1; }
-    snap_path_for(slot, path, "qs_first_"); unlink(path);
+    snapshot_store_path(slot, path, "qs_first_"); unlink(path);
     if (s->prev_fd > 0)  { close(s->prev_fd);  s->prev_fd  = -1; }
-    snap_path_for(slot, path, "qs_prev_");  unlink(path);
+    snapshot_store_path(slot, path, "qs_prev_");  unlink(path);
   }
   memset(s, 0, sizeof(*s));
 }
 
-/* ---- Bitmap helpers ---- */
-
-static inline void bm_clear(uint8_t *bm, uint64_t i) {
+static inline void bitmap_clear(uint8_t *bm, uint64_t i) {
   bm[i >> 3] &= (uint8_t)~(1u << (i & 7));
 }
 
-static uint64_t bm_next(const uint8_t *bm, uint64_t from, uint64_t n) {
+static uint64_t bitmap_next_set(const uint8_t *bm, uint64_t from, uint64_t n) {
   uint64_t i = from;
   while (i < n) {
     if ((i & 63) == 0) {
@@ -277,19 +248,17 @@ static uint64_t slot_to_addr(const struct flashscan_sess *s, uint64_t i) {
   return seg[lo].addr + (i - seg[lo].slot_start) * s->stride;
 }
 
-/* ---- Session allocation ---- */
-
 static struct flashscan_sess *session_alloc(unsigned slot, uint32_t pid,
                                             uint32_t vt, uint64_t vlen) {
   if (slot >= FLASHSCAN_MAX_SESSIONS) return NULL;
   flashscan_free_slot(slot);
 
-  void *m = anon_mmap(FS_RESCAN_WIN_CAP * 2);
+  void *m = mmap_anonymous(FS_RESCAN_WIN_CAP * 2);
   if (!m) return NULL;
 
   struct flashscan_sess *s = &g_sessions[slot];
   s->in_use    = 1;
-  s->mode      = FS_MODE_LIST;
+  s->mode      = FLASHSCAN_MODE_LIST;
   s->buf       = m;
   s->buf_cap   = FS_RESCAN_WIN_CAP * 2;
   s->count     = 0;
@@ -299,8 +268,6 @@ static struct flashscan_sess *session_alloc(unsigned slot, uint32_t pid,
   s->value_type = vt;
   return s;
 }
-
-/* ---- Snapshot creation ---- */
 
 static int snapshot_create(int fd, unsigned slot,
                            const memdbg_quickscan_start_request_t *req,
@@ -312,12 +279,12 @@ static int snapshot_create(int fd, unsigned slot,
   struct fs_seg *seg = (struct fs_seg *)malloc(
       (size_t)in_nseg * sizeof(struct fs_seg));
   if (!seg) {
-    memdbg_quickscan_snapshot_plan plan = {0,0};
-    net_send_all(fd, &plan, sizeof(plan));
+    memdbg_quickscan_snapshot_plan_t plan = {0,0};
+    socket_send_all(fd, &plan, sizeof(plan));
     uint64_t sent = 0xFFFFFFFFFFFFFFFFULL;
-    net_send_all(fd, &sent, 8);
-    memdbg_quickscan_snapshot_summary sum = {0,0};
-    net_send_all(fd, &sum, sizeof(sum));
+    socket_send_all(fd, &sent, 8);
+    memdbg_quickscan_snapshot_summary_t sum = {0,0};
+    socket_send_all(fd, &sum, sizeof(sum));
     return 0;
   }
 
@@ -338,22 +305,21 @@ static int snapshot_create(int fd, unsigned slot,
   int include_zeros = !(req->request_flags & MEMDBG_QS_FL_SNAP_NOZERO);
   uint64_t survivors = include_zeros ? slot_count : 0;
 
-  /* Send plan */
-  memdbg_quickscan_snapshot_plan plan;
+  memdbg_quickscan_snapshot_plan_t plan;
   plan.slot_count  = slot_count;
   plan.total_bytes = total_bytes;
-  net_send_all(fd, &plan, sizeof(plan));
+  socket_send_all(fd, &plan, sizeof(plan));
 
-  if (slot_count == 0 || bitmap_bytes > FS_SNAP_BITMAP_MAX) {
+  if (slot_count == 0 || bitmap_bytes > FLASHSCAN_SNAPSHOT_BITMAP_MAX) {
     uint64_t sent = 0xFFFFFFFFFFFFFFFFULL;
-    net_send_all(fd, &sent, 8);
-    memdbg_quickscan_snapshot_summary sum = {0,0};
-    net_send_all(fd, &sum, sizeof(sum));
+    socket_send_all(fd, &sent, 8);
+    memdbg_quickscan_snapshot_summary_t sum = {0,0};
+    socket_send_all(fd, &sum, sizeof(sum));
     free(seg);
     return 0;
   }
 
-  uint8_t *bitmap   = (uint8_t *)anon_mmap(bitmap_bytes);
+  uint8_t *bitmap   = (uint8_t *)mmap_anonymous(bitmap_bytes);
   uint8_t *snap_ram = NULL;
   int      snap_fd  = -1;
   int      use_file = 0;
@@ -364,7 +330,7 @@ static int snapshot_create(int fd, unsigned slot,
 
   if (ok) {
     if (snap_bytes <= g_fs_ram_limit) {
-      snap_ram = (uint8_t *)anon_mmap(snap_bytes);
+      snap_ram = (uint8_t *)mmap_anonymous(snap_bytes);
       if (snap_ram) ram_bytes = snap_bytes;
       else use_file = 1;
     } else {
@@ -373,11 +339,11 @@ static int snapshot_create(int fd, unsigned slot,
     if (use_file) {
       uint64_t cache = (g_fs_ram_limit / vlen) * vlen;
       if (cache > 0) {
-        snap_ram = (uint8_t *)anon_mmap(cache);
+        snap_ram = (uint8_t *)mmap_anonymous(cache);
         if (snap_ram) ram_bytes = cache;
       }
       char path[96];
-      snap_path_for(slot, path, "qs_snap_");
+      snapshot_store_path(slot, path, "qs_snap_");
       snap_fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0666);
       if (snap_fd < 0) ok = 0;
     }
@@ -386,20 +352,19 @@ static int snapshot_create(int fd, unsigned slot,
   int first_fd = -1, prev_fd = -1;
   if (ok && keep_first) {
     char path[96];
-    snap_path_for(slot, path, "qs_first_");
+    snapshot_store_path(slot, path, "qs_first_");
     first_fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0666);
     if (first_fd < 0) keep_first = 0;
   }
   if (ok && keep_prev) {
     char path[96];
-    snap_path_for(slot, path, "qs_prev_");
+    snapshot_store_path(slot, path, "qs_prev_");
     prev_fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0666);
     if (prev_fd < 0) keep_prev = 0;
   }
 
   if (ok) memset(bitmap, 0xFF, bitmap_bytes);
 
-  /* Read/write loop */
   uint64_t chunk_size = 0x100000ULL;
   if (chunk_size % step) chunk_size = (chunk_size / step) * step;
   if (chunk_size == 0) chunk_size = step;
@@ -435,7 +400,7 @@ static int snapshot_create(int fd, unsigned slot,
       }
 
       if (use_file && psrc) {
-        if (!snap_write(&g_sessions[slot], psrc, gslot * vlen, pbytes))
+        if (!snapshot_store_write(&g_sessions[slot], psrc, gslot * vlen, pbytes))
           { fail = 1; break; }
       } else if (step == vlen) {
         if (snap_ram)
@@ -449,45 +414,43 @@ static int snapshot_create(int fd, unsigned slot,
           const uint8_t *v = psrc + k * vlen;
           uint64_t b = 0;
           while (b < vlen && v[b] == 0) b++;
-          if (b == vlen) { bm_clear(bitmap, gslot + k); /* don't count yet */ }
+          if (b == vlen) { bitmap_clear(bitmap, gslot + k); /* don't count yet */ }
         }
       }
 
       s0   += win_slots;
       done_total += wbytes;
-      net_send_all(fd, &done_total, 8);
+      socket_send_all(fd, &done_total, 8);
     }
   }
 
-  /* Count survivors if zeros excluded */
   if (!include_zeros) {
     survivors = 0;
     for (uint64_t i = 0; i < slot_count; i++)
       if ((bitmap[i >> 3] >> (i & 7)) & 1) survivors++;
   }
 
-  /* Send end sentinel */
   uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
-  net_send_all(fd, &sentinel, 8);
+  socket_send_all(fd, &sentinel, 8);
 
   if (!ok || fail) {
-    anon_munmap(bitmap, bitmap_bytes);
-    anon_munmap(snap_ram, ram_bytes);
-    if (snap_fd >= 0) { close(snap_fd); char p[96]; snap_path_for(slot, p, "qs_snap_"); unlink(p); }
-    if (first_fd >= 0) { close(first_fd); char p[96]; snap_path_for(slot, p, "qs_first_"); unlink(p); }
-    if (prev_fd >= 0)  { close(prev_fd);  char p[96]; snap_path_for(slot, p, "qs_prev_"); unlink(p); }
+    munmap_anonymous(bitmap, bitmap_bytes);
+    munmap_anonymous(snap_ram, ram_bytes);
+    if (snap_fd >= 0) { close(snap_fd); char p[96]; snapshot_store_path(slot, p, "qs_snap_"); unlink(p); }
+    if (first_fd >= 0) { close(first_fd); char p[96]; snapshot_store_path(slot, p, "qs_first_"); unlink(p); }
+    if (prev_fd >= 0)  { close(prev_fd);  char p[96]; snapshot_store_path(slot, p, "qs_prev_"); unlink(p); }
     free(read_buf);
     free(pack_buf);
     free(seg);
-    memdbg_quickscan_snapshot_summary sum = {0,0};
-    net_send_all(fd, &sum, sizeof(sum));
+    memdbg_quickscan_snapshot_summary_t sum = {0,0};
+    socket_send_all(fd, &sum, sizeof(sum));
     return 0;
   }
 
   struct flashscan_sess *s = &g_sessions[slot];
   memset(s, 0, sizeof(*s));
   s->in_use          = 1;
-  s->mode            = FS_MODE_SNAPSHOT;
+  s->mode            = FLASHSCAN_MODE_SNAPSHOT;
   s->bitmap          = bitmap;
   s->bitmap_bytes    = bitmap_bytes;
   s->slot_count      = slot_count;
@@ -509,16 +472,14 @@ static int snapshot_create(int fd, unsigned slot,
   free(read_buf);
   free(pack_buf);
 
-  memdbg_quickscan_snapshot_summary sum;
+  memdbg_quickscan_snapshot_summary_t sum;
   sum.ok             = 1;
   sum.survivor_count = survivors;
-  net_send_all(fd, &sum, sizeof(sum));
+  socket_send_all(fd, &sum, sizeof(sum));
   return 1;
 }
 
-/* ---- Alias-aware window reader ---- */
-
-static const uint8_t *fs_win_read(page_alias_ctx_t *actx, uint32_t pid,
+static const uint8_t *flashscan_window_read(page_alias_ctx_t *actx, uint32_t pid,
                                   uint64_t win_start, uint64_t read_size,
                                   uint8_t *fallback, int *aliased) {
   *aliased = 0;
@@ -530,8 +491,6 @@ static const uint8_t *fs_win_read(page_alias_ctx_t *actx, uint32_t pid,
   { size_t __ro = 0; memdbg_memory_read((int)pid, win_start, fallback, read_size, &__ro); }
   return fallback;
 }
-
-/* ---- Snapshot rescan ---- */
 
 static uint64_t snapshot_rescan(int fd, struct flashscan_sess *s,
                                 uint32_t cmp_type, uint32_t val_type,
@@ -547,16 +506,16 @@ static uint64_t snapshot_rescan(int fd, struct flashscan_sess *s,
   uint64_t prog_step = n >> 8; if (prog_step == 0) prog_step = 1;
   uint64_t next_prog = prog_step;
 
-  for (uint64_t i = bm_next(s->bitmap, 0, n); i < n; ) {
+  for (uint64_t i = bitmap_next_set(s->bitmap, 0, n); i < n; ) {
     if (i >= next_prog) {
-      net_send_all(fd, &i, 8);
+      socket_send_all(fd, &i, 8);
       next_prog = i + prog_step;
     }
     uint64_t win_start = slot_to_addr(s, i);
     uint64_t covered   = win_start + vlen;
     uint64_t last = i;
-    for (uint64_t j = bm_next(s->bitmap, i + 1, n); j < n;
-         j = bm_next(s->bitmap, j + 1, n)) {
+    for (uint64_t j = bitmap_next_set(s->bitmap, i + 1, n); j < n;
+         j = bitmap_next_set(s->bitmap, j + 1, n)) {
       uint64_t na  = slot_to_addr(s, j);
       uint64_t gap = (na > covered) ? (na - covered) : 0;
       if (gap > FS_RESCAN_GAP_MAX) break;
@@ -566,78 +525,223 @@ static uint64_t snapshot_rescan(int fd, struct flashscan_sess *s,
     }
     uint64_t read_size = covered - win_start;
     int win_aliased;
-    const uint8_t *win = fs_win_read(actx, s->pid, win_start, read_size,
+    const uint8_t *win = flashscan_window_read(actx, s->pid, win_start, read_size,
                                      read_buf, &win_aliased);
 
     uint64_t bl_off = i * vlen, bl_len = (last - i + 1) * vlen;
     uint8_t *bl;
     int buffered = (bl_off + bl_len > rb);
     if (buffered) {
-      if (!snap_read(s, bl_buf, bl_off, bl_len)) break;
+      if (!snapshot_store_read(s, bl_buf, bl_off, bl_len)) break;
       bl = bl_buf;
     } else {
       bl = s->snap_ram + bl_off;
     }
 
     int dirty = 0;
-    for (uint64_t k = i; k <= last; k = bm_next(s->bitmap, k + 1, n)) {
+    for (uint64_t k = i; k <= last; k = bitmap_next_set(s->bitmap, k + 1, n)) {
       uint64_t addr = slot_to_addr(s, k);
       const uint8_t *mem_p  = win + (addr - win_start);
       uint8_t       *base_p = bl + (k - i) * vlen;
       const uint8_t *prev_p = includes_prev ? base_p : between_hi;
 
-      int matched;
-      if (cmp_type == 0 && mask == NULL) {
-        matched = (memcmp(mem_p, pattern, vlen) == 0);
-      } else if (cmp_type == 4 && between_hi) {
-        matched = (memcmp(mem_p, pattern, vlen) >= 0 &&
-                   memcmp(mem_p, between_hi, vlen) <= 0);
-      } else if (cmp_type == 1) {
-        matched = (memcmp(mem_p, pattern, vlen) > 0);
-      } else if (cmp_type == 2) {
-        matched = (memcmp(mem_p, pattern, vlen) < 0);
-      } else if (cmp_type == 3 && prev_p) {
-        matched = (memcmp(mem_p, prev_p, vlen) != 0);
-      } else {
-        int64_t dv = 0, pv = 0;
-        if (vlen <= 8) {
-          memcpy(&dv, mem_p, vlen);
-          memcpy(&pv, pattern, vlen);
-        }
-        switch (cmp_type) {
-        case 5: matched = (dv == pv); break;
-        case 6: matched = (dv > pv); break;
-        case 7: matched = (dv < pv); break;
-        case 8: matched = (dv != pv); break;
-        case 9: matched = (dv < pv || dv > pv); break; /* unknown changed */
-        case 10: matched = (dv == pv); break; /* unchanged */
-        case 11: matched = (dv > pv); break; /* increased */
-        case 12: matched = (dv < pv); break; /* decreased */
-        default: matched = (memcmp(mem_p, pattern, vlen) == 0); break;
-        }
-      }
+      int matched = snap_compare(mem_p, pattern, prev_p, mask, between_hi,
+                                  cmp_type, vlen);
 
       if (matched) {
         if (s->has_prev)
-          fs_pwrite_all(s->prev_fd, base_p, vlen, k * vlen);
+          flashscan_pwrite_all(s->prev_fd, base_p, vlen, k * vlen);
         memcpy(base_p, mem_p, vlen);
         dirty = 1;
         survivors++;
       } else {
-        bm_clear(s->bitmap, k);
+        bitmap_clear(s->bitmap, k);
       }
     }
     if (win_aliased) page_alias_release(actx);
     if (buffered && dirty)
-      snap_write(s, bl, bl_off, bl_len);
+      snapshot_store_write(s, bl, bl_off, bl_len);
 
-    i = bm_next(s->bitmap, last + 1, n);
+    i = bitmap_next_set(s->bitmap, last + 1, n);
   }
   s->survivor_count = survivors;
   return survivors;
 }
 
-/* ---- Snapshot survivors fetch ---- */
+struct rescan_worker_ctx {
+  struct flashscan_sess *s;
+  uint32_t       cmp_type;
+  uint32_t       val_type;
+  uint64_t       vlen;
+  const uint8_t *pattern;
+  const uint8_t *mask;
+  const uint8_t *between_hi;
+  int            includes_prev;
+  uint64_t       chunk_start;  /* first slot index for this worker */
+  uint64_t       chunk_end;    /* one-past-last slot index for this worker */
+  uint64_t      *survivors_out;
+  uint32_t       worker_id;
+};
+
+static void *rescan_worker_thread(void *arg) {
+  struct rescan_worker_ctx *c = (struct rescan_worker_ctx *)arg;
+  struct flashscan_sess *s = c->s;
+  uint64_t n = s->slot_count, survivors = 0;
+  uint64_t vlen = c->vlen, rb = s->snap_bytes;
+
+  uint8_t *read_buf = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+  uint8_t *bl_buf   = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+  if (!read_buf || !bl_buf) {
+    free(read_buf); free(bl_buf);
+    if (c->survivors_out) *c->survivors_out = 0;
+    return NULL;
+  }
+
+  page_alias_ctx_t *actx = page_alias_begin(s->pid, 0);
+
+  uint64_t i = bitmap_next_set(s->bitmap, c->chunk_start, c->chunk_end);
+
+  while (i < c->chunk_end) {
+    uint64_t win_start = slot_to_addr(s, i);
+    uint64_t covered   = win_start + vlen;
+    uint64_t last = i;
+    for (uint64_t j = bitmap_next_set(s->bitmap, i + 1, c->chunk_end);
+         j < c->chunk_end;
+         j = bitmap_next_set(s->bitmap, j + 1, c->chunk_end)) {
+      uint64_t na  = slot_to_addr(s, j);
+      uint64_t gap = (na > covered) ? (na - covered) : 0;
+      if (gap > FS_RESCAN_GAP_MAX) break;
+      uint64_t ne = na + vlen;
+      if (ne - win_start > FS_RESCAN_WIN_CAP) break;
+      covered = ne; last = j;
+    }
+
+    uint64_t read_size = covered - win_start;
+    int win_aliased;
+    const uint8_t *win = flashscan_window_read(actx, s->pid, win_start, read_size,
+                                     read_buf, &win_aliased);
+
+    uint64_t bl_off = i * vlen, bl_len = (last - i + 1) * vlen;
+    uint8_t *bl;
+    int buffered = (bl_off + bl_len > rb);
+    if (buffered) {
+      if (!snapshot_store_read(s, bl_buf, bl_off, bl_len)) break;
+      bl = bl_buf;
+    } else {
+      bl = s->snap_ram + bl_off;
+    }
+
+    int dirty = 0;
+    for (uint64_t k = i;
+         k <= last;
+         k = bitmap_next_set(s->bitmap, k + 1, c->chunk_end)) {
+      uint64_t addr = slot_to_addr(s, k);
+      const uint8_t *mem_p  = win + (addr - win_start);
+      uint8_t       *base_p = bl + (k - i) * vlen;
+      const uint8_t *prev_p = c->includes_prev ? base_p : c->between_hi;
+
+      int matched = snap_compare(mem_p, c->pattern, prev_p, c->mask,
+                                  c->between_hi, c->cmp_type, c->vlen);
+
+      if (matched) {
+        if (s->has_prev)
+          flashscan_pwrite_all(s->prev_fd, base_p, vlen, k * vlen);
+        memcpy(base_p, mem_p, vlen);
+        dirty = 1;
+        survivors++;
+      } else {
+        bitmap_clear(s->bitmap, k);
+      }
+    }
+    if (win_aliased) page_alias_release(actx);
+    if (buffered && dirty)
+      snapshot_store_write(s, bl, bl_off, bl_len);
+
+    i = bitmap_next_set(s->bitmap, last + 1, c->chunk_end);
+  }
+
+  if (actx) page_alias_end(actx);
+  free(read_buf); free(bl_buf);
+
+  if (c->survivors_out)
+    *c->survivors_out = survivors;
+  return NULL;
+}
+
+static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
+                                         uint32_t cmp_type, uint32_t val_type,
+                                         uint64_t vlen,
+                                         const uint8_t *pattern, const uint8_t *mask,
+                                         const uint8_t *between_hi, int includes_prev) {
+  if (!s->bitmap || s->slot_count == 0) { s->survivor_count = 0; return 0; }
+  uint64_t n = s->slot_count;
+
+  uint32_t nworkers = FLASHSCAN_PARALLEL_WORKERS;
+  if (nworkers > FLASHSCAN_PARALLEL_MAX_WORKERS) nworkers = FLASHSCAN_PARALLEL_MAX_WORKERS;
+  if (nworkers == 0) nworkers = 1;
+  if (n < (uint64_t)nworkers * 256) nworkers = 1;  /* not worth parallelising */
+
+  if (nworkers == 1) {
+    uint8_t *rb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+    uint8_t *bb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+    uint64_t nc = snapshot_rescan(fd, s, cmp_type, val_type, vlen,
+                           pattern, mask, between_hi, includes_prev,
+                           rb, bb, NULL);
+    free(rb); free(bb);
+    return nc;
+  }
+
+  struct rescan_worker_ctx *ctxs =
+      (struct rescan_worker_ctx *)calloc(nworkers, sizeof(*ctxs));
+  uint64_t *surv = (uint64_t *)calloc(nworkers, sizeof(uint64_t));
+  pthread_t *tids = (pthread_t *)calloc(nworkers, sizeof(pthread_t));
+
+  if (!ctxs || !surv || !tids) {
+    free(ctxs); free(surv); free(tids);
+    uint8_t *rb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+    uint8_t *bb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+    uint64_t nc = snapshot_rescan(fd, s, cmp_type, val_type, vlen,
+                           pattern, mask, between_hi, includes_prev,
+                           rb, bb, NULL);
+    free(rb); free(bb);
+    return nc;
+  }
+
+  uint64_t chunk_size = (n + nworkers - 1) / nworkers;
+
+  for (uint32_t w = 0; w < nworkers; w++) {
+    ctxs[w].s             = s;
+    ctxs[w].cmp_type      = cmp_type;
+    ctxs[w].val_type      = val_type;
+    ctxs[w].vlen          = vlen;
+    ctxs[w].pattern       = pattern;
+    ctxs[w].mask          = mask;
+    ctxs[w].between_hi    = between_hi;
+    ctxs[w].includes_prev = includes_prev;
+    ctxs[w].chunk_start   = w * chunk_size;
+    ctxs[w].chunk_end     = (w + 1 == nworkers) ? n : ((w + 1) * chunk_size);
+    ctxs[w].survivors_out = &surv[w];
+    ctxs[w].worker_id     = w;
+
+    pthread_create(&tids[w], NULL, rescan_worker_thread, &ctxs[w]);
+  }  // Send approximate progress while workers run
+  for (uint32_t w = 0; w < nworkers; w++) {
+    struct timespec ts = {0, 50000000L};
+    nanosleep(&ts, NULL);
+    uint64_t prog_idx = (w + 1) * (n / nworkers);
+    socket_send_all(fd, &prog_idx, 8);
+  }
+
+  uint64_t total_survivors = 0;
+  for (uint32_t w = 0; w < nworkers; w++) {
+    pthread_join(tids[w], NULL);
+    total_survivors += surv[w];
+  }
+
+  free(ctxs); free(surv); free(tids);
+  s->survivor_count = total_survivors;
+  return total_survivors;
+}
 
 static uint32_t snapshot_fetch(int fd, struct flashscan_sess *s,
                                uint32_t start, uint32_t count,
@@ -652,37 +756,35 @@ static uint32_t snapshot_fetch(int fd, struct flashscan_sess *s,
   }
 
   uint32_t hdr = actual | (has_first ? 0x80000000u : 0u);
-  net_send_all(fd, &hdr, 4);
+  socket_send_all(fd, &hdr, 4);
   if (actual == 0 || !s->bitmap) return 0;
 
   uint64_t rb = s->snap_bytes;
   uint64_t ent = 8 + vlen * (has_first ? 3 : 2);
   uint64_t out_len = 0, seen = 0, emitted = 0;
 
-  for (uint64_t i = bm_next(s->bitmap, 0, n); i < n && emitted < actual;
-       i = bm_next(s->bitmap, i + 1, n)) {
+  for (uint64_t i = bitmap_next_set(s->bitmap, 0, n); i < n && emitted < actual;
+       i = bitmap_next_set(s->bitmap, i + 1, n)) {
     if (seen < start) { seen++; continue; }
     uint64_t addr = slot_to_addr(s, i);
     if (out_len + ent > out_cap) {
-      net_send_all(fd, out_buf, (int)out_len);
+      socket_send_all(fd, out_buf, (int)out_len);
       out_len = 0;
     }
     uint8_t *o = out_buf + out_len;
     memcpy(o, &addr, 8);
-    snap_read(s, o + 8, i * vlen, vlen);
+    snapshot_store_read(s, o + 8, i * vlen, vlen);
     if (s->has_prev)
-      fs_pread_all(s->prev_fd, o + 8 + vlen, vlen, i * vlen);
+      flashscan_pread_all(s->prev_fd, o + 8 + vlen, vlen, i * vlen);
     else
       memcpy(o + 8 + vlen, o + 8, vlen);
     if (has_first)
-      fs_pread_all(s->first_fd, o + 8 + 2 * vlen, vlen, i * vlen);
+      flashscan_pread_all(s->first_fd, o + 8 + 2 * vlen, vlen, i * vlen);
     out_len += ent; emitted++; seen++;
   }
-  if (out_len) net_send_all(fd, out_buf, (int)out_len);
+  if (out_len) socket_send_all(fd, out_buf, (int)out_len);
   return (uint32_t)emitted;
 }
-
-/* ---- Snapshot materialization (to list) ---- */
 
 static int snapshot_materialize(unsigned slot, struct flashscan_sess *s) {
   uint64_t vlen = s->value_len;
@@ -693,21 +795,21 @@ static int snapshot_materialize(unsigned slot, struct flashscan_sess *s) {
   if (records == 0 || rec_size * records > FS_RESCAN_WIN_CAP * 2) return 0;
 
   uint64_t bytes = records * rec_size;
-  void *buf = anon_mmap(bytes);
+  void *buf = mmap_anonymous(bytes);
   if (!buf) return 0;
 
   uint64_t rb = s->snap_bytes;
   uint8_t *recs = (uint8_t *)buf;
   uint64_t n = s->slot_count, out = 0;
 
-  for (uint64_t i = bm_next(s->bitmap, 0, n); i < n && out < records;
-       i = bm_next(s->bitmap, i + 1, n)) {
+  for (uint64_t i = bitmap_next_set(s->bitmap, 0, n); i < n && out < records;
+       i = bitmap_next_set(s->bitmap, i + 1, n)) {
     const uint8_t *val;
     uint64_t voff = i * vlen;
     uint8_t small_val[8];
     if (voff >= rb) {
-      if (!fs_pread_all(s->snap_fd, small_val, vlen, voff - rb))
-        { anon_munmap(buf, bytes); return 0; }
+      if (!flashscan_pread_all(s->snap_fd, small_val, vlen, voff - rb))
+        { munmap_anonymous(buf, bytes); return 0; }
       val = small_val;
     } else {
       val = s->snap_ram + voff;
@@ -719,32 +821,32 @@ static int snapshot_materialize(unsigned slot, struct flashscan_sess *s) {
     uint64_t prev_off = 8 + vlen;
     uint64_t first_off = 8 + vlen + (has_prev ? vlen : 0);
     if (has_prev) {
-      if (!fs_pread_all(s->prev_fd, rec + prev_off, vlen, voff))
-        { anon_munmap(buf, bytes); return 0; }
+      if (!flashscan_pread_all(s->prev_fd, rec + prev_off, vlen, voff))
+        { munmap_anonymous(buf, bytes); return 0; }
     }
     if (has_first) {
-      if (!fs_pread_all(s->first_fd, rec + first_off, vlen, voff))
-        { anon_munmap(buf, bytes); return 0; }
+      if (!flashscan_pread_all(s->first_fd, rec + first_off, vlen, voff))
+        { munmap_anonymous(buf, bytes); return 0; }
     }
     out++;
   }
 
-  anon_munmap(s->snap_ram, s->snap_bytes);
-  anon_munmap(s->bitmap,   s->bitmap_bytes);
+  munmap_anonymous(s->snap_ram, s->snap_bytes);
+  munmap_anonymous(s->bitmap,   s->bitmap_bytes);
   if (s->snap_fd > 0) close(s->snap_fd);
   if (s->first_fd > 0) close(s->first_fd);
   if (s->prev_fd > 0) close(s->prev_fd);
   if (s->seg) free(s->seg);
   { char path[96];
-    snap_path_for(slot, path, "qs_snap_");  unlink(path);
-    if (has_first) { snap_path_for(slot, path, "qs_first_"); unlink(path); }
-    if (has_prev)  { snap_path_for(slot, path, "qs_prev_");  unlink(path); }
+    snapshot_store_path(slot, path, "qs_snap_");  unlink(path);
+    if (has_first) { snapshot_store_path(slot, path, "qs_first_"); unlink(path); }
+    if (has_prev)  { snapshot_store_path(slot, path, "qs_prev_");  unlink(path); }
   }
 
   uint32_t pid = s->pid; uint32_t vt = s->value_type;
   memset(s, 0, sizeof(*s));
   s->in_use     = 1;
-  s->mode       = FS_MODE_LIST;
+  s->mode       = FLASHSCAN_MODE_LIST;
   s->buf        = buf;
   s->buf_cap    = bytes;
   s->count      = out;
@@ -758,8 +860,6 @@ static int snapshot_materialize(unsigned slot, struct flashscan_sess *s) {
   s->prev_fd    = -1;
   return 1;
 }
-
-/* ---- Scan a single range (streaming) ---- */
 
 static int scan_range_stream(int fd,
                              const memdbg_quickscan_start_request_t *req,
@@ -808,7 +908,7 @@ static int scan_range_stream(int fd,
         } else {
           if (result_len > flush_thresh) {
             *(uint64_t *)result_buf = result_len;
-            net_send_all(fd, result_buf, (int)(result_len + 8));
+            socket_send_all(fd, result_buf, (int)(result_len + 8));
             result_len = 0;
           }
           uint32_t offset = (uint32_t)((addr + coff) - req->address);
@@ -844,7 +944,7 @@ static int scan_range_stream(int fd,
           } else {
             if (result_len > flush_thresh) {
               *(uint64_t *)result_buf = result_len;
-              net_send_all(fd, result_buf, (int)(result_len + 8));
+              socket_send_all(fd, result_buf, (int)(result_len + 8));
               result_len = 0;
             }
             uint32_t offset = (uint32_t)((addr + j) - req->address);
@@ -866,14 +966,10 @@ static int scan_range_stream(int fd,
 
   if (!sess && result_len) {
     *(uint64_t *)result_buf = result_len;
-    net_send_all(fd, result_buf, (int)(result_len + 8));
+    socket_send_all(fd, result_buf, (int)(result_len + 8));
   }
   return 1;
 }
-
-/* ================================================================
- *  Public API
- * ================================================================ */
 
 int flashscan_handle_caps(int fd) {
   memdbg_quickscan_caps_response_t resp;
@@ -884,9 +980,9 @@ int flashscan_handle_caps(int fd) {
                        MEMDBG_QS_F_SNAP_CONFIG | MEMDBG_QS_F_SNAP_FIRST |
                        MEMDBG_QS_F_SNAP_PREVIOUS | MEMDBG_QS_F_PARALLEL |
                        MEMDBG_QS_F_ALIAS_RESCAN;
-  resp.max_workers   = FS_WORKERS;
-  net_send_int32(fd, 0);
-  net_send_all(fd, &resp, sizeof(resp));
+  resp.max_workers   = FLASHSCAN_WORKERS;
+  socket_send_int32(fd, 0);
+  socket_send_all(fd, &resp, sizeof(resp));
   return 0;
 }
 
@@ -898,14 +994,14 @@ int flashscan_handle_config(int fd, const memdbg_quickscan_config_request_t *req
     memcpy(g_fs_spill_dir, extra, path_len);
     g_fs_spill_dir[path_len] = 0;
   }
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
   return 0;
 }
 
 int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *req) {
   memdbg_map_list_t map_list;
   if (memdbg_process_maps(req->pid, &map_list) != 0 || map_list.count <= 0) {
-    net_send_int32(fd, -1);
+    socket_send_int32(fd, -1);
     return 1;
   }
 
@@ -919,7 +1015,7 @@ int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *r
   memdbg_quickscan_region_info_t *out =
       (memdbg_quickscan_region_info_t *)malloc((size_t)cap * sizeof(*out));
   uint8_t *probe = (uint8_t *)malloc(probe_bytes);
-  if (!out || !probe) { free(out); free(probe); memdbg_process_maps_free(&map_list); net_send_int32(fd, -1); return 1; }
+  if (!out || !probe) { free(out); free(probe); memdbg_process_maps_free(&map_list); socket_send_int32(fd, -1); return 1; }
 
   uint32_t n = 0;
   for (int i = 0; i < count && n < cap; i++) {
@@ -927,13 +1023,13 @@ int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *r
     uint64_t st = e[i].start, en = e[i].end;
     if (en <= st) continue;
 
-    /* Check PCD */
+    // PCD check
     uint32_t rflags = 0;
     uint64_t pte = 0, ph = 0, pg = 0; int lv = -1;
     if (ptw_probe((uint32_t)req->pid, st, &ph, &lv, &pg, &pte) == 0)
       if ((pte >> 4) & 1) rflags |= 1u;
 
-    /* Measure throughput */
+    // Throughput measurement
     uint64_t pb = (en - st) < probe_bytes ? (en - st) : probe_bytes;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -954,10 +1050,10 @@ int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *r
     n++;
   }
 
-  net_send_int32(fd, 0);
-  net_send_all(fd, &n, 4);
-  if (n) net_send_all(fd, out, (int)((size_t)n * sizeof(*out)));
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
+  socket_send_all(fd, &n, 4);
+  if (n) socket_send_all(fd, out, (int)((size_t)n * sizeof(*out)));
+  socket_send_int32(fd, 0);
 
   free(out); free(probe); memdbg_process_maps_free(&map_list);
   return 0;
@@ -973,7 +1069,7 @@ int flashscan_handle_start(int fd,
   uint64_t vlen = req->value_length;
   if (vlen == 0) vlen = 4;
   if (vlen > 16 || (vlen == 0 && !want_snap)) {
-    net_send_int32(fd, -1); return 1;
+    socket_send_int32(fd, -1); return 1;
   }
 
   int needs_data = ((1u << req->compare_type) & 0x114Fu) != 0;
@@ -982,7 +1078,7 @@ int flashscan_handle_start(int fd,
   uint8_t *pattern = NULL;
   if (needs_data && vlen > 0) {
     pattern = (uint8_t *)malloc(vlen * 2);
-    if (!pattern) { net_send_int32(fd, -1); return 1; }
+    if (!pattern) { socket_send_int32(fd, -1); return 1; }
     memcpy(pattern, compare_data, vlen * (is_between ? 2 : 1));
   }
 
@@ -1007,13 +1103,12 @@ int flashscan_handle_start(int fd,
   if (!read_buf || !result_buf) {
     free(read_buf); free(result_buf);
     free(simd_offs); free(pattern);
-    net_send_int32(fd, -1); return 1;
+    socket_send_int32(fd, -1); return 1;
   }
 
-  net_send_int32(fd, 0);  /* ack 1 */
-  net_send_int32(fd, 0);  /* ack 2 */
+  socket_send_int32(fd, 0);  /* ack 1 */
+  socket_send_int32(fd, 0);  /* ack 2 */
 
-  /* Snapshot path */
   if (want_snap) {
     memdbg_quickscan_segment_t *segs = NULL;
     uint32_t nseg = 0;
@@ -1026,12 +1121,12 @@ int flashscan_handle_start(int fd,
 
     if (req->request_flags & MEMDBG_QS_FL_SNAP_SEGMENTS) {
       /* Read segment list from client */
-      net_recv_all(fd, &nseg, 4);
+      socket_recv_all(fd, &nseg, 4);
       if (nseg >= 1 && nseg <= MEMDBG_QUICKSCAN_MAX_SEGMENTS) {
         segs = (memdbg_quickscan_segment_t *)malloc(
             (size_t)nseg * sizeof(*segs));
         if (segs)
-          net_recv_all(fd, segs, (int)(nseg * sizeof(*segs)));
+          socket_recv_all(fd, segs, (int)(nseg * sizeof(*segs)));
         else
           seg_ok = 0;
       } else { seg_ok = 0; }
@@ -1041,12 +1136,12 @@ int flashscan_handle_start(int fd,
     }
 
     if (!seg_ok || vlen > 8 || vlen == 0) {
-      memdbg_quickscan_snapshot_plan plan = {0,0};
-      net_send_all(fd, &plan, sizeof(plan));
+      memdbg_quickscan_snapshot_plan_t plan = {0,0};
+      socket_send_all(fd, &plan, sizeof(plan));
       uint64_t sent = 0xFFFFFFFFFFFFFFFFULL;
-      net_send_all(fd, &sent, 8);
-      memdbg_quickscan_snapshot_summary sum = {0,0};
-      net_send_all(fd, &sum, sizeof(sum));
+      socket_send_all(fd, &sent, 8);
+      memdbg_quickscan_snapshot_summary_t sum = {0,0};
+      socket_send_all(fd, &sum, sizeof(sum));
     } else {
       int kf = (req->request_flags & MEMDBG_QS_FL_SNAP_FIRST) != 0;
       int kp = (req->request_flags & MEMDBG_QS_FL_SNAP_PREVIOUS) != 0;
@@ -1055,15 +1150,14 @@ int flashscan_handle_start(int fd,
     if (segs && segs != &one) free(segs);
     free(read_buf); free(result_buf);
     free(simd_offs); free(pattern);
-    net_send_int32(fd, 0);
+    socket_send_int32(fd, 0);
     return 0;
   }
 
-  /* Resident / streaming path */
   const uint8_t *between_hi = (is_between && pattern) ? (pattern + vlen) : NULL;
 
   page_alias_ctx_t *actx = (req->request_flags & MEMDBG_QS_FL_ALIAS_READ)
-                           ? alias_get(slot, (uint32_t)req->pid) : NULL;
+                           ? alias_context_get(slot, (uint32_t)req->pid) : NULL;
 
   int resident = (req->request_flags & MEMDBG_QS_FL_SERVER_KEEP) != 0;
 
@@ -1081,18 +1175,18 @@ int flashscan_handle_start(int fd,
       memdbg_quickscan_resident_header_t hdr;
       hdr.stored    = 1;
       hdr.hit_count = s->count;
-      net_send_all(fd, &hdr, sizeof(hdr));
+      socket_send_all(fd, &hdr, sizeof(hdr));
       free(read_buf); free(result_buf);
       free(simd_offs); free(pattern);
       if (actx) page_alias_release(actx);
-      net_send_int32(fd, 0);
+      socket_send_int32(fd, 0);
       return 0;
     }
     flashscan_free_slot(slot);
     memdbg_quickscan_resident_header_t hdr;
     hdr.stored    = 0;
     hdr.hit_count = 0;
-    net_send_all(fd, &hdr, sizeof(hdr));
+    socket_send_all(fd, &hdr, sizeof(hdr));
     /* Fall through to streaming */
   }
 
@@ -1102,12 +1196,12 @@ int flashscan_handle_start(int fd,
                     simd_offs, simd_max, NULL, actx);
 
   uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
-  net_send_all(fd, &sentinel, 8);
+  socket_send_all(fd, &sentinel, 8);
 
   free(read_buf); free(result_buf);
   free(simd_offs); free(pattern);
   if (actx) page_alias_release(actx);
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
   return 0;
 }
 
@@ -1118,55 +1212,61 @@ int flashscan_handle_count(int fd,
                            unsigned int slot) {
   uint64_t vlen = req->value_length;
   if (vlen == 0) vlen = 4;
-  if (vlen > 0x1000) { net_send_int32(fd, -1); return 1; }
+  if (vlen > 0x1000) { socket_send_int32(fd, -1); return 1; }
 
   int is_between    = (req->compare_type == 4);
   int includes_prev = ((req->compare_type) >= 3 && (req->compare_type) <= 12);
   const uint8_t *between_hi = (is_between && compare_data && vlen > 0)
                               ? (compare_data + vlen) : NULL;
 
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
 
   int resident = (req->request_flags & MEMDBG_QS_FL_SERVER_KEEP) != 0;
 
   if (resident) {
-    struct flashscan_sess *s = sess_get(slot);
+    struct flashscan_sess *s = session_get(slot);
 
-    /* Snapshot rescan */
-    if (s && s->in_use && s->mode == FS_MODE_SNAPSHOT) {
+      if (s && s->in_use && s->mode == FLASHSCAN_MODE_SNAPSHOT) {
       if (s->value_len != vlen) {
         uint64_t nc = s->survivor_count;
         uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
-        net_send_all(fd, &sentinel, 8);
-        net_send_all(fd, &nc, 8);
-        net_send_int32(fd, 0);
+        socket_send_all(fd, &sentinel, 8);
+        socket_send_all(fd, &nc, 8);
+        socket_send_int32(fd, 0);
         return 0;
       }
       page_alias_ctx_t *rsctx = (req->request_flags & MEMDBG_QS_FL_ALIAS_RESCAN)
-                                ? alias_get(slot, s->pid) : NULL;
+                                ? alias_context_get(slot, s->pid) : NULL;
 
-      uint8_t *read_buf = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
-      uint8_t *bl_buf   = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
-      uint64_t nc = snapshot_rescan(fd, s, req->compare_type, req->value_type,
-                                    vlen, compare_data, mask, between_hi,
-                                    includes_prev, read_buf, bl_buf, rsctx);
+      int want_parallel = (req->request_flags & MEMDBG_QS_FL_PARALLEL) != 0;
+      uint64_t nc;
+
+      if (want_parallel) {
+        nc = snapshot_rescan_parallel(fd, s, req->compare_type, req->value_type,
+                                      vlen, compare_data, mask, between_hi,
+                                      includes_prev);
+      } else {
+        uint8_t *read_buf = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+        uint8_t *bl_buf   = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+        nc = snapshot_rescan(fd, s, req->compare_type, req->value_type,
+                             vlen, compare_data, mask, between_hi,
+                             includes_prev, read_buf, bl_buf, rsctx);
+        free(read_buf); free(bl_buf);
+      }
       if (rsctx) page_alias_release(rsctx);
-      free(read_buf); free(bl_buf);
 
-      /* Materialize if beneficial */
       uint64_t rsz = 8 + vlen * (1 + (s->has_prev ? 1 : 0) + (s->has_first ? 1 : 0));
       if (nc > 0 && nc <= g_fs_mat_max &&
           nc * 32 <= s->slot_count && nc * rsz <= FS_RESCAN_WIN_CAP * 2)
         snapshot_materialize(slot, s);
 
       uint64_t prog_sentinel = 0xFFFFFFFFFFFFFFFFULL;
-      net_send_all(fd, &prog_sentinel, 8);
-      net_send_all(fd, &nc, 8);
-      net_send_int32(fd, 0);
+      socket_send_all(fd, &prog_sentinel, 8);
+      socket_send_all(fd, &nc, 8);
+      socket_send_int32(fd, 0);
       return 0;
     }
 
-    /* Resident list rescan */
     uint64_t new_count = 0;
     if (s && s->in_use && s->buf && s->value_len == vlen) {
       uint8_t  *recs     = (uint8_t *)s->buf;
@@ -1176,7 +1276,7 @@ int flashscan_handle_count(int fd,
       uint8_t  *rw_buf = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
 
       page_alias_ctx_t *rsctx = (req->request_flags & MEMDBG_QS_FL_ALIAS_RESCAN)
-                                ? alias_get(slot, s->pid) : NULL;
+                                ? alias_context_get(slot, s->pid) : NULL;
       const uint8_t *win_base = rw_buf;
       int            win_aliased = 0;
 
@@ -1200,7 +1300,7 @@ int flashscan_handle_count(int fd,
           }
           uint64_t read_size = covered - win_start;
           if (win_aliased) { page_alias_release(rsctx); win_aliased = 0; }
-          win_base = fs_win_read(rsctx, s->pid, win_start, read_size,
+          win_base = flashscan_window_read(rsctx, s->pid, win_start, read_size,
                                  rw_buf, &win_aliased);
           win_end = win_start + read_size;
         }
@@ -1227,13 +1327,12 @@ int flashscan_handle_count(int fd,
     }
 
     uint64_t prog_sentinel = 0xFFFFFFFFFFFFFFFFULL;
-    net_send_all(fd, &prog_sentinel, 8);
-    net_send_all(fd, &new_count, 8);
-    net_send_int32(fd, 0);
+    socket_send_all(fd, &prog_sentinel, 8);
+    socket_send_all(fd, &new_count, 8);
+    socket_send_int32(fd, 0);
     return 0;
   }
 
-  /* Client-driven rescan (legacy streaming) */
   uint64_t entry_size = 4 + vlen;
   uint64_t flush_thresh = 0x3FFE8ULL - 2 * vlen;
   uint8_t *chunk_buf  = (uint8_t *)malloc(0x40000);
@@ -1241,20 +1340,20 @@ int flashscan_handle_count(int fd,
   uint8_t *mem_buf    = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
 
   page_alias_ctx_t *rsctx = (req->request_flags & MEMDBG_QS_FL_ALIAS_RESCAN)
-                            ? alias_get(slot, (uint32_t)req->pid) : NULL;
+                            ? alias_context_get(slot, (uint32_t)req->pid) : NULL;
 
   for (;;) {
     uint32_t chunk_len = 0;
-    if (net_recv_all(fd, &chunk_len, 4) <= 0) break;
+    if (socket_recv_all(fd, &chunk_len, 4) <= 0) break;
     if (chunk_len == 0xFFFFFFFFu) break;
     if (chunk_len == 0) {
       uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
-      net_send_all(fd, &sentinel, 8);
+      socket_send_all(fd, &sentinel, 8);
       continue;
     }
     if (chunk_len > 0x40000u) break;
 
-    net_recv_all(fd, chunk_buf, (int)chunk_len);
+    socket_recv_all(fd, chunk_buf, (int)chunk_len);
 
     uint64_t win_start = 0, win_end = 0, result_len = 0;
     const uint8_t *win_base = mem_buf;
@@ -1281,7 +1380,7 @@ int flashscan_handle_count(int fd,
         }
         uint64_t read_size = covered - win_start;
         if (waliased) { page_alias_release(rsctx); waliased = 0; }
-        win_base = fs_win_read(rsctx, (uint32_t)req->pid, win_start, read_size,
+        win_base = flashscan_window_read(rsctx, (uint32_t)req->pid, win_start, read_size,
                                mem_buf, &waliased);
         win_end = win_start + read_size;
       }
@@ -1292,7 +1391,7 @@ int flashscan_handle_count(int fd,
       if (matched) {
         if (result_len > flush_thresh) {
           *(uint64_t *)result_buf = result_len;
-          net_send_all(fd, result_buf, (int)(result_len + 8));
+          socket_send_all(fd, result_buf, (int)(result_len + 8));
           result_len = 0;
         }
         memcpy(result_buf + 8 + result_len,     &eoff, 4);
@@ -1304,41 +1403,39 @@ int flashscan_handle_count(int fd,
 
     if (result_len) {
       *(uint64_t *)result_buf = result_len;
-      net_send_all(fd, result_buf, (int)(result_len + 8));
+      socket_send_all(fd, result_buf, (int)(result_len + 8));
     }
 
     uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
-    net_send_all(fd, &sentinel, 8);
+    socket_send_all(fd, &sentinel, 8);
   }
 
   free(chunk_buf); free(result_buf); free(mem_buf);
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
   return 0;
 }
 
 int flashscan_handle_fetch(int fd,
                            const memdbg_quickscan_fetch_request_t *req,
                            unsigned int slot) {
-  struct flashscan_sess *s = sess_get(slot);
-  if (!s || !s->in_use || (s->mode == FS_MODE_LIST && !s->buf)) {
-    net_send_int32(fd, 0);
-    net_send_all(fd, &(uint32_t){0}, 4);
-    net_send_int32(fd, 0);
+  struct flashscan_sess *s = session_get(slot);
+  if (!s || !s->in_use || (s->mode == FLASHSCAN_MODE_LIST && !s->buf)) {
+    socket_send_int32(fd, 0);
+    socket_send_all(fd, &(uint32_t){0}, 4);
+    socket_send_int32(fd, 0);
     return 0;
   }
 
-  /* Snapshot fetch */
-  if (s->mode == FS_MODE_SNAPSHOT) {
+  if (s->mode == FLASHSCAN_MODE_SNAPSHOT) {
     uint8_t *out_buf = (uint8_t *)malloc(0x40000);
-    if (!out_buf) { net_send_int32(fd, -1); return 1; }
-    net_send_int32(fd, 0);
+    if (!out_buf) { socket_send_int32(fd, -1); return 1; }
+    socket_send_int32(fd, 0);
     snapshot_fetch(fd, s, req->start_index, req->count, out_buf, 0x40000);
     free(out_buf);
-    net_send_int32(fd, 0);
+    socket_send_int32(fd, 0);
     return 0;
   }
 
-  /* List fetch */
   uint64_t vlen     = s->value_len;
   uint64_t rec_size = s->rec_size;
   uint64_t total    = s->count;
@@ -1350,15 +1447,15 @@ int flashscan_handle_fetch(int fd,
   uint32_t actual = (uint32_t)(end - start);
 
   uint8_t *out_buf = (uint8_t *)malloc(0x40000);
-  if (!out_buf) { net_send_int32(fd, -1); return 1; }
+  if (!out_buf) { socket_send_int32(fd, -1); return 1; }
 
   int has_first = s->has_first, has_prev = s->has_prev;
   uint64_t prev_off  = has_prev ? (8 + vlen) : 8;
   uint64_t first_off = 8 + vlen + (has_prev ? vlen : 0);
 
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
   uint32_t hdr = actual | (has_first ? 0x80000000u : 0u);
-  net_send_all(fd, &hdr, 4);
+  socket_send_all(fd, &hdr, 4);
 
   uint8_t  *recs = (uint8_t *)s->buf;
   uint64_t  ent_size = 8 + vlen * (has_first ? 3 : 2);
@@ -1368,7 +1465,7 @@ int flashscan_handle_fetch(int fd,
   for (uint64_t i = start; i < end; i++) {
     uint8_t *rec = recs + i * rec_size;
     if (out_len + ent_size > out_cap) {
-      net_send_all(fd, out_buf, (int)out_len);
+      socket_send_all(fd, out_buf, (int)out_len);
       out_len = 0;
     }
     uint8_t *o = out_buf + out_len;
@@ -1379,15 +1476,15 @@ int flashscan_handle_fetch(int fd,
       memcpy(o + 8 + 2 * vlen, rec + first_off, vlen);
     out_len += ent_size;
   }
-  if (out_len) net_send_all(fd, out_buf, (int)out_len);
+  if (out_len) socket_send_all(fd, out_buf, (int)out_len);
 
   free(out_buf);
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
   return 0;
 }
 
 int flashscan_handle_end(int fd, unsigned int slot) {
   flashscan_free_slot(slot);
-  net_send_int32(fd, 0);
+  socket_send_int32(fd, 0);
   return 0;
 }

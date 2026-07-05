@@ -5,10 +5,12 @@
  */
 
 #include "memdbg/core/memdbg_protocol.h"
+#include "memdbg/core/region_match.h"
 #include "memdbg/pal/pal_network.h"
 #include "memdbg/pal/pal_memory.h"
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/debug/memdbg_memory.h"
+#include "memdbg/debug/memdbg_process.h"
 #include "memdbg/privilege/privilege.h"
 
 #include <errno.h>
@@ -20,17 +22,18 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
-/* ---- External: privilege functions for auth ---- */
+// External declarations for feature helpers
 
 extern int memdbg_privilege_jailbreak_self(void);
+extern int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
+                                    const char *region, uint32_t match_flags,
+                                    uint64_t *entry, uint64_t *base);
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
 #endif
 
-/* ================================================================
- *  Auth ceremony
- * ================================================================ */
+// Auth ceremony
 
 static int g_auth_privileged = 0;
 
@@ -40,7 +43,7 @@ int memdbg_auth_handle(int fd, const memdbg_auth_key_request_t *req) {
     return 1;
   }
 
-  /* Elevate the payload's own privileges for debug operations */
+  // Elevate payload privileges for debug operations
   int rc = memdbg_privilege_jailbreak_self();
   if (rc != 0) {
     pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
@@ -54,9 +57,7 @@ int memdbg_auth_handle(int fd, const memdbg_auth_key_request_t *req) {
 
 int memdbg_is_privileged(void) { return g_auth_privileged; }
 
-/* ================================================================
- *  Arena memory sub-allocator
- * ================================================================ */
+// Arena memory sub-allocator
 
 #define ARENA_ALIGN      0x4000ULL
 #define ARENA_CHUNK      (16ULL * 1024 * 1024)
@@ -87,7 +88,7 @@ static struct arena_pool *arena_for(uint32_t pid, int create) {
   }
   if (!create || slot < 0) return NULL;
 
-  /* Reuse slot */
+  // Reuse slot
   struct arena_pool *ap = &g_arenas[slot];
   for (struct arena_seg *s = ap->segs; s; ) {
     struct arena_seg *n = s->next; free(s); s = n;
@@ -104,7 +105,7 @@ static struct arena_pool *arena_for(uint32_t pid, int create) {
 static int arena_try_alloc(struct arena_pool *ap, uint64_t length, uint64_t *out) {
   uint64_t size = arena_align(length ? length : ARENA_ALIGN);
 
-  /* Check freelist first */
+  // Check freelist first
   struct arena_blk **pp = &ap->freelist;
   for (struct arena_blk *b = ap->freelist; b; pp = &b->next, b = b->next) {
     if (b->size >= size) {
@@ -121,7 +122,7 @@ static int arena_try_alloc(struct arena_pool *ap, uint64_t length, uint64_t *out
   for (struct arena_seg *s = ap->segs; s; s = s->next)
     if (s->size - s->used >= size) { *out = s->base + s->used; s->used += size; return 0; }
 
-  /* Allocate new segment */
+  // Allocate new segment
   uint64_t seg_size = (size > ARENA_CHUNK) ? size : ARENA_CHUNK;
   uint64_t base = 0;
   {
@@ -170,9 +171,7 @@ int memdbg_arena_free_hinted(uint32_t pid, uint64_t addr, uint64_t length) {
   return pal_memory_free((int)pid, addr, length);
 }
 
-/* ================================================================
- *  Bulk write advanced
- * ================================================================ */
+// Bulk write advanced
 
 int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t *req,
                                   const uint8_t *body, uint32_t body_len) {
@@ -187,7 +186,7 @@ int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t
     return 1;
   }
 
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);  /* ack */
+  pal_socket_write_all(fd, &(uint32_t){0}, 4);  // ack
 
   const uint8_t *cursor = body + sizeof(*req);
   const uint8_t *end    = body + body_len;
@@ -219,13 +218,11 @@ int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t
     free(status_array);
   }
 
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);  /* CMD_SUCCESS */
+  pal_socket_write_all(fd, &(uint32_t){0}, 4);  // CMD_SUCCESS
   return 0;
 }
 
-/* ================================================================
- *  Enhanced ELF loader with JIT shared memory
- * ================================================================ */
+// Enhanced ELF loader with JIT shared memory
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
@@ -261,9 +258,9 @@ static int jit_shm_alias(int pid, int shm_fd, int prot) {
 }
 
 int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
-                             const char *target_region, uint64_t *entry_out,
-                             uint64_t *base_out) {
-  if (elf_size < 64 || elf[0] != 0x7F || elf[1] != 'E' ||
+                             const char *target_region, uint32_t match_flags,
+                             uint64_t *entry_out, uint64_t *base_out) {
+  if (!elf || elf_size < 52 || elf[0] != 0x7F || elf[1] != 'E' ||
       elf[2] != 'L' || elf[3] != 'F') return -1;
 
   uint64_t e_entry = *(const uint64_t *)(elf + 0x18);
@@ -278,7 +275,7 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
   const uint8_t *phdr_base = elf + e_phoff;
   const uint8_t *shdr_base = elf + e_shoff;
 
-  /* Compute address range */
+  // Compute address range
   uint64_t min_addr = ~0ULL, max_addr = 0;
   if (e_phnum) {
     for (uint16_t i = 0; i < e_phnum; i++) {
@@ -294,22 +291,50 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
     }
   }
 
-  /* Round to pages */
+  // Round to pages
   const uint64_t page_mask = 0x3FFFULL;
   uint64_t min_aligned = min_addr & ~page_mask;
   uint64_t total_size = ((max_addr + page_mask) & ~page_mask) - min_aligned;
 
-  /* Allocate in target */
-  int mmap_flags = (e_type == 2) ? 0x1012 : 0x1002;
-  uint64_t base_request = (e_type == 2) ? min_aligned : 0;
-  void *base_p = (void *)(uintptr_t)base_request;
-  int rc = pal_memory_alloc(pid, base_request, total_size, 0,
-                            (uint32_t)mmap_flags, (uint64_t *)&base_p);
-  if (rc != 0) return -1;
+  uint64_t base;
+  int      use_existing_region = (target_region && target_region[0] != '\0');
 
-  uint64_t base = (uint64_t)(uintptr_t)base_p;
+  if (use_existing_region) {
+    // Find the named VM region in the target process
+    memdbg_map_list_t map_list;
+    if (memdbg_process_maps(pid, &map_list) != 0)
+      return -1;
 
-  /* Load segments */
+    uint64_t region_base = 0, region_end = 0;
+    for (size_t i = 0; i < map_list.count; i++) {
+      if (region_name_matches(map_list.entries[i].name, target_region, match_flags)) {
+        region_base = map_list.entries[i].start;
+        region_end  = map_list.entries[i].end;
+        break;
+      }
+    }
+    memdbg_process_maps_free(&map_list);
+
+    if (region_base == 0 || region_end <= region_base)
+      return -1;
+
+    uint64_t available = region_end - region_base;
+    if (total_size > available)
+      return -1;
+
+    base = region_base + min_aligned;
+  } else {
+    // Allocate new memory in target
+    int mmap_flags = (e_type == 2) ? 0x1012 : 0x1002;
+    uint64_t base_request = (e_type == 2) ? min_aligned : 0;
+    void *base_p = (void *)(uintptr_t)base_request;
+    int rc = pal_memory_alloc(pid, base_request, total_size, 0,
+                              (uint32_t)mmap_flags, (uint64_t *)&base_p);
+    if (rc != 0) return -1;
+    base = (uint64_t)(uintptr_t)base_p;
+  }
+
+  // Load segments
   if (e_phnum) {
     for (uint16_t i = 0; i < e_phnum; i++) {
       const uint8_t *ph = phdr_base + (uint64_t)i * 56;
@@ -327,8 +352,8 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
       uint64_t aligned_sz = (p_memsz + page_mask) & ~page_mask;
       uint64_t tgt_addr   = base + p_vaddr;
 
-      if (p_flags & 1) {
-        /* Executable: use JIT shared memory */
+      if ((p_flags & 1) && !use_existing_region) {
+        // Executable (new allocation): use JIT shared memory
         int shm_fd = jit_shm_create(pid, aligned_sz, ((p_flags >> 2) & 1) | 6);
         if (shm_fd < 0) continue;
 
@@ -348,14 +373,25 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
 
         pal_memory_free(pid, (uint64_t)(uintptr_t)rw_p, aligned_sz);
       } else {
-        /* Non-executable: direct write */
+        // Non-executable or existing region: direct write
+        uint32_t old_prot = 0;
+        if (use_existing_region && (p_flags & 1))
+          pal_memory_protect(pid, tgt_addr, aligned_sz, 7, &old_prot);
+
         size_t wb = 0;
         memdbg_memory_write(pid, tgt_addr, elf + p_offset, p_memsz, &wb);
+
+        if (use_existing_region && (p_flags & 1) && wb != p_memsz) {
+          pal_memory_protect(pid, tgt_addr, aligned_sz, old_prot, NULL);
+          return -1;
+        }
+        if (use_existing_region && (p_flags & 1))
+          pal_memory_protect(pid, tgt_addr, aligned_sz, old_prot, NULL);
       }
     }
   }
 
-  /* Apply RELA relocations */
+  // Apply RELA relocations
   if (e_shnum) {
     for (uint16_t i = 0; i < e_shnum; i++) {
       const uint8_t *sh = shdr_base + (uint64_t)i * 64;
@@ -370,7 +406,7 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
       for (uint64_t j = 0; j < n_rela; j++) {
         const uint8_t *r = rela_base + j * 24;
         uint32_t r_type = *(const uint32_t *)(r + 8);
-        if (r_type != 8) continue; /* R_X86_64_RELATIVE */
+        if (r_type != 8) continue; // R_X86_64_RELATIVE
         uint64_t r_offset = *(const uint64_t *)(r + 0);
         uint64_t r_addend = *(const uint64_t *)(r + 16);
         uint64_t target   = base + r_offset;
@@ -381,7 +417,7 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
     }
   }
 
-  /* Fix segment protections */
+  // Fix segment protections after loading
   if (e_phnum) {
     for (uint16_t i = 0; i < e_phnum; i++) {
       const uint8_t *ph = phdr_base + (uint64_t)i * 56;
@@ -408,9 +444,9 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
 #else /* !PS5 */
 
 int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
-                             const char *target_region, uint64_t *entry_out,
-                             uint64_t *base_out) {
-  (void)pid; (void)elf; (void)elf_size; (void)target_region;
+                             const char *target_region, uint32_t match_flags,
+                             uint64_t *entry_out, uint64_t *base_out) {
+  (void)pid; (void)elf; (void)elf_size; (void)target_region; (void)match_flags;
   if (entry_out) *entry_out = 0;
   if (base_out)  *base_out  = 0;
   return -1;
@@ -418,9 +454,7 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
 
 #endif
 
-/* ================================================================
- *  Klog streaming server
- * ================================================================ */
+// Klog streaming server
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 static int g_klog_listen_fd = -1;
@@ -493,7 +527,7 @@ static void *klog_server_thread(void *arg) {
 }
 
 int memdbg_klog_start(pthread_t *out_tid) {
-  if (g_klog_listen_fd >= 0) return 0; /* already running */
+  if (g_klog_listen_fd >= 0) return 0; // already running
 
   pthread_attr_t attr;
   pthread_attr_init(&attr);
@@ -521,9 +555,7 @@ void memdbg_klog_stop(void) {}
 
 #endif
 
-/* ================================================================
- *  Broadcast beacon
- * ================================================================ */
+// Broadcast beacon
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 
@@ -600,3 +632,98 @@ int memdbg_beacon_start(pthread_t *out_tid) {
 void memdbg_beacon_stop(void) {}
 
 #endif
+
+// Hijack mode: inject payload without blocking the caller
+
+struct hijack_ctx {
+  int            pid;
+  uint8_t       *elf_data;
+  uint64_t       elf_size;
+  uint32_t       flags;
+  uint32_t       match_flags;
+  char           target_region[44];
+  volatile int   done;
+  int            result;
+  uint64_t       entry;
+  uint64_t       base;
+};
+
+static void *hijack_thread(void *arg) {
+  struct hijack_ctx *ctx = (struct hijack_ctx *)arg;
+
+  const char *region = ctx->target_region[0] ? ctx->target_region : NULL;
+  ctx->result = memdbg_elf_load_enhanced(
+      ctx->pid, ctx->elf_data, ctx->elf_size, region, ctx->match_flags,
+      &ctx->entry, &ctx->base);
+
+  ctx->done = 1;
+  free(ctx->elf_data);
+  free(ctx);
+  return NULL;
+}
+
+int memdbg_hijack_handle(int fd, const memdbg_process_hijack_request_t *req,
+                         const uint8_t *body, uint32_t body_len) {
+  if (!req || req->payload_size == 0 || req->payload_size > (64ULL << 20)) {
+    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+    return 1;
+  }
+
+  if (body_len < sizeof(*req) + req->payload_size) {
+    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+    return 1;
+  }
+
+  if (req->pid <= 1) {
+    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+    return 1;
+  }
+
+  // Copy ELF data so the caller can be released immediately
+  const uint8_t *elf_src = body + sizeof(*req);
+  uint8_t *elf_copy = (uint8_t *)malloc((size_t)req->payload_size);
+  if (!elf_copy) {
+    pal_socket_write_all(fd, &(uint32_t){0xF0000003u}, 4);
+    return 1;
+  }
+  memcpy(elf_copy, elf_src, (size_t)req->payload_size);
+
+  struct hijack_ctx *ctx = (struct hijack_ctx *)calloc(1, sizeof(*ctx));
+  if (!ctx) {
+    free(elf_copy);
+    pal_socket_write_all(fd, &(uint32_t){0xF0000003u}, 4);
+    return 1;
+  }
+
+  ctx->pid         = req->pid;
+  ctx->elf_data    = elf_copy;
+  ctx->elf_size    = req->payload_size;
+  ctx->flags       = req->flags;
+  ctx->match_flags = req->match_flags;
+  memcpy(ctx->target_region, req->target_region, sizeof(ctx->target_region));
+  ctx->target_region[sizeof(ctx->target_region) - 1] = '\0';
+  ctx->done      = 0;
+  ctx->result    = -1;
+
+  pthread_t tid;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+  int rc = pthread_create(&tid, &attr, hijack_thread, ctx);
+  pthread_attr_destroy(&attr);
+
+  if (rc != 0) {
+    free(elf_copy);
+    free(ctx);
+    pal_socket_write_all(fd, &(uint32_t){0xF0000003u}, 4);
+    return 1;
+  }
+
+  // Reply immediately — injection proceeds in background
+  memdbg_process_hijack_response_t resp;
+  resp.accepted = 1;
+  resp.reserved = 0;
+  pal_socket_write_all(fd, &resp, sizeof(resp));
+  return 0;
+}

@@ -88,7 +88,7 @@ void draw_tracer(AppState &state, ImVec2 avail) {
           state.tracer_target_pid = pid;
           request_tracer_attach_async(state);
         } else {
-          set_status(state, "Select a valid PID before attaching the tracer");
+          set_status(state, locale::tr("tracer.select_pid"));
         }
       }
       ImGui::EndDisabled();

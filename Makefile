@@ -51,7 +51,7 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon check-locales tracer-tool FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon test-new-features check-locales check-headers tracer-tool FORCE
 
 all: host
 
@@ -117,7 +117,13 @@ test-tracer-daemon: src/tracer/memdbg_tracer_daemon.c tests/test_tracer_daemon.c
 	@echo "--- Running Tracer daemon lifecycle test ---"
 	$(BUILD_DIR)/test_tracer_daemon
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon
+test-new-features: tests/test_new_features.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc/scanner $(HOST_CFLAGS) tests/test_new_features.c -o $(BUILD_DIR)/test_new_features
+	@echo "--- Running New Features test ---"
+	$(BUILD_DIR)/test_new_features
+
+test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)
@@ -148,6 +154,9 @@ frontend:
 
 check-locales:
 	python3 tools/check_locales.py
+
+check-headers:
+	python3 tools/check_headers.py
 
 verify:
 	$(MAKE) clean

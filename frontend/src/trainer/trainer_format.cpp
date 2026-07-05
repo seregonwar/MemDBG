@@ -26,7 +26,7 @@ TrainerFormat detect_trainer_format(const std::string &path) {
   std::filesystem::path p(path);
   std::string ext = p.extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (ext == ".cht")    return TrainerFormat::CHT;
+  if (ext == ".cht" || ext == ".trainer") return TrainerFormat::CHT;
   if (ext == ".shn")    return TrainerFormat::SHN;
   if (ext == ".json")   return TrainerFormat::JSON;
   if (ext == ".mc4")    return TrainerFormat::MC4;

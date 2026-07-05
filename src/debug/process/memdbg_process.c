@@ -18,7 +18,7 @@
 #include <string.h>
 #include <time.h>
 
-/* ---- Map cache ---- */
+// Map cache
 
 #define CACHE_MAX 8
 
@@ -90,7 +90,7 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
   memdbg_status_t st = pal_process_maps(pid, &pmaps);
   if (st != MEMDBG_OK) return st;
   out->count   = pmaps.count;
-  out->entries = (memdbg_map_entry_t *)pmaps.entries; /* steal ownership */
+  out->entries = (memdbg_map_entry_t *)pmaps.entries;
   memset(&pmaps, 0, sizeof(pmaps));
 
   /* Store */
@@ -118,7 +118,7 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
   return MEMDBG_OK;
 }
 
-/* ---- Process list (passthrough to PAL with type conversion) ---- */
+// Process list (passthrough to PAL with type conversion)
 
 memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
   if (!out) return MEMDBG_ERR_PARAM;
@@ -140,7 +140,7 @@ void memdbg_process_list_free(memdbg_process_list_t *list) {
   memset(list, 0, sizeof(*list));
 }
 
-/* ---- Memory maps (non-cached passthrough) ---- */
+// Memory maps (non-cached passthrough)
 
 memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
   if (pid <= 0 || !out) return MEMDBG_ERR_PARAM;
@@ -162,7 +162,7 @@ void memdbg_process_maps_free(memdbg_map_list_t *list) {
   memset(list, 0, sizeof(*list));
 }
 
-/* ---- Process info (title ID / content ID extraction) ---- */
+// Process info (title ID / content ID extraction)
 
 static void copy_field(char *dst, size_t dsz, const char *src) {
   if (dst && dsz) (void)snprintf(dst, dsz, "%s", src ? src : "");

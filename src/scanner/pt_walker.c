@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
-/* ---- Platform abstraction: kernel memory access ---- */
+// Platform abstraction: kernel memory access
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
@@ -30,7 +30,7 @@
 
 #if PTW_HAS_DMAP
 
-/* ---- Constants ---- */
+// Constants
 
 #define PTW_PHYS_MASK     0x000FFFFFFFFFF000ULL
 #define PTW_PHYS_BOUND    0x1000000000ULL
@@ -49,7 +49,7 @@
 #define PTW_PMAP_OFF_KNOWN   0x300ULL
 #define PTW_VMSPACE_SCAN_END 0x400ULL
 
-/* ---- Static cache ---- */
+// Static cache
 
 static volatile uint64_t g_ptw_known_value = 0x5E7C0DE5E7C0DE71ULL;
 
@@ -57,7 +57,7 @@ static int      g_ptw_state     = 0;
 static uint64_t g_ptw_dmap      = 0;
 static uint64_t g_ptw_pmap_off  = 0;
 
-/* ---- Minimal kernel_copyout_fast wrapper ---- */
+// Minimal kernel_copyout_fast wrapper
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
   if (kernel_copyout_fast(kaddr, dst, n) != 0) return -1;
@@ -69,7 +69,7 @@ static inline int kwrite(const void *src, intptr_t kaddr, size_t n) {
   return 0;
 }
 
-/* ---- Virtual to physical using known DMAP ---- */
+// Virtual to physical using known DMAP
 
 static uint64_t ptw_va_to_phys(uint64_t dmap, uint64_t cr3, uint64_t va) {
   uint64_t table = cr3 & PTW_PHYS_MASK;
@@ -91,7 +91,7 @@ static uint64_t ptw_va_to_phys(uint64_t dmap, uint64_t cr3, uint64_t va) {
   return 0;
 }
 
-/* ---- Walk one leaf level for a VA ---- */
+// Walk one leaf level for a VA
 
 static int ptw_walk_leaf_inner(uint64_t dmap, uint64_t cr3, uint64_t va,
                                uint64_t *out_e, int *out_level) {
@@ -113,7 +113,7 @@ static int ptw_walk_leaf_inner(uint64_t dmap, uint64_t cr3, uint64_t va,
   return 1;
 }
 
-/* ---- DMAP discovery ---- */
+// DMAP discovery
 
 static uint64_t ptw_try_offset(uint64_t vmspace, uint64_t off,
                                uint64_t verify_va, uint64_t verify_val) {
@@ -191,7 +191,7 @@ int ptw_is_available(void) {
 
 uint64_t ptw_dmap_base(void) { return g_ptw_dmap; }
 
-/* ---- Physical address resolution ---- */
+// Physical address resolution
 
 int ptw_probe(uint32_t pid, uint64_t va,
               uint64_t *phys_out, int *level_out,
@@ -324,7 +324,7 @@ int ptw_leaf_addr(uint32_t pid, uint64_t va,
   return 1;
 }
 
-/* ---- Direct DMAP read/write ---- */
+// Direct DMAP read/write
 
 int ptw_read(uint32_t pid, uint64_t va, uint64_t len, void *dst) {
   if ((int32_t)pid <= 0 || !dst || len == 0) return 1;
@@ -424,16 +424,16 @@ int ptw_write(uint32_t pid, uint64_t va, uint64_t len, const void *src) {
   return 0;
 }
 
-/* ---- PT protection conversion ---- */
+// PT protection conversion
 
 static uint16_t ptw_prot_from_pte(uint64_t pte) {
-  uint16_t prot = 1U; /* R */
-  if (pte & PTW_PTE_RW)    prot |= 2U;  /* W */
-  if (!(pte & PTW_PTE_NX)) prot |= 4U;  /* X */
+  uint16_t prot = 1U;
+  if (pte & PTW_PTE_RW)    prot |= 2U;
+  if (!(pte & PTW_PTE_NX)) prot |= 4U;
   return prot;
 }
 
-/* ---- Coalesced entry builder for PT enumeration ---- */
+// Coalesced entry builder for PT enumeration
 
 struct ptw_coal {
   memdbg_map_entry_t *ents;
@@ -469,7 +469,7 @@ static void ptw_coal_emit(struct ptw_coal *c,
   c->cur_prot  = prot;
 }
 
-/* ---- Full PT enumeration ---- */
+// Full PT enumeration
 
 static int ptw_enumerate(uint64_t cr3,
                          memdbg_map_entry_t **out, int *out_count) {
@@ -544,7 +544,7 @@ static int ptw_enumerate(uint64_t cr3,
   return 0;
 }
 
-/* ---- Merge vm_map and PT entries ---- */
+// Merge vm_map and PT entries
 
 static int ptw_merge(memdbg_map_entry_t *v, int v_count,
                      memdbg_map_entry_t *e, int e_count,
@@ -575,7 +575,7 @@ static int ptw_merge(memdbg_map_entry_t *v, int v_count,
   return 0;
 }
 
-/* ---- Aux cache ---- */
+// Aux cache
 
 #define AUX_CACHE_MAX 4096
 static struct { uint64_t start, end; } g_aux_cache[AUX_CACHE_MAX];
@@ -607,7 +607,7 @@ int ptw_aux_contains(uint32_t pid, uint64_t addr, uint64_t len) {
   return 0;
 }
 
-/* ---- Public augment ---- */
+// Public augment
 
 int ptw_augment_maps(uint32_t pid,
                      memdbg_map_entry_t *vmaps, int vmap_count,
@@ -657,7 +657,7 @@ void ptw_flush(void) {
 
 #else /* !PTW_HAS_DMAP */
 
-/* Stubs for non-PS5 platforms */
+// Stubs for non-PS5 platforms
 
 int ptw_discover(uint64_t *dmap, uint64_t *p_off) {
   (void)dmap; (void)p_off; return -1;

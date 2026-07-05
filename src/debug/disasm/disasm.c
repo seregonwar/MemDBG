@@ -20,7 +20,7 @@
 #include "Zydis.h"
 #endif
 
-/* ---- Public helpers ---- */
+// Public helpers
 
 int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
                   const uint8_t *code, uint32_t code_len) {
@@ -61,9 +61,8 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
 
     e->address     = req->address + offset;
     e->byte_length = insn.length;
-    e->opcode_kind = 0; /* normal */
+    e->opcode_kind = 0;
 
-    /* Classify opcode */
     switch (insn.meta.category) {
     case ZYDIS_CATEGORY_UNCOND_BRANCH:
       e->opcode_kind = (insn.mnemonic == ZYDIS_MNEMONIC_CALL) ? 2 : 1;
@@ -74,7 +73,6 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
 
     e->mnemonic_id = (uint8_t)(insn.mnemonic & 0xFF);
 
-    /* Compute RIP-relative target */
     for (ZyanU8 i = 0; i < insn.operand_count_visible; i++) {
       if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY &&
           operands[i].mem.base == ZYDIS_REGISTER_RIP) {
@@ -84,7 +82,6 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
       }
     }
 
-    /* Find memory operand details */
     for (ZyanU8 i = 0; i < insn.operand_count_visible; i++) {
       if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY) {
         if (operands[i].mem.base != ZYDIS_REGISTER_NONE)
@@ -183,7 +180,7 @@ int memdbg_xrefs(int fd, const memdbg_xrefs_to_request_t *req) {
   return 0;
 }
 
-/* ---- Wrapper for daemon dispatch ---- */
+// Wrapper for daemon dispatch
 
 int memdbg_disasm_multiple(int fd, const uint8_t *body, uint32_t body_len) {
   if (body_len < sizeof(memdbg_disasm_request_t)) {

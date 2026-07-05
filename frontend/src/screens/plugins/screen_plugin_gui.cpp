@@ -127,8 +127,10 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
     }
 
     state.plugin_gui_starting = false;
-    set_status(state, "GUI plugin started: " + plugin_name);
-    push_notification(state, "GUI plugin started: " + plugin_name);
+    char gui_buf[256];
+    std::snprintf(gui_buf, sizeof(gui_buf), locale::tr("plugins.gui_started"), plugin_name.c_str());
+    set_status(state, gui_buf);
+    push_notification(state, gui_buf);
   }
 
   /* Render the plugin UI */

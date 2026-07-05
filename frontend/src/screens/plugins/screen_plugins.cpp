@@ -240,7 +240,7 @@ void start_refresh(AppState &state) {
   if (state.plugin_refresh_future.valid()) state.plugin_refresh_future.wait();
   state.plugin_refresh_error.clear();
   state.plugin_refresh_pending = true;
-  set_status(state, "Refreshing plugin sources...");
+  set_status(state, locale::tr("plugins.refreshing_sources"));
   state.plugin_refresh_future = std::async(std::launch::async, [&state]() -> bool {
     std::string error;
     const bool ok = state.plugin_manager.refresh_all(&error);
@@ -260,7 +260,9 @@ void start_run(AppState &state, const PluginPackage &package) {
   state.plugin_last_id = package_id;
   state.plugin_run_pending = true;
   state.plugin_run_start_time = ImGui::GetTime();
-  set_status(state, "Running plugin " + package.name + "...");
+  char run_buf[256];
+  std::snprintf(run_buf, sizeof(run_buf), locale::tr("plugins.running_plugin"), package.name.c_str());
+  set_status(state, run_buf);
   state.plugin_run_future = std::async(std::launch::async, [&state, package_id, context]() {
     return state.plugin_manager.run_plugin(package_id, context);
   });
@@ -420,8 +422,8 @@ void draw_add_source_modal(AppState &state) {
         state.plugin_source_url[0] = '\0';
         state.plugin_source_filter = 0;
         state.plugin_add_source_modal_open = false;
-        set_status(state, "Plugin source added");
-        push_notification(state, "Plugin source added");
+        set_status(state, locale::tr("plugins.source_added"));
+        push_notification(state, locale::tr("plugins.source_added"));
         start_refresh(state);
         ImGui::CloseCurrentPopup();
       } else {
@@ -476,7 +478,7 @@ void draw_add_source_modal(AppState &state) {
           if (!state.plugin_manager.remove_source(i, &error)) set_status(state, error);
           else {
             state.plugin_source_filter = 0;
-            set_status(state, "Plugin source removed");
+            set_status(state, locale::tr("plugins.source_removed"));
           }
         }
         ImGui::EndDisabled();
@@ -716,8 +718,10 @@ void draw_package_details(AppState &state, const PluginPackage *pkg) {
                                   34.0f * scl))) {
       std::string error;
       if (state.plugin_manager.install_package(pkg->id, pkg->source_id, &error)) {
-        set_status(state, "Plugin installed: " + pkg->name);
-        push_notification(state, "Plugin installed: " + pkg->name);
+        char inst_buf[256];
+        std::snprintf(inst_buf, sizeof(inst_buf), locale::tr("plugins.installed"), pkg->name.c_str());
+        set_status(state, inst_buf);
+        push_notification(state, inst_buf);
       } else {
         set_status(state, error);
       }
@@ -737,8 +741,10 @@ void draw_package_details(AppState &state, const PluginPackage *pkg) {
                         ImVec2(button_w, 34.0f * scl))) {
       std::string error;
       if (state.plugin_manager.install_package(pkg->id, pkg->source_id, &error)) {
-        set_status(state, "Plugin updated: " + pkg->name);
-        push_notification(state, "Plugin updated: " + pkg->name);
+        char upd_buf[256];
+        std::snprintf(upd_buf, sizeof(upd_buf), locale::tr("plugins.updated"), pkg->name.c_str());
+        set_status(state, upd_buf);
+        push_notification(state, upd_buf);
       } else {
         set_status(state, error);
       }
@@ -748,7 +754,9 @@ void draw_package_details(AppState &state, const PluginPackage *pkg) {
                           ImVec2(button_w, 34.0f * scl))) {
       std::string error;
       if (state.plugin_manager.uninstall_package(pkg->id, &error)) {
-        set_status(state, "Plugin removed: " + pkg->name);
+        char rem_buf[256];
+        std::snprintf(rem_buf, sizeof(rem_buf), locale::tr("plugins.removed"), pkg->name.c_str());
+        set_status(state, rem_buf);
       } else {
         set_status(state, error);
       }
@@ -792,7 +800,7 @@ void draw_package_details(AppState &state, const PluginPackage *pkg) {
     if (ui::soft_button((std::string(icons::kLink) + "  Open project").c_str(),
                         ImVec2(std::min(170.0f * scl, ImGui::GetContentRegionAvail().x),
                                30.0f * scl))) {
-      if (!platform::open_url(link)) set_status(state, "Cannot open URL");
+      if (!platform::open_url(link)) set_status(state, locale::tr("plugins.cannot_open_url"));
     }
   }
 }
@@ -855,8 +863,8 @@ void poll_plugin_tasks(AppState &state) {
       }
       state.plugin_refresh_pending = false;
       if (ok) {
-        set_status(state, "Plugin sources refreshed");
-        push_notification(state, "Plugin sources refreshed");
+        set_status(state, locale::tr("plugins.sources_refreshed"));
+        push_notification(state, locale::tr("plugins.sources_refreshed"));
       } else {
         const std::string error = state.plugin_refresh_error.empty()
             ? "Plugin source refresh failed"
@@ -884,8 +892,10 @@ void poll_plugin_tasks(AppState &state) {
       state.plugin_last_error = result.error;
       state.plugin_last_command = result.command;
       if (result.ok) {
-        set_status(state, "Plugin completed: " + result.plugin_id);
-        push_notification(state, "Plugin completed: " + result.plugin_id);
+        char comp_buf[256];
+        std::snprintf(comp_buf, sizeof(comp_buf), locale::tr("plugins.completed"), result.plugin_id.c_str());
+        set_status(state, comp_buf);
+        push_notification(state, comp_buf);
       } else {
         const std::string error = result.error.empty()
             ? "Plugin failed: " + result.plugin_id

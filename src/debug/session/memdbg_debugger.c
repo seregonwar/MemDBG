@@ -59,7 +59,7 @@ bool memdbg_debugger_is_elevated(int32_t pid) {
   return r;
 }
 
-/* ---- Internal helpers ---- */
+// Internal helpers
 
 static memdbg_status_t pal_status_from_errno_code(int code) {
   switch (code) {
@@ -100,7 +100,7 @@ static memdbg_status_t pal_status_from_errno(void) {
   return pal_status_from_errno_code(errno);
 }
 
-/* ---- Condition evaluation ---- */
+// Condition evaluation
 
 static int64_t get_reg_value_by_cond_reg(const memdbg_debug_regs_t *regs,
                                          uint32_t cond_reg) {
@@ -223,7 +223,7 @@ static int alloc_hw_slot(void) {
   return -1;
 }
 
-/* ---- Memory helpers (bypass memdbg_memory elevation to avoid nesting) ---- */
+// Memory helpers (bypass memdbg_memory elevation to avoid nesting)
 
 static memdbg_status_t debugger_memory_read(uint64_t address, void *buffer,
                                             size_t length) {
@@ -246,7 +246,7 @@ static memdbg_status_t debugger_memory_write(uint64_t address,
   return MEMDBG_OK;
 }
 
-/* ---- Software breakpoint install/uninstall ---- */
+// Software breakpoint install/uninstall
 
 static memdbg_status_t install_sw_breakpoint(memdbg_breakpoint_t *bp) {
   if (bp->installed) return MEMDBG_OK;
@@ -270,7 +270,7 @@ static memdbg_status_t uninstall_sw_breakpoint(memdbg_breakpoint_t *bp) {
   return MEMDBG_OK;
 }
 
-/* ---- Hardware breakpoint/watchpoint helpers ---- */
+// Hardware breakpoint/watchpoint helpers
 
 static void build_dr7(uint32_t *dr7_out) {
   uint32_t dr7 = 0;
@@ -342,7 +342,7 @@ static memdbg_status_t refresh_dbregs_from_thread(int32_t lwp) {
   return MEMDBG_OK;
 }
 
-/* ---- Internal single-step over a software breakpoint ---- */
+// Internal single-step over a software breakpoint
 
 static memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp) {
   memdbg_debug_regs_t regs;
@@ -386,7 +386,7 @@ static memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp) {
   return st;
 }
 
-/* ---- Internal hardware debug-register synchronisation ---- */
+// Internal hardware debug-register synchronisation
 
 static memdbg_status_t sync_hardware_dbregs_locked(void) {
   if (!g_dbg.dbregs_valid) {
@@ -417,7 +417,7 @@ static memdbg_status_t sync_hardware_dbregs_locked(void) {
   return apply_dbregs_to_all();
 }
 
-/* ---- Public API ---- */
+// Public API
 
 bool memdbg_debugger_is_attached(void) {
   bool r;
@@ -881,7 +881,7 @@ memdbg_status_t memdbg_debugger_set_breakpoint_cond(
 
   if (find_breakpoint_slot(address) >= 0) {
     debugger_unlock();
-    return MEMDBG_ERR_PARAM; /* duplicate */
+    return MEMDBG_ERR_PARAM;
   }
 
   int slot = alloc_breakpoint_slot();
@@ -1028,7 +1028,7 @@ memdbg_status_t memdbg_debugger_set_watchpoint(uint64_t address,
 
   if (find_watchpoint_slot(address) >= 0) {
     debugger_unlock();
-    return MEMDBG_ERR_PARAM; /* duplicate */
+    return MEMDBG_ERR_PARAM;
   }
 
   int slot = alloc_hw_slot();

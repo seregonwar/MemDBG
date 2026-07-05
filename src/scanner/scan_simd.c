@@ -27,7 +27,7 @@ int memdbg_simd_exact_available(uint32_t value_type, uint32_t value_length) {
 #endif
 }
 
-/* ---- Broadcast a value into a vector register ---- */
+// Broadcast a value into a vector register
 
 #if defined(__AVX2__)
 static __m256i broadcast_value_avx2(const uint8_t *v, uint32_t len) {
@@ -184,7 +184,6 @@ size_t memdbg_simd_find_exact(uint32_t value_type,
   }
 #endif
 
-  /* Fallback: scalar comparison */
   size_t limit = haystack_len - (size_t)value_length + 1U;
   for (size_t i = 0U; i < limit && count < max_offsets; i += value_length) {
     if (memcmp(haystack + i, needle, value_length) == 0)

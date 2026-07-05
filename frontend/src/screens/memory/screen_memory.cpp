@@ -117,7 +117,7 @@ static void draw_overlay_hex_view(AppState &state) {
                       ImVec2(130, 30))) {
     const std::string text = bytes_to_readable_text(state.memory);
     ImGui::SetClipboardText(text.c_str());
-    set_status(state, "Copied memory as readable text");
+    set_status(state, locale::tr("memory.copied_readable_text"));
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Copy printable UTF-8 text; non-text bytes are shown as .");
@@ -484,12 +484,12 @@ static void scan_map_for_gadgets(AppState &state, int map_index) {
 
 static void find_gadgets(AppState &state) {
   state.gadget_results.clear();
-  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.connected()) { set_status(state, locale::tr("memory.connect_first")); return; }
+  if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
   state.gadget_max_results = std::clamp(state.gadget_max_results, 1, 4096);
 
   if (state.gadget_selected_map_only) {
-    if (state.selected_map_row < 0) { set_status(state, "Select a map first"); return; }
+    if (state.selected_map_row < 0) { set_status(state, locale::tr("memory.select_map_first")); return; }
     if (should_scan_map_for_gadgets(state, state.selected_map_row))
       scan_map_for_gadgets(state, state.selected_map_row);
   } else {
@@ -539,8 +539,8 @@ static double shannon_entropy(const std::vector<uint8_t> &bytes,
 
 static void analyze_heap_spray(AppState &state) {
   state.heap_findings.clear();
-  if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
-  if (state.selected_pid <= 0) { set_status(state, "Select a process first"); return; }
+  if (!state.client.connected()) { set_status(state, locale::tr("memory.connect_first")); return; }
+  if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
   state.heap_sample_kb = std::clamp(state.heap_sample_kb, 4, 4096);
   state.heap_max_maps = std::clamp(state.heap_max_maps, 1, 256);
 
@@ -578,8 +578,9 @@ static void analyze_heap_spray(AppState &state) {
       state.heap_findings.push_back(std::move(finding));
     }
   }
-  set_status(state, "Heap analysis: " + std::to_string(state.heap_findings.size()) +
-                    " suspicious region(s)");
+  char heap_buf[128];
+  std::snprintf(heap_buf, sizeof(heap_buf), locale::tr("memory.heap_analysis"), state.heap_findings.size());
+  set_status(state, heap_buf);
 }
 
 static const GadgetMatch *find_gadget(const AppState &state, const char *name) {

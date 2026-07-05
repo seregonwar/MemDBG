@@ -19,7 +19,6 @@
 
 int memdbg_asm_encode(int fd, const uint8_t *body, uint32_t body_len) {
   if (body_len < sizeof(memdbg_asm_encode_request_t)) {
-    /* Send error */
     uint32_t err = 0xF0000002u;
     pal_socket_write_all(fd, &err, 4);
     return 1;

@@ -843,6 +843,85 @@ bool Client::process_free(int32_t pid, uint64_t address, uint64_t length) {
   return request(MEMDBG_CMD_PROCESS_FREE, &body, sizeof(body), response);
 }
 
+bool Client::process_elf_load(int32_t pid, const std::vector<uint8_t> &elf_data,
+                              uint32_t flags, const std::string &target_region,
+                              uint32_t match_flags,
+                              ProcessElfLoadResult &out) {
+  if (elf_data.empty() || elf_data.size() > (64ULL << 20)) {
+    set_error("ELF data too large (max 64MB)");
+    return false;
+  }
+
+  memdbg_process_elf_load_request_t req{};
+  req.pid        = pid;
+  req.flags      = flags;
+  req.image_size = static_cast<uint64_t>(elf_data.size());
+  req.match_flags = match_flags;
+  if (!target_region.empty()) {
+    size_t len = target_region.size();
+    if (len >= sizeof(req.target_region)) len = sizeof(req.target_region) - 1;
+    memcpy(req.target_region, target_region.c_str(), len);
+    req.target_region[len] = '\0';
+  }
+
+  std::vector<uint8_t> body(sizeof(req) + elf_data.size());
+  memcpy(body.data(), &req, sizeof(req));
+  memcpy(body.data() + sizeof(req), elf_data.data(), elf_data.size());
+
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_ELF_LOAD, body.data(),
+               static_cast<uint32_t>(body.size()), response))
+    return false;
+
+  memdbg_process_elf_load_response_t wire{};
+  if (!read_object(response, wire)) {
+    set_error("short ELF load response");
+    return false;
+  }
+  out.entry_address = wire.entry_address;
+  out.load_base     = wire.load_base;
+  return true;
+}
+
+bool Client::process_hijack(int32_t pid, const std::vector<uint8_t> &elf_data,
+                            uint32_t flags, const std::string &target_region,
+                            uint32_t match_flags, bool &accepted) {
+  accepted = false;
+  if (elf_data.empty() || elf_data.size() > (64ULL << 20)) {
+    set_error("ELF data too large (max 64MB)");
+    return false;
+  }
+
+  memdbg_process_hijack_request_t req{};
+  req.pid          = pid;
+  req.flags        = flags;
+  req.payload_size = static_cast<uint64_t>(elf_data.size());
+  req.match_flags  = match_flags;
+  if (!target_region.empty()) {
+    size_t len = target_region.size();
+    if (len >= sizeof(req.target_region)) len = sizeof(req.target_region) - 1;
+    memcpy(req.target_region, target_region.c_str(), len);
+    req.target_region[len] = '\0';
+  }
+
+  std::vector<uint8_t> body(sizeof(req) + elf_data.size());
+  memcpy(body.data(), &req, sizeof(req));
+  memcpy(body.data() + sizeof(req), elf_data.data(), elf_data.size());
+
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_HIJACK, body.data(),
+               static_cast<uint32_t>(body.size()), response))
+    return false;
+
+  memdbg_process_hijack_response_t wire{};
+  if (!read_object(response, wire)) {
+    set_error("short hijack response");
+    return false;
+  }
+  accepted = wire.accepted != 0U;
+  return true;
+}
+
 bool Client::process_stack(const memdbg_process_stack_request_t &request_body,
                            std::vector<StackFrame> &out, bool &truncated) {
   out.clear();

@@ -19,7 +19,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-/* ---- Telemetry ---- */
+// Telemetry
 
 static atomic_ullong g_total_bytes_read    = 0;
 static atomic_ullong g_total_bytes_written = 0;
@@ -85,7 +85,7 @@ static void privilege_scope_end(memdbg_memory_privilege_scope_t *scope) {
   atomic_flag_clear(&g_priv_elevating);
 }
 
-/* ---- Single read ---- */
+// Single read
 
 memdbg_status_t memdbg_memory_read(int pid, uint64_t address, void *buffer,
                                    size_t length, size_t *read_out) {
@@ -106,7 +106,7 @@ memdbg_status_t memdbg_memory_read(int pid, uint64_t address, void *buffer,
   return st;
 }
 
-/* ---- Single write ---- */
+// Single write
 
 memdbg_status_t memdbg_memory_write(int pid, uint64_t address,
                                     const void *buffer, size_t length,
@@ -128,7 +128,7 @@ memdbg_status_t memdbg_memory_write(int pid, uint64_t address,
   return st;
 }
 
-/* ---- Batch read ---- */
+// Batch read
 
 memdbg_status_t memdbg_memory_batch_read(
     int pid, const memdbg_batch_read_item_t *items, uint32_t count,
@@ -189,7 +189,7 @@ memdbg_status_t memdbg_memory_batch_read(
   return overall;
 }
 
-/* ---- Batch write ---- */
+// Batch write
 
 memdbg_status_t memdbg_memory_batch_write(
     int pid, const memdbg_batch_write_item_t *items, const uint8_t *data,

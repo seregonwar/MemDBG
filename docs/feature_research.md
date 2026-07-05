@@ -24,7 +24,8 @@ serious runtime inspection.
 | Console reboot | PS5 implemented, PS4 unsupported | PS4 SDK used here does not export a linkable `reboot`, so PS4 returns `UNSUPPORTED`. |
 | Remote allocation/free | Protocol endpoint only | Kept disabled until MemDBG has a safe remote syscall bridge. |
 | Remote function call | Protocol endpoint only | Request validation exists; execution returns `UNSUPPORTED`. |
-| ELF load into target process | Protocol endpoint only | Reserved for a future loader built on the remote allocation/call bridge. |
+| ELF load into target process | Implemented with region matching | Supports `target_region` with wildcards, substring fallback, and `match_flags` (Exact, Case-Sensitive, Regex, Full Path). Hijack mode spawns a thread inside the target. Frontend provides async dispatch, ELF magic validation, and double-click map→target_region. |
+| Process hijack (thread injection) | Implemented | Spawns a thread in the target with the same `match_flags` region matching; frontend provides confirmation modal and async dispatch. |
 
 ## Still open
 

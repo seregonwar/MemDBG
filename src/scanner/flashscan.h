@@ -1,19 +1,7 @@
 /*
- * memDBG - FlashScan engine: server-resident scanning with snapshots.
+ * memDBG - FlashScan: server-resident scanning with snapshots.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * FlashScan keeps scan results on the server side (in-memory or on disk),
- * enabling fast rescans without re-reading the target's memory. Supports:
- *
- *  - Server-resident survivor lists (per-connection mmap buffers)
- *  - Unknown-initial-value snapshots (full value capture on first scan)
- *  - Disjoint multi-segment scans within one session
- *  - First-scan and previous-scan value retention for 3-value records
- *  - Snapshot-to-list materialization for small survivor sets
- *  - Server-side parallel compare via multiple worker threads
- *  - Region classification with throughput measurement
- *  - Configurable RAM threshold with spill-to-file
  */
 
 #ifndef MEMDBG_SCANNER_FLASHSCAN_H
@@ -22,60 +10,75 @@
 #include "memdbg/core/memdbg_protocol.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Maximum concurrent sessions (one per client slot). */
 #define FLASHSCAN_MAX_SESSIONS 12U
 
-/* ---- Initialisation and cleanup ---- */
-
+// Lifecycle
 void flashscan_init(void);
-
-/* Remove orphaned spill files from previous runs. */
 void flashscan_cleanup_orphans(void);
-
-/* Free all resources for a given client slot. */
 void flashscan_free_slot(unsigned int slot);
 
-/* ---- Capabilities ---- */
-
+// Handlers
 int flashscan_handle_caps(int fd);
-
-/* ---- Configuration ---- */
-
 int flashscan_handle_config(int fd, const memdbg_quickscan_config_request_t *req,
                             const uint8_t *extra, uint32_t path_len);
-
-/* ---- Region classification ---- */
-
 int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *req);
-
-/* ---- Start (streaming, resident, or snapshot) ---- */
-
 int flashscan_handle_start(int fd,
                            const memdbg_quickscan_start_request_t *req,
                            const uint8_t *compare_data, const uint8_t *mask,
                            unsigned int client_slot);
-
-/* ---- Narrow / rescan ---- */
-
 int flashscan_handle_count(int fd,
                            const memdbg_quickscan_count_request_t *req,
                            const uint8_t *compare_data, const uint8_t *mask,
                            unsigned int client_slot);
-
-/* ---- Fetch survivors ---- */
-
 int flashscan_handle_fetch(int fd,
                            const memdbg_quickscan_fetch_request_t *req,
                            unsigned int client_slot);
-
-/* ---- End session ---- */
-
 int flashscan_handle_end(int fd, unsigned int client_slot);
+
+static inline int snap_compare(const uint8_t *mem_p, const uint8_t *pattern,
+                                const uint8_t *prev_p, const uint8_t *mask,
+                                const uint8_t *between_hi,
+                                uint32_t cmp_type, uint64_t vlen) {
+  int matched;
+  if (cmp_type == 0 && mask == NULL) {
+    matched = (memcmp(mem_p, pattern, vlen) == 0);
+  } else if (cmp_type == 4 && between_hi) {
+    matched = (memcmp(mem_p, pattern, vlen) >= 0 &&
+               memcmp(mem_p, between_hi, vlen) <= 0);
+  } else if (cmp_type == 1) {
+    matched = (memcmp(mem_p, pattern, vlen) > 0);
+  } else if (cmp_type == 2) {
+    matched = (memcmp(mem_p, pattern, vlen) < 0);
+  } else if (cmp_type == 3 && prev_p) {
+    matched = (memcmp(mem_p, prev_p, vlen) != 0);
+  } else {
+    int64_t dv = 0, pv = 0;
+    if (vlen <= 8) {
+      memcpy(&dv, mem_p, vlen);
+      memcpy(&pv, pattern, vlen);
+    }
+    switch (cmp_type) {
+    case 5: matched = (dv == pv); break;
+    case 6: matched = (dv > pv); break;
+    case 7: matched = (dv < pv); break;
+    case 8: matched = (dv != pv); break;
+    case 9: matched = (dv < pv || dv > pv); break;
+    case 10: matched = (dv == pv); break;
+    case 11: matched = (dv > pv); break;
+    case 12: matched = (dv < pv); break;
+    default: matched = (memcmp(mem_p, pattern, vlen) == 0); break;
+    }
+  }
+  return matched;
+}
+
+
 
 #ifdef __cplusplus
 }

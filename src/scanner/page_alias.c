@@ -28,18 +28,18 @@
 
 #if ALIAS_HAS_DMAP
 
-/* ---- Constants ---- */
+// Constants
 
-#define AL_SPAN_SIZE      0x200000ULL    /* 2MB span */
+#define AL_SPAN_SIZE      0x200000ULL
 #define AL_PT_ENTRIES     512U
-#define AL_PAGE_SIZE      0x1000ULL      /* 4KB page */
-#define AL_MAX_PAGES      511U           /* max pages per map (leaves one guard) */
-#define AL_ARENA_DEFAULT  (64ULL << 20)  /* 64MB arena default */
+#define AL_PAGE_SIZE      0x1000ULL
+#define AL_MAX_PAGES      511U
+#define AL_ARENA_DEFAULT  (64ULL << 20)
 #define AL_DMAP_BOUND     0x1000000000ULL
 #define AL_PTE_PRESENT    0x1ULL
 #define AL_PTE_PCD        0x10ULL
 #define AL_PHYS_MASK      0x000FFFFFFFFFF000ULL
-#define AL_PTE_PROT       0x7ULL         /* R/W + present for alias */
+#define AL_PTE_PROT       0x7ULL
 
 #define AL_MAX_SPANS      128U
 #define AL_VERIFY_INTERVAL 16U          /* verify every N remaps */
@@ -64,7 +64,6 @@ struct page_alias_ctx {
   uint64_t map_pt_kaddr;   /* kernel address of leaf PT page */
   uint64_t map_pages;      /* number of PTEs written */
 
-  /* Span-resolution cache */
   int      sc_valid;
   uint64_t sc_span_2m;
   int      sc_huge;
@@ -73,7 +72,7 @@ struct page_alias_ctx {
   uint64_t span_pt[AL_PT_ENTRIES];
 };
 
-/* ---- Kernel access wrappers ---- */
+// Kernel access wrappers
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
   return kernel_copyout_fast(kaddr, dst, n);
@@ -111,7 +110,7 @@ static int raw_munmap(uint64_t addr, uint64_t size) {
   return (int)raw_syscall(73, (long)addr, (long)size, 0L, 0L, 0L, 0L);
 }
 
-/* ---- Arena management ---- */
+// Arena management
 
 static int al_arena_alloc(page_alias_ctx_t *c) {
   uint64_t mapsz = c->arena_bytes + AL_SPAN_SIZE;
@@ -152,7 +151,7 @@ static int al_next_span(page_alias_ctx_t *c, uint64_t *span_out) {
   return 0;
 }
 
-/* ---- Public API ---- */
+// Public API
 
 page_alias_ctx_t *page_alias_begin(uint32_t pid, uint64_t arena_cap) {
   uint64_t dmap = ptw_dmap_base();
@@ -197,14 +196,12 @@ const void *page_alias_map(page_alias_ctx_t *c,
   uint64_t npages   = (offset + length + (AL_PAGE_SIZE - 1)) >> 12;
   if (npages == 0 || npages > AL_MAX_PAGES) return NULL;
 
-  /* Allocate a fresh 2MB span from our arena */
   uint64_t span;
   if (al_next_span(c, &span) != 0) return NULL;
 
   /* Touch the guard page to force PT allocation */
   *(volatile uint8_t *)(uintptr_t)(span + (uint64_t)AL_TOUCH_SLOT * AL_PAGE_SIZE) = 0;
 
-  /* Find the kernel address of our span's leaf PT */
   uint64_t pt_kaddr = 0, pt_val = 0;
   int      pt_lv = -1;
   if (ptw_leaf_addr(c->self_pid, span, &pt_kaddr, &pt_val, &pt_lv) != 0)
@@ -213,11 +210,9 @@ const void *page_alias_map(page_alias_ctx_t *c,
   if (pt_kaddr < c->dmap || pt_kaddr >= c->dmap + AL_DMAP_BOUND)
     return NULL;
 
-  /* Read our current PTEs */
   uint64_t pt[AL_PT_ENTRIES];
   if (kread((intptr_t)pt_kaddr, pt, sizeof(pt)) != 0) return NULL;
 
-  /* For each page to map, resolve target physical address and overwrite PTE */
   uint64_t verify_vas[AL_VERIFY_MAX], verify_tgts[AL_VERIFY_MAX];
   unsigned n_verify = 0;
 
@@ -227,7 +222,7 @@ const void *page_alias_map(page_alias_ctx_t *c,
     uint64_t tphys;
     int      newly_resolved = 0;
 
-    /* Span-resolution cache: resolve 2MB span once */
+    // Span-resolution cache: resolve 2MB span once
     if (!c->sc_valid || c->sc_span_2m != span2m) {
       int    huge = 0;
       uint64_t pbase = 0, leaf_kaddr = 0, pte = 0;
@@ -258,13 +253,11 @@ const void *page_alias_map(page_alias_ctx_t *c,
       tphys = e & AL_PHYS_MASK;
     }
 
-    /* Check no collision in our PT */
     if (pt[k] & AL_PTE_PRESENT) return NULL;
 
-    /* Write the alias PTE */
     pt[k] = (tphys & AL_PHYS_MASK) | AL_PTE_PROT;
 
-    /* Select verification pages: first, last, and each newly resolved span */
+    // Select verification pages: first, last, and each newly resolved span
     if ((newly_resolved || k == 0 || k == npages - 1) && n_verify < AL_VERIFY_MAX) {
       verify_vas[n_verify]   = span + k * AL_PAGE_SIZE;
       verify_tgts[n_verify]  = tpage;
@@ -274,7 +267,6 @@ const void *page_alias_map(page_alias_ctx_t *c,
 
   if ((pt_kaddr & 0xFFFULL) != 0 || npages > AL_MAX_PAGES) return NULL;
 
-  /* Install the alias PTEs atomically */
   if (kwrite(pt, (intptr_t)pt_kaddr, npages * 8) != 0) {
     uint64_t zeros[AL_MAX_PAGES];
     memset(zeros, 0, npages * 8);
@@ -290,18 +282,16 @@ const void *page_alias_map(page_alias_ctx_t *c,
     c->used_pt_bases[c->used_count] = pt_kaddr;
   c->used_count++;
 
-  /* Periodic verification: compare alias content against real read */
+  // Periodic verification: compare alias content against real read
   int do_verify = ((c->map_counter % AL_VERIFY_INTERVAL) == 0);
   c->map_counter++;
   if (do_verify) {
     for (unsigned s = 0; s < n_verify; s++) {
       uint8_t alias_buf[64], real_buf[64];
       memcpy(alias_buf, (const void *)(uintptr_t)verify_vas[s], sizeof(alias_buf));
-      /* Read via standard path for comparison */
       memset(real_buf, 0, sizeof(real_buf));
       {
         size_t rsz = 0;
-        /* Use pal_memory_read for verification */
         {
           extern memdbg_status_t pal_memory_read(int, uint64_t, void*, size_t, size_t*);
           (void)pal_memory_read((int)c->pid, verify_tgts[s], real_buf, sizeof(real_buf), &rsz);
@@ -340,7 +330,7 @@ void page_alias_end(page_alias_ctx_t *c) {
 
 #else /* !ALIAS_HAS_DMAP */
 
-/* Stubs */
+// Stubs
 
 page_alias_ctx_t *page_alias_begin(uint32_t pid, uint64_t cap) {
   (void)pid; (void)cap; return NULL;

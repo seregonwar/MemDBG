@@ -57,6 +57,17 @@ jobs:
           python3 tools/generate_locale_manifest.py
           make check-locales
 
+  headers:
+    name: Header-source validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify header-source correspondence
+        run: python3 tools/check_headers.py
+
   frontend:
     name: Frontend build and tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -494,7 +494,7 @@ void connect_console(AppState &state) {
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", ("Connecting to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
 
-  set_status(state, "Connecting to " + std::string(state.host) + "...");
+  char conn_buf[256]; std::snprintf(conn_buf, sizeof(conn_buf), locale::tr("app.connecting"), state.host); set_status(state, conn_buf);
 
   std::string host = state.host;
   uint16_t port = static_cast<uint16_t>(state.debug_port);
@@ -554,7 +554,7 @@ static void poll_telemetry(AppState &state) {
   if (!ok) {
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Telemetry failed: " + state.telemetry_temp_error).c_str());
-    set_status(state, "Telemetry: " + state.telemetry_temp_error);
+    char tel_buf[256]; std::snprintf(tel_buf, sizeof(tel_buf), locale::tr("app.telemetry_error"), state.telemetry_temp_error.c_str()); set_status(state, tel_buf);
     state.telemetry_available = false;
     return;
   }
@@ -565,11 +565,11 @@ static void poll_telemetry(AppState &state) {
 
 void request_maps_refresh_async(AppState &state) {
   if (state.map_refresh_pending) {
-    set_status(state, "Memory maps refresh already in progress");
+    set_status(state, locale::tr("app.maps_refresh_in_progress"));
     return;
   }
   if (state.connect_pending || state.telemetry_pending || state.scan_async_pending) {
-    set_status(state, "Wait for the active operation to finish");
+    set_status(state, locale::tr("app.wait_active"));
     return;
   }
   if (!state.client.connected()) {
@@ -595,7 +595,7 @@ void request_maps_refresh_async(AppState &state) {
   state.map_refresh_pending = true;
   state.map_refresh_temp_maps.clear();
   state.map_refresh_error.clear();
-  set_status(state, "Refreshing memory maps...");
+  set_status(state, locale::tr("app.refreshing_maps"));
 
   int32_t pid = state.map_refresh_pid;
   state.map_refresh_future = std::async(std::launch::async,
@@ -633,7 +633,7 @@ static void poll_map_refresh(AppState &state) {
 
   if (state.map_refresh_pid != state.selected_pid) {
     state.map_refresh_temp_maps.clear();
-    set_status(state, "Memory maps refresh discarded: selected process changed");
+    set_status(state, locale::tr("app.maps_refresh_discarded"));
     return;
   }
 
@@ -644,7 +644,7 @@ static void poll_map_refresh(AppState &state) {
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Maps refresh failed: " + error).c_str());
     set_status(state, error);
-    push_notification(state, "Maps refresh failed: " + error, 5.0);
+    char mrf_buf[256]; std::snprintf(mrf_buf, sizeof(mrf_buf), locale::tr("app.maps_refresh_failed"), error.c_str()); push_notification(state, mrf_buf, 5.0);
     return;
   }
 
@@ -844,7 +844,7 @@ static void poll_connect(AppState &state) {
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Connection failed: " + s_temp_error).c_str());
     set_status(state, s_temp_error);
-    push_notification(state, "Connection failed: " + s_temp_error, 5.0);
+    char cf_buf[256]; std::snprintf(cf_buf, sizeof(cf_buf), locale::tr("app.connection_failed"), s_temp_error.c_str()); push_notification(state, cf_buf, 5.0);
     return;
   }
 
@@ -866,7 +866,7 @@ static void poll_connect(AppState &state) {
     state.crash_logger.log("connect", ("Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
 
   set_status(state, message);
-  push_notification(state, "Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port));
+  char cond_buf[256]; std::snprintf(cond_buf, sizeof(cond_buf), locale::tr("app.connected"), state.host, state.debug_port); push_notification(state, cond_buf);
   start_taskmgr_prefetch(state);
 }
 
@@ -1217,15 +1217,15 @@ static void topbar_select_process(AppState &state, int row) {
   state.scan_is_unknown_session = false;
   state.has_process_info = false;
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
-  set_status(state, "Selected PID " + std::to_string(state.selected_pid) + " (" + state.processes[row].name + ")");
+  char spid_buf[256]; std::snprintf(spid_buf, sizeof(spid_buf), locale::tr("app.selected_pid"), state.selected_pid, state.processes[row].name.c_str()); set_status(state, spid_buf);
 }
 
 static void topbar_refresh_processes(AppState &state) {
   if (!state.client.connected()) {
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", "Process refresh failed: not connected");
-    set_status(state, "Connect a console before refreshing processes");
-    push_notification(state, "Connect a console before loading processes", 4.0);
+    set_status(state, locale::tr("app.connect_before_processes"));
+    push_notification(state, locale::tr("app.connect_before_load"), 4.0);
     return;
   }
   if (!state.client.process_list(state.processes)) {
@@ -1234,7 +1234,7 @@ static void topbar_refresh_processes(AppState &state) {
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Process refresh failed: " + error).c_str());
     set_status(state, error);
-    push_notification(state, "Process refresh failed: " + error, 5.0);
+    char prf_buf[256]; std::snprintf(prf_buf, sizeof(prf_buf), locale::tr("app.process_refresh_failed"), error.c_str()); push_notification(state, prf_buf, 5.0);
     return;
   }
 
@@ -1259,7 +1259,7 @@ static void topbar_refresh_processes(AppState &state) {
   state.taskmgr_detail_open = false;
   state.taskmgr_map_summary = ProcessMapSummary{};
   state.taskmgr_has_process_info = false;
-  set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
+  char plr_buf[128]; std::snprintf(plr_buf, sizeof(plr_buf), locale::tr("app.process_list_refreshed"), (unsigned)state.processes.size()); set_status(state, plr_buf);
   if (state.crash_logging_enabled)
     state.crash_logger.log("refresh", ("Process list: " + std::to_string(state.processes.size()) + " entries").c_str());
 }
@@ -1471,7 +1471,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   if (connected) {
     ImGui::BeginDisabled(client_async_busy(state));
     if (topbar_button("TopbarPing", icons::kGauge, locale::tr("topbar.ping"), 96.0f * scl))
-      set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
+      set_status(state, state.client.ping() ? locale::tr("app.ping_ok") : state.client.last_error());
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (topbar_button("TopbarLogs", icons::kLogs, locale::tr("topbar.logs"), 130.0f * scl))
@@ -1796,7 +1796,7 @@ static void handle_global_shortcuts(AppState &state) {
   if (ImGui::IsKeyPressed(ImGuiKey_F11)) state.screen = Screen::Plugins;
   if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending) {
     if (client_async_busy(state)) {
-      set_status(state, "Wait for the active operation to finish");
+      set_status(state, locale::tr("app.wait_active"));
     } else if (state.client.connected()) {
       disconnect_console(state);
     } else {
@@ -2063,7 +2063,7 @@ int run_frontend(int, char **argv) {
     std::string config_error;
     settings_loaded = load_frontend_settings(*state, &config_error);
     if (settings_loaded && config_error.empty()) {
-      set_status(*state, "Settings loaded");
+      set_status(*state, locale::tr("settings.saved"));
     } else if (!config_error.empty()) {
       if (state->crash_logging_enabled)
         state->crash_logger.log("error", ("Config load error: " + config_error).c_str());
@@ -2116,13 +2116,13 @@ int run_frontend(int, char **argv) {
   {
     std::string udp_error;
     if (!ensure_udp_listener(*state, udp_error))
-      set_status(*state, "UDP: " + udp_error);
+      { char udpe2_buf[128]; std::snprintf(udpe2_buf, sizeof(udpe2_buf), locale::tr("app.udp_error"), udp_error.c_str()); set_status(*state, udpe2_buf); }
   }
 
   if (state->crash_logging_enabled)
     state->crash_logger.log("startup", "MemDBG frontend started");
 
-  push_notification(*state, "MemDBG by seregonwar started", 6.0);
+  push_notification(*state, locale::tr("app.started"), 6.0);
 
   /* Store pointers for the refresh callback (window-refresh fires during live resize on macOS).
    * Must be static so the non-capturing lambda below can access them. */

@@ -17,6 +17,8 @@
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/core/memdbg_protocol_debug_handlers.h"
 #include "memdbg/core/memdbg_protocol_tracer_handlers.h"
+#include "memdbg/debug/memdbg_disasm.h"
+#include "memdbg/debug/memdbg_assembler.h"
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/tracer/memdbg_tracer_daemon.h"
 #include "memdbg/debug/memdbg_memory.h"
@@ -57,11 +59,8 @@
 #define MEMDBG_DAEMON_HAS_REBOOT 1
 #endif
 
-/* ---- External declarations for new features ---- */
+/* ---- External declarations for features without dedicated headers yet ---- */
 
-extern int memdbg_asm_encode(int fd, const uint8_t *body, uint32_t body_len);
-extern int memdbg_disasm_multiple(int fd, const uint8_t *body, uint32_t body_len);
-extern int memdbg_xrefs_multiple(int fd, const uint8_t *body, uint32_t body_len);
 extern int memdbg_auth_handle(int fd, const memdbg_auth_key_request_t *req);
 extern int memdbg_arena_config_handle(int fd, const memdbg_arena_config_request_t *req);
 extern int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t *req,
@@ -71,13 +70,12 @@ extern void memdbg_klog_stop(void);
 extern int memdbg_beacon_start(pthread_t *out_tid);
 extern void memdbg_beacon_stop(void);
 extern int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
-                                    const char *region, uint64_t *entry, uint64_t *base);
+                                    const char *region, uint32_t match_flags,
+                                    uint64_t *entry, uint64_t *base);
+extern int memdbg_hijack_handle(int fd, const memdbg_process_hijack_request_t *req,
+                                const uint8_t *body, uint32_t body_len);
 
-/* From flashscan */
-
-/* From pt_walker */
-
-/* ---- Thread pool config ---- */
+// Thread pool config
 
 #define MEMDBG_THREAD_POOL_SIZE 4
 
@@ -179,6 +177,7 @@ uint32_t memdbg_capabilities(const memdbg_config_t *cfg) {
 #if defined(MEMDBG_HAS_KEYSTONE) || defined(MEMDBG_HAS_ZYDIS)
   caps |= MEMDBG_CAP_DISASSEMBLY;
 #endif
+  caps |= MEMDBG_CAP_HIJACK_MASK;
   return caps;
 }
 
@@ -1161,8 +1160,40 @@ static memdbg_status_t handle_process_elf_load(socket_t fd,
     const memdbg_packet_header_t *req, const void *body, uint32_t body_len) {
   if (body_len < sizeof(memdbg_process_elf_load_request_t))
     return MEMDBG_ERR_PROTOCOL;
-  (void)body;
-  return send_response(fd, req, MEMDBG_ERR_UNSUPPORTED, NULL, 0U) == 0
+
+  const memdbg_process_elf_load_request_t *elf_req =
+      (const memdbg_process_elf_load_request_t *)body;
+  uint64_t elf_size = elf_req->image_size;
+
+  if (elf_size == 0U || elf_size > (64ULL << 20))
+    return MEMDBG_ERR_PARAM;
+  if (body_len < sizeof(*elf_req) + elf_size)
+    return MEMDBG_ERR_PROTOCOL;
+  if (elf_req->pid <= 1 || (pid_t)elf_req->pid == getpid())
+    return MEMDBG_ERR_PERMISSION;
+
+  const uint8_t *elf_data = (const uint8_t *)body + sizeof(*elf_req);
+  uint64_t entry = 0U, base = 0U;
+
+  /* Force null termination on target_region from wire */
+  char region_buf[45];
+  memcpy(region_buf, elf_req->target_region, sizeof(elf_req->target_region));
+  region_buf[44] = '\0';
+  const char *region = region_buf[0] ? region_buf : NULL;
+
+  int rc = memdbg_elf_load_enhanced(
+      elf_req->pid, elf_data, elf_size, region, elf_req->match_flags,
+      &entry, &base);
+
+  if (rc != 0)
+    return MEMDBG_ERR_IO;
+
+  memdbg_process_elf_load_response_t resp;
+  memset(&resp, 0, sizeof(resp));
+  resp.entry_address = entry;
+  resp.load_base     = base;
+
+  return send_response(fd, req, MEMDBG_OK, &resp, sizeof(resp)) == 0
              ? MEMDBG_OK
              : MEMDBG_ERR_NET;
 }
@@ -1335,6 +1366,12 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PROCESS_STACK:      return handle_process_stack(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_CALL:       return handle_process_call(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_ELF_LOAD:   return handle_process_elf_load(fd, req, body, req->length);
+  case MEMDBG_CMD_PROCESS_HIJACK: {
+    if (req->length < sizeof(memdbg_process_hijack_request_t)) return MEMDBG_ERR_PROTOCOL;
+    const memdbg_process_hijack_request_t *hj = (const memdbg_process_hijack_request_t *)body;
+    int r = memdbg_hijack_handle(fd, hj, (const uint8_t *)body, req->length);
+    return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
+  }
   case MEMDBG_CMD_KERNEL_BASE:        return handle_kernel_base(fd, req);
   case MEMDBG_CMD_KERNEL_READ:        return handle_kernel_read(fd, req, body, req->length);
   case MEMDBG_CMD_KERNEL_WRITE:       return handle_kernel_write(fd, req, body, req->length);
@@ -1342,8 +1379,8 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_CONSOLE_PRINT:      return handle_console_print(fd, req, body, req->length);
   case MEMDBG_CMD_CONSOLE_REBOOT:     return handle_console_reboot(fd, req);
   case MEMDBG_CMD_DEBUG_ATTACH:
-    /* Tracer and debugger both own ptrace; release a previous trace session
-     * before attaching the debugger so the target cannot remain EALREADY. */
+  /* Tracer and debugger both own ptrace; release a previous trace session
+   * before attaching the debugger so the target cannot remain EALREADY. */
     memdbg_tracer_daemon_stop();
     return handle_debug_attach(fd, req, body, req->length, send_response);
   case MEMDBG_CMD_DEBUG_DETACH:       return handle_debug_detach(fd, req, send_response);
@@ -1386,14 +1423,14 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
     return memdbg_asm_encode(fd, (const uint8_t *)body, req->length);
 
   case MEMDBG_CMD_DISASM: {
-    if (body_len < sizeof(memdbg_disasm_request_t)) return MEMDBG_ERR_PROTOCOL;
-    int r = memdbg_disasm_multiple(fd, (const uint8_t *)body, body_len);
+    if (req->length < sizeof(memdbg_disasm_request_t)) return MEMDBG_ERR_PROTOCOL;
+    int r = memdbg_disasm_multiple(fd, (const uint8_t *)body, req->length);
     return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
   }
 
   case MEMDBG_CMD_XREFS_TO: {
-    if (body_len < sizeof(memdbg_xrefs_to_request_t)) return MEMDBG_ERR_PROTOCOL;
-    int r = memdbg_xrefs_multiple(fd, (const uint8_t *)body, body_len);
+    if (req->length < sizeof(memdbg_xrefs_to_request_t)) return MEMDBG_ERR_PROTOCOL;
+    int r = memdbg_xrefs_multiple(fd, (const uint8_t *)body, req->length);
     return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
   }
 
@@ -1403,39 +1440,39 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
     return MEMDBG_OK;
 
   case MEMDBG_CMD_QUICKSCAN_START: {
-    if (body_len < sizeof(memdbg_quickscan_start_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_quickscan_start_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_start_request_t *qs = (const memdbg_quickscan_start_request_t *)body;
     uint32_t data_off = (uint32_t)sizeof(*qs);
     uint32_t data_len = qs->value_length;
     int is_bet = (qs->compare_type == 4);
-    const uint8_t *cmp_data = (data_off + data_len * (is_bet ? 2 : 1) <= body_len)
+    const uint8_t *cmp_data = (data_off + data_len * (is_bet ? 2 : 1) <= req->length)
                               ? ((const uint8_t *)body + data_off) : NULL;
     const uint8_t *qs_mask = NULL;
     if (qs->value_type == 10) {
       uint32_t moff = data_off + data_len * (is_bet ? 2 : 1);
-      if (moff + data_len <= body_len) qs_mask = (const uint8_t *)body + moff;
+      if (moff + data_len <= req->length) qs_mask = (const uint8_t *)body + moff;
     }
     flashscan_handle_start(fd, qs, cmp_data, qs_mask, 0 /* slot 0 for now */);
     return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_QUICKSCAN_COUNT: {
-    if (body_len < sizeof(memdbg_quickscan_count_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_quickscan_count_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_count_request_t *qc = (const memdbg_quickscan_count_request_t *)body;
     uint32_t d_off = (uint32_t)sizeof(*qc);
     uint32_t d_len = qc->value_length;
-    const uint8_t *cmp_d = (d_off + d_len <= body_len) ? ((const uint8_t *)body + d_off) : NULL;
+    const uint8_t *cmp_d = (d_off + d_len <= req->length) ? ((const uint8_t *)body + d_off) : NULL;
     const uint8_t *qc_mask = NULL;
     if (qc->value_type == 10) {
       uint32_t mo = d_off + d_len;
-      if (mo + d_len <= body_len) qc_mask = (const uint8_t *)body + mo;
+      if (mo + d_len <= req->length) qc_mask = (const uint8_t *)body + mo;
     }
     flashscan_handle_count(fd, qc, cmp_d, qc_mask, 0);
     return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_QUICKSCAN_FETCH: {
-    if (body_len < sizeof(memdbg_quickscan_fetch_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_quickscan_fetch_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_fetch_request_t *qf = (const memdbg_quickscan_fetch_request_t *)body;
     flashscan_handle_fetch(fd, qf, 0);
     return MEMDBG_OK;
@@ -1446,16 +1483,16 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
     return MEMDBG_OK;
 
   case MEMDBG_CMD_QUICKSCAN_CONFIG: {
-    if (body_len < sizeof(memdbg_quickscan_config_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_quickscan_config_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_config_request_t *qc = (const memdbg_quickscan_config_request_t *)body;
     uint32_t plen = qc->spill_path_len;
-    const uint8_t *pextra = (sizeof(*qc) + plen <= body_len) ? ((const uint8_t *)body + sizeof(*qc)) : NULL;
+    const uint8_t *pextra = (sizeof(*qc) + plen <= req->length) ? ((const uint8_t *)body + sizeof(*qc)) : NULL;
     flashscan_handle_config(fd, qc, pextra, plen);
     return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_QUICKSCAN_REGIONS: {
-    if (body_len < sizeof(memdbg_quickscan_regions_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_quickscan_regions_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_regions_request_t *qr = (const memdbg_quickscan_regions_request_t *)body;
     flashscan_handle_regions(fd, qr);
     return MEMDBG_OK;
@@ -1473,13 +1510,13 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   }
 
   case MEMDBG_CMD_PTWALK_AUGMENT: {
-    if (body_len < sizeof(memdbg_ptwalk_augment_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_ptwalk_augment_request_t)) return MEMDBG_ERR_PROTOCOL;
     /* Stub: return existing maps without augmentation for now */
-    return handle_process_maps(fd, req, body, body_len);
+    return handle_process_maps(fd, req, body, req->length);
   }
 
   case MEMDBG_CMD_PTWALK_READ: {
-    if (body_len < sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_ptwalk_io_request_t *pr = (const memdbg_ptwalk_io_request_t *)body;
     uint8_t *buf = (uint8_t *)malloc(pr->length);
     if (!buf) return MEMDBG_ERR_NOMEM;
@@ -1491,16 +1528,16 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
   }
 
   case MEMDBG_CMD_PTWALK_WRITE: {
-    if (body_len < sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_ptwalk_io_request_t *pw = (const memdbg_ptwalk_io_request_t *)body;
-    uint32_t data_len = body_len - (uint32_t)sizeof(*pw);
+    uint32_t data_len = req->length - (uint32_t)sizeof(*pw);
     const uint8_t *data_ptr = (const uint8_t *)body + sizeof(*pw);
     int rc = ptw_write((uint32_t)pw->pid, pw->address, data_len, data_ptr);
     return send_response(fd, req, (rc == 0) ? MEMDBG_OK : MEMDBG_ERR_IO, NULL, 0) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 
   case MEMDBG_CMD_PTWALK_PROBE: {
-    if (body_len < sizeof(memdbg_ptwalk_probe_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_ptwalk_probe_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_ptwalk_probe_request_t *pp = (const memdbg_ptwalk_probe_request_t *)body;
     memdbg_ptwalk_probe_response_t resp;
     memset(&resp, 0, sizeof(resp));
@@ -1512,7 +1549,7 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
 
   /* ---- Auth ---- */
   case MEMDBG_CMD_AUTH_KEY: {
-    if (body_len < sizeof(memdbg_auth_key_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_auth_key_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_auth_key_request_t *ak = (const memdbg_auth_key_request_t *)body;
     int r = memdbg_auth_handle(fd, ak);
     return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
@@ -1520,7 +1557,7 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
 
   /* ---- Arena config ---- */
   case MEMDBG_CMD_ARENA_CONFIG: {
-    if (body_len < sizeof(memdbg_arena_config_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_arena_config_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_arena_config_request_t *ac = (const memdbg_arena_config_request_t *)body;
     memdbg_arena_config_handle(fd, ac);
     return MEMDBG_OK;
@@ -1528,9 +1565,9 @@ static memdbg_status_t dispatch_packet(socket_t fd, const memdbg_config_t *cfg,
 
   /* ---- Bulk write advanced ---- */
   case MEMDBG_CMD_BATCH_WRITE_ADV: {
-    if (body_len < sizeof(memdbg_batch_write_adv_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_batch_write_adv_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_batch_write_adv_request_t *bwa = (const memdbg_batch_write_adv_request_t *)body;
-    int r = memdbg_batch_write_adv_handle(fd, bwa, (const uint8_t *)body, body_len);
+    int r = memdbg_batch_write_adv_handle(fd, bwa, (const uint8_t *)body, req->length);
     return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
   }
 

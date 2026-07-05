@@ -40,6 +40,12 @@ extern "C" {
 #define MEMDBG_MAP_PROT_WRITE 2U
 #define MEMDBG_MAP_PROT_EXEC 4U
 
+/* Region matching flags for ELF load / hijack target_region */
+#define MEMDBG_MATCH_EXACT          0x00000001U  /* exact basename only, skip substring fallback */
+#define MEMDBG_MATCH_CASE_SENSITIVE 0x00000002U  /* case-sensitive comparison */
+#define MEMDBG_MATCH_REGEX          0x00000004U  /* treat target as POSIX ERE instead of glob */
+#define MEMDBG_MATCH_FULLPATH       0x00000008U  /* match against full path instead of basename */
+
 typedef enum memdbg_command {
   MEMDBG_CMD_HELLO = 0x0001U,
   MEMDBG_CMD_PING = 0x0002U,
@@ -102,6 +108,7 @@ typedef enum memdbg_command {
   MEMDBG_CMD_PROCESS_STACK = 0x010BU,
   MEMDBG_CMD_PROCESS_CALL = 0x010CU,
   MEMDBG_CMD_PROCESS_ELF_LOAD = 0x010DU,
+  MEMDBG_CMD_PROCESS_HIJACK  = 0x010EU,
   MEMDBG_CMD_TELEMETRY = 0x0400U,
   MEMDBG_CMD_DISCOVERY = 0x0500U,
   MEMDBG_CMD_KERNEL_BASE = 0x0800U,
@@ -188,6 +195,7 @@ typedef enum memdbg_capability {
 } memdbg_capability_t;
 
 #define MEMDBG_CAP_KLOG_FORWARD (1U << 31)
+#define MEMDBG_CAP_HIJACK_MASK   (1U << 31)
 
 /* Extended capabilities (report at runtime via HELLO caps field;
  * these overlap bit positions with the main caps but are advertised
@@ -201,6 +209,7 @@ typedef enum memdbg_capability {
 #define MEMDBG_EXT_CAP_AUTH           0x00000020U
 #define MEMDBG_EXT_CAP_ARENA          0x00000040U
 #define MEMDBG_EXT_CAP_BATCH_WRITE_ADV 0x00000080U
+#define MEMDBG_EXT_CAP_HIJACK           0x00000100U
 
 typedef enum memdbg_value_type {
   MEMDBG_VALUE_BYTES = 0U,
@@ -417,8 +426,10 @@ typedef struct MEMDBG_PACKED memdbg_process_call_response {
 
 typedef struct MEMDBG_PACKED memdbg_process_elf_load_request {
   int32_t pid;
-  uint32_t flags; /* bit 0 = jump to entry immediately */
+  uint32_t flags;             /* bit 0 = jump to entry immediately */
   uint64_t image_size;
+  uint32_t match_flags;       /* MEMDBG_MATCH_*; 0 = default (case-insensitive, substring) */
+  char     target_region[44]; /* VM region name to load into, empty = allocate new */
 } memdbg_process_elf_load_request_t;
 
 typedef struct MEMDBG_PACKED memdbg_process_elf_load_response {
@@ -816,9 +827,7 @@ typedef struct MEMDBG_PACKED memdbg_klog_connect_request {
   uint32_t reserved;
 } memdbg_klog_connect_request_t;
 
-/* ================================================================
- *  Assembler / disassembler / xrefs
- * ================================================================ */
+// Assembler / disassembler / xrefs
 
 typedef struct MEMDBG_PACKED memdbg_asm_encode_request {
   uint64_t origin;        /* base address for relative operands */
@@ -868,9 +877,7 @@ typedef struct MEMDBG_PACKED memdbg_xrefs_to_request {
   uint64_t target_address;
 } memdbg_xrefs_to_request_t;
 
-/* ================================================================
- *  FlashScan engine (QuickScan): server-resident, snapshot-capable
- * ================================================================ */
+// FlashScan: server-resident, snapshot-capable scanning
 
 #define MEMDBG_QUICKSCAN_MAX_CLIENTS 12U
 #define MEMDBG_QUICKSCAN_RESIDENT_CAP (256ULL << 20)
@@ -987,9 +994,7 @@ typedef struct MEMDBG_PACKED memdbg_quickscan_segment {
 
 #define MEMDBG_QUICKSCAN_MAX_SEGMENTS (1U << 20)
 
-/* ================================================================
- *  Page-table walk / DMAP introspection
- * ================================================================ */
+// Page-table walk / DMAP introspection
 
 typedef struct MEMDBG_PACKED memdbg_ptwalk_discover_response {
   uint32_t status;        /* 0 = found, non-zero = not available */
@@ -1024,9 +1029,7 @@ typedef struct MEMDBG_PACKED memdbg_ptwalk_probe_response {
   uint32_t cached;       /* non-zero if PCD bit is set (uncached memory) */
 } memdbg_ptwalk_probe_response_t;
 
-/* ================================================================
- *  Batch write with per-entry status (advanced)
- * ================================================================ */
+// Batch write with per-entry status
 
 typedef struct MEMDBG_PACKED memdbg_batch_write_adv_request {
   int32_t pid;
@@ -1039,9 +1042,7 @@ typedef struct MEMDBG_PACKED memdbg_batch_write_adv_request {
 #define MEMDBG_BATCH_WRITE_ADV_MAX_ENTRIES 0xFFFFU
 #define MEMDBG_BATCH_WRITE_ADV_MAX_ENTRY   0x100000U
 
-/* ================================================================
- *  Auth ceremony
- * ================================================================ */
+// Auth ceremony
 
 typedef struct MEMDBG_PACKED memdbg_auth_key_request {
   uint32_t magic;       /* must match MEMDBG_AUTH_KEY_MAGIC */
@@ -1050,22 +1051,28 @@ typedef struct MEMDBG_PACKED memdbg_auth_key_request {
 
 #define MEMDBG_AUTH_KEY_MAGIC 0x4DE640BBU
 
-/* ================================================================
- *  Arena memory sub-allocator toggle
- * ================================================================ */
+// Arena memory sub-allocator toggle
 
 typedef struct MEMDBG_PACKED memdbg_arena_config_request {
   uint32_t enabled;  /* 0 = disable, 1 = enable */
   uint32_t reserved;
 } memdbg_arena_config_request_t;
 
-/* ================================================================
- *  Klog streaming
- * ================================================================ */
+// Hijack mode: inject payload without blocking the caller
 
-typedef struct MEMDBG_PACKED memdbg_klog_connect_request {
+typedef struct MEMDBG_PACKED memdbg_process_hijack_request {
+  int32_t pid;
+  uint32_t flags;             /* bit 0 = spawn thread, bit 1 = resume target after injection */
+  uint64_t payload_size;      /* size of payload ELF that follows */
+  uint32_t match_flags;       /* MEMDBG_MATCH_*; 0 = default (case-insensitive, substring) */
+  char     target_region[44]; /* VM region name to load into, empty = allocate new */
+  /* followed by payload_size bytes of ELF data */
+} memdbg_process_hijack_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_process_hijack_response {
+  uint32_t accepted;  /* 1 = hijack thread started, 0 = rejected */
   uint32_t reserved;
-} memdbg_klog_connect_request_t;
+} memdbg_process_hijack_response_t;
 
 #undef MEMDBG_PACKED
 
