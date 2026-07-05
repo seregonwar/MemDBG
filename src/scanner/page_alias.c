@@ -11,6 +11,7 @@
 
 #include "page_alias.h"
 #include "pt_walker.h"
+#include "memdbg/pal/pal_memory.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,31 +76,29 @@ struct page_alias_ctx {
 // Kernel access wrappers
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
-  return kernel_copyout_fast(kaddr, dst, n);
+  return kernel_copyout(kaddr, dst, n);
 }
 
 static inline int kwrite(const void *src, intptr_t kaddr, size_t n) {
-  return kernel_copyin_fast(src, kaddr, n);
+  return kernel_copyin(src, kaddr, n);
 }
 
 static long raw_syscall(long no, long a, long b, long c, long d, long e, long f) {
-  volatile long ret;
+  register long rax __asm__("rax") = no;
+  register long rdi __asm__("rdi") = a;
+  register long rsi __asm__("rsi") = b;
+  register long rdx __asm__("rdx") = c;
+  register long r10 __asm__("r10") = d;
+  register long r8  __asm__("r8")  = e;
+  register long r9  __asm__("r9")  = f;
+
   __asm__ volatile(
-    "mov %[no], %%rax\n"
-    "mov %[a], %%rdi\n"
-    "mov %[b], %%rsi\n"
-    "mov %[c], %%rdx\n"
-    "mov %[d], %%r10\n"
-    "mov %[e], %%r8\n"
-    "mov %[f], %%r9\n"
-    "syscall\n"
-    "mov %%rax, %[ret]\n"
-    : [ret] "=r" (ret)
-    : [no] "r" (no), [a] "r" (a), [b] "r" (b), [c] "r" (c),
-      [d] "r" (d), [e] "r" (e), [f] "r" (f)
-    : "rax", "rdi", "rsi", "rdx", "r10", "r8", "r9", "rcx", "r11", "memory"
+    "syscall"
+    : "+r" (rax)
+    : "r" (rdi), "r" (rsi), "r" (rdx), "r" (r10), "r" (r8), "r" (r9)
+    : "rcx", "r11", "memory"
   );
-  return ret;
+  return rax;
 }
 
 static long raw_mmap(uint64_t size) {
@@ -292,10 +291,8 @@ const void *page_alias_map(page_alias_ctx_t *c,
       memset(real_buf, 0, sizeof(real_buf));
       {
         size_t rsz = 0;
-        {
-          extern memdbg_status_t pal_memory_read(int, uint64_t, void*, size_t, size_t*);
-          (void)pal_memory_read((int)c->pid, verify_tgts[s], real_buf, sizeof(real_buf), &rsz);
-        }
+        (void)pal_memory_read((int)c->pid, verify_tgts[s], real_buf,
+                              sizeof(real_buf), &rsz);
       }
       if (memcmp(alias_buf, real_buf, sizeof(alias_buf)) != 0) {
         page_alias_release(c);
