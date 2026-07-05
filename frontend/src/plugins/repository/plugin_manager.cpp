@@ -10,6 +10,14 @@
 
 #include <nlohmann/json.hpp>
 
+#if defined(MEMDBG_ENABLE_EMBEDDED_LUA)
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
+}
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -17,6 +25,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <system_error>
 
@@ -335,6 +344,187 @@ PluginRunResult run_shell_capture(const std::string &command) {
     result.error = "Script exited with code " + std::to_string(result.exit_code);
   return result;
 }
+
+#if defined(MEMDBG_ENABLE_EMBEDDED_LUA)
+struct LuaOutputCapture {
+  std::string output;
+  bool truncated = false;
+};
+
+void append_lua_output(LuaOutputCapture &capture, const char *text,
+                       size_t length) {
+  if (text == nullptr || length == 0U) return;
+  if (capture.output.size() + length <= kMaxCapturedOutput) {
+    capture.output.append(text, length);
+  } else {
+    capture.truncated = true;
+  }
+}
+
+int lua_print_capture(lua_State *L) {
+  auto *capture = static_cast<LuaOutputCapture *>(
+      lua_touserdata(L, lua_upvalueindex(1)));
+  if (capture == nullptr) return 0;
+
+  const int top = lua_gettop(L);
+  for (int i = 1; i <= top; ++i) {
+    size_t len = 0;
+    const char *text = luaL_tolstring(L, i, &len);
+    if (i > 1) append_lua_output(*capture, "\t", 1U);
+    append_lua_output(*capture, text, len);
+    lua_pop(L, 1);
+  }
+  append_lua_output(*capture, "\n", 1U);
+  return 0;
+}
+
+void lua_open_lib(lua_State *L, const char *name, lua_CFunction fn) {
+  luaL_requiref(L, name, fn, 1);
+  lua_pop(L, 1);
+}
+
+void configure_lua_package_path(lua_State *L,
+                                const std::filesystem::path &root) {
+  lua_getglobal(L, "package");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+
+  const char *existing = "";
+  lua_getfield(L, -1, "path");
+  if (lua_isstring(L, -1)) existing = lua_tostring(L, -1);
+  lua_pop(L, 1);
+
+  const std::string plugin_path =
+      (root / "?.lua").string() + ";" +
+      (root / "?" / "init.lua").string() + ";" +
+      (root / "sdk" / "?.lua").string() + ";" +
+      (root / "sdk" / "?" / "init.lua").string() + ";" +
+      existing;
+  lua_pushlstring(L, plugin_path.data(), plugin_path.size());
+  lua_setfield(L, -2, "path");
+
+  /* Embedded plugins should load Lua modules from their package only. Native
+   * module loading is intentionally disabled so iOS and desktop behave alike. */
+  lua_pushliteral(L, "");
+  lua_setfield(L, -2, "cpath");
+  lua_pop(L, 1);
+}
+
+void set_lua_string_global(lua_State *L, const char *name,
+                           const std::string &value) {
+  lua_pushlstring(L, value.data(), value.size());
+  lua_setglobal(L, name);
+}
+
+void set_lua_arg_table(lua_State *L, const std::filesystem::path &entry,
+                       const std::filesystem::path &context_path) {
+  const std::string entry_text = entry.string();
+  const std::string context_text = context_path.string();
+  lua_createtable(L, 2, 0);
+  lua_pushlstring(L, entry_text.data(), entry_text.size());
+  lua_rawseti(L, -2, 0);
+  lua_pushlstring(L, context_text.data(), context_text.size());
+  lua_rawseti(L, -2, 1);
+  lua_setglobal(L, "arg");
+}
+
+void set_lua_memdbg_table(lua_State *L, const std::filesystem::path &root,
+                          const std::filesystem::path &context_path,
+                          const std::string &context_json) {
+  const std::string root_text = root.string();
+  const std::string context_text = context_path.string();
+  lua_newtable(L);
+  lua_pushlstring(L, root_text.data(), root_text.size());
+  lua_setfield(L, -2, "plugin_dir");
+  lua_pushlstring(L, context_text.data(), context_text.size());
+  lua_setfield(L, -2, "context_path");
+  lua_pushlstring(L, context_json.data(), context_json.size());
+  lua_setfield(L, -2, "context_json");
+  lua_setglobal(L, "memdbg");
+}
+
+std::mutex &embedded_lua_cwd_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+PluginRunResult run_embedded_lua_script(const std::filesystem::path &entry,
+                                        const std::filesystem::path &context_path,
+                                        const std::filesystem::path &root,
+                                        const std::string &context_json) {
+  PluginRunResult result;
+  result.command = "embedded-lua " + shell_quote(entry.string()) + " " +
+                   shell_quote(context_path.string());
+  result.exit_code = 1;
+
+  std::unique_ptr<lua_State, decltype(&lua_close)> L(luaL_newstate(),
+                                                     lua_close);
+  if (!L) {
+    result.error = "Cannot create embedded Lua state";
+    return result;
+  }
+
+  LuaOutputCapture capture;
+  lua_open_lib(L.get(), LUA_GNAME, luaopen_base);
+  lua_open_lib(L.get(), LUA_COLIBNAME, luaopen_coroutine);
+  lua_open_lib(L.get(), LUA_TABLIBNAME, luaopen_table);
+  lua_open_lib(L.get(), LUA_IOLIBNAME, luaopen_io);
+  lua_open_lib(L.get(), LUA_STRLIBNAME, luaopen_string);
+  lua_open_lib(L.get(), LUA_MATHLIBNAME, luaopen_math);
+  lua_open_lib(L.get(), LUA_UTF8LIBNAME, luaopen_utf8);
+  lua_open_lib(L.get(), LUA_LOADLIBNAME, luaopen_package);
+  configure_lua_package_path(L.get(), root);
+
+  lua_pushlightuserdata(L.get(), &capture);
+  lua_pushcclosure(L.get(), lua_print_capture, 1);
+  lua_setglobal(L.get(), "print");
+
+  set_lua_string_global(L.get(), "MEMDBG_CONTEXT", context_path.string());
+  set_lua_string_global(L.get(), "MEMDBG_PLUGIN_DIR", root.string());
+  set_lua_string_global(L.get(), "MEMDBG_CONTEXT_JSON", context_json);
+  set_lua_arg_table(L.get(), entry, context_path);
+  set_lua_memdbg_table(L.get(), root, context_path, context_json);
+
+  int status = LUA_OK;
+  {
+    std::lock_guard<std::mutex> lock(embedded_lua_cwd_mutex());
+    std::error_code cwd_error;
+    const std::filesystem::path original_cwd =
+        std::filesystem::current_path(cwd_error);
+    std::error_code chdir_error;
+    std::filesystem::current_path(root, chdir_error);
+    if (chdir_error) {
+      result.error = "Cannot enter plugin directory: " + chdir_error.message();
+      return result;
+    }
+
+    status = luaL_loadfilex(L.get(), entry.string().c_str(), nullptr);
+    if (status == LUA_OK) status = lua_pcall(L.get(), 0, LUA_MULTRET, 0);
+
+    if (!cwd_error) {
+      std::error_code restore_error;
+      std::filesystem::current_path(original_cwd, restore_error);
+      (void)restore_error;
+    }
+  }
+
+  result.output = capture.output;
+  if (capture.truncated) result.output += "\n[MemDBG] Output truncated.\n";
+  if (status != LUA_OK) {
+    const char *message = lua_tostring(L.get(), -1);
+    result.error = message != nullptr ? message : "Embedded Lua runtime error";
+    result.exit_code = 1;
+    result.ok = false;
+    return result;
+  }
+
+  result.exit_code = 0;
+  result.ok = true;
+  return result;
+}
+#endif
 
 std::string json_string(const nlohmann::json &doc,
                         std::initializer_list<const char *> keys,
@@ -1185,12 +1375,6 @@ PluginRunResult PluginManager::run_plugin(const std::string &package_id,
     return result;
   }
 
-  const auto interpreter = find_interpreter(record.language);
-  if (interpreter.empty()) {
-    result.error = std::string(language_name(record.language)) + " interpreter not found";
-    return result;
-  }
-
   const auto root = record.path.empty()
       ? plugin_data_dir() / make_package_dir_name(package_id)
       : record.path;
@@ -1242,7 +1426,28 @@ PluginRunResult PluginManager::run_plugin(const std::string &package_id,
       result.error = "Cannot write plugin context";
       return result;
     }
-    out << doc.dump(2) << "\n";
+    const std::string context_json = doc.dump(2);
+    out << context_json << "\n";
+
+#if defined(MEMDBG_ENABLE_EMBEDDED_LUA)
+    if (record.language == PluginLanguage::Lua) {
+      out.close();
+      result = run_embedded_lua_script(entry, context_path, root, context_json);
+      result.plugin_id = package_id;
+      return result;
+    }
+#endif
+  }
+
+  const auto interpreter = find_interpreter(record.language);
+  if (interpreter.empty()) {
+    result.error = std::string(language_name(record.language)) +
+#if defined(MEMDBG_PLATFORM_IOS)
+                   " plugins are unavailable on this mobile build";
+#else
+                   " interpreter not found";
+#endif
+    return result;
   }
 
   const std::string command =

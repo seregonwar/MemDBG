@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -130,6 +131,71 @@ int main() {
 
   require(manager.uninstall_package(installed->id, &error),
           "uninstall context dump package");
+
+#if defined(MEMDBG_ENABLE_EMBEDDED_LUA)
+  const fs::path lua_source = temp / "lua-source";
+  fs::create_directories(lua_source / "plugins" / "lua_echo");
+  {
+    std::ofstream manifest(lua_source / "manifest.json",
+                           std::ios::binary | std::ios::trunc);
+    manifest <<
+        "{\n"
+        "  \"schema\": 1,\n"
+        "  \"name\": \"Local Lua Test\",\n"
+        "  \"plugins\": [\n"
+        "    {\n"
+        "      \"id\": \"local.memdbg.lua-echo\",\n"
+        "      \"name\": \"Lua Echo\",\n"
+        "      \"version\": \"1.0.0\",\n"
+        "      \"language\": \"lua\",\n"
+        "      \"entry\": \"plugins/lua_echo/echo.lua\",\n"
+        "      \"summary\": \"Echo embedded Lua context.\",\n"
+        "      \"files\": [\n"
+        "        {\n"
+        "          \"path\": \"plugins/lua_echo/echo.lua\",\n"
+        "          \"url\": \"plugins/lua_echo/echo.lua\"\n"
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n";
+  }
+  {
+    std::ofstream script(lua_source / "plugins" / "lua_echo" / "echo.lua",
+                         std::ios::binary | std::ios::trunc);
+    script <<
+        "print('MemDBG Lua plugin context')\n"
+        "print('context=' .. tostring(MEMDBG_CONTEXT))\n"
+        "local file = assert(io.open(MEMDBG_CONTEXT, 'rb'))\n"
+        "local context = file:read('*a')\n"
+        "file:close()\n"
+        "print('pid=' .. tostring(context:match('\"pid\"%s*:%s*(%d+)')))\n"
+        "print('bytes=' .. tostring(#context))\n"
+        "print('dir=' .. tostring(memdbg.plugin_dir))\n";
+  }
+
+  require(manager.add_source("Local Lua Test", lua_source.string(), &error),
+          "add local Lua source");
+  require(manager.refresh_all(&error), "refresh local Lua source");
+  const auto lua_catalog = manager.catalog();
+  auto lua_pkg = std::find_if(lua_catalog.begin(), lua_catalog.end(),
+      [](const auto &pkg) { return pkg.id == "local.memdbg.lua-echo"; });
+  require(lua_pkg != lua_catalog.end(), "Lua test package exists");
+  require(lua_pkg->language == plugins::PluginLanguage::Lua,
+          "Lua test package language");
+  require(manager.install_package(lua_pkg->id, lua_pkg->source_id, &error),
+          "install Lua test package");
+
+  const plugins::PluginRunResult lua_run =
+      manager.run_plugin("local.memdbg.lua-echo", context);
+  require(lua_run.ok, "run embedded Lua plugin");
+  require(lua_run.command.find("embedded-lua") != std::string::npos,
+          "embedded Lua command marker");
+  require(lua_run.output.find("MemDBG Lua plugin context") != std::string::npos,
+          "Lua output header");
+  require(lua_run.output.find("pid=1234") != std::string::npos,
+          "Lua output PID");
+#endif
 
   fs::remove_all(temp);
   std::cout << "plugin_manager tests passed\n";
