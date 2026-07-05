@@ -6,8 +6,8 @@
  * Direct page-table introspection for DMAP discovery, PT enumeration,
  * augmented VM maps, and direct physical memory access.
  *
- * This module relies on kernel_copyout_fast/kernel_copyin_fast for kernel
- * memory access and kernel_get_proc_fast for the process structure.
+ * This module relies on kernel_copyout/kernel_copyin for kernel
+ * memory access and kernel_get_proc for the process structure.
  */
 
 #include "pt_walker.h"
@@ -57,15 +57,15 @@ static int      g_ptw_state     = 0;
 static uint64_t g_ptw_dmap      = 0;
 static uint64_t g_ptw_pmap_off  = 0;
 
-// Minimal kernel_copyout_fast wrapper
+// Minimal kernel copy wrappers
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
-  if (kernel_copyout_fast(kaddr, dst, n) != 0) return -1;
+  if (kernel_copyout(kaddr, dst, n) != 0) return -1;
   return 0;
 }
 
 static inline int kwrite(const void *src, intptr_t kaddr, size_t n) {
-  if (kernel_copyin_fast(src, kaddr, n) != 0) return -1;
+  if (kernel_copyin(src, kaddr, n) != 0) return -1;
   return 0;
 }
 
@@ -101,7 +101,7 @@ static int ptw_walk_leaf_inner(uint64_t dmap, uint64_t cr3, uint64_t va,
     int      shift = 39 - level * 9;
     uint64_t idx   = (va >> shift) & 0x1FF;
     uint64_t e     = 0;
-    if (kread((intptr_t)(g_ptw_dmap + table + idx * 8), &e, 8) != 0)
+    if (kread((intptr_t)(dmap + table + idx * 8), &e, 8) != 0)
       { if(out_e) *out_e = 0; if(out_level) *out_level = level; return 1; }
     if (!(e & PTW_PTE_PRESENT)) { if(out_e) *out_e = e; if(out_level) *out_level = level; return 1; }
     if (level == 3) { if(out_e) *out_e = e; if(out_level) *out_level = 3; return 0; }
@@ -151,7 +151,7 @@ int ptw_discover(uint64_t *dmap_base_out, uint64_t *pmap_offset_out) {
 
   int result = -1;
   pid_t self = getpid();
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast(self);
+  intptr_t kproc = (intptr_t)kernel_get_proc(self);
   if (kproc) {
     uint64_t vmspace = 0;
     if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) == 0 && vmspace) {
@@ -199,7 +199,7 @@ int ptw_probe(uint32_t pid, uint64_t va,
   if ((int32_t)pid <= 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast((pid_t)pid);
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) return 1;
 
   uint64_t vmspace = 0;
@@ -238,7 +238,7 @@ int ptw_span_resolve(uint32_t pid, uint64_t span_2m, int *is_huge,
   if ((int32_t)pid <= 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast((pid_t)pid);
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) return 1;
 
   uint64_t vmspace = 0;
@@ -287,7 +287,7 @@ int ptw_leaf_addr(uint32_t pid, uint64_t va,
   if ((int32_t)pid <= 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast((pid_t)pid);
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) return 1;
 
   uint64_t vmspace = 0;
@@ -330,7 +330,7 @@ int ptw_read(uint32_t pid, uint64_t va, uint64_t len, void *dst) {
   if ((int32_t)pid <= 0 || !dst || len == 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast((pid_t)pid);
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) return 1;
 
   uint64_t vmspace = 0;
@@ -379,7 +379,7 @@ int ptw_write(uint32_t pid, uint64_t va, uint64_t len, const void *src) {
   if ((int32_t)pid <= 0 || !src || len == 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast((pid_t)pid);
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) return 1;
 
   uint64_t vmspace = 0;
@@ -618,7 +618,7 @@ int ptw_augment_maps(uint32_t pid,
 
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc_fast((pid_t)pid);
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) return 1;
 
   uint64_t vmspace = 0;

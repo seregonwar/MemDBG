@@ -40,7 +40,7 @@ uint64_t ptw_dmap_base(void);
 /* ---- Physical address resolution ---- */
 
 /* Resolve a single VA to its physical address, page size, and leaf PTE.
- * Returns 0 on success. pid uses kernel process handle (kernel_get_proc_fast). */
+ * Returns 0 on success. pid uses kernel process handle (kernel_get_proc). */
 int ptw_probe(uint32_t pid, uint64_t va,
               uint64_t *phys_out, int *level_out,
               uint64_t *pagesize_out, uint64_t *pte_out);

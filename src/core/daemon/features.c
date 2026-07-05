@@ -13,12 +13,15 @@
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/privilege/privilege.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <sys/mman.h>
 
@@ -363,6 +366,8 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
         if ((uint64_t)(uintptr_t)exe_p != tgt_addr) return -1;
 
         int alias_fd = jit_shm_alias(pid, shm_fd, 3);
+        if (alias_fd < 0) return -1;
+
         void *rw_p = NULL;
         pal_memory_alloc(pid, 0, aligned_sz, 3, 1,
                          (uint64_t *)(uintptr_t)&rw_p);
