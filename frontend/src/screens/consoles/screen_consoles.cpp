@@ -82,7 +82,8 @@ void draw_consoles(AppState &state, ImVec2 avail) {
   const bool connected = state.client.connected();
   const bool locked = connected || state.connect_pending;
   const float gap = 16.0f;
-  const float col_w = (avail.x - gap) * 0.5f;
+  const bool mobile = avail.x < 500.0f;
+  const float col_w = mobile ? avail.x : (avail.x - gap) * 0.5f;
 
   ui::begin_panel("ConsoleTargets", "Console Targets", ImVec2(col_w, avail.y));
   ImGui::TextColored(ui::colors().primary2, "%s  Saved targets", icons::kTarget);
@@ -204,8 +205,9 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     }
   }
 
-  ImGui::SameLine(0, gap);
-  ui::begin_panel("ConsoleRuntime", locale::tr("consoles.runtime"), ImVec2(0, avail.y));
+  if (!mobile) ImGui::SameLine(0, gap);
+  if (mobile) ImGui::Spacing();
+  ui::begin_panel("ConsoleRuntime", locale::tr("consoles.runtime"), ImVec2(mobile ? avail.x : 0, mobile ? 0 : avail.y));
   ImGui::TextColored(connected ? ui::colors().success : ui::colors().danger,
                      "%s", connected ? locale::tr("consoles.session_open") : locale::tr("consoles.no_session"));
   ImGui::Spacing();
