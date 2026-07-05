@@ -110,6 +110,39 @@ typedef enum memdbg_command {
   MEMDBG_CMD_CONSOLE_NOTIFY = 0x0900U,
   MEMDBG_CMD_CONSOLE_PRINT = 0x0901U,
   MEMDBG_CMD_CONSOLE_REBOOT = 0x0902U,
+  /* Assembler / disassembler */
+  MEMDBG_CMD_ASM_ENCODE = 0x0A00U,
+  MEMDBG_CMD_DISASM      = 0x0A01U,
+  MEMDBG_CMD_XREFS_TO    = 0x0A02U,
+
+  /* FlashScan engine (server-resident scan with snapshots) */
+  MEMDBG_CMD_QUICKSCAN_CAPS     = 0x0B00U,
+  MEMDBG_CMD_QUICKSCAN_START    = 0x0B01U,
+  MEMDBG_CMD_QUICKSCAN_COUNT    = 0x0B02U,
+  MEMDBG_CMD_QUICKSCAN_FETCH    = 0x0B03U,
+  MEMDBG_CMD_QUICKSCAN_END      = 0x0B04U,
+  MEMDBG_CMD_QUICKSCAN_CONFIG   = 0x0B05U,
+  MEMDBG_CMD_QUICKSCAN_REGIONS  = 0x0B06U,
+
+  /* Page-table introspection */
+  MEMDBG_CMD_PTWALK_DISCOVER = 0x0C00U,
+  MEMDBG_CMD_PTWALK_AUGMENT  = 0x0C01U,
+  MEMDBG_CMD_PTWALK_READ     = 0x0C02U,
+  MEMDBG_CMD_PTWALK_WRITE    = 0x0C03U,
+  MEMDBG_CMD_PTWALK_PROBE    = 0x0C04U,
+
+  /* Bulk write with per-entry status */
+  MEMDBG_CMD_BATCH_WRITE_ADV  = 0x0204U,
+
+  /* Auth / privilege escalation ceremony */
+  MEMDBG_CMD_AUTH_KEY = 0x0D00U,
+
+  /* Arena allocator toggle */
+  MEMDBG_CMD_ARENA_CONFIG = 0x0D01U,
+
+  /* Klog streaming */
+  MEMDBG_CMD_KLOG_CONNECT = 0x0D02U,
+
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
 
@@ -155,6 +188,19 @@ typedef enum memdbg_capability {
 } memdbg_capability_t;
 
 #define MEMDBG_CAP_KLOG_FORWARD (1U << 31)
+
+/* Extended capabilities (report at runtime via HELLO caps field;
+ * these overlap bit positions with the main caps but are advertised
+ * as a second 32-bit word in the quick-scan capabilities response).
+ * For HELLO, we stuff the high 16 bits of the protocol's caps field. */
+#define MEMDBG_EXT_CAP_QUICKSCAN     0x00000001U
+#define MEMDBG_EXT_CAP_PTWALK         0x00000002U
+#define MEMDBG_EXT_CAP_ALIAS          0x00000004U
+#define MEMDBG_EXT_CAP_SIMD           0x00000008U
+#define MEMDBG_EXT_CAP_KLOG_SERVER    0x00000010U
+#define MEMDBG_EXT_CAP_AUTH           0x00000020U
+#define MEMDBG_EXT_CAP_ARENA          0x00000040U
+#define MEMDBG_EXT_CAP_BATCH_WRITE_ADV 0x00000080U
 
 typedef enum memdbg_value_type {
   MEMDBG_VALUE_BYTES = 0U,
@@ -763,6 +809,263 @@ typedef struct MEMDBG_PACKED memdbg_tracer_status_response {
   uint64_t elapsed_ns;
   char     dump_path[256];  /* path to crash dump, empty if none */
 } memdbg_tracer_status_response_t;
+
+/* ---- Klog streaming ---- */
+
+typedef struct MEMDBG_PACKED memdbg_klog_connect_request {
+  uint32_t reserved;
+} memdbg_klog_connect_request_t;
+
+/* ================================================================
+ *  Assembler / disassembler / xrefs
+ * ================================================================ */
+
+typedef struct MEMDBG_PACKED memdbg_asm_encode_request {
+  uint64_t origin;        /* base address for relative operands */
+  uint32_t syntax;        /* 0 = Intel, 1 = AT&T */
+  uint32_t reserved;
+  /* followed by 'length' bytes of assembly source text */
+} memdbg_asm_encode_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_asm_encode_ok {
+  uint32_t byte_count;
+  uint32_t insn_count;
+  /* followed by byte_count bytes of machine code */
+} memdbg_asm_encode_ok_t;
+
+typedef struct MEMDBG_PACKED memdbg_asm_encode_err {
+  uint32_t err_code;
+  uint32_t msg_len;
+  /* followed by msg_len bytes of error message (UTF-8, not NUL-terminated) */
+} memdbg_asm_encode_err_t;
+
+typedef struct MEMDBG_PACKED memdbg_disasm_request {
+  int32_t pid;
+  uint32_t count_max;    /* max instructions to emit */
+  uint64_t address;
+  uint32_t length;       /* max bytes to disassemble */
+  uint32_t reserved;
+} memdbg_disasm_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_disasm_entry {
+  uint64_t address;           /* instruction address */
+  uint64_t rip_rel_target;    /* effective target if RIP-relative, else 0 */
+  int64_t  mem_displacement;  /* memory operand displacement, 0 if none */
+  uint8_t  byte_length;       /* instruction length in bytes */
+  uint8_t  opcode_kind;       /* 0=normal, 1=jump, 2=call, 3=ret, 4=conditional */
+  uint8_t  mem_base_reg;      /* memory base register (0=none, 1=RAX..16=R15) */
+  uint8_t  mem_index_reg;     /* memory index register (0=none) */
+  uint8_t  mem_scale;         /* index scale (1,2,4,8; 0=none) */
+  uint8_t  mnemonic_id;       /* compact mnemonic identifier */
+  uint16_t padding;
+} memdbg_disasm_entry_t;
+
+typedef struct MEMDBG_PACKED memdbg_xrefs_to_request {
+  int32_t pid;
+  uint32_t reserved;
+  uint64_t scan_address;
+  uint64_t scan_length;
+  uint64_t target_address;
+} memdbg_xrefs_to_request_t;
+
+/* ================================================================
+ *  FlashScan engine (QuickScan): server-resident, snapshot-capable
+ * ================================================================ */
+
+#define MEMDBG_QUICKSCAN_MAX_CLIENTS 12U
+#define MEMDBG_QUICKSCAN_RESIDENT_CAP (256ULL << 20)
+#define MEMDBG_QUICKSCAN_RAM_DEFAULT  (512ULL << 20)
+#define MEMDBG_QUICKSCAN_MATERIALIZE_MAX (1ULL << 20)
+
+/* Engine capability flags (advertised in caps response) */
+#define MEMDBG_QS_F_SIMD          0x00000001U
+#define MEMDBG_QS_F_RESIDENT      0x00000004U
+#define MEMDBG_QS_F_SNAPSHOT      0x00000008U
+#define MEMDBG_QS_F_SNAP_SEGMENTS 0x00000010U
+#define MEMDBG_QS_F_SNAP_CONFIG   0x00000020U
+#define MEMDBG_QS_F_SNAP_FIRST    0x00000040U
+#define MEMDBG_QS_F_SNAP_PREVIOUS 0x00000080U
+#define MEMDBG_QS_F_PARALLEL      0x00000100U
+#define MEMDBG_QS_F_ALIAS_RESCAN  0x00000200U
+
+/* Per-request flags */
+#define MEMDBG_QS_FL_ALIAS_READ    0x00000001U
+#define MEMDBG_QS_FL_SERVER_KEEP   0x00000002U
+#define MEMDBG_QS_FL_SNAPSHOT      0x00000004U
+#define MEMDBG_QS_FL_SNAP_NOZERO   0x00000008U
+#define MEMDBG_QS_FL_SNAP_SEGMENTS 0x00000010U
+#define MEMDBG_QS_FL_SNAP_FIRST    0x00000020U
+#define MEMDBG_QS_FL_SNAP_PREVIOUS 0x00000040U
+#define MEMDBG_QS_FL_PARALLEL      0x00000080U
+#define MEMDBG_QS_FL_ALIAS_RESCAN  0x00000100U
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_caps_response {
+  uint32_t protocol_vers;  /* 1 */
+  uint32_t engine_flags;   /* MEMDBG_QS_F_* */
+  uint32_t max_workers;    /* parallel compare threads */
+  uint32_t reserved;
+} memdbg_quickscan_caps_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_start_request {
+  int32_t pid;
+  uint32_t value_type;
+  uint32_t compare_type;
+  uint32_t alignment;
+  uint32_t value_length;
+  uint32_t request_flags;  /* MEMDBG_QS_FL_* */
+  uint64_t address;
+  uint64_t length;
+  /* followed by value_length + (between ? value_length : 0) bytes of compare data */
+  /* if AOB/array-of-bytes: followed by value_length bytes of mask */
+} memdbg_quickscan_start_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_count_request {
+  int32_t pid;
+  uint32_t value_type;
+  uint32_t compare_type;
+  uint32_t value_length;
+  uint32_t request_flags;
+  uint64_t base_address;
+  /* followed by value_length + optional extra bytes of compare data + optional mask */
+} memdbg_quickscan_count_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_fetch_request {
+  uint32_t start_index;
+  uint32_t count;
+  uint32_t flags;
+} memdbg_quickscan_fetch_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_config_request {
+  uint32_t ram_limit_mb;     /* 0 = default 512MB */
+  uint32_t spill_path_len;   /* length of spill directory path that follows */
+  /* followed by spill_path_len bytes */
+} memdbg_quickscan_config_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_regions_request {
+  int32_t pid;
+  uint32_t region_max;
+  uint32_t probe_bytes;
+  uint32_t reserved;
+} memdbg_quickscan_regions_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_quickscan_region_info {
+  uint64_t start;
+  uint64_t end;
+  uint32_t protection;
+  uint32_t flags;      /* bit 0 = uncached (PCD set) */
+  uint32_t read_mbps;  /* measured read MB/s */
+  uint32_t reserved;
+} memdbg_quickscan_region_info_t;
+
+/* Resident result header sent after a server-kept START */
+typedef struct MEMDBG_PACKED memdbg_quickscan_resident_header {
+  uint32_t stored;    /* 1 = kept server-side, 0 = results streamed */
+  uint64_t hit_count; /* valid iff stored==1 */
+} memdbg_quickscan_resident_header_t;
+
+/* Snapshot creation progress sentinel: a uint64 with value 0xFFFFFFFFFFFFFFFF
+ * marks end of progress stream. */
+
+/* Snapshot result header */
+typedef struct MEMDBG_PACKED memdbg_quickscan_snapshot_summary {
+  uint32_t ok;             /* 1 = success */
+  uint64_t survivor_count; /* initial survivor slots */
+} memdbg_quickscan_snapshot_summary_t;
+
+/* Snapshot plan: sent before scanning begins so client can show progress */
+typedef struct MEMDBG_PACKED memdbg_quickscan_snapshot_plan {
+  uint64_t slot_count;
+  uint64_t total_bytes;
+} memdbg_quickscan_snapshot_plan_t;
+
+/* ---- Disjoint segment descriptor for multi-segment snapshot/resident ---- */
+typedef struct MEMDBG_PACKED memdbg_quickscan_segment {
+  uint64_t address;
+  uint32_t length;
+  uint32_t reserved;
+} memdbg_quickscan_segment_t;
+
+#define MEMDBG_QUICKSCAN_MAX_SEGMENTS (1U << 20)
+
+/* ================================================================
+ *  Page-table walk / DMAP introspection
+ * ================================================================ */
+
+typedef struct MEMDBG_PACKED memdbg_ptwalk_discover_response {
+  uint32_t status;        /* 0 = found, non-zero = not available */
+  uint64_t dmap_base;     /* kernel identity-mapping base */
+  uint64_t pmap_offset;   /* offset of pmap within vmspace */
+} memdbg_ptwalk_discover_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_ptwalk_augment_request {
+  int32_t pid;
+  uint32_t reserved;
+} memdbg_ptwalk_augment_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_ptwalk_io_request {
+  int32_t pid;
+  uint32_t reserved;
+  uint64_t address;
+  uint64_t length;
+  /* for write: followed by length bytes of data */
+} memdbg_ptwalk_io_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_ptwalk_probe_request {
+  int32_t pid;
+  uint32_t reserved;
+  uint64_t address;
+} memdbg_ptwalk_probe_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_ptwalk_probe_response {
+  uint64_t phys_address;
+  uint64_t page_size;    /* 4096, 2MB, or 1GB */
+  uint64_t pte_value;    /* raw page table entry */
+  int32_t  page_level;   /* 1=1GB, 2=2MB, 3=4KB */
+  uint32_t cached;       /* non-zero if PCD bit is set (uncached memory) */
+} memdbg_ptwalk_probe_response_t;
+
+/* ================================================================
+ *  Batch write with per-entry status (advanced)
+ * ================================================================ */
+
+typedef struct MEMDBG_PACKED memdbg_batch_write_adv_request {
+  int32_t pid;
+  uint32_t count;
+  uint32_t flags;      /* bit 0 = include per-entry status array in response */
+  uint32_t reserved;
+  /* followed by count streamed entries: { uint64 address; uint32 length; <length> bytes } */
+} memdbg_batch_write_adv_request_t;
+
+#define MEMDBG_BATCH_WRITE_ADV_MAX_ENTRIES 0xFFFFU
+#define MEMDBG_BATCH_WRITE_ADV_MAX_ENTRY   0x100000U
+
+/* ================================================================
+ *  Auth ceremony
+ * ================================================================ */
+
+typedef struct MEMDBG_PACKED memdbg_auth_key_request {
+  uint32_t magic;       /* must match MEMDBG_AUTH_KEY_MAGIC */
+  uint32_t flags;
+} memdbg_auth_key_request_t;
+
+#define MEMDBG_AUTH_KEY_MAGIC 0x4DE640BBU
+
+/* ================================================================
+ *  Arena memory sub-allocator toggle
+ * ================================================================ */
+
+typedef struct MEMDBG_PACKED memdbg_arena_config_request {
+  uint32_t enabled;  /* 0 = disable, 1 = enable */
+  uint32_t reserved;
+} memdbg_arena_config_request_t;
+
+/* ================================================================
+ *  Klog streaming
+ * ================================================================ */
+
+typedef struct MEMDBG_PACKED memdbg_klog_connect_request {
+  uint32_t reserved;
+} memdbg_klog_connect_request_t;
 
 #undef MEMDBG_PACKED
 
