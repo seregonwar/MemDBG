@@ -70,7 +70,13 @@ FetchContent_Declare(
   GIT_TAG v3.11.3
 )
 
-FetchContent_MakeAvailable(glfw imgui stb nlohmann_json)
+FetchContent_Declare(
+  lua
+  GIT_REPOSITORY https://github.com/lua/lua.git
+  GIT_TAG v5.4.8
+)
+
+FetchContent_MakeAvailable(glfw imgui stb nlohmann_json lua)
 
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
@@ -90,6 +96,45 @@ target_include_directories(imgui PUBLIC
 )
 
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+
+set(MEMDBG_LUA_SOURCES
+  ${lua_SOURCE_DIR}/lapi.c
+  ${lua_SOURCE_DIR}/lauxlib.c
+  ${lua_SOURCE_DIR}/lbaselib.c
+  ${lua_SOURCE_DIR}/lcode.c
+  ${lua_SOURCE_DIR}/lcorolib.c
+  ${lua_SOURCE_DIR}/lctype.c
+  ${lua_SOURCE_DIR}/ldblib.c
+  ${lua_SOURCE_DIR}/ldebug.c
+  ${lua_SOURCE_DIR}/ldo.c
+  ${lua_SOURCE_DIR}/ldump.c
+  ${lua_SOURCE_DIR}/lfunc.c
+  ${lua_SOURCE_DIR}/lgc.c
+  ${lua_SOURCE_DIR}/liolib.c
+  ${lua_SOURCE_DIR}/llex.c
+  ${lua_SOURCE_DIR}/lmathlib.c
+  ${lua_SOURCE_DIR}/lmem.c
+  ${lua_SOURCE_DIR}/loadlib.c
+  ${lua_SOURCE_DIR}/lobject.c
+  ${lua_SOURCE_DIR}/lopcodes.c
+  ${lua_SOURCE_DIR}/lparser.c
+  ${lua_SOURCE_DIR}/lstate.c
+  ${lua_SOURCE_DIR}/lstring.c
+  ${lua_SOURCE_DIR}/lstrlib.c
+  ${lua_SOURCE_DIR}/ltable.c
+  ${lua_SOURCE_DIR}/ltablib.c
+  ${lua_SOURCE_DIR}/ltm.c
+  ${lua_SOURCE_DIR}/lundump.c
+  ${lua_SOURCE_DIR}/lutf8lib.c
+  ${lua_SOURCE_DIR}/lvm.c
+  ${lua_SOURCE_DIR}/lzio.c
+)
+
+add_library(memdbg_lua STATIC ${MEMDBG_LUA_SOURCES})
+target_include_directories(memdbg_lua PUBLIC ${lua_SOURCE_DIR})
+if(UNIX AND NOT APPLE)
+  target_link_libraries(memdbg_lua PUBLIC m ${CMAKE_DL_LIBS})
+endif()
 
 # ---- memdbg_frontend ----
 
@@ -223,7 +268,8 @@ target_include_directories(memdbg_frontend PRIVATE
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
-target_link_libraries(memdbg_frontend PRIVATE imgui Threads::Threads)
+target_compile_definitions(memdbg_frontend PRIVATE MEMDBG_ENABLE_EMBEDDED_LUA)
+target_link_libraries(memdbg_frontend PRIVATE imgui memdbg_lua Threads::Threads)
 
 if(MSVC)
   target_compile_options(memdbg_frontend PRIVATE /utf-8)
@@ -415,6 +461,7 @@ add_executable(memdbg_plugin_manager_test
 )
 
 target_compile_definitions(memdbg_plugin_manager_test PRIVATE
+  MEMDBG_ENABLE_EMBEDDED_LUA
   MEMDBG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
@@ -427,6 +474,7 @@ target_include_directories(memdbg_plugin_manager_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
   ${nlohmann_json_SOURCE_DIR}/include
 )
+target_link_libraries(memdbg_plugin_manager_test PRIVATE memdbg_lua)
 
 # ---- platform specific ----
 

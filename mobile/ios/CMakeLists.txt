@@ -106,7 +106,12 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/nlohmann/json.git
   GIT_TAG v3.11.3
 )
-FetchContent_MakeAvailable(imgui stb nlohmann_json)
+FetchContent_Declare(
+  lua
+  GIT_REPOSITORY https://github.com/lua/lua.git
+  GIT_TAG v5.4.8
+)
+FetchContent_MakeAvailable(imgui stb nlohmann_json lua)
 
 add_library(memdbg_imgui_metal STATIC
   ${imgui_SOURCE_DIR}/imgui.cpp
@@ -128,6 +133,42 @@ target_link_libraries(memdbg_imgui_metal PUBLIC
   "-framework UIKit"
   "-framework QuartzCore"
 )
+
+set(MEMDBG_LUA_SOURCES
+  ${lua_SOURCE_DIR}/lapi.c
+  ${lua_SOURCE_DIR}/lauxlib.c
+  ${lua_SOURCE_DIR}/lbaselib.c
+  ${lua_SOURCE_DIR}/lcode.c
+  ${lua_SOURCE_DIR}/lcorolib.c
+  ${lua_SOURCE_DIR}/lctype.c
+  ${lua_SOURCE_DIR}/ldblib.c
+  ${lua_SOURCE_DIR}/ldebug.c
+  ${lua_SOURCE_DIR}/ldo.c
+  ${lua_SOURCE_DIR}/ldump.c
+  ${lua_SOURCE_DIR}/lfunc.c
+  ${lua_SOURCE_DIR}/lgc.c
+  ${lua_SOURCE_DIR}/liolib.c
+  ${lua_SOURCE_DIR}/llex.c
+  ${lua_SOURCE_DIR}/lmathlib.c
+  ${lua_SOURCE_DIR}/lmem.c
+  ${lua_SOURCE_DIR}/loadlib.c
+  ${lua_SOURCE_DIR}/lobject.c
+  ${lua_SOURCE_DIR}/lopcodes.c
+  ${lua_SOURCE_DIR}/lparser.c
+  ${lua_SOURCE_DIR}/lstate.c
+  ${lua_SOURCE_DIR}/lstring.c
+  ${lua_SOURCE_DIR}/lstrlib.c
+  ${lua_SOURCE_DIR}/ltable.c
+  ${lua_SOURCE_DIR}/ltablib.c
+  ${lua_SOURCE_DIR}/ltm.c
+  ${lua_SOURCE_DIR}/lundump.c
+  ${lua_SOURCE_DIR}/lutf8lib.c
+  ${lua_SOURCE_DIR}/lvm.c
+  ${lua_SOURCE_DIR}/lzio.c
+)
+
+add_library(memdbg_lua STATIC ${MEMDBG_LUA_SOURCES})
+target_include_directories(memdbg_lua PUBLIC ${lua_SOURCE_DIR})
 
 # ---- MemDBG mobile executable -----------------------------------------------
 
@@ -190,6 +231,7 @@ add_executable(MemDBGMobile ${MOBILE_SOURCES})
 
 target_compile_definitions(MemDBGMobile PRIVATE
   MEMDBG_PLATFORM_IOS
+  MEMDBG_ENABLE_EMBEDDED_LUA
   IMGUI_DEFINE_MATH_OPERATORS
 )
 
@@ -231,6 +273,7 @@ target_include_directories(MemDBGMobile PRIVATE
 
 target_link_libraries(MemDBGMobile PRIVATE
   memdbg_imgui_metal
+  memdbg_lua
   nlohmann_json::nlohmann_json
   Threads::Threads
   "-framework Metal"

@@ -27,7 +27,9 @@
   [super viewDidLoad];
   _imguiInitialized = NO;
   _primaryTouch = nil;
-  _dpiScale = [[UIScreen mainScreen] scale];
+  _dpiScale = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad
+                  ? 1.08f
+                  : 1.0f;
 
   self.device = MTLCreateSystemDefaultDevice();
   if (!self.device) {
@@ -42,8 +44,10 @@
   self.mtkView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
   self.mtkView.sampleCount = 1;
   self.mtkView.preferredFramesPerSecond = 60;
+  self.mtkView.contentScaleFactor = [[UIScreen mainScreen] scale];
   self.mtkView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
   self.mtkView.backgroundColor = [UIColor colorWithRed:11.0f/255.0f green:11.0f/255.0f blue:14.0f/255.0f alpha:1.0f];
+  self.mtkView.multipleTouchEnabled = YES;
   [self.view addSubview:self.mtkView];
 
   IMGUI_CHECKVERSION();
@@ -65,6 +69,7 @@
     ImGui_ImplMetal_Shutdown();
     ImGui::DestroyContext();
   }
+  [super dealloc];
 }
 
 #pragma mark - MTKViewDelegate
@@ -74,9 +79,17 @@
 
   ImGuiIO &io = ImGui::GetIO();
   io.DisplaySize = ImVec2(view.bounds.size.width, view.bounds.size.height);
-  CGFloat scale = view.window.screen.scale ?: view.contentScaleFactor;
+  CGFloat scale = view.window.screen.scale;
+  if (scale <= 0.0) scale = view.contentScaleFactor;
   io.DisplayFramebufferScale = ImVec2(scale, scale);
   io.DeltaTime = 1.0f / 60.0f;
+
+  UIEdgeInsets safe = view.safeAreaInsets;
+  memdbg::frontend::set_mobile_safe_area(
+      static_cast<float>(safe.left),
+      static_cast<float>(safe.top),
+      static_cast<float>(safe.right),
+      static_cast<float>(safe.bottom));
 
   [self _applyTouchStateToImGui];
 
@@ -117,7 +130,7 @@
   if (!t) return;
   CGPoint p = [t locationInView:self.mtkView];
   ImGuiIO &io = ImGui::GetIO();
-  io.AddMousePosEvent(p.x * io.DisplayFramebufferScale.x, p.y * io.DisplayFramebufferScale.y);
+  io.AddMousePosEvent(p.x, p.y);
   io.AddMouseButtonEvent(0, true);
   _primaryTouch = t;
 }
@@ -128,7 +141,7 @@
   if (!t) return;
   CGPoint p = [t locationInView:self.mtkView];
   ImGuiIO &io = ImGui::GetIO();
-  io.AddMousePosEvent(p.x * io.DisplayFramebufferScale.x, p.y * io.DisplayFramebufferScale.y);
+  io.AddMousePosEvent(p.x, p.y);
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -148,7 +161,7 @@
   if (!t) return;
   CGPoint p = [t locationInView:self.mtkView];
   ImGuiIO &io = ImGui::GetIO();
-  io.AddMousePosEvent(p.x * io.DisplayFramebufferScale.x, p.y * io.DisplayFramebufferScale.y);
+  io.AddMousePosEvent(p.x, p.y);
 }
 
 @end

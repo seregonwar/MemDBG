@@ -22,6 +22,7 @@ int run_frontend(int argc, char **argv);
  *   The render backend (OpenGL/Metal) is owned by the calling shell. */
 void init_app_shared(AppState &state, float dpi_scale);
 void draw_app(AppState &state);
+void set_mobile_safe_area(float left, float top, float right, float bottom);
 void draw_mobile_app(AppState &state);
 void shutdown_app_shared(AppState &state);
 
