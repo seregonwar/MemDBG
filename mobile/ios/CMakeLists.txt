@@ -179,6 +179,11 @@ set(MOBILE_SOURCES
 
   # Shared frontend sources (re-using the desktop UI via draw_app()).
   ${FRONTEND_ROOT}/src/app/shell/memdbg_app.cpp
+  ${FRONTEND_ROOT}/src/app/shell/state.cpp
+  ${FRONTEND_ROOT}/src/app/shell/connection.cpp
+  ${FRONTEND_ROOT}/src/app/shell/chrome.cpp
+  ${FRONTEND_ROOT}/src/app/shell/session.cpp
+  ${FRONTEND_ROOT}/src/app/shell/mobile/mobile.cpp
 
   ${FRONTEND_ROOT}/src/core/crash_logger.cpp
   ${FRONTEND_ROOT}/src/core/discovery_client.cpp
@@ -205,6 +210,10 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/screens/consoles/screen_consoles.cpp
   ${FRONTEND_ROOT}/src/screens/processes/screen_processes.cpp
   ${FRONTEND_ROOT}/src/screens/memory/screen_memory.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_helpers.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_compare.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_session.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_async.cpp
   ${FRONTEND_ROOT}/src/screens/scanner/screen_scanner.cpp
   ${FRONTEND_ROOT}/src/screens/pointer_scanner/screen_pointer_scanner.cpp
   ${FRONTEND_ROOT}/src/screens/aob_scanner/screen_aob_scanner.cpp
@@ -217,6 +226,8 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/screens/settings/screen_settings.cpp
   ${FRONTEND_ROOT}/src/screens/credits/screen_credits.cpp
   ${FRONTEND_ROOT}/src/screens/debugger/debugger_disassembly.cpp
+  ${FRONTEND_ROOT}/src/screens/debugger/debugger_patch_studio.cpp
+  ${FRONTEND_ROOT}/src/screens/debugger/debugger_notebook.cpp
   ${FRONTEND_ROOT}/src/screens/debugger/screen_debugger.cpp
   ${FRONTEND_ROOT}/src/screens/tracer/screen_tracer.cpp
 

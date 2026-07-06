@@ -174,6 +174,11 @@ add_executable(memdbg_frontend
   # app (entry point, shell, shared state)
   src/app/main.cpp
   src/app/shell/memdbg_app.cpp
+  src/app/shell/state.cpp
+  src/app/shell/connection.cpp
+  src/app/shell/chrome.cpp
+  src/app/shell/session.cpp
+  src/app/shell/mobile/mobile.cpp
 
   # core (backend clients)
   src/core/crash_logger.cpp
@@ -208,6 +213,10 @@ add_executable(memdbg_frontend
   src/screens/consoles/screen_consoles.cpp
   src/screens/processes/screen_processes.cpp
   src/screens/memory/screen_memory.cpp
+  src/screens/scanner/scanner_helpers.cpp
+  src/screens/scanner/scanner_compare.cpp
+  src/screens/scanner/scanner_session.cpp
+  src/screens/scanner/scanner_async.cpp
   src/screens/scanner/screen_scanner.cpp
   src/screens/pointer_scanner/screen_pointer_scanner.cpp
   src/screens/aob_scanner/screen_aob_scanner.cpp
@@ -221,6 +230,8 @@ add_executable(memdbg_frontend
   src/screens/settings/screen_settings.cpp
   src/screens/credits/screen_credits.cpp
   src/screens/debugger/debugger_disassembly.cpp
+  src/screens/debugger/debugger_patch_studio.cpp
+  src/screens/debugger/debugger_notebook.cpp
   src/screens/debugger/screen_debugger.cpp
   src/screens/tracer/screen_tracer.cpp
 

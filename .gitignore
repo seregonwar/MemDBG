@@ -76,3 +76,4 @@ docs/x_project_article.md
 /mobile/android/app/build
 /mobile/android/build
 /mobile/android/captures
+*.tmp

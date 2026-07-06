@@ -48,10 +48,10 @@ memdbg_status_t build_framed_payload(const void *data, uint32_t data_len,
 
 uint64_t monotonic_seconds(void);
 
-/* ---- Legacy ps5debug compatibility service (defined in compat_ps5debug.c) ---- */
+/* ---- Legacy ps5debug compatibility service (defined in legacy/legacy_server.c) ---- */
 
-memdbg_status_t memdbg_ps5debug_compat_start(const memdbg_config_t *cfg);
-void memdbg_ps5debug_compat_stop(void);
+memdbg_status_t memdbg_legacy_start(const memdbg_config_t *cfg);
+void            memdbg_legacy_stop(void);
 
 /* ---- Shared globals (defined in memdbg.c) ---- */
 

@@ -782,6 +782,8 @@
   "taskmgr.col_maps": "Maps",
   "taskmgr.col_memory": "Memory",
   "debugger.title": "Debugger",
+  "debugger.unsupported_title": "Unsupported",
+  "debugger.connect_first_title": "Not Connected",
   "debugger.unsupported": "This payload does not support the debugger. Update to a newer build.",
   "debugger.connect_first": "Connect a console before using the debugger.",
   "debugger.attach": "Attach",

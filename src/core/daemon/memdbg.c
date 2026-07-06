@@ -610,13 +610,14 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   }
 
   if (cfg.enable_legacy_compat) {
-    memdbg_status_t lstatus = memdbg_ps5debug_compat_start(&cfg);
+    memdbg_status_t lstatus = memdbg_legacy_start(&cfg);
     if (lstatus == MEMDBG_OK) {
       memdbg_log_write(MEMDBG_LOG_INFO,
-                       "ps5debug-compat: active on tcp/%u", cfg.legacy_port);
+                       "ps5debug-legacy: active on tcp/%u, debugger-intr tcp/755",
+                       cfg.legacy_port);
     } else {
       memdbg_log_write(MEMDBG_LOG_WARN,
-                       "ps5debug-compat: disabled: %s",
+                       "ps5debug-legacy: disabled: %s",
                        memdbg_strerror(lstatus));
     }
   }
@@ -663,7 +664,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     (void)pthread_join(workers[i], NULL);
 
   memdbg_tracer_daemon_stop();
-  memdbg_ps5debug_compat_stop();
+  memdbg_legacy_stop();
 
   (void)pal_socket_close(listen_fd);
   memdbg_discovery_stop();

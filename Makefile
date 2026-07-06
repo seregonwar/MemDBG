@@ -131,6 +131,18 @@ test-new-features: tests/test_new_features.c
 	@echo "--- Running New Features test ---"
 	$(BUILD_DIR)/test_new_features
 
+test-legacy-scanner-e2e: host tests/test_legacy_scanner_e2e.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_legacy_scanner_e2e.c -o $(BUILD_DIR)/test_legacy_scanner_e2e
+	@echo "--- Running Legacy Scanner E2E test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-scan.XXXXXX); \
+	legacy_port=19130; \
+	$(HOST_TARGET) --bind=127.0.0.1 --debug-port=19129 --legacy-compat --legacy-port=$$legacy_port --udp-port=19131 --data-root=$$tmpdir --no-udp-log --no-replace-existing >$$tmpdir/payload.log 2>&1 & \
+	pid=$$!; \
+	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
+	sleep 0.6; \
+	$(BUILD_DIR)/test_legacy_scanner_e2e 127.0.0.1 $$legacy_port
+
 test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features
 
 payload-ps4: $(PS4_TARGET)
