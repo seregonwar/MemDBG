@@ -2710,11 +2710,11 @@ static void draw_mobile_logs(AppState &state, ImVec2 size) {
     if (mobile_action_button(std::string(icons::kPlay) +
                                  "  Start listener",
                              true)) {
-      std::string error;
-      if (ensure_udp_listener(state, error))
+      std::string start_error;
+      if (ensure_udp_listener(state, start_error))
         set_status(state, "UDP listener started");
       else
-        set_status(state, error);
+        set_status(state, start_error);
     }
   } else if (mobile_action_button(std::string(icons::kStop) +
                                       "  Stop listener",

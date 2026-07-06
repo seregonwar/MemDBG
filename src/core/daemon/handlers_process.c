@@ -8,12 +8,12 @@
  * reduce compilation duplication across translation units.
  */
 
-#include "memdbg/core/memdbg_protocol.h"
+#include "daemon_internal.h"
+#include "memdbg/core/memdbg_protocol_process_handlers.h"
+
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/debug/memdbg_process.h"
-#include "memdbg/pal/pal_memory.h"
 #include "memdbg/pal/pal_time.h"
-#include "daemon_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -157,7 +157,9 @@ memdbg_status_t handle_process_control(int fd,
 memdbg_status_t handle_process_call(int fd,
     const memdbg_packet_header_t *req,
     const void *body, uint32_t body_len,
-    memdbg_send_response_fn send_response_fn) {
+    memdbg_send_response_fn send_response_fn,
+    void (*sleep_ms_fn)(uint32_t)) {
+  if (sleep_ms_fn == NULL) sleep_ms_fn = memdbg_sleep_ms;
   if (body_len != sizeof(memdbg_process_call_request_t))
     return MEMDBG_ERR_PROTOCOL;
   const memdbg_process_call_request_t *cr =
@@ -265,7 +267,7 @@ memdbg_status_t handle_process_call(int fd,
     uint32_t waited_ms = 0U;
     while (!memdbg_debugger_is_stopped() && waited_ms < max_wait_ms) {
       (void)memdbg_debugger_poll_events();
-      memdbg_sleep_ms(10U);
+      sleep_ms_fn(10U);
       waited_ms += 10U;
     }
     if (!memdbg_debugger_is_stopped()) {

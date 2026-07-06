@@ -63,9 +63,9 @@ test-aob-boundary: $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/h
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 
-test-process-aob-e2e: host tests/test_process_aob_e2e.c
+test-process-aob-e2e: host tests/test_process_aob_e2e.c tests/e2e_utils.c tests/e2e_utils.h
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_aob_e2e.c -o $(BUILD_DIR)/test_process_aob_e2e
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_aob_e2e.c tests/e2e_utils.c -o $(BUILD_DIR)/test_process_aob_e2e
 	@echo "--- Running process AOB E2E test ---"
 	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e.XXXXXX); \
 	port=19120; \
@@ -81,9 +81,9 @@ test-debugger: $(BUILD_DIR)/host/debug/session/memdbg_debugger.o tests/test_debu
 	@echo "--- Running Debugger test ---"
 	$(BUILD_DIR)/test_debugger
 
-test-debugger-e2e: host tests/test_debugger_e2e.c
+test-debugger-e2e: host tests/test_debugger_e2e.c tests/e2e_utils.c tests/e2e_utils.h
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_e2e.c -o $(BUILD_DIR)/test_debugger_e2e
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_e2e.c tests/e2e_utils.c -o $(BUILD_DIR)/test_debugger_e2e
 	@echo "--- Running Debugger E2E test ---"
 	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-dbg.XXXXXX); \
 	port=19121; \
