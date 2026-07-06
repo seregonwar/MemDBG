@@ -511,6 +511,9 @@ void connect_console(AppState &state) {
   normalize_ports(state);
   state.client.disconnect();
   state.has_hello = false;
+  state.klog_connected = false;
+  state.klog_lines.clear();
+  state.klog_raw.clear();
   state.processes.clear(); state.maps.clear(); state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
@@ -1204,6 +1207,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.tracer_temp_events.clear();
   state.client.disconnect();
   state.has_hello = false;
+  state.klog_connected = false;
+  state.klog_lines.clear();
+  state.klog_raw.clear();
   state.processes.clear(); state.maps.clear(); state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
@@ -1543,6 +1549,7 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
     sidebar_section(locale::tr("sidebar.section.system"));
     nav_item(state, Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
     nav_item(state, Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
+    nav_item(state, Screen::Klog, icons::kTerminal, locale::tr("nav.klog"));
 
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
@@ -2157,6 +2164,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
   case Screen::Tracer:    draw_tracer(state, avail); break;
   case Screen::Settings:  draw_settings(state, avail); break;
   case Screen::Credits:   draw_credits(state, avail); break;
+  case Screen::Klog:     draw_klog(state, avail); break;
   }
 }
 
@@ -4733,7 +4741,8 @@ static void draw_bottom_tab_bar(AppState &state, ImVec2 pos, ImVec2 size) {
     const ImVec2 tab_max(pos.x + tab_w * 6, pos.y + tab_h);
     const bool is_overflow_active =
         state.screen == Screen::Plugins || state.screen == Screen::Logs ||
-        state.screen == Screen::Credits || state.screen == Screen::PluginGUI;
+        state.screen == Screen::Credits || state.screen == Screen::PluginGUI ||
+        state.screen == Screen::Klog;
 
     if (is_overflow_active) {
       ImVec4 bg(32.0f/255.0f, 58.0f/255.0f, 45.0f/255.0f, 1.0f);
@@ -4832,6 +4841,11 @@ static void draw_mobile_content(AppState &state, ImVec2 size) {
 
   if (state.screen == Screen::Credits) {
     draw_mobile_credits(state, size);
+    ImGui::PopStyleVar(3);
+    return;
+  }
+  if (state.screen == Screen::Klog) {
+    draw_klog(state, size);
     ImGui::PopStyleVar(3);
     return;
   }

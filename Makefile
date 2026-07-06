@@ -95,7 +95,9 @@ test-debugger-e2e: host tests/test_debugger_e2e.c
 
 test-debugger-protocol: tests/test_debugger_protocol.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_protocol.c -o $(BUILD_DIR)/test_debugger_protocol
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_protocol.c \
+		src/core/daemon/handlers_debug.c src/core/daemon/handlers_process.c \
+		-o $(BUILD_DIR)/test_debugger_protocol
 	@echo "--- Running Debugger Protocol test ---"
 	$(BUILD_DIR)/test_debugger_protocol
 
@@ -104,6 +106,12 @@ test-lz4: src/pal/lz4.c include/memdbg/pal/lz4.h tests/test_lz4.c
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_lz4.c src/pal/lz4.c -o $(BUILD_DIR)/test_lz4
 	@echo "--- Running LZ4 test ---"
 	$(BUILD_DIR)/test_lz4
+
+test-benchmarks: src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c tests/test_benchmarks.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c -o $(BUILD_DIR)/test_benchmarks
+	@echo "--- Running Benchmarks ---"
+	$(BUILD_DIR)/test_benchmarks
 
 test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)

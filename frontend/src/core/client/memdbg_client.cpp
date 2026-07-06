@@ -212,6 +212,7 @@ void Client::disconnect() {
 }
 
 void Client::disconnect_unlocked() {
+  klog_disconnect();
   if (platform::socket_valid(fd_)) {
     platform::socket_shutdown_both(fd_);
     platform::socket_close(fd_);
@@ -987,6 +988,135 @@ bool Client::process_call(const memdbg_process_call_request_t &request_body,
                sizeof(request_body), response))
     return false;
   return read_object(response, out);
+}
+
+/* ---- Klog streaming ---- */
+
+bool Client::klog_connect(const std::string &host, uint16_t &klog_port) {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+
+  /* Close any existing klog socket */
+  if (platform::socket_valid(klog_fd_)) {
+    platform::socket_close(klog_fd_);
+    klog_fd_ = platform::invalid_socket();
+  }
+
+  if (!platform::socket_valid(fd_)) {
+    set_error("not connected to payload");
+    return false;
+  }
+
+  /* Send KLOG_CONNECT command on the main protocol socket */
+  memdbg_klog_connect_request_t body{};
+  body.reserved = 0;
+
+  memdbg_packet_header_t header{};
+  header.magic = MEMDBG_PACKET_MAGIC;
+  header.version = MEMDBG_PROTOCOL_VERSION;
+  header.command = MEMDBG_CMD_KLOG_CONNECT;
+  header.request_id = next_request_id_++;
+  header.length = sizeof(body);
+
+  if (!write_all(&header, sizeof(header)) ||
+      !write_all(&body, sizeof(body))) {
+    return false;
+  }
+
+  memdbg_response_header_t response_header{};
+  if (!read_exact(&response_header, sizeof(response_header))) {
+    return false;
+  }
+  if (response_header.magic != MEMDBG_PACKET_MAGIC ||
+      response_header.version != MEMDBG_PROTOCOL_VERSION ||
+      response_header.command != MEMDBG_CMD_KLOG_CONNECT ||
+      response_header.request_id != header.request_id) {
+    set_error("invalid klog connect response header");
+    return false;
+  }
+  if (response_header.status != 0) {
+    std::ostringstream oss;
+    oss << "klog connect: payload status " << response_header.status
+        << " (" << payload_status_name(response_header.status) << ")";
+    set_error(oss.str());
+    return false;
+  }
+  if (response_header.length != sizeof(uint32_t)) {
+    set_error("short klog connect response");
+    return false;
+  }
+
+  uint32_t port = 0;
+  if (!read_exact(&port, sizeof(port))) {
+    return false;
+  }
+  klog_port = static_cast<uint16_t>(port);
+
+  /* Open a secondary raw TCP connection for the klog stream */
+  klog_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (!platform::socket_valid(klog_fd_)) {
+    set_error_from_errno("klog socket");
+    klog_fd_ = platform::invalid_socket();
+    return false;
+  }
+
+  (void)platform::socket_set_recv_timeout(klog_fd_, 500U); /* 500ms timeout */
+  (void)platform::socket_set_nosigpipe(klog_fd_);
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(klog_port);
+  if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+    set_error("invalid klog IPv4 address");
+    platform::socket_close(klog_fd_);
+    klog_fd_ = platform::invalid_socket();
+    return false;
+  }
+
+  if (::connect(klog_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+    set_error_from_errno("klog connect");
+    platform::socket_close(klog_fd_);
+    klog_fd_ = platform::invalid_socket();
+    return false;
+  }
+
+  last_error_.clear();
+  return true;
+}
+
+bool Client::klog_read(std::vector<uint8_t> &out) {
+  out.clear();
+  if (!platform::socket_valid(klog_fd_)) {
+    return false;
+  }
+
+  uint8_t buf[4096];
+  int n = platform::socket_recv(klog_fd_, buf, sizeof(buf));
+  if (n < 0) {
+    int err = platform::socket_last_error_code();
+    if (platform::socket_error_interrupted(err) ||
+        platform::socket_error_would_block(err)) {
+      return true; /* no data available, not an error */
+    }
+    set_error_from_errno("klog read");
+    return false;
+  }
+  if (n == 0) {
+    /* Connection closed by server */
+    return false;
+  }
+  out.assign(buf, buf + static_cast<size_t>(n));
+  return true;
+}
+
+void Client::klog_disconnect() {
+  if (platform::socket_valid(klog_fd_)) {
+    platform::socket_close(klog_fd_);
+    klog_fd_ = platform::invalid_socket();
+  }
+}
+
+bool Client::klog_connected() const {
+  return platform::socket_valid(klog_fd_);
 }
 
 bool Client::kernel_base(KernelBase &out) {

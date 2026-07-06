@@ -94,6 +94,29 @@ static void test_literal_only_blocks(void) {
   TEST("literal-only len 16 bytes", memcmp(output, block16 + 2, 16U) == 0);
 }
 
+static void test_short_literal_wildcopy_bounds(void) {
+  uint8_t input[32];
+  memset(input, 'A', sizeof(input));
+
+  enum { dst_capacity = 5, backing_size = 16 };
+  uint8_t dst[backing_size];
+  memset(dst, 0xCD, sizeof(dst));
+
+  int compressed_len = lz4_compress_default((const char *)(const void *)input,
+                                            (char *)(void *)dst,
+                                            (int)sizeof(input), dst_capacity);
+  TEST("short literal tight output reports full dst", compressed_len == 0);
+
+  int canary_ok = 1;
+  for (size_t i = dst_capacity; i < sizeof(dst); ++i) {
+    if (dst[i] != 0xCDU) {
+      canary_ok = 0;
+      break;
+    }
+  }
+  TEST("short literal wildcopy stays inside dst_capacity", canary_ok);
+}
+
 static void test_corrupt_blocks(void) {
   const uint8_t zero_offset[] = {0x00U, 0x00U, 0x00U};
   uint8_t output[16];
@@ -115,6 +138,7 @@ int main(void) {
   printf("--- LZ4 tests ---\n");
   test_roundtrip();
   test_literal_only_blocks();
+  test_short_literal_wildcopy_bounds();
   test_corrupt_blocks();
 
   if (g_failed != 0) {

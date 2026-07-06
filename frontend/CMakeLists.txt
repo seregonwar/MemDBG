@@ -215,6 +215,7 @@ add_executable(memdbg_frontend
   src/screens/plugins/screen_plugins.cpp
   src/screens/plugins/screen_plugin_gui.cpp
   src/screens/logs/screen_logs.cpp
+    src/screens/klog/screen_klog.cpp
   src/screens/telemetry/screen_telemetry.cpp
   src/screens/task_manager/screen_taskmgr.cpp
   src/screens/settings/screen_settings.cpp

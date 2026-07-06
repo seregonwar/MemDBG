@@ -16,7 +16,9 @@
 
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/core/memdbg_protocol_debug_handlers.h"
+#include "memdbg/core/memdbg_protocol_process_handlers.h"
 #include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/pal/pal_memory.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -80,8 +82,22 @@ static memdbg_status_t g_mock_clear_all_bp_st = MEMDBG_OK;
 static memdbg_status_t g_mock_clear_all_wp_st = MEMDBG_OK;
 static memdbg_status_t g_mock_get_threads_st = MEMDBG_OK;
 
-static bool     g_mock_is_stopped = false;
-static int32_t  g_mock_stop_lwp   = 0;
+/* ---- PAL memory mock ---- */
+static memdbg_status_t g_mock_pal_alloc_st   = MEMDBG_OK;
+static memdbg_status_t g_mock_pal_write_st   = MEMDBG_OK;
+static memdbg_status_t g_mock_pal_free_st    = MEMDBG_OK;
+static uint64_t        g_mock_stub_addr      = 0x7FFFDEAD0000ULL;
+static size_t          g_mock_write_expected = 0U; /* 0 = no check */
+static size_t          g_mock_write_result   = 0U;
+static uint32_t        g_mock_write_call_count = 0U;
+static uint32_t        g_mock_write_fail_on_call = 0U; /* 0 = never fail by count */
+
+/* ---- Sleep mock ---- */
+static uint32_t g_sleep_ms_called = 0U;
+
+static bool     g_mock_is_stopped  = false;
+static int32_t  g_mock_stop_lwp    = 0;
+static bool     g_mock_is_attached = false;
 
 /* Thread list mock */
 static int32_t g_mock_lwps[4] = { 1001, 1002, 1003, 0 };
@@ -121,8 +137,18 @@ static void mock_backend_reset(void) {
   g_mock_clear_all_bp_st = MEMDBG_OK;
   g_mock_clear_all_wp_st = MEMDBG_OK;
   g_mock_get_threads_st = MEMDBG_OK;
-  g_mock_is_stopped = false;
+  g_mock_is_stopped  = false;
+  g_mock_is_attached = false;
   g_mock_stop_lwp = 0;
+  g_mock_pal_alloc_st = MEMDBG_OK;
+  g_mock_pal_write_st = MEMDBG_OK;
+  g_mock_pal_free_st  = MEMDBG_OK;
+  g_mock_stub_addr    = 0x7FFFDEAD0000ULL;
+  g_mock_write_expected = 0U;
+  g_mock_write_result   = 0U;
+  g_mock_write_call_count = 0U;
+  g_mock_write_fail_on_call = 0U;
+  g_sleep_ms_called = 0U;
   g_mock_thread_count = 3;
   g_mock_bp_active_count = 0;
   g_mock_wp_installed_count = 0;
@@ -207,6 +233,9 @@ memdbg_status_t memdbg_debugger_poll_events(void) {
 bool memdbg_debugger_is_stopped(void) {
   return g_mock_is_stopped;
 }
+bool memdbg_debugger_is_attached(void) {
+  return g_mock_is_attached;
+}
 int32_t memdbg_debugger_get_stop_lwp(void) {
   return g_mock_stop_lwp;
 }
@@ -257,6 +286,41 @@ bool memdbg_debugger_is_elevated(int32_t pid) {
 
 int32_t memdbg_debugger_attached_pid(void) {
   return 100;
+}
+
+/* ---- PAL memory mock implementations ---- */
+memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
+                                 uint32_t protection, uint32_t flags,
+                                 uint64_t *address_out) {
+  (void)pid; (void)hint; (void)length; (void)protection; (void)flags;
+  if (address_out != NULL && g_mock_pal_alloc_st == MEMDBG_OK)
+    *address_out = g_mock_stub_addr;
+  return g_mock_pal_alloc_st;
+}
+memdbg_status_t pal_memory_write(int pid, uint64_t address,
+                                 const void *buffer, size_t length,
+                                 size_t *written_out) {
+  (void)pid; (void)address; (void)buffer;
+  g_mock_write_call_count++;
+  /* Fail if this is the Nth call marked to fail */
+  if (g_mock_write_fail_on_call != 0U &&
+      g_mock_write_call_count == g_mock_write_fail_on_call)
+    return MEMDBG_ERR_IO;
+  if (g_mock_write_expected != 0U && length != g_mock_write_expected)
+    return MEMDBG_ERR_IO;
+  if (written_out != NULL)
+    *written_out = (g_mock_write_result != 0U) ? g_mock_write_result : length;
+  return g_mock_pal_write_st;
+}
+memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length) {
+  (void)pid; (void)address; (void)length;
+  return g_mock_pal_free_st;
+}
+
+/* ---- Sleep mock ---- */
+static void mock_sleep_ms(uint32_t ms) {
+  (void)ms;
+  g_sleep_ms_called++;
 }
 
 int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
@@ -1012,6 +1076,229 @@ static void test_proto_clear_all_breakpoints(void) {
   g_mock_bp_active_count = 0;
 }
 
+/* ---- 23. handle_process_call ---- */
+
+static void test_proto_process_call(void) {
+  printf("\n--- handle_process_call ---\n");
+  mock_backend_reset(); mock_send_reset();
+
+  memdbg_process_call_request_t body;
+  memset(&body, 0, sizeof(body));
+  body.pid = 200;
+  body.function_address = 0x7FFF10000000ULL;
+  body.args[0] = 0xAAAAULL;
+  body.args[1] = 0xBBBBULL;
+  body.args[2] = 0xCCCCULL;
+  body.args[3] = 0xDDDDULL;
+  body.args[4] = 0xEEEEULL;
+  body.args[5] = 0xFFFFULL;
+
+  memdbg_status_t st;
+
+  /* ---- Body validation ---- */
+
+  /* Short body */
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body) - 1, send_response, mock_sleep_ms);
+  TEST_ERR("proc_call short body", st, MEMDBG_ERR_PROTOCOL);
+
+  /* Long body */
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body) + 1, send_response, mock_sleep_ms);
+  TEST_ERR("proc_call long body", st, MEMDBG_ERR_PROTOCOL);
+
+  /* ---- Parameter validation ---- */
+
+  /* PID <= 1 */
+  {
+    memdbg_process_call_request_t bad = body;
+    bad.pid = 0;
+    st = handle_process_call(g_mock_socket, &g_req, &bad,
+                             sizeof(bad), send_response, mock_sleep_ms);
+    TEST_ERR("proc_call pid 0", st, MEMDBG_ERR_PARAM);
+  }
+
+  /* function_address == 0 */
+  {
+    memdbg_process_call_request_t bad = body;
+    bad.function_address = 0ULL;
+    st = handle_process_call(g_mock_socket, &g_req, &bad,
+                             sizeof(bad), send_response, mock_sleep_ms);
+    TEST_ERR("proc_call addr 0", st, MEMDBG_ERR_PARAM);
+  }
+
+  /* PID == self (getpid) */
+  {
+    memdbg_process_call_request_t bad = body;
+    bad.pid = (int32_t)getpid();
+    st = handle_process_call(g_mock_socket, &g_req, &bad,
+                             sizeof(bad), send_response, mock_sleep_ms);
+    TEST_ERR("proc_call self pid", st, MEMDBG_ERR_PERMISSION);
+  }
+
+  /* ---- Attach fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_attach_st = MEMDBG_ERR_PERMISSION;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call attach fail", st, MEMDBG_ERR_PERMISSION);
+
+  /* ---- Already attached to same PID -> reuse, then stop fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_is_attached = true; /* already attached to PID 100 */
+  /* But we're requesting PID 200, so it will detach and re-attach */
+  g_mock_stop_st = MEMDBG_ERR_STATE;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call stop fail (re-attach)", st, MEMDBG_ERR_STATE);
+  /* Should have detached after stop failure */
+
+  /* ---- Already attached to same PID -> reuse, then stop succeeds ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_is_attached = true;
+  /* Override attached_pid to match our request */
+  /* We can't change the stub return value of memdbg_debugger_attached_pid()
+     easily; it always returns 100. So we use PID 100 for the "already
+     attached" test. */
+  {
+    memdbg_process_call_request_t samepid = body;
+    samepid.pid = 100; /* matches g_mock_attached_pid() */
+    /* Force stop to succeed, but get_threads returns 0 */
+    g_mock_thread_count = 0;
+    st = handle_process_call(g_mock_socket, &g_req, &samepid,
+                             sizeof(samepid), send_response, mock_sleep_ms);
+    TEST_ERR("proc_call no threads (reuse)", st, MEMDBG_ERR_STATE);
+    g_mock_thread_count = 3;
+  }
+
+  /* ---- No threads ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_thread_count = 0;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call no threads", st, MEMDBG_ERR_STATE);
+  g_mock_thread_count = 3;
+
+  /* ---- get_regs fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_get_regs_st = MEMDBG_ERR_IO;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call get_regs fail", st, MEMDBG_ERR_IO);
+  /* Should detach after failure (was not attached before) */
+
+  /* ---- pal_memory_alloc fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_pal_alloc_st = MEMDBG_ERR_NOMEM;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call alloc fail", st, MEMDBG_ERR_NOMEM);
+  g_mock_pal_alloc_st = MEMDBG_OK;
+
+  /* ---- pal_memory_write (INT3) fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_pal_write_st = MEMDBG_ERR_IO;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call write int3 fail", st, MEMDBG_ERR_IO);
+  g_mock_pal_write_st = MEMDBG_OK;
+
+  /* ---- pal_memory_write (stack return addr) fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  /* First call (INT3, 1 byte) succeeds; second call (stack, 8 bytes) fails */
+  g_mock_write_fail_on_call = 2U; /* fail on the second pal_memory_write call */
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call write stack addr fail", st, MEMDBG_ERR_IO);
+  /* Should have called pal_memory_write exactly twice (INT3 + stack), then
+     freed the stub and detached. */
+  TEST_EQ_U("proc_call write call count", g_mock_write_call_count, 2U);
+  g_mock_write_fail_on_call = 0U;
+  g_mock_write_call_count = 0U;
+
+  /* ---- set_regs fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_set_regs_st = MEMDBG_ERR_IO;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call set_regs fail", st, MEMDBG_ERR_IO);
+  /* Should free stub and detach */
+  g_mock_set_regs_st = MEMDBG_OK;
+
+  /* ---- continue fails ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_continue_st = MEMDBG_ERR_IO;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call continue fail", st, MEMDBG_ERR_IO);
+  g_mock_continue_st = MEMDBG_OK;
+
+  /* ---- Timeout (never stops) ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_is_stopped = false; /* never becomes stopped */
+  g_sleep_ms_called = 0U;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call timeout", st, MEMDBG_ERR_STATE);
+  /* Should have polled ~500 times (5s / 10ms = 500) */
+  TEST("proc_call sleep called during timeout", g_sleep_ms_called >= 490U);
+  g_mock_is_stopped = false;
+  g_sleep_ms_called = 0U;
+
+  /* ---- Success path ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_is_stopped = true; /* immediately stopped after continue */
+  /* Set a known return value in RAX */
+  g_mock_regs.r_rax = 0xCAFEBABEDEADBEEFLL;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_OK("proc_call success", st);
+  TEST_EQ_I("proc_call sent OK", (int)g_last_status, (int)MEMDBG_OK);
+  /* Verify response payload contains the RAX value */
+  {
+    const memdbg_process_call_response_t *resp =
+        (const memdbg_process_call_response_t *)g_last_payload;
+    TEST_EQ_U("proc_call payload len", g_last_payload_len,
+              (uint32_t)sizeof(memdbg_process_call_response_t));
+    TEST_EQ_LL("proc_call rax matches", resp->rax, 0xCAFEBABEDEADBEEFLL);
+  }
+
+  /* ---- Success with argument forwarding ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_is_stopped = true;
+  {
+    memdbg_process_call_request_t add_body;
+    memset(&add_body, 0, sizeof(add_body));
+    add_body.pid = 200;
+    add_body.function_address = 0x7FFF20000000ULL;
+    add_body.args[0] = 42ULL;
+    add_body.args[1] = 58ULL;
+    add_body.args[2] = 0ULL;
+    add_body.args[3] = 0ULL;
+    add_body.args[4] = 0ULL;
+    add_body.args[5] = 0ULL;
+    /* Mock returns 100 (42 + 58) */
+    g_mock_regs.r_rax = 100LL;
+    st = handle_process_call(g_mock_socket, &g_req, &add_body,
+                             sizeof(add_body), send_response, mock_sleep_ms);
+    TEST_OK("proc_call sum args", st);
+    {
+      const memdbg_process_call_response_t *resp =
+          (const memdbg_process_call_response_t *)g_last_payload;
+      TEST_EQ_LL("proc_call sum rax=100", resp->rax, 100ULL);
+    }
+  }
+
+  /* ---- Network error ---- */
+  mock_backend_reset(); mock_send_reset();
+  g_mock_is_stopped = true;
+  g_send_rc = -1;
+  st = handle_process_call(g_mock_socket, &g_req, &body,
+                           sizeof(body), send_response, mock_sleep_ms);
+  TEST_ERR("proc_call net error", st, MEMDBG_ERR_NET);
+  g_send_rc = 0;
+}
+
 /* ---- 22. handle_debug_clear_all_watchpoints ---- */
 
 static void test_proto_clear_all_watchpoints(void) {
@@ -1064,6 +1351,7 @@ int main(void) {
   test_proto_get_watchpoints();
   test_proto_clear_all_breakpoints();
   test_proto_clear_all_watchpoints();
+  test_proto_process_call();
 
   printf("\n=== Results ======================================\n");
   int total = g_passed + g_failed;

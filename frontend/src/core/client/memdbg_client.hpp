@@ -183,6 +183,13 @@ public:
                      std::vector<StackFrame> &out, bool &truncated);
   bool process_call(const memdbg_process_call_request_t &request,
                     memdbg_process_call_response_t &out);
+
+  /* ---- Klog streaming (secondary raw TCP connection) ---- */
+  bool klog_connect(const std::string &host, uint16_t &klog_port);
+  bool klog_read(std::vector<uint8_t> &out);
+  void klog_disconnect();
+  bool klog_connected() const;
+
   bool kernel_base(KernelBase &out);
   bool kernel_read(uint64_t address, uint32_t length,
                    std::vector<uint8_t> &out);
@@ -296,6 +303,7 @@ private:
   void set_error(const std::string &message);
 
   platform::socket_handle_t fd_ = platform::invalid_socket();
+  platform::socket_handle_t klog_fd_ = platform::invalid_socket();
   bool socket_runtime_active_ = false;
   uint32_t next_request_id_ = 1;
   std::string last_error_;
