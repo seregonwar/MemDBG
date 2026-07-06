@@ -263,12 +263,11 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   }
 
   const float scl = ui::dpi_scale();
-  const float gap = 12.0f * scl;
   const bool stacked = avail.x < 900.0f * scl;
   const float left_w = stacked
       ? avail.x
-      : std::clamp((avail.x - gap) * 0.40f, 360.0f * scl,
-                   std::max(360.0f * scl, (avail.x - gap) * 0.54f));
+      : std::clamp(avail.x * 0.40f, 360.0f * scl,
+                   std::max(360.0f * scl, avail.x * 0.54f));
   const float left_h = stacked ? std::max(330.0f * scl, avail.y * 0.48f)
                                : avail.y;
   const char *type_names[] = {"Bytes","u8","u16","u32","u64","float","double","pointer"};
@@ -363,9 +362,9 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   if (stacked) {
     ImGui::Spacing();
   } else {
-    ImGui::SameLine(0, gap);
+    ImGui::SameLine();
   }
-  const float list_h = stacked ? std::max(220.0f * scl, avail.y - left_h - gap)
+  const float list_h = stacked ? std::max(220.0f * scl, avail.y - left_h)
                                : avail.y;
   ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"),
                   ImVec2(0, list_h));

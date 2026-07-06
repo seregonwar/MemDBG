@@ -944,7 +944,7 @@ void draw_plugins(AppState &state, ImVec2 avail) {
   draw_catalog(state, catalog);
   ui::end_panel();
 
-  if (!stacked) ImGui::SameLine(0, gap);
+  if (!stacked) ImGui::SameLine();
   ui::begin_panel("PluginDetailsPanel", "Plugin Details", ImVec2(right_w, right_h));
   ImGui::BeginChild("PluginDetailsScroll", ImVec2(0, 0), false,
                     ImGuiWindowFlags_AlwaysVerticalScrollbar);

@@ -333,11 +333,12 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   ranges_builder.BuildRanges(&glyph_ranges);
 
   ImFontConfig base_cfg;
-  base_cfg.OversampleH = 3;
-  base_cfg.OversampleV = 2;
-  base_cfg.PixelSnapH = false;
-  base_cfg.RasterizerMultiply = 1.08f;
+  base_cfg.OversampleH = 4;
+  base_cfg.OversampleV = 3;
+  base_cfg.PixelSnapH = true;
+  base_cfg.RasterizerMultiply = 1.12f;
   base_cfg.GlyphRanges = glyph_ranges.Data;
+  base_cfg.FontBuilderFlags = 0;
 
   bool loaded_base = false;
   static const char *font_candidates[] = {
@@ -366,10 +367,12 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   if (!loaded_base) {
     ImFontConfig fallback_cfg;
     fallback_cfg.SizePixels = text_size;
-    fallback_cfg.OversampleH = 3;
-    fallback_cfg.OversampleV = 2;
-    fallback_cfg.RasterizerMultiply = 1.08f;
+    fallback_cfg.OversampleH = 4;
+    fallback_cfg.OversampleV = 3;
+    fallback_cfg.PixelSnapH = true;
+    fallback_cfg.RasterizerMultiply = 1.12f;
     fallback_cfg.GlyphRanges = glyph_ranges.Data;
+    fallback_cfg.FontBuilderFlags = 0;
     io.Fonts->AddFontDefault(&fallback_cfg);
   }
 
@@ -377,10 +380,11 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   {
     ImFontConfig cjk_cfg;
     cjk_cfg.MergeMode = true;
-    cjk_cfg.OversampleH = 2;
-    cjk_cfg.OversampleV = 1;
+    cjk_cfg.OversampleH = 3;
+    cjk_cfg.OversampleV = 2;
     cjk_cfg.PixelSnapH = true;
     cjk_cfg.GlyphRanges = io.Fonts->GetGlyphRangesJapanese();
+    cjk_cfg.FontBuilderFlags = 0;
 
     static const char *cjk_candidates[] = {
 #if defined(__APPLE__)
@@ -417,13 +421,16 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
     (void)loaded_cjk;  // best-effort; UI degrades gracefully without CJK font
   }
 
-  const float icon_size = std::roundf(15.0f * dpi_scale);
+  const float icon_size = std::roundf(16.0f * dpi_scale);
   ImFontConfig icon_cfg;
   icon_cfg.MergeMode = true;
   icon_cfg.FontDataOwnedByAtlas = false;
   icon_cfg.PixelSnapH = true;
-  icon_cfg.GlyphMinAdvanceX = std::roundf(16.0f * dpi_scale);
-  icon_cfg.GlyphOffset = ImVec2(0.0f, 1.0f * dpi_scale);
+  icon_cfg.OversampleH = 3;
+  icon_cfg.OversampleV = 2;
+  icon_cfg.GlyphMinAdvanceX = std::roundf(17.0f * dpi_scale);
+  icon_cfg.GlyphOffset = ImVec2(0.0f, 0.0f);
+  icon_cfg.FontBuilderFlags = 0;
   static const ImWchar icon_ranges[] = { 0xF000, 0xF8FF, 0 };
   io.Fonts->AddFontFromMemoryTTF(
       fa_solid_900, (int)fa_solid_900_len,
@@ -433,8 +440,11 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   brand_cfg.MergeMode = true;
   brand_cfg.FontDataOwnedByAtlas = false;
   brand_cfg.PixelSnapH = true;
-  brand_cfg.GlyphMinAdvanceX = std::roundf(16.0f * dpi_scale);
-  brand_cfg.GlyphOffset = ImVec2(0.0f, 1.0f * dpi_scale);
+  brand_cfg.OversampleH = 3;
+  brand_cfg.OversampleV = 2;
+  brand_cfg.GlyphMinAdvanceX = std::roundf(17.0f * dpi_scale);
+  brand_cfg.GlyphOffset = ImVec2(0.0f, 0.0f);
+  brand_cfg.FontBuilderFlags = 0;
   static const ImWchar brand_ranges[] = { 0xE000, 0xF8FF, 0 };
   io.Fonts->AddFontFromMemoryTTF(
       fa_brands_400, (int)fa_brands_400_len,
@@ -464,6 +474,15 @@ void init_app_shared(AppState &state, float dpi_scale) {
       set_status(state, plugin_error);
     }
   }
+
+  state.theme_manager.set_bundle_root(s_executable_dir);
+  {
+    std::string theme_error;
+    if (!state.theme_manager.load(&theme_error) && !theme_error.empty()) {
+      set_status(state, theme_error);
+    }
+  }
+  state.theme_manager.apply_active_theme();
 
   // Open crash logger in the executable directory
   try {

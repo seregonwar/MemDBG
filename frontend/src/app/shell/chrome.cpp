@@ -109,7 +109,7 @@ static void draw_gui_plugin_launcher(AppState &state) {
   ImGui::PushStyleColor(ImGuiCol_ButtonActive, alpha(palette.primary, 0.82f));
   const std::string launcher_label =
       std::string(icons::kPlugins) + " Open plugin UI##GuiPluginLauncher";
-  if (ImGui::Button(launcher_label.c_str(), ImVec2(width, 31.0f * scl))) {
+  if (ImGui::Button(launcher_label.c_str(), ImVec2(width, 34.0f * scl))) {
     ImGui::OpenPopup("GuiPluginLauncherPopup");
   }
   if (ImGui::IsItemHovered()) {
@@ -175,7 +175,7 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
   ImGui::PushID(label);
 
   const float scl = ui::dpi_scale();
-  const float row_h = 28.0f * scl;
+  const float row_h = 32.0f * scl;
   const float row_w = ImGui::GetContentRegionAvail().x;
   ImVec2 pos = ImGui::GetCursorScreenPos();
   ImGui::InvisibleButton("##nav", ImVec2(row_w, row_h));
@@ -188,7 +188,7 @@ static void nav_item(AppState &state, Screen screen, const char *icon, const cha
 
   if (selected || hovered) {
     const ImVec4 bg = selected
-        ? ImVec4(32.0f/255.0f, 58.0f/255.0f, 45.0f/255.0f, 1.0f)
+        ? ImVec4(ui::colors().primary.x * 0.3f, ui::colors().primary.y * 0.3f, ui::colors().primary.z * 0.3f, 1.0f)
         : alpha(ui::colors().bg3, 0.70f);
     dl->AddRectFilled(min, max, ui::color_u32(bg), 1.0f * scl);
     dl->AddRect(min, max,
@@ -251,27 +251,47 @@ void draw_sidebar(AppState &state, ImVec2 size) {
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg3);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8,6));
-  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 2.0f);
-  ImGui::BeginChild("SidebarStatus", ImVec2(0, 52.0f * scl), true, ImGuiWindowFlags_NoScrollbar);
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
+  ImGui::BeginChild("SidebarStatus", ImVec2(0, 72.0f * scl), true, ImGuiWindowFlags_NoScrollbar);
+
   const bool connected = state.client.connected();
   const ImVec4 status_color = state.connect_pending ? ui::colors().warning :
                               connected ? ui::colors().success : ui::colors().dim;
-  ui::status_dot(status_color);
-  ImGui::SameLine();
-  ImGui::BeginGroup();
-  ImGui::TextColored(status_color, "%s", state.connect_pending ? locale::tr("status.connecting") :
-                                          connected ? locale::tr("status.connected") : locale::tr("status.offline"));
-  ImGui::TextColored(ui::colors().dim, "%s:%d", state.host, state.debug_port);
-  ImGui::EndGroup();
-  ImGui::SameLine();
-  ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 72.0f * scl);
-  ImGui::TextColored(state.udp_listener.running() ? ui::colors().success : ui::colors().dim,
-                     "%s", state.udp_listener.running() ? locale::tr("sidebar.udp_on") : locale::tr("sidebar.udp_off"));
+  const ImVec4 udp_color = state.udp_listener.running() ? ui::colors().success : ui::colors().dim;
+
+  if (ImGui::BeginTable("SidebarStatusTable", 2, ImGuiTableFlags_NoBordersInBody, ImVec2(0, 0))) {
+    ImGui::TableSetupColumn("Left", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Right", ImGuiTableColumnFlags_WidthFixed, 80.0f * scl);
+
+    /* Row 1: Connection + UDP */
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ui::status_dot(status_color);
+    ImGui::SameLine();
+    ImGui::TextColored(status_color, "%s", state.connect_pending ? locale::tr("status.connecting") :
+                                            connected ? locale::tr("status.connected") : locale::tr("status.offline"));
+
+    ImGui::TableSetColumnIndex(1);
+    ui::status_dot(udp_color);
+    ImGui::SameLine();
+    ImGui::TextColored(udp_color, "%s", state.udp_listener.running() ? locale::tr("sidebar.udp_on") : locale::tr("sidebar.udp_off"));
+
+    /* Row 2: Host:Port + PID */
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextColored(ui::colors().muted, "%s:%d", state.host, state.debug_port);
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextColored(ui::colors().muted, "PID %d", state.selected_pid);
+
+    ImGui::EndTable();
+  }
+
   ImGui::EndChild();
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 
   /* Footer: fixed height, drawn first so scrollable area gets remaining space */
-  const float footer_h = 42.0f * scl;
+  const float footer_h = 38.0f * scl;
   const float avail_y = ImGui::GetContentRegionAvail().y;
   const float nav_h = avail_y - footer_h - 4.0f * scl;
 
@@ -323,10 +343,8 @@ void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::SetCursorPosY(size.y - footer_h - ImGui::GetStyle().WindowPadding.y);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 5));
   ImGui::BeginChild("SidebarFooter", ImVec2(0, footer_h), true, ImGuiWindowFlags_NoScrollbar);
-  ImGui::TextColored(ui::colors().dim, "TCP %d", state.debug_port);
-  ImGui::SameLine();
-  ImGui::TextColored(ui::colors().dim, "UDP %d", state.udp_port);
-  ImGui::TextColored(ui::colors().dim, "PID %d", state.selected_pid);
+  const auto *active_theme = state.theme_manager.active_theme();
+  ImGui::TextColored(ui::colors().dim, "Theme: %s", active_theme ? active_theme->name.c_str() : "Default");
   ImGui::EndChild();
   ImGui::PopStyleVar();
 
@@ -336,7 +354,7 @@ void draw_sidebar(AppState &state, ImVec2 size) {
 
 /* ---- Top bar ---- */
 
-static float topbar_control_h() { return 32.0f * ui::dpi_scale(); }
+static float topbar_control_h() { return 34.0f * ui::dpi_scale(); }
 static float topbar_logo_h() { return 34.0f * ui::dpi_scale(); }
 
 static float topbar_center_y(float item_h) {
@@ -512,7 +530,7 @@ void draw_top_bar(AppState &state, ImVec2 size) {
   ImGui::SetCursorPos(ImVec2(left_tb_x, topbar_center_y(topbar_control_h())));
 
   ImGui::BeginDisabled(client_async_busy(state));
-  if (topbar_button("TopbarRefreshPids", icons::kRefresh, locale::tr("topbar.pids"), 90.0f * scl))
+  if (topbar_button("TopbarRefreshPids", icons::kRefresh, locale::tr("topbar.pids"), 95.0f * scl))
     topbar_refresh_processes(state);
   ImGui::EndDisabled();
   ImGui::SameLine();
@@ -522,7 +540,7 @@ void draw_top_bar(AppState &state, ImVec2 size) {
   if (!state.client.connected()) ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(client_async_busy(state));
-  if (topbar_button("TopbarRefreshMaps", icons::kMemory, locale::tr("topbar.maps"), 90.0f * scl))
+  if (topbar_button("TopbarRefreshMaps", icons::kMemory, locale::tr("topbar.maps"), 95.0f * scl))
     topbar_refresh_maps(state);
   ImGui::EndDisabled();
 
@@ -539,7 +557,7 @@ void draw_top_bar(AppState &state, ImVec2 size) {
 
   const bool has_update = !update_tag.empty();
   const bool connected = state.client.connected();
-  const float btn_w = 126.0f * scl;
+  const float btn_w = 130.0f * scl;
   const float right_group_w = 3.0f * btn_w + 2.0f * 5.0f * scl;
   const float right_w = right_group_w + (has_update ? btn_w + 5.0f * scl : 0.0f);
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 8.0f * scl, topbar_w - right_w));

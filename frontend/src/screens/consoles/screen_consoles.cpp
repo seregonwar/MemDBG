@@ -207,7 +207,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     }
   }
 
-  if (!mobile) ImGui::SameLine(0, gap);
+  if (!mobile) ImGui::SameLine();
   if (mobile) ImGui::Spacing();
   ui::begin_panel("ConsoleRuntime", locale::tr("consoles.runtime"), ImVec2(mobile ? avail.x : 0, mobile ? 0 : avail.y));
   ImGui::TextColored(connected ? ui::colors().success : ui::colors().danger,

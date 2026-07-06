@@ -231,8 +231,7 @@ static void run_aob_scan(AppState &state) {
 void draw_aob_scanner(AppState &state, ImVec2 avail) {
   poll_aob_async(state);
 
-  const float gap = 16.0f;
-  const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
+  const float left_w = std::max(420.0f, avail.x * 0.38f);
 
   ui::begin_panel("AOBControl", locale::tr("aob_scanner.title"), ImVec2(left_w, avail.y));
   ImGui::Text(locale::tr("aob_scanner.active_pid"), state.selected_pid);
@@ -330,7 +329,7 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
   ImGui::TextWrapped("%s", locale::tr("aob_scanner.tips_desc"));
   ui::end_panel();
 
-  ImGui::SameLine(0, gap);
+  ImGui::SameLine();
   ui::begin_panel("AOBResults", locale::tr("aob_scanner.results"), ImVec2(0, avail.y));
 
   auto &result = state.aob_result;

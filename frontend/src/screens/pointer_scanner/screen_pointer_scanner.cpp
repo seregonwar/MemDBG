@@ -126,8 +126,7 @@ static void run_pointer_scan(AppState &state) {
 void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   poll_pointer_async(state);
 
-  const float gap = 16.0f;
-  const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
+  const float left_w = std::max(420.0f, avail.x * 0.38f);
 
   ui::begin_panel("PointerControl", locale::tr("pointer_scanner.title"), ImVec2(left_w, avail.y));
   ImGui::Text(locale::tr("pointer_scanner.active_pid"), state.selected_pid);
@@ -189,7 +188,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   ImGui::TextWrapped("%s", locale::tr("pointer_scanner.desc"));
   ui::end_panel();
 
-  ImGui::SameLine(0, gap);
+  ImGui::SameLine();
   ui::begin_panel("PointerResults", locale::tr("pointer_scanner.candidates"), ImVec2(0, avail.y));
 
   auto &result = state.pointer_result;

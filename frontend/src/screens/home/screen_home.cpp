@@ -33,7 +33,7 @@ bool action_tile(const char *id, const char *icon, const char *title,
   const bool mobile = ImGui::GetContentRegionAvail().x < 400.0f;
   const float scl = mobile ? 1.0f : ui::dpi_scale();
   ImGui::PushID(id);
-  const float h = 36.0f * scl;
+  const float h = 40.0f * scl;
   const float w = ImGui::GetContentRegionAvail().x;
   ImVec2 pos = ImGui::GetCursorScreenPos();
   ImGui::InvisibleButton("##tile", ImVec2(w, h));
@@ -72,11 +72,10 @@ bool action_tile(const char *id, const char *icon, const char *title,
 
 void draw_home(AppState &state, ImVec2 avail) {
   const float scl = ui::dpi_scale();
-  const float gap = 6.0f * scl;
   const bool connected = state.client.connected();
   const bool mobile = avail.x < 500.0f;
 
-  const float col_w = mobile ? avail.x : (avail.x - gap) * 0.40f;
+  const float col_w = mobile ? avail.x : avail.x * 0.40f;
 
   ui::begin_panel("HomeStatus", locale::tr("home.session"), ImVec2(col_w, mobile ? 0 : avail.y));
   ImGui::BeginGroup();
@@ -107,11 +106,11 @@ void draw_home(AppState &state, ImVec2 avail) {
     ui::draw_capabilities(state.hello);
     ImGui::BeginDisabled(client_async_busy(state));
     const float btn_w = mobile ? ImGui::GetContentRegionAvail().x : 120.0f * scl;
-    if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("home.ping")).c_str(), ImVec2(btn_w, 28.0f * scl))) {
+    if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("home.ping")).c_str(), ImVec2(btn_w, 32.0f * scl))) {
       set_status(state, state.client.ping() ? locale::tr("home.ping_ok") : state.client.last_error());
     }
     if (!mobile) ImGui::SameLine();
-    if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("home.drop")).c_str(), ImVec2(btn_w, 28.0f * scl))) {
+    if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("home.drop")).c_str(), ImVec2(btn_w, 32.0f * scl))) {
       ImGui::OpenPopup("ConfirmDisconnectHome");
     }
     static bool skip_disconnect_h = false;
@@ -123,13 +122,13 @@ void draw_home(AppState &state, ImVec2 avail) {
     ImGui::EndDisabled();
   } else {
     ui::text_muted(locale::tr("home.no_active_session"));
-    if (ui::primary_button((std::string(icons::kConnect) + "  " + locale::tr("home.configure")).c_str(), ImVec2(mobile ? ImGui::GetContentRegionAvail().x : 180.0f * scl, 28.0f * scl))) {
+    if (ui::primary_button((std::string(icons::kConnect) + "  " + locale::tr("home.configure")).c_str(), ImVec2(mobile ? ImGui::GetContentRegionAvail().x : 180.0f * scl, 32.0f * scl))) {
       state.screen = Screen::Consoles;
     }
   }
   ui::end_panel();
 
-  if (!mobile) ImGui::SameLine(0, gap);
+  if (!mobile) ImGui::SameLine();
   if (mobile) ImGui::Spacing();
   ui::begin_panel("HomeActions", locale::tr("home.command_palette"), ImVec2(mobile ? avail.x : 0, mobile ? 0 : avail.y));
   if (action_tile("Consoles", icons::kConsole, locale::tr("home.tile_consoles"), locale::tr("home.tile_consoles_meta"), true))

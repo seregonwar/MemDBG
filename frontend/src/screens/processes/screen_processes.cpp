@@ -487,18 +487,17 @@ static void draw_maps_table(AppState &state) {
 
 /* ---- Main draw ---- */
 void draw_processes(AppState &state, ImVec2 avail) {
-  const float gap = 16.0f;
-  const float left_w = std::max(360.0f, (avail.x - gap) * 0.42f);
+  const float left_w = std::max(360.0f, avail.x * 0.42f);
 
   ui::begin_panel("ProcessesPanel", locale::tr("processes.console_processes"), ImVec2(left_w, avail.y));
   if (!state.client.connected()) {
-    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(190, 38)))
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(190, 34)))
       refresh_processes(state);
     ImGui::Spacing();
     ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
     ImGui::BeginDisabled(client_async_busy(state));
-    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(180, 38))) refresh_processes(state);
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(180, 34))) refresh_processes(state);
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, locale::tr("processes.entries"), state.processes.size());
@@ -507,7 +506,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
   }
   ui::end_panel();
 
-  ImGui::SameLine(0, gap);
+  ImGui::SameLine();
   ui::begin_panel("MapsPanel", locale::tr("processes.memory_maps"), ImVec2(0, avail.y));
   if (!state.client.connected()) {
     ui::draw_empty_state(locale::tr("processes.waiting_session"), locale::tr("processes.waiting_desc"));
@@ -524,14 +523,14 @@ void draw_processes(AppState &state, ImVec2 avail) {
     }
     ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0 ||
                          client_async_busy(state));
-    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 38))) refresh_maps(state);
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 34))) refresh_maps(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 38))) set_scan_window_from_filtered_maps(state);
+    if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 34))) set_scan_window_from_filtered_maps(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_selected_map")).c_str(), ImVec2(170, 38))) ImGui::OpenPopup("ConfirmDumpSelectedMap");
-    if (ui::soft_button((std::string(icons::kSearch) + "  " + locale::tr("processes.analyze_process")).c_str(), ImVec2(170, 38))) analyze_process(state);
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_selected_map")).c_str(), ImVec2(170, 34))) ImGui::OpenPopup("ConfirmDumpSelectedMap");
+    if (ui::soft_button((std::string(icons::kSearch) + "  " + locale::tr("processes.analyze_process")).c_str(), ImVec2(170, 34))) analyze_process(state);
     ImGui::SameLine();
-    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_filtered_maps")).c_str(), ImVec2(190, 38))) ImGui::OpenPopup("ConfirmDumpFilteredMaps");
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.dump_filtered_maps")).c_str(), ImVec2(190, 34))) ImGui::OpenPopup("ConfirmDumpFilteredMaps");
     ImGui::EndDisabled();
     static bool skip_dump_selected_confirm = false;
     static bool skip_dump_filtered_confirm = false;
