@@ -68,6 +68,7 @@ constexpr uint32_t kMaxMapEntries =
     sizeof(memdbg_map_entry_t);
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
+constexpr uint32_t kMainSocketTimeoutMs = 60000U;
 
 template <typename T> bool read_object(const std::vector<uint8_t> &data, T &out) {
   if (data.size() < sizeof(T)) {
@@ -182,8 +183,8 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
     return false;
   }
 
-  (void)platform::socket_set_recv_timeout(fd_, 10000U);
-  (void)platform::socket_set_send_timeout(fd_, 10000U);
+  (void)platform::socket_set_recv_timeout(fd_, kMainSocketTimeoutMs);
+  (void)platform::socket_set_send_timeout(fd_, kMainSocketTimeoutMs);
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
@@ -1059,7 +1060,7 @@ bool Client::klog_connect(const std::string &host, uint16_t &klog_port) {
     return false;
   }
 
-  (void)platform::socket_set_recv_timeout(klog_fd_, 500U); /* 500ms timeout */
+  (void)platform::socket_set_recv_timeout(klog_fd_, 100U); /* 100ms for background thread */
   (void)platform::socket_set_nosigpipe(klog_fd_);
 
   sockaddr_in addr{};
@@ -1080,43 +1081,77 @@ bool Client::klog_connect(const std::string &host, uint16_t &klog_port) {
   }
 
   last_error_.clear();
+
+  /* Start background reader thread */
+  klog_reader_closed_ = false;
+  klog_reader_running_ = true;
+  klog_reader_thread_ = std::thread(&Client::klog_reader_loop, this);
+
   return true;
+}
+
+void Client::klog_reader_loop() {
+  uint8_t buf[4096];
+  while (klog_reader_running_.load()) {
+    int n = platform::socket_recv(klog_fd_, buf, sizeof(buf));
+    if (n > 0) {
+      std::vector<uint8_t> chunk(buf, buf + static_cast<size_t>(n));
+      {
+        std::lock_guard<std::mutex> lock(klog_buf_mutex_);
+        klog_buf_.push_back(std::move(chunk));
+      }
+      klog_buf_cv_.notify_one();
+    } else if (n == 0) {
+      /* Connection closed */
+      break;
+    } else {
+      int err = platform::socket_last_error_code();
+      if (platform::socket_error_interrupted(err) ||
+          platform::socket_error_would_block(err)) {
+        /* No data yet, continue looping */
+        continue;
+      }
+      /* Real error */
+      break;
+    }
+  }
+  klog_reader_closed_ = true;
+  klog_buf_cv_.notify_all();
 }
 
 bool Client::klog_read(std::vector<uint8_t> &out) {
   out.clear();
-  if (!platform::socket_valid(klog_fd_)) {
-    return false;
+  std::lock_guard<std::mutex> lock(klog_buf_mutex_);
+  if (klog_buf_.empty()) {
+    return !klog_reader_closed_.load();
   }
-
-  uint8_t buf[4096];
-  int n = platform::socket_recv(klog_fd_, buf, sizeof(buf));
-  if (n < 0) {
-    int err = platform::socket_last_error_code();
-    if (platform::socket_error_interrupted(err) ||
-        platform::socket_error_would_block(err)) {
-      return true; /* no data available, not an error */
-    }
-    set_error_from_errno("klog read");
-    return false;
-  }
-  if (n == 0) {
-    /* Connection closed by server */
-    return false;
-  }
-  out.assign(buf, buf + static_cast<size_t>(n));
+  out = std::move(klog_buf_.front());
+  klog_buf_.pop_front();
   return true;
 }
 
 void Client::klog_disconnect() {
+  klog_stop_reader();
   if (platform::socket_valid(klog_fd_)) {
     platform::socket_close(klog_fd_);
     klog_fd_ = platform::invalid_socket();
   }
 }
 
+void Client::klog_stop_reader() {
+  klog_reader_running_ = false;
+  if (klog_reader_thread_.joinable()) {
+    klog_reader_thread_.join();
+  }
+  /* Drain remaining buffered data */
+  {
+    std::lock_guard<std::mutex> lock(klog_buf_mutex_);
+    klog_buf_.clear();
+  }
+}
+
 bool Client::klog_connected() const {
-  return platform::socket_valid(klog_fd_);
+  return platform::socket_valid(klog_fd_) && !klog_reader_closed_.load();
 }
 
 bool Client::kernel_base(KernelBase &out) {
@@ -1696,6 +1731,11 @@ bool Client::read_exact(void *data, size_t size) {
       int err = platform::socket_last_error_code();
       if (platform::socket_error_interrupted(err)) {
         continue;
+      }
+      if (platform::socket_error_would_block(err)) {
+        set_error("recv: timed out waiting for payload response");
+        close_after_connection_loss();
+        return false;
       }
       set_error_from_errno("recv");
       close_after_connection_loss();

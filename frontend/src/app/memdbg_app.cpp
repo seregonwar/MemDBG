@@ -482,8 +482,7 @@ void connect_console(AppState &state) {
   state.client.disconnect();
   state.has_hello = false;
   state.klog_connected = false;
-  state.klog_lines.clear();
-  state.klog_raw.clear();
+  state.klog_paused = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
@@ -966,8 +965,7 @@ void disconnect_console(AppState &state, const char *reason) {
   state.client.disconnect();
   state.has_hello = false;
   state.klog_connected = false;
-  state.klog_lines.clear();
-  state.klog_raw.clear();
+  state.klog_paused = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;

@@ -730,7 +730,7 @@
   "debugger.connect_first": "Zuerst eine Konsole verbinden.",
   "debugger.attach": "Anhängen",
   "debugger.pause_on_attach": "Pause nach Attach",
-  "debugger.pause_on_attach_tip": "Zielprozess nach dem Attach automatisch anhalten (SIGSTOP).",
+  "debugger.pause_on_attach_tip": "Laesst das Ziel nach dem Attach angehalten; deaktivieren, um es nach dem ersten Thread-/Register-Snapshot fortzusetzen.",
   "debugger.auto_refresh_on_stop": "Auto-refresh bei Stop",
   "debugger.auto_refresh_on_stop_tip": "Register und Threads automatisch auslesen, wenn das Ziel stoppt (Breakpoint, Watchpoint oder manueller Stop).",
   "debugger.detach": "Trennen",
@@ -1038,5 +1038,13 @@
   "klog.copied": "KLOG in die Zwischenablage kopiert",
   "klog.none_to_copy": "Keine KLOG-Daten zum Kopieren",
   "klog.ready": "Bereit zum Verbinden",
+  "klog.export": "Exportieren",
+  "klog.exported": "KLOG exportiert",
+  "klog.none_to_export": "Keine KLOG-Daten zum Exportieren",
+  "klog.search_hint": "Logs suchen...",
+  "klog.pause": "Pause",
+  "klog.resume": "Fortsetzen",
+  "klog.paused": "Pausiert",
+  "klog.no_matches": "Keine passenden Zeilen",
   "klog.streaming": "Streaming aktiv"
 }

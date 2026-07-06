@@ -731,7 +731,7 @@
   "debugger.connect_first": "先にコンソールに接続してください。",
   "debugger.attach": "アタッチ",
   "debugger.pause_on_attach": "アタッチ時に停止",
-  "debugger.pause_on_attach_tip": "アタッチ後、自動的にターゲットプロセスを停止します（SIGSTOP）。",
+  "debugger.pause_on_attach_tip": "アタッチ後もターゲットを停止したままにします。無効にすると、初回のスレッド/レジスタ取得後に再開します。",
   "debugger.auto_refresh_on_stop": "停止時に自動更新",
   "debugger.auto_refresh_on_stop_tip": "ターゲットが停止したときに自動的にレジスタとスレッドを更新します（ブレークポイント、ウォッチポイント、手動停止）。",
   "debugger.detach": "デタッチ",
@@ -1039,5 +1039,13 @@
   "klog.copied": "KLOG をクリップボードにコピーしました",
   "klog.none_to_copy": "コピーする KLOG データがありません",
   "klog.ready": "接続準備完了",
+  "klog.export": "エクスポート",
+  "klog.exported": "KLOG をエクスポートしました",
+  "klog.none_to_export": "エクスポートする KLOG データがありません",
+  "klog.search_hint": "ログを検索...",
+  "klog.pause": "一時停止",
+  "klog.resume": "再開",
+  "klog.paused": "一時停止中",
+  "klog.no_matches": "一致する行はありません",
   "klog.streaming": "ストリーミング中"
 }

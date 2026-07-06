@@ -731,7 +731,7 @@
   "debugger.connect_first": "Сначала подключите консоль.",
   "debugger.attach": "Прикрепить",
   "debugger.pause_on_attach": "Пауза после attach",
-  "debugger.pause_on_attach_tip": "Автоматически остановить целевой процесс после подключения (SIGSTOP).",
+  "debugger.pause_on_attach_tip": "Оставляет цель остановленной после attach; отключите, чтобы продолжить после первичного снимка потоков и регистров.",
   "debugger.auto_refresh_on_stop": "Автообновление при остановке",
   "debugger.auto_refresh_on_stop_tip": "Автоматически обновлять регистры и потоки при остановке цели (брейкпойнт, точка наблюдения или ручная остановка).",
   "debugger.detach": "Открепить",
@@ -1039,5 +1039,13 @@
   "klog.copied": "KLOG скопирован в буфер обмена",
   "klog.none_to_copy": "Нет данных KLOG для копирования",
   "klog.ready": "Готово к подключению",
+  "klog.export": "Экспорт",
+  "klog.exported": "KLOG экспортирован",
+  "klog.none_to_export": "Нет данных KLOG для экспорта",
+  "klog.search_hint": "Поиск в логах...",
+  "klog.pause": "Пауза",
+  "klog.resume": "Продолжить",
+  "klog.paused": "На паузе",
+  "klog.no_matches": "Совпадающих строк нет",
   "klog.streaming": "Идет потоковая передача"
 }

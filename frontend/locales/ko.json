@@ -731,7 +731,7 @@
   "debugger.connect_first": "디버거를 사용하기 전에 먼저 콘솔에 연결하세요.",
   "debugger.attach": "연결",
   "debugger.pause_on_attach": "연결 시 일시 중지",
-  "debugger.pause_on_attach_tip": "연결한 후 대상 프로세스를 자동으로 중지합니다 (SIGSTOP).",
+  "debugger.pause_on_attach_tip": "연결 후 대상을 중지 상태로 유지합니다. 끄면 초기 스레드/레지스터 스냅샷 후 다시 실행합니다.",
   "debugger.auto_refresh_on_stop": "중지 시 자동 새로 고침",
   "debugger.auto_refresh_on_stop_tip": "대상이 중지될 때 레지스터와 스레드를 자동으로 새로 고침합니다 (브레이크포인트, 왓치포인트 또는 수동 중지).",
   "debugger.detach": "연결 해제",
@@ -1039,5 +1039,13 @@
   "klog.copied": "KLOG를 클립보드에 복사했습니다",
   "klog.none_to_copy": "복사할 KLOG 데이터가 없습니다",
   "klog.ready": "연결 준비됨",
+  "klog.export": "내보내기",
+  "klog.exported": "KLOG를 내보냈습니다",
+  "klog.none_to_export": "내보낼 KLOG 데이터가 없습니다",
+  "klog.search_hint": "로그 검색...",
+  "klog.pause": "일시 중지",
+  "klog.resume": "다시 시작",
+  "klog.paused": "일시 중지됨",
+  "klog.no_matches": "일치하는 줄이 없습니다",
   "klog.streaming": "스트리밍 중"
 }

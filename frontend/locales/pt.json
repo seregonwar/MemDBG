@@ -730,7 +730,7 @@
   "debugger.connect_first": "Conecte uma consola antes de usar o debugger.",
   "debugger.attach": "Anexar",
   "debugger.pause_on_attach": "Pausar ao anexar",
-  "debugger.pause_on_attach_tip": "Parar automaticamente o processo alvo após anexar (SIGSTOP).",
+  "debugger.pause_on_attach_tip": "Mantem o alvo parado apos anexar; desative para continuar depois do snapshot inicial de threads e registradores.",
   "debugger.auto_refresh_on_stop": "Auto-refresh ao parar",
   "debugger.auto_refresh_on_stop_tip": "Atualizar automaticamente registros e threads quando o alvo parar (breakpoint, watchpoint ou parada manual).",
   "debugger.detach": "Soltar",
@@ -1038,5 +1038,13 @@
   "klog.copied": "KLOG copiado para a área de transferência",
   "klog.none_to_copy": "Não há dados de KLOG para copiar",
   "klog.ready": "Pronto para conectar",
+  "klog.export": "Exportar",
+  "klog.exported": "KLOG exportado",
+  "klog.none_to_export": "Não há dados de KLOG para exportar",
+  "klog.search_hint": "Pesquisar logs...",
+  "klog.pause": "Pausar",
+  "klog.resume": "Retomar",
+  "klog.paused": "Pausado",
+  "klog.no_matches": "Nenhuma linha correspondente",
   "klog.streaming": "Transmitindo"
 }

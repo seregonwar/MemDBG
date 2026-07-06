@@ -392,7 +392,8 @@ struct AppState {
   /* ---- Async connect ---- */
   bool connect_pending = false;
   bool heartbeat_pending = false;
-  /* A debugger thread refresh owns the shared client socket off the UI thread. */
+  /* Debugger workers own the shared client socket off the UI thread. */
+  bool debugger_attach_pending = false;
   bool debugger_threads_pending = false;
   std::future<bool> heartbeat_future;
   std::string heartbeat_error;
@@ -570,11 +571,14 @@ struct AppState {
   /* ---- KLOG streaming ---- */
   bool klog_connected = false;
   uint16_t klog_port = 0;
-  std::vector<std::string> klog_lines;
+  std::deque<std::string> klog_lines;    /* changed to deque for O(1) front-erase */
   std::vector<uint8_t> klog_raw;       /* partial-line buffer */
   int klog_max_lines = 5000;
   bool klog_auto_scroll = true;
   double klog_last_poll = 0.0;
+  bool klog_paused = false;            /* pause streaming without disconnecting */
+  char klog_search[128] = "";          /* search/filter text */
+  size_t klog_total_received = 0;      /* total lines ever received (for display) */
 };
 
 /* ---- utility functions ---- */
@@ -890,7 +894,7 @@ inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
-         state.debugger_threads_pending ||
+         state.debugger_attach_pending || state.debugger_threads_pending ||
          state.tracer_pending || state.tracer_status_pending ||
          state.tracer_events_pending ||
          state.elf_load_pending ||

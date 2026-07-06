@@ -10,9 +10,13 @@
 #include "memdbg/core/memdbg_protocol.h"
 #include "platform.hpp"
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace memdbg::frontend {
@@ -186,9 +190,13 @@ public:
 
   /* ---- Klog streaming (secondary raw TCP connection) ---- */
   bool klog_connect(const std::string &host, uint16_t &klog_port);
+  /* Non-blocking: drains buffered data from the background reader thread.
+     Returns true if the klog connection is still alive, false if closed/error.
+     out is filled with available bytes (may be empty if none ready). */
   bool klog_read(std::vector<uint8_t> &out);
   void klog_disconnect();
   bool klog_connected() const;
+  void klog_stop_reader();
 
   bool kernel_base(KernelBase &out);
   bool kernel_read(uint64_t address, uint32_t length,
@@ -308,6 +316,15 @@ private:
   uint32_t next_request_id_ = 1;
   std::string last_error_;
   mutable std::mutex io_mutex_;
+
+  /* Klog background reader */
+  std::thread klog_reader_thread_;
+  std::atomic<bool> klog_reader_running_{false};
+  std::mutex klog_buf_mutex_;
+  std::condition_variable klog_buf_cv_;
+  std::deque<std::vector<uint8_t>> klog_buf_;
+  std::atomic<bool> klog_reader_closed_{false};
+  void klog_reader_loop();
 };
 
 std::string platform_name(uint16_t platform_id);

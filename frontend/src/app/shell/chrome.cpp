@@ -461,7 +461,8 @@ static std::string console_target_label(const ConsoleTarget &target) {
   return normalized.name + "  " + normalized.host + ":" + std::to_string(normalized.debug_port);
 }
 
-static void draw_console_target_combo(AppState &state, float width) {
+[[maybe_unused]] static void draw_console_target_combo(AppState &state,
+                                                       float width) {
   ensure_console_targets(state);
   const ConsoleTarget preview_target = current_console_target_from_fields(state);
   const std::string preview = console_target_label(preview_target);
