@@ -18,6 +18,7 @@
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/tracer/memdbg_tracer_daemon.h"
 #include "memdbg/pal/pal_notification.h"
+#include "memdbg/pal/pal_time.h"
 #include "memdbg/scanner/flashscan.h"
 #include "memdbg/scanner/pt_walker.h"
 
@@ -120,7 +121,7 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PROCESS_ALLOC:      return handle_process_alloc(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_FREE:       return handle_process_free(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_STACK:      return handle_process_stack(fd, req, body, req->length);
-  case MEMDBG_CMD_PROCESS_CALL:       return handle_process_call(fd, req, body, req->length, send_response);
+  case MEMDBG_CMD_PROCESS_CALL:       return handle_process_call(fd, req, body, req->length, send_response, memdbg_sleep_ms);
   case MEMDBG_CMD_PROCESS_ELF_LOAD:   return handle_process_elf_load(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_HIJACK: {
     if (req->length < sizeof(memdbg_process_hijack_request_t)) return MEMDBG_ERR_PROTOCOL;
@@ -294,8 +295,16 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     const memdbg_ptwalk_probe_request_t *pp = (const memdbg_ptwalk_probe_request_t *)body;
     memdbg_ptwalk_probe_response_t resp;
     memset(&resp, 0, sizeof(resp));
-    int rc = ptw_probe((uint32_t)pp->pid, pp->address, &resp.phys_address,
-                       &resp.page_level, &resp.page_size, &resp.pte_value);
+    uint64_t phys_address = 0U;
+    int page_level = 0;
+    uint64_t page_size = 0U;
+    uint64_t pte_value = 0U;
+    int rc = ptw_probe((uint32_t)pp->pid, pp->address, &phys_address,
+                       &page_level, &page_size, &pte_value);
+    resp.phys_address = phys_address;
+    resp.page_level = (uint32_t)page_level;
+    resp.page_size = page_size;
+    resp.pte_value = pte_value;
     if (rc == 0) resp.cached = (resp.pte_value >> 4) & 1;
     return send_response(fd, req, (rc == 0) ? MEMDBG_OK : MEMDBG_ERR_IO, &resp, sizeof(resp)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }

@@ -29,9 +29,8 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
     return 1;
   }
 
-  uint32_t max_entries = req->count_max ? req->count_max : 200u;
-
 #if defined(MEMDBG_HAS_ZYDIS)
+  uint32_t max_entries = req->count_max ? req->count_max : 200u;
   memdbg_disasm_entry_t *entries =
       (memdbg_disasm_entry_t *)malloc((size_t)max_entries * sizeof(*entries));
   if (!entries) {

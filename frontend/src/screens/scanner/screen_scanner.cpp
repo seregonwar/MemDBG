@@ -1073,8 +1073,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                     !state.scan_snapshot.empty();
     ImGui::BeginDisabled(!can_next);    char ns_buf[128];
     std::snprintf(ns_buf, sizeof(ns_buf), locale::tr("scanner.next_scan_pass"), state.auto_search_pass + 1);
-    std::string next_label = std::string(icons::kRefresh) + "  " + ns_buf;
-    if (ui::primary_button(next_label.c_str(), ui::full_button(38))) {
+    std::string auto_next_label = std::string(icons::kRefresh) + "  " + ns_buf;
+    if (ui::primary_button(auto_next_label.c_str(), ui::full_button(38))) {
       /* Re-read baseline addresses and score them on the async worker.
        * We reuse the refine_scan Changed path but with scoring layered on top. */
       AutoSearchTarget tgt = static_cast<AutoSearchTarget>(state.auto_search_target);

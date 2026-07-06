@@ -204,6 +204,7 @@ void flashscan_cleanup_orphans(void) {
 
 void flashscan_free_slot(unsigned int slot) {
   if (slot >= FLASHSCAN_MAX_SESSIONS) return;
+  alias_context_free_slot(slot);
   struct flashscan_sess *s = &g_sessions[slot];
   munmap_anonymous(s->buf,      s->buf_cap);
   munmap_anonymous(s->snap_ram, s->snap_bytes);
@@ -499,6 +500,7 @@ static uint64_t snapshot_rescan(int fd, struct flashscan_sess *s,
                                 const uint8_t *between_hi, int includes_prev,
                                 uint8_t *read_buf, uint8_t *bl_buf,
                                 page_alias_ctx_t *actx) {
+  (void)val_type;
   if (!s->bitmap || s->slot_count == 0) { s->survivor_count = 0; return 0; }
   uint64_t n = s->slot_count, survivors = 0;
   uint64_t rb = s->snap_bytes;
@@ -586,7 +588,7 @@ struct rescan_worker_ctx {
 static void *rescan_worker_thread(void *arg) {
   struct rescan_worker_ctx *c = (struct rescan_worker_ctx *)arg;
   struct flashscan_sess *s = c->s;
-  uint64_t n = s->slot_count, survivors = 0;
+  uint64_t survivors = 0;
   uint64_t vlen = c->vlen, rb = s->snap_bytes;
 
   uint8_t *read_buf = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
@@ -759,7 +761,6 @@ static uint32_t snapshot_fetch(int fd, struct flashscan_sess *s,
   socket_send_all(fd, &hdr, 4);
   if (actual == 0 || !s->bitmap) return 0;
 
-  uint64_t rb = s->snap_bytes;
   uint64_t ent = 8 + vlen * (has_first ? 3 : 2);
   uint64_t out_len = 0, seen = 0, emitted = 0;
 
@@ -1285,6 +1286,7 @@ int flashscan_handle_count(int fd,
         uint64_t addr;
         memcpy(&addr, rec, 8);
         const uint8_t *prev_p = includes_prev ? (rec + 8) : between_hi;
+        (void)prev_p;
 
         if (addr < win_start || addr + vlen > win_end) {
           win_start = addr;
@@ -1364,6 +1366,7 @@ int flashscan_handle_count(int fd,
       memcpy(&eoff, chunk_buf + off, 4);
       uint64_t addr = req->base_address + eoff;
       const uint8_t *prev_p = includes_prev ? (chunk_buf + off + 4) : between_hi;
+      (void)prev_p;
 
       if (addr < win_start || addr + vlen > win_end) {
         win_start = addr;

@@ -8,9 +8,9 @@
  * reduce compilation duplication across translation units.
  */
 
-#include "memdbg/core/memdbg_protocol.h"
+#include "memdbg/core/memdbg_protocol_tracer_handlers.h"
+
 #include "memdbg/debug/memdbg_debugger.h"
-#include "memdbg/tracer/memdbg_tracer_daemon.h"
 
 #include <stdlib.h>
 #include <string.h>

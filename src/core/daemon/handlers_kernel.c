@@ -20,6 +20,10 @@
 #elif defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/klog.h>
 #include <sys/reboot.h>
+#ifndef RB_AUTOBOOT
+#define RB_AUTOBOOT 0
+#endif
+extern int reboot(int);
 #define MEMDBG_DAEMON_HAS_REBOOT 1
 #endif
 

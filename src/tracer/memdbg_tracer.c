@@ -650,8 +650,6 @@ static memdbg_status_t tracer_run_full(memdbg_tracer_t *t) {
     if (!WIFSTOPPED(status)) continue;
 
     int sig = WSTOPSIG(status);
-    unsigned int flags = 0;
-    int sc_no = -1;
     bool is_syscall_entry = false;
     bool is_syscall_exit = false;
     (void)is_syscall_exit;
@@ -669,7 +667,7 @@ static memdbg_status_t tracer_run_full(memdbg_tracer_t *t) {
         long ri = pal_debug_ptrace(PT_LWPINFO, (int)lwp_buf[0],
                                    (void *)&lwpinfo, (long)sizeof(lwpinfo));
         if (ri == 0) {
-          flags = (unsigned int)lwpinfo.pl_flags;
+          unsigned int flags = (unsigned int)lwpinfo.pl_flags;
           if (flags & PL_FLAG_SCE) is_syscall_entry = true;
           if (flags & PL_FLAG_SCX) is_syscall_exit = true;
           if (lwpinfo.pl_event == PL_EVENT_SIGNAL) {

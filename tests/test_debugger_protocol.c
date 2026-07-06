@@ -18,6 +18,7 @@
 #include "memdbg/core/memdbg_protocol_debug_handlers.h"
 #include "memdbg/core/memdbg_protocol_process_handlers.h"
 #include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_memory.h"
 
 #include <stdbool.h>
@@ -25,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ======================================================================
  * Mock send_response — captures the last call's status, payload, length.
@@ -44,9 +46,9 @@ static void mock_send_reset(void) {
 }
 
 /* Override send_response.  Called by the handler functions. */
-static int send_response(int fd, const memdbg_packet_header_t *req,
-                         memdbg_status_t status, const void *payload,
-                         uint32_t payload_len) {
+int send_response(int fd, const memdbg_packet_header_t *req,
+                  memdbg_status_t status, const void *payload,
+                  uint32_t payload_len) {
   (void)fd;
   (void)req;
   g_last_status = status;
@@ -193,6 +195,22 @@ memdbg_status_t memdbg_debugger_get_dbregs(int32_t lwp, memdbg_debug_dbregs_t *d
 memdbg_status_t memdbg_debugger_set_dbregs(int32_t lwp, const memdbg_debug_dbregs_t *dbregs) {
   (void)lwp; (void)dbregs; return g_mock_set_dbregs_st;
 }
+memdbg_status_t memdbg_debugger_get_fpregs(int32_t lwp, memdbg_debug_fpregs_t *fpregs) {
+  (void)lwp;
+  if (fpregs != NULL) memset(fpregs, 0, sizeof(*fpregs));
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+memdbg_status_t memdbg_debugger_set_fpregs(int32_t lwp, const memdbg_debug_fpregs_t *fpregs) {
+  (void)lwp; (void)fpregs; return MEMDBG_ERR_UNSUPPORTED;
+}
+memdbg_status_t memdbg_debugger_get_fsgsbase(int32_t lwp, memdbg_debug_fsgsbase_t *base) {
+  (void)lwp;
+  if (base != NULL) memset(base, 0, sizeof(*base));
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+memdbg_status_t memdbg_debugger_set_fsgsbase(int32_t lwp, const memdbg_debug_fsgsbase_t *base) {
+  (void)lwp; (void)base; return MEMDBG_ERR_UNSUPPORTED;
+}
 memdbg_status_t memdbg_debugger_set_breakpoint(uint64_t address, uint32_t kind) {
   (void)address; (void)kind; return g_mock_set_bp_st;
 }
@@ -286,6 +304,32 @@ bool memdbg_debugger_is_elevated(int32_t pid) {
 
 int32_t memdbg_debugger_attached_pid(void) {
   return 100;
+}
+
+/* ---- Process backend stubs for handlers_process.c symbols not covered here ---- */
+memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
+  if (out != NULL) memset(out, 0, sizeof(*out));
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+void memdbg_process_list_free(memdbg_process_list_t *list) {
+  (void)list;
+}
+
+memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
+  (void)pid;
+  if (out != NULL) memset(out, 0, sizeof(*out));
+  return MEMDBG_ERR_UNSUPPORTED;
+}
+
+void memdbg_process_maps_free(memdbg_map_list_t *list) {
+  (void)list;
+}
+
+memdbg_status_t memdbg_process_info(int pid, memdbg_process_info_response_t *out) {
+  (void)pid;
+  if (out != NULL) memset(out, 0, sizeof(*out));
+  return MEMDBG_ERR_UNSUPPORTED;
 }
 
 /* ---- PAL memory mock implementations ---- */

@@ -8,10 +8,8 @@
  * reduce compilation duplication across translation units.
  */
 
-#include "memdbg/core/memdbg_protocol.h"
-#include "memdbg/debug/memdbg_debugger.h"
-#include "memdbg/pal/pal_debug.h"
 #include "daemon_internal.h"
+#include "memdbg/core/memdbg_protocol_debug_handlers.h"
 
 #include <stdbool.h>
 #include <stdlib.h>

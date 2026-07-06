@@ -75,7 +75,7 @@ static __m256i broadcast_value_avx2(const uint8_t *v, uint32_t len) {
 }
 #endif
 
-#if defined(__SSE2__)
+#if defined(__SSE2__) && !defined(__AVX2__) && !defined(__AVX512F__)
 static __m128i broadcast_value_sse2(const uint8_t *v, uint32_t len) {
   switch (len) {
   case 1U: return _mm_set1_epi8((char)v[0]);

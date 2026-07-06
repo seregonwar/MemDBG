@@ -36,6 +36,14 @@
 #define LZ4_GEN_MASK   ((1U << 12U) - 1U)
 #define LZ4_GEN_MAX    LZ4_GEN_MASK
 
+#if defined(_MSC_VER)
+#define LZ4_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define LZ4_THREAD_LOCAL _Thread_local
+#else
+#define LZ4_THREAD_LOCAL __thread
+#endif
+
 typedef uint32_t LZ4_hash_t;
 
 /*
@@ -45,8 +53,8 @@ typedef uint32_t LZ4_hash_t;
  * avoiding a 16-KiB stack allocation per call.  The generation counter
  * eliminates the per-call memset for inputs up to 1 MiB.
  */
-static _Thread_local uint32_t lz4_ht[LZ4_HASHTABLESIZE];
-static _Thread_local uint32_t lz4_ht_gen;
+static LZ4_THREAD_LOCAL uint32_t lz4_ht[LZ4_HASHTABLESIZE];
+static LZ4_THREAD_LOCAL uint32_t lz4_ht_gen;
 
 static LZ4_hash_t lz4_hash_position(const uint8_t *p) {
   uint32_t v;
@@ -57,6 +65,19 @@ static LZ4_hash_t lz4_hash_position(const uint8_t *p) {
 static unsigned lz4_len_bytes(unsigned length, unsigned base) {
   if (length < base) return 0U;
   return 1U + ((length - base) / 255U);
+}
+
+static unsigned lz4_first_diff_byte(uint64_t diff) {
+#if defined(__GNUC__) || defined(__clang__)
+  return (unsigned)__builtin_ctzll(diff) >> 3;
+#else
+  unsigned byte = 0U;
+  while ((diff & 0xFFU) == 0U) {
+    diff >>= 8U;
+    ++byte;
+  }
+  return byte;
+#endif
 }
 
 static void lz4_write_len(uint8_t **op, unsigned length, unsigned base) {
@@ -167,8 +188,9 @@ int lz4_compress_default(const char *src, char *dst, int src_size,
     const uint8_t *match_end = ip + LZ4_MIN_MATCH;
 
     /* Word-at-a-time match extension: compare 8 bytes per iteration
-     * using 64-bit XOR.  __builtin_ctzll finds the first differing
-     * byte without branching on every byte.
+     * using 64-bit XOR.  lz4_first_diff_byte finds the first differing
+     * byte without branching on every byte on compilers with ctz support,
+     * and falls back to a tiny byte loop elsewhere.
      *
      * The remaining-byte guard keeps pointer arithmetic inside the source
      * object while preserving the mandatory LZ4_LASTLITERALS (5)
@@ -179,7 +201,7 @@ int lz4_compress_default(const char *src, char *dst, int src_size,
       memcpy(&a, match_end, 8);
       memcpy(&b, match_cursor, 8);
       if (a != b) {
-        unsigned tz = (unsigned)__builtin_ctzll(a ^ b) >> 3;
+        unsigned tz = lz4_first_diff_byte(a ^ b);
         match_end += tz;
         ext_early = 1;
         break;

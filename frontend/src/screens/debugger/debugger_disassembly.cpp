@@ -313,7 +313,7 @@ static DecodedInsn decode_one(const uint8_t *bytes, size_t len) {
 
   case InsnKind::kPush:
   case InsnKind::kPop: {
-    uint8_t reg = (bytes[op_pos] & 7) + rex_b(rex);
+    uint8_t reg = static_cast<uint8_t>((bytes[op_pos] & 7U) + rex_b(rex));
     insn.dst.kind = DecodedOp::kReg;
     insn.dst.reg = (int)reg;
     insn.dst.size = OpSize::k64;
@@ -322,7 +322,7 @@ static DecodedInsn decode_one(const uint8_t *bytes, size_t len) {
   }
 
   case InsnKind::kMovRI: {
-    uint8_t reg = (bytes[op_pos] & 7) + rex_b(rex);
+    uint8_t reg = static_cast<uint8_t>((bytes[op_pos] & 7U) + rex_b(rex));
     insn.dst.kind = DecodedOp::kReg;
     insn.dst.reg = (int)reg;
     insn.dst.size = (match->pattern >= 0xB800) ? OpSize::k64 : OpSize::k8;
@@ -400,7 +400,7 @@ static DecodedInsn decode_one(const uint8_t *bytes, size_t len) {
 
   case InsnKind::kInc:
   case InsnKind::kDec: {
-    uint8_t reg = (bytes[op_pos] & 7) + rex_b(rex);
+    uint8_t reg = static_cast<uint8_t>((bytes[op_pos] & 7U) + rex_b(rex));
     insn.dst.kind = DecodedOp::kReg;
     insn.dst.reg = (int)reg;
     insn.dst.size = OpSize::k64;

@@ -287,7 +287,8 @@ memdbg_status_t handle_tracer_status(
 memdbg_status_t handle_process_call(int fd,
     const memdbg_packet_header_t *req,
     const void *body, uint32_t body_len,
-    memdbg_send_response_fn send_response_fn);
+    memdbg_send_response_fn send_response_fn,
+    void (*sleep_ms_fn)(uint32_t));
 
 /* ---- Process protect/alloc/free/stack/elf handlers (defined in handlers_protect.c) ---- */
 
