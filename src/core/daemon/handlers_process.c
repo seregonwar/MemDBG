@@ -28,9 +28,28 @@ memdbg_status_t handle_process_list(int fd,
   memdbg_status_t st = memdbg_process_list(&list);
   if (st != MEMDBG_OK) return st;
 
-  uint32_t payload_len =
-      (uint32_t)(list.count * sizeof(memdbg_process_entry_t));
-  int rc = send_response(fd, req, MEMDBG_OK, list.entries, payload_len);
+  size_t entries_size = list.count * sizeof(memdbg_process_entry_t);
+  size_t payload_len = sizeof(uint32_t) + entries_size;
+  if (list.count > UINT32_MAX ||
+      entries_size / sizeof(memdbg_process_entry_t) != list.count ||
+      payload_len > UINT32_MAX) {
+    memdbg_process_list_free(&list);
+    return MEMDBG_ERR_OVERFLOW;
+  }
+
+  uint8_t *payload = (uint8_t *)malloc(payload_len);
+  if (payload == NULL) {
+    memdbg_process_list_free(&list);
+    return MEMDBG_ERR_NOMEM;
+  }
+
+  uint32_t count32 = (uint32_t)list.count;
+  memcpy(payload, &count32, sizeof(count32));
+  if (entries_size != 0U)
+    memcpy(payload + sizeof(count32), list.entries, entries_size);
+
+  int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
+  free(payload);
   memdbg_process_list_free(&list);
   return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
@@ -50,9 +69,28 @@ memdbg_status_t handle_process_maps(int fd,
   memdbg_status_t st = memdbg_process_maps(mr->pid, &list);
   if (st != MEMDBG_OK) return st;
 
-  uint32_t payload_len =
-      (uint32_t)(list.count * sizeof(memdbg_map_entry_t));
-  int rc = send_response(fd, req, MEMDBG_OK, list.entries, payload_len);
+  size_t entries_size = list.count * sizeof(memdbg_map_entry_t);
+  size_t payload_len = sizeof(uint32_t) + entries_size;
+  if (list.count > UINT32_MAX ||
+      entries_size / sizeof(memdbg_map_entry_t) != list.count ||
+      payload_len > UINT32_MAX) {
+    memdbg_process_maps_free(&list);
+    return MEMDBG_ERR_OVERFLOW;
+  }
+
+  uint8_t *payload = (uint8_t *)malloc(payload_len);
+  if (payload == NULL) {
+    memdbg_process_maps_free(&list);
+    return MEMDBG_ERR_NOMEM;
+  }
+
+  uint32_t count32 = (uint32_t)list.count;
+  memcpy(payload, &count32, sizeof(count32));
+  if (entries_size != 0U)
+    memcpy(payload + sizeof(count32), list.entries, entries_size);
+
+  int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
+  free(payload);
   memdbg_process_maps_free(&list);
   return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }

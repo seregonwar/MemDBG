@@ -307,6 +307,12 @@ MemDBG uses a packed little-endian binary protocol identified by
 payloads advertise supported features during `HELLO`, and clients gate UI and
 requests accordingly.
 
+The normative technical specification is
+[`docs/protocol.md`](docs/protocol.md). It documents the frame layout,
+request/response lifecycle, compression sub-frame, status codes, command
+registry, capability bits, and extension rules for keeping MDBG compatible as it
+becomes a stable internal standard.
+
 | Limit | Value |
 |---|---|
 | Maximum packet size | 1 MiB |
@@ -329,6 +335,8 @@ Primary command families:
 | Console | notification, kernel-console print, reboot |
 
 Public protocol structures are in [`include/memdbg/core/`](include/memdbg/core/).
+The protocol header remains the ABI source of truth; the specification explains
+how that ABI is serialized and extended.
 
 ## Platform Support
 
@@ -371,6 +379,7 @@ publish artifacts with `SHA256SUMS.txt`.
 | Document | Purpose |
 |---|---|
 | [`docs/showcase.md`](docs/showcase.md) | Product walkthrough and feature showcase. |
+| [`docs/protocol.md`](docs/protocol.md) | Internal MDBG wire protocol specification and extension rules. |
 | [`docs/feature_research.md`](docs/feature_research.md) | Planned work and technical research notes. |
 | [`docs/plugins.md`](docs/plugins.md) | Plugin manifest and runtime contract. |
 | [`docs/mobile_architecture.md`](docs/mobile_architecture.md) | iOS/Android shell architecture. |

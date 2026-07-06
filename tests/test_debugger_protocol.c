@@ -106,6 +106,14 @@ static int32_t g_mock_lwps[4] = { 1001, 1002, 1003, 0 };
 static char    g_mock_names[4][24] = { "main", "worker", "io", "" };
 static uint32_t g_mock_thread_count = 3;
 
+/* Process list/map mock */
+static memdbg_status_t g_mock_process_list_st = MEMDBG_ERR_UNSUPPORTED;
+static memdbg_status_t g_mock_process_maps_st = MEMDBG_ERR_UNSUPPORTED;
+static memdbg_process_entry_t g_mock_process_entries[4];
+static uint32_t g_mock_process_count = 0U;
+static memdbg_map_entry_t g_mock_map_entries[4];
+static uint32_t g_mock_map_count = 0U;
+
 /* Register mock */
 static memdbg_debug_regs_t g_mock_regs;
 static memdbg_debug_dbregs_t g_mock_dbregs;
@@ -152,10 +160,16 @@ static void mock_backend_reset(void) {
   g_mock_write_fail_on_call = 0U;
   g_sleep_ms_called = 0U;
   g_mock_thread_count = 3;
+  g_mock_process_list_st = MEMDBG_ERR_UNSUPPORTED;
+  g_mock_process_maps_st = MEMDBG_ERR_UNSUPPORTED;
+  g_mock_process_count = 0U;
+  g_mock_map_count = 0U;
   g_mock_bp_active_count = 0;
   g_mock_wp_installed_count = 0;
   memset(&g_mock_regs, 0, sizeof(g_mock_regs));
   memset(&g_mock_dbregs, 0, sizeof(g_mock_dbregs));
+  memset(g_mock_process_entries, 0, sizeof(g_mock_process_entries));
+  memset(g_mock_map_entries, 0, sizeof(g_mock_map_entries));
   g_mock_regs.r_rip = 0x7FFF12340000LL;
   g_mock_regs.r_rax = 0x42LL;
   memset(g_mock_bps, 0, sizeof(g_mock_bps));
@@ -309,21 +323,47 @@ int32_t memdbg_debugger_attached_pid(void) {
 /* ---- Process backend stubs for handlers_process.c symbols not covered here ---- */
 memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
   if (out != NULL) memset(out, 0, sizeof(*out));
-  return MEMDBG_ERR_UNSUPPORTED;
+  if (g_mock_process_list_st != MEMDBG_OK) return g_mock_process_list_st;
+  if (out == NULL) return MEMDBG_ERR_PARAM;
+  out->count = g_mock_process_count;
+  if (out->count != 0U) {
+    out->entries = (memdbg_process_entry_t *)malloc(
+        out->count * sizeof(memdbg_process_entry_t));
+    if (out->entries == NULL) return MEMDBG_ERR_NOMEM;
+    memcpy(out->entries, g_mock_process_entries,
+           out->count * sizeof(memdbg_process_entry_t));
+  }
+  return MEMDBG_OK;
 }
 
 void memdbg_process_list_free(memdbg_process_list_t *list) {
-  (void)list;
+  if (list != NULL) {
+    free(list->entries);
+    memset(list, 0, sizeof(*list));
+  }
 }
 
 memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
   (void)pid;
   if (out != NULL) memset(out, 0, sizeof(*out));
-  return MEMDBG_ERR_UNSUPPORTED;
+  if (g_mock_process_maps_st != MEMDBG_OK) return g_mock_process_maps_st;
+  if (out == NULL) return MEMDBG_ERR_PARAM;
+  out->count = g_mock_map_count;
+  if (out->count != 0U) {
+    out->entries = (memdbg_map_entry_t *)malloc(
+        out->count * sizeof(memdbg_map_entry_t));
+    if (out->entries == NULL) return MEMDBG_ERR_NOMEM;
+    memcpy(out->entries, g_mock_map_entries,
+           out->count * sizeof(memdbg_map_entry_t));
+  }
+  return MEMDBG_OK;
 }
 
 void memdbg_process_maps_free(memdbg_map_list_t *list) {
-  (void)list;
+  if (list != NULL) {
+    free(list->entries);
+    memset(list, 0, sizeof(*list));
+  }
 }
 
 memdbg_status_t memdbg_process_info(int pid, memdbg_process_info_response_t *out) {
@@ -462,9 +502,74 @@ static memdbg_packet_header_t g_req = {
   MEMDBG_PACKET_MAGIC, MEMDBG_PROTOCOL_VERSION, 0, 1, 0
 };
 
+memdbg_status_t handle_process_list(int fd, const memdbg_packet_header_t *req);
+memdbg_status_t handle_process_maps(int fd, const memdbg_packet_header_t *req,
+                                    const void *body, uint32_t body_len);
+
 /* ======================================================================
  * Test cases
  * ====================================================================== */
+
+/* ---- process list/map wire format ---- */
+
+static void test_proto_process_wire_format(void) {
+  printf("\n--- process list/map wire format ---\n");
+  mock_backend_reset(); mock_send_reset();
+
+  g_mock_process_list_st = MEMDBG_OK;
+  g_mock_process_count = 2U;
+  g_mock_process_entries[0].pid = 101;
+  snprintf(g_mock_process_entries[0].name,
+           sizeof(g_mock_process_entries[0].name), "proc-a");
+  g_mock_process_entries[1].pid = 202;
+  snprintf(g_mock_process_entries[1].name,
+           sizeof(g_mock_process_entries[1].name), "proc-b");
+
+  memdbg_status_t st = handle_process_list(g_mock_socket, &g_req);
+  TEST_OK("process_list OK", st);
+  TEST_EQ_U("process_list status", (uint32_t)g_last_status, (uint32_t)MEMDBG_OK);
+  TEST_EQ_U("process_list payload length", g_last_payload_len,
+            (uint32_t)(sizeof(uint32_t) +
+                       2U * sizeof(memdbg_process_entry_t)));
+  {
+    uint32_t count = 0U;
+    memcpy(&count, g_last_payload, sizeof(count));
+    const memdbg_process_entry_t *entries =
+        (const memdbg_process_entry_t *)(g_last_payload + sizeof(count));
+    TEST_EQ_U("process_list count prefix", count, 2U);
+    TEST_EQ_I("process_list first pid", entries[0].pid, 101);
+    TEST("process_list second name",
+         strcmp(entries[1].name, "proc-b") == 0);
+  }
+
+  mock_send_reset();
+  g_mock_process_maps_st = MEMDBG_OK;
+  g_mock_map_count = 1U;
+  g_mock_map_entries[0].start = 0x1000U;
+  g_mock_map_entries[0].end = 0x2000U;
+  g_mock_map_entries[0].protection = MEMDBG_MAP_PROT_READ |
+                                     MEMDBG_MAP_PROT_EXEC;
+  snprintf(g_mock_map_entries[0].name,
+           sizeof(g_mock_map_entries[0].name), "text");
+
+  memdbg_process_maps_request_t maps_req;
+  memset(&maps_req, 0, sizeof(maps_req));
+  maps_req.pid = 101;
+  st = handle_process_maps(g_mock_socket, &g_req, &maps_req, sizeof(maps_req));
+  TEST_OK("process_maps OK", st);
+  TEST_EQ_U("process_maps payload length", g_last_payload_len,
+            (uint32_t)(sizeof(uint32_t) + sizeof(memdbg_map_entry_t)));
+  {
+    uint32_t count = 0U;
+    memcpy(&count, g_last_payload, sizeof(count));
+    const memdbg_map_entry_t *entries =
+        (const memdbg_map_entry_t *)(g_last_payload + sizeof(count));
+    TEST_EQ_U("process_maps count prefix", count, 1U);
+    TEST_EQ_LL("process_maps start", entries[0].start, 0x1000ULL);
+    TEST_EQ_LL("process_maps end", entries[0].end, 0x2000ULL);
+    TEST("process_maps name", strcmp(entries[0].name, "text") == 0);
+  }
+}
 
 /* ---- 1. handle_debug_attach ---- */
 
@@ -1396,6 +1501,7 @@ int main(void) {
   test_proto_clear_all_breakpoints();
   test_proto_clear_all_watchpoints();
   test_proto_process_call();
+  test_proto_process_wire_format();
 
   printf("\n=== Results ======================================\n");
   int total = g_passed + g_failed;
