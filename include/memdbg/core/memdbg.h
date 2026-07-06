@@ -29,6 +29,7 @@ extern "C" {
 #define MEMDBG_PATH_MAX 512U
 
 #define MEMDBG_DEFAULT_DEBUG_PORT 9020U
+#define MEMDBG_DEFAULT_LEGACY_PORT 744U
 #define MEMDBG_DEFAULT_UDP_LOG_HOST "255.255.255.255"
 #define MEMDBG_DEFAULT_UDP_LOG_PORT 9023U
 #define MEMDBG_DEFAULT_DISCOVERY_PORT 9022U
@@ -54,9 +55,11 @@ typedef struct memdbg_config {
   char udp_log_host[MEMDBG_UDP_HOST_MAX];
   char data_root[MEMDBG_PATH_MAX];
   uint16_t debug_port;
+  uint16_t legacy_port;
   uint16_t udp_log_port;
   uint16_t discovery_port;
   bool enable_udp_log;
+  bool enable_legacy_compat;
   bool replace_existing;
   uint32_t max_packet_bytes;
   uint32_t max_read_bytes;

@@ -313,6 +313,12 @@ request/response lifecycle, compression sub-frame, status codes, command
 registry, capability bits, and extension rules for keeping MDBG compatible as it
 becomes a stable internal standard.
 
+For older trainer/debugger clients, MemDBG can also expose a separate
+ps5debug-compatible listener on TCP port `744`. That bridge is intentionally
+isolated from the native protocol; see
+[`docs/ps5debug_compat.md`](docs/ps5debug_compat.md) for the compatibility
+contract, supported legacy commands, and extension plan.
+
 | Limit | Value |
 |---|---|
 | Maximum packet size | 1 MiB |
@@ -380,6 +386,7 @@ publish artifacts with `SHA256SUMS.txt`.
 |---|---|
 | [`docs/showcase.md`](docs/showcase.md) | Product walkthrough and feature showcase. |
 | [`docs/protocol.md`](docs/protocol.md) | Internal MDBG wire protocol specification and extension rules. |
+| [`docs/ps5debug_compat.md`](docs/ps5debug_compat.md) | ps5debug compatibility layer for older trainer/debugger clients. |
 | [`docs/feature_research.md`](docs/feature_research.md) | Planned work and technical research notes. |
 | [`docs/plugins.md`](docs/plugins.md) | Plugin manifest and runtime contract. |
 | [`docs/mobile_architecture.md`](docs/mobile_architecture.md) | iOS/Android shell architecture. |

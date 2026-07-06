@@ -83,9 +83,16 @@ void memdbg_config_defaults(memdbg_config_t *cfg) {
   (void)snprintf(cfg->data_root, sizeof(cfg->data_root), "%s",
                  MEMDBG_DEFAULT_DATA_ROOT);
   cfg->debug_port      = MEMDBG_DEFAULT_DEBUG_PORT;
+  cfg->legacy_port     = MEMDBG_DEFAULT_LEGACY_PORT;
   cfg->udp_log_port    = MEMDBG_DEFAULT_UDP_LOG_PORT;
   cfg->discovery_port  = MEMDBG_DEFAULT_DISCOVERY_PORT;
   cfg->enable_udp_log  = true;
+#if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
+    defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
+  cfg->enable_legacy_compat = true;
+#else
+  cfg->enable_legacy_compat = false;
+#endif
   cfg->replace_existing = true;
   cfg->max_packet_bytes = MEMDBG_PROTOCOL_MAX_PACKET;
   cfg->max_read_bytes   = MEMDBG_PROTOCOL_MAX_READ;
@@ -568,8 +575,10 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   }
 
   memdbg_log_write(MEMDBG_LOG_INFO,
-                   "MemDBG %s starting debug=%s:%u udp_log=%s:%u pool=%d",
+                   "MemDBG %s starting debug=%s:%u legacy=%s:%u udp_log=%s:%u pool=%d",
                    MEMDBG_VERSION_STRING, cfg.bind_host, cfg.debug_port,
+                   cfg.enable_legacy_compat ? cfg.bind_host : "off",
+                   cfg.enable_legacy_compat ? cfg.legacy_port : 0U,
                    cfg.enable_udp_log ? cfg.udp_log_host : "off",
                    cfg.enable_udp_log ? cfg.udp_log_port : 0U,
                    MEMDBG_THREAD_POOL_SIZE);
@@ -598,6 +607,18 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
 
   if (memdbg_instance_write_pid_file(&cfg) != 0) {
     memdbg_log_write(MEMDBG_LOG_WARN, "instance: failed to write pid file");
+  }
+
+  if (cfg.enable_legacy_compat) {
+    memdbg_status_t lstatus = memdbg_ps5debug_compat_start(&cfg);
+    if (lstatus == MEMDBG_OK) {
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "ps5debug-compat: active on tcp/%u", cfg.legacy_port);
+    } else {
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "ps5debug-compat: disabled: %s",
+                       memdbg_strerror(lstatus));
+    }
   }
 
   {
@@ -642,6 +663,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     (void)pthread_join(workers[i], NULL);
 
   memdbg_tracer_daemon_stop();
+  memdbg_ps5debug_compat_stop();
 
   (void)pal_socket_close(listen_fd);
   memdbg_discovery_stop();

@@ -59,6 +59,10 @@ static void print_usage(const char *argv0) {
   printf("  --allow=ADDR             Only accept a single IPv4 client address\n");
   printf("  --debug-port=PORT        TCP command port (default %u)\n",
          MEMDBG_DEFAULT_DEBUG_PORT);
+  printf("  --legacy-compat          Enable ps5debug-compatible TCP listener\n");
+  printf("  --no-legacy-compat       Disable ps5debug-compatible TCP listener\n");
+  printf("  --legacy-port=PORT       ps5debug-compatible port (default %u)\n",
+         MEMDBG_DEFAULT_LEGACY_PORT);
   printf("  --udp-host=ADDR          UDP log destination (default %s)\n",
          MEMDBG_DEFAULT_UDP_LOG_HOST);
   printf("  --udp-port=PORT          UDP log port (default %u)\n",
@@ -83,6 +87,8 @@ static int apply_arg(memdbg_config_t *cfg, const char *arg) {
     (void)snprintf(cfg->allow_host, sizeof(cfg->allow_host), "%s", arg + 8);
   } else if (strncmp(arg, "--debug-port=", 13) == 0) {
     if (!parse_u16(arg + 13, &cfg->debug_port)) return -1;
+  } else if (strncmp(arg, "--legacy-port=", 14) == 0) {
+    if (!parse_u16(arg + 14, &cfg->legacy_port)) return -1;
   } else if (strncmp(arg, "--udp-host=", 11) == 0) {
     (void)snprintf(cfg->udp_log_host, sizeof(cfg->udp_log_host), "%s",
                    arg + 11);
@@ -100,6 +106,10 @@ static int apply_arg(memdbg_config_t *cfg, const char *arg) {
     cfg->replace_existing = true;
   } else if (strcmp(arg, "--no-replace-existing") == 0) {
     cfg->replace_existing = false;
+  } else if (strcmp(arg, "--legacy-compat") == 0) {
+    cfg->enable_legacy_compat = true;
+  } else if (strcmp(arg, "--no-legacy-compat") == 0) {
+    cfg->enable_legacy_compat = false;
   } else if (strcmp(arg, "--no-udp-log") == 0) {
     cfg->enable_udp_log = false;
   } else if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
