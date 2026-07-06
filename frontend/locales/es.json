@@ -730,7 +730,7 @@
   "debugger.connect_first": "Conecta una consola antes de usar el depurador.",
   "debugger.attach": "Adjuntar",
   "debugger.pause_on_attach": "Pausa al adjuntar",
-  "debugger.pause_on_attach_tip": "Detener automáticamente el proceso objetivo tras adjuntar (SIGSTOP).",
+  "debugger.pause_on_attach_tip": "Mantiene el objetivo detenido tras adjuntar; desactívalo para reanudarlo después de la captura inicial de hilos y registros.",
   "debugger.auto_refresh_on_stop": "Auto-refresh al parar",
   "debugger.auto_refresh_on_stop_tip": "Actualizar automáticamente registros e hilos cuando el objetivo se detenga (punto de interrupción, punto de observación o parada manual).",
   "debugger.detach": "Soltar",
@@ -1038,5 +1038,13 @@
   "klog.copied": "KLOG copiado al portapapeles",
   "klog.none_to_copy": "No hay datos de KLOG para copiar",
   "klog.ready": "Listo para conectar",
+  "klog.export": "Exportar",
+  "klog.exported": "KLOG exportado",
+  "klog.none_to_export": "No hay datos de KLOG para exportar",
+  "klog.search_hint": "Buscar registros...",
+  "klog.pause": "Pausar",
+  "klog.resume": "Reanudar",
+  "klog.paused": "Pausado",
+  "klog.no_matches": "No hay lineas coincidentes",
   "klog.streaming": "Transmitiendo"
 }

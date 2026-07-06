@@ -730,7 +730,7 @@
   "debugger.connect_first": "Connectez une console avant d'utiliser le débogueur.",
   "debugger.attach": "Attacher",
   "debugger.pause_on_attach": "Pause après attachement",
-  "debugger.pause_on_attach_tip": "Arrêter automatiquement le processus cible après l'attachement (SIGSTOP).",
+  "debugger.pause_on_attach_tip": "Garde la cible arrêtée après l'attachement ; désactivez cette option pour la reprendre après le premier instantané des threads et registres.",
   "debugger.auto_refresh_on_stop": "Auto-refresh à l'arrêt",
   "debugger.auto_refresh_on_stop_tip": "Actualiser automatiquement les registres et les threads lorsque la cible s'arrête (point d'arrêt, point d'observation ou arrêt manuel).",
   "debugger.detach": "Détacher",
@@ -1038,5 +1038,13 @@
   "klog.copied": "KLOG copié dans le presse-papiers",
   "klog.none_to_copy": "Aucune donnée KLOG à copier",
   "klog.ready": "Prêt à se connecter",
+  "klog.export": "Exporter",
+  "klog.exported": "KLOG exporté",
+  "klog.none_to_export": "Aucune donnée KLOG à exporter",
+  "klog.search_hint": "Rechercher dans les logs...",
+  "klog.pause": "Pause",
+  "klog.resume": "Reprendre",
+  "klog.paused": "En pause",
+  "klog.no_matches": "Aucune ligne correspondante",
   "klog.streaming": "Flux actif"
 }

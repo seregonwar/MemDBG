@@ -534,6 +534,10 @@ memdbg_status_t memdbg_debugger_stop(void) {
     debugger_unlock();
     return MEMDBG_ERR_STATE;
   }
+  if (g_dbg.stopped) {
+    debugger_unlock();
+    return memdbg_debugger_poll_events();
+  }
   if (pal_debug_stop((int)g_dbg.pid) != 0) {
     debugger_unlock();
     return pal_status_from_errno();

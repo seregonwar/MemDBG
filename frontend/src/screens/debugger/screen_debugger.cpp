@@ -268,6 +268,7 @@ void start_debugger_attach(AppState &state, DebuggerState &ds,
   if (pid <= 0 || ds.attach_pending) return;
 
   ds.attach_pending = true;
+  state.debugger_attach_pending = true;
   ds.threads.clear();
   ds.breakpoints.clear();
   ds.watchpoints.clear();
@@ -275,51 +276,64 @@ void start_debugger_attach(AppState &state, DebuggerState &ds,
 
   const bool pause_on_attach = ds.pause_on_attach;
   auto &client = state.client;
-  s_attach_future = std::async(std::launch::async,
-      [&client, pid, pause_on_attach]() -> DebuggerAttachResult {
-    DebuggerAttachResult result;
-    result.pid = pid;
+  try {
+    s_attach_future = std::async(std::launch::async,
+        [&client, pid, pause_on_attach]() -> DebuggerAttachResult {
+          DebuggerAttachResult result;
+          result.pid = pid;
 
-    if (!client.debug_attach(pid)) {
-      result.error = client.last_error();
-      return result;
-    }
+          if (!client.debug_attach(pid)) {
+            result.error = client.last_error();
+            return result;
+          }
 
-    result.ok = true;
-    result.stopped = true;
+          result.ok = true;
+          result.stopped = true;
 
-    if (pause_on_attach) {
-      if (!client.debug_stop()) {
-        result.stopped = false;
-        result.error = "Stop: " + client.last_error();
-      }
-    }
+          /* Fetch threads and registers inside the async worker so they
+           * arrive pre-populated in the result, with no synchronous network
+           * calls in poll_debugger_attach after the future completes. */
+          if (result.stopped) {
+            std::vector<Client::DebugThreadEntry> threads;
+            if (client.debug_get_threads(threads) && !threads.empty()) {
+              result.threads = std::move(threads);
+              result.selected_lwp = result.threads[0].lwp;
 
-    /* Fetch threads and registers inside the async worker so they arrive
-     * pre-populated in the result — no synchronous network calls needed
-     * in poll_debugger_attach after the future completes. */
-    if (result.stopped) {
-      std::vector<Client::DebugThreadEntry> threads;
-      if (client.debug_get_threads(threads) && !threads.empty()) {
-        result.threads = std::move(threads);
-        result.selected_lwp = result.threads[0].lwp;
+              Client::DebugRegs regs{};
+              if (client.debug_get_regs(result.selected_lwp, regs)) {
+                result.regs = regs;
+                result.has_regs = true;
+              }
+            }
+          }
 
-        Client::DebugRegs regs{};
-        if (client.debug_get_regs(result.selected_lwp, regs)) {
-          result.regs = regs;
-          result.has_regs = true;
+          if (!pause_on_attach) {
+            if (client.debug_continue()) {
+              result.stopped = false;
+            } else {
+              result.error = "Continue: " + client.last_error();
+            }
+          }
+
+          return result;
         }
-      }
-    }
-
-    return result;
-  });
+    );
+  } catch (const std::exception &ex) {
+    ds.attach_pending = false;
+    state.debugger_attach_pending = false;
+    set_status(state, std::string("Attach: could not start worker: ") + ex.what());
+  } catch (...) {
+    ds.attach_pending = false;
+    state.debugger_attach_pending = false;
+    set_status(state, "Attach: could not start worker");
+  }
 }
 
 void poll_debugger_attach(AppState &state, DebuggerState &ds) {
   if (!ds.attach_pending) return;
   if (!s_attach_future.valid()) {
     ds.attach_pending = false;
+    state.debugger_attach_pending = false;
     set_status(state, "Attach: worker did not start");
     return;
   }
@@ -337,6 +351,7 @@ void poll_debugger_attach(AppState &state, DebuggerState &ds) {
   }
 
   ds.attach_pending = false;
+  state.debugger_attach_pending = false;
   if (!result.ok) {
     set_status(state, "Attach: " + result.error);
     return;
@@ -688,6 +703,13 @@ void reset_debugger_state(AppState &state) {
   /* disconnect_console() closes the client first, so this wait is normally
    * already complete.  It also makes any future caller safe before the
    * static future is replaced or the Client object goes away. */
+  if (s_attach_future.valid()) {
+    s_attach_future.wait();
+    try {
+      (void)s_attach_future.get();
+    } catch (...) {
+    }
+  }
   if (s_threads_future.valid()) {
     s_threads_future.wait();
     try {
@@ -695,6 +717,7 @@ void reset_debugger_state(AppState &state) {
     } catch (...) {
     }
   }
+  state.debugger_attach_pending = false;
   state.debugger_threads_pending = false;
   s_dbg_state = DebuggerState{};
 }

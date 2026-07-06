@@ -79,6 +79,8 @@ static struct {
 
   /* step expected flag */
   bool     step_called;
+  int      stop_call_count;
+  int      stop_errno;
   bool     suspend_called[8];
   bool     resume_called[8];
   int      attach_errno;
@@ -193,6 +195,8 @@ int pal_debug_continue(int pid) {
 
 int pal_debug_stop(int pid) {
   (void)pid;
+  mock.stop_call_count++;
+  if (mock.stop_errno != 0) { errno = mock.stop_errno; return -1; }
   if (!mock.attached) { errno = ESRCH; return -1; }
   mock.stopped = true;
   return 0;
@@ -510,8 +514,16 @@ static void test_stop_continue_step(void) {
   TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
   TEST("stopped after attach", memdbg_debugger_is_stopped());
 
+  mock.stop_call_count = 0;
+  mock.stop_errno = ESRCH;
+  memdbg_status_t st = memdbg_debugger_stop();
+  TEST_OK("stop while already stopped is idempotent", st);
+  TEST_EQ_I("PAL stop not called for already-stopped target",
+            mock.stop_call_count, 0);
+  mock.stop_errno = 0;
+
   /* Continue */
-  memdbg_status_t st = memdbg_debugger_continue();
+  st = memdbg_debugger_continue();
   TEST_OK("continue succeeds", st);
   TEST("not stopped after continue", !memdbg_debugger_is_stopped());
 

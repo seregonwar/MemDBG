@@ -30,6 +30,7 @@ constexpr const char *kDisconnect = u8"\uf011"; /* power-off */
 constexpr const char *kRefresh    = u8"\uf021"; /* arrows-rotate */
 constexpr const char *kSearch     = u8"\uf002"; /* magnifying-glass */
 constexpr const char *kPlay       = u8"\uf04b"; /* play */
+constexpr const char *kPause      = u8"\uf04c"; /* pause */
 constexpr const char *kStop       = u8"\uf04d"; /* stop */
 constexpr const char *kAdd        = u8"\uf055"; /* circle-plus */
 constexpr const char *kRemove     = u8"\uf056"; /* circle-minus */

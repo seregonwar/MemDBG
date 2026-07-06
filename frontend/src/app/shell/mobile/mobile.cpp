@@ -2368,7 +2368,8 @@ static void draw_mobile_session(AppState &state, ImVec2 size) {
   ImGui::PopStyleVar(2);
 }
 
-static void draw_mobile_top_bar(AppState &state, ImVec2 size) {
+[[maybe_unused]] static void draw_mobile_top_bar(AppState &state,
+                                                 ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                       ImVec2(10.0f * ui::dpi_scale(), 6.0f * ui::dpi_scale()));
@@ -2488,7 +2489,8 @@ static void draw_mobile_tools_sheet(AppState &state, ImVec2 tab_pos,
   ImGui::PopStyleColor();
 }
 
-static void draw_bottom_tab_bar(AppState &state, ImVec2 pos, ImVec2 size) {
+[[maybe_unused]] static void draw_bottom_tab_bar(AppState &state, ImVec2 pos,
+                                                 ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
@@ -2579,7 +2581,8 @@ static void draw_bottom_tab_bar(AppState &state, ImVec2 pos, ImVec2 size) {
   draw_mobile_tools_sheet(state, pos, size);
 }
 
-static void draw_mobile_status_bar(AppState &state, ImVec2 size) {
+[[maybe_unused]] static void draw_mobile_status_bar(AppState &state,
+                                                    ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                       ImVec2(10.0f * ui::dpi_scale(), 3.0f * ui::dpi_scale()));
@@ -2598,7 +2601,8 @@ static void draw_mobile_status_bar(AppState &state, ImVec2 size) {
   ImGui::PopStyleColor();
 }
 
-static void draw_mobile_content(AppState &state, ImVec2 size) {
+[[maybe_unused]] static void draw_mobile_content(AppState &state,
+                                                 ImVec2 size) {
   const float scl = ui::dpi_scale();
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                       ImVec2(10.0f * scl, 8.0f * scl));
