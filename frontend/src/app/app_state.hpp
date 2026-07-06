@@ -15,6 +15,7 @@
 #include "release_check.hpp"
 #include "plugins/repository/plugin_manager.hpp"
 #include "scanner/structure_compare.hpp"
+#include "ui/theme_manager.hpp"
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "locale/locale.hpp"
@@ -249,6 +250,7 @@ struct AppState {
   GitHubProfile github_profile;
   ReleaseCheck release_check;
   plugins::PluginManager plugin_manager;
+  themes::ThemeManager theme_manager;
 
   char host[64] = "192.168.1.100";
   int debug_port = 9020;

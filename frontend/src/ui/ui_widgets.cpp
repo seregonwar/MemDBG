@@ -20,10 +20,18 @@
 namespace memdbg::frontend::ui {
 
 static float s_dpi_scale = 1.0f;
+static Palette s_active_palette;
+
+Palette &mutable_colors() {
+  return s_active_palette;
+}
 
 const Palette &colors() {
-  static Palette palette;
-  return palette;
+  return s_active_palette;
+}
+
+void set_palette(const Palette &palette) {
+  s_active_palette = palette;
 }
 
 ImU32 color_u32(const ImVec4 &color) {
@@ -50,40 +58,40 @@ void apply_theme() {
   c[ImGuiCol_TextDisabled] = p.dim;
   c[ImGuiCol_WindowBg] = p.bg0;
   c[ImGuiCol_ChildBg] = p.panel;
-  c[ImGuiCol_PopupBg] = ImVec4(24.0f/255.0f,26.0f/255.0f,27.0f/255.0f,0.99f);
+  c[ImGuiCol_PopupBg] = p.bg1;
   c[ImGuiCol_Border] = p.border;
   c[ImGuiCol_BorderShadow] = ImVec4(0,0,0,0);
-  c[ImGuiCol_FrameBg] = ImVec4(43.0f/255.0f, 47.0f/255.0f, 48.0f/255.0f, 1.0f);
-  c[ImGuiCol_FrameBgHovered] = ImVec4(58.0f/255.0f, 70.0f/255.0f, 64.0f/255.0f, 1.0f);
-  c[ImGuiCol_FrameBgActive] = ImVec4(46.0f/255.0f, 119.0f/255.0f, 76.0f/255.0f, 1.0f);
-  c[ImGuiCol_ScrollbarBg] = ImVec4(17.0f/255.0f,18.0f/255.0f,19.0f/255.0f,0.92f);
-  c[ImGuiCol_ScrollbarGrab] = ImVec4(67.0f/255.0f,73.0f/255.0f,74.0f/255.0f,1.0f);
-  c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(91.0f/255.0f,101.0f/255.0f,98.0f/255.0f,1.0f);
+  c[ImGuiCol_FrameBg] = p.bg2;
+  c[ImGuiCol_FrameBgHovered] = p.bg3;
+  c[ImGuiCol_FrameBgActive] = p.primary;
+  c[ImGuiCol_ScrollbarBg] = p.bg0;
+  c[ImGuiCol_ScrollbarGrab] = p.bg3;
+  c[ImGuiCol_ScrollbarGrabHovered] = p.dim;
   c[ImGuiCol_ScrollbarGrabActive] = p.primary;
   c[ImGuiCol_CheckMark] = p.primary2;
   c[ImGuiCol_SliderGrab] = p.primary;
   c[ImGuiCol_SliderGrabActive] = p.primary2;
-  c[ImGuiCol_Button] = ImVec4(45.0f/255.0f, 50.0f/255.0f, 51.0f/255.0f, 1.0f);
-  c[ImGuiCol_ButtonHovered] = ImVec4(62.0f/255.0f, 82.0f/255.0f, 71.0f/255.0f, 1.0f);
-  c[ImGuiCol_ButtonActive] = ImVec4(42.0f/255.0f, 136.0f/255.0f, 84.0f/255.0f, 1.0f);
-  c[ImGuiCol_Header] = ImVec4(45.0f/255.0f, 49.0f/255.0f, 50.0f/255.0f, 1.0f);
-  c[ImGuiCol_HeaderHovered] = ImVec4(61.0f/255.0f, 83.0f/255.0f, 70.0f/255.0f, 1.0f);
-  c[ImGuiCol_HeaderActive] = ImVec4(38.0f/255.0f, 121.0f/255.0f, 76.0f/255.0f, 1.0f);
+  c[ImGuiCol_Button] = p.bg2;
+  c[ImGuiCol_ButtonHovered] = p.primary;
+  c[ImGuiCol_ButtonActive] = p.primary2;
+  c[ImGuiCol_Header] = p.bg2;
+  c[ImGuiCol_HeaderHovered] = p.primary;
+  c[ImGuiCol_HeaderActive] = p.primary2;
   c[ImGuiCol_Separator] = p.border;
   c[ImGuiCol_SeparatorHovered] = p.primary;
   c[ImGuiCol_SeparatorActive] = p.primary2;
-  c[ImGuiCol_ResizeGrip] = ImVec4(83.0f/255.0f,92.0f/255.0f,88.0f/255.0f,0.54f);
-  c[ImGuiCol_ResizeGripHovered] = ImVec4(79.0f/255.0f,220.0f/255.0f,145.0f/255.0f,0.70f);
+  c[ImGuiCol_ResizeGrip] = p.bg3;
+  c[ImGuiCol_ResizeGripHovered] = p.primary2;
   c[ImGuiCol_ResizeGripActive] = p.primary;
   c[ImGuiCol_Tab] = p.bg1;
-  c[ImGuiCol_TabHovered] = ImVec4(49.0f/255.0f,70.0f/255.0f,59.0f/255.0f,1.0f);
-  c[ImGuiCol_TabActive] = ImVec4(38.0f/255.0f,55.0f/255.0f,46.0f/255.0f,1.0f);
-  c[ImGuiCol_TableHeaderBg] = ImVec4(34.0f/255.0f,37.0f/255.0f,38.0f/255.0f,1.0f);
+  c[ImGuiCol_TabHovered] = p.primary;
+  c[ImGuiCol_TabActive] = p.bg2;
+  c[ImGuiCol_TableHeaderBg] = p.bg1;
   c[ImGuiCol_TableBorderStrong] = p.border_hot;
   c[ImGuiCol_TableBorderLight] = p.border;
   c[ImGuiCol_TableRowBg] = ImVec4(0,0,0,0);
   c[ImGuiCol_TableRowBgAlt] = ImVec4(1,1,1,0.045f);
-  c[ImGuiCol_TextSelectedBg] = ImVec4(79.0f/255.0f,220.0f/255.0f,145.0f/255.0f,0.34f);
+  c[ImGuiCol_TextSelectedBg] = ImVec4(p.primary2.x, p.primary2.y, p.primary2.z, 0.34f);
 
   style.WindowPadding = ImVec2(0, 0);
   style.FramePadding = ImVec2(7, 4);
@@ -158,22 +166,20 @@ bool styled_button(const char *label, ImVec2 size, ImVec4 base, ImVec4 hover, Im
 
 bool primary_button(const char *label, ImVec2 size) {
   const auto &p = colors();
-  return styled_button(label, size, p.primary, p.primary2,
-                       ImVec4(31.0f/255.0f,125.0f/255.0f,78.0f/255.0f,1.0f));
+  return styled_button(label, size, p.primary, p.primary2, p.primary);
 }
 
 bool soft_button(const char *label, ImVec2 size) {
-  return styled_button(label, size,
-    ImVec4(40.0f/255.0f,44.0f/255.0f,45.0f/255.0f,1.0f),
-    ImVec4(55.0f/255.0f,73.0f/255.0f,64.0f/255.0f,1.0f),
-    ImVec4(40.0f/255.0f,105.0f/255.0f,70.0f/255.0f,1.0f));
+  const auto &p = colors();
+  return styled_button(label, size, p.bg2, p.bg3, p.primary);
 }
 
 bool danger_button(const char *label, ImVec2 size) {
+  const auto &p = colors();
   return styled_button(label, size,
-    ImVec4(78.0f/255.0f,28.0f/255.0f,40.0f/255.0f,1.0f),
-    colors().danger,
-    ImVec4(140.0f/255.0f,42.0f/255.0f,55.0f/255.0f,1.0f));
+    ImVec4(p.danger.x * 0.5f, p.danger.y * 0.5f, p.danger.z * 0.5f, 1.0f),
+    p.danger,
+    ImVec4(p.danger.x * 0.8f, p.danger.y * 0.8f, p.danger.z * 0.8f, 1.0f));
 }
 
 ImVec2 full_button(float height) {

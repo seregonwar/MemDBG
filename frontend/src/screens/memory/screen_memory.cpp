@@ -698,8 +698,7 @@ void draw_memory(AppState &state, ImVec2 avail) {
     }
   }
 
-  const float gap = 16.0f;
-  const float left_w = std::max(420.0f, (avail.x - gap) * 0.38f);
+  const float left_w = std::max(420.0f, avail.x * 0.38f);
 
   ui::begin_panel("MemoryTools", locale::tr("memory.memory_tools"), ImVec2(left_w, avail.y));
   ImGui::Text(locale::tr("memory.active_pid"), state.selected_pid);
@@ -763,7 +762,7 @@ void draw_memory(AppState &state, ImVec2 avail) {
   }
   ui::end_panel();
 
-  ImGui::SameLine(0, gap);
+  ImGui::SameLine();
   ui::begin_panel("MemoryHex", locale::tr("memory.hex_view"), ImVec2(0, avail.y));
   refresh_allocation_findings(state);
   draw_overlay_hex_view(state);

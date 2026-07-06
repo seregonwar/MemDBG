@@ -729,7 +729,6 @@ void draw_debugger(AppState &state, ImVec2 avail) {
   poll_debugger_state(state);
 
   const float scl = ui::dpi_scale();
-  const float gap = 16.0f * scl;
   const bool has_cap = state.has_hello &&
                        (state.hello.capabilities & MEMDBG_CAP_DEBUGGER);
 
@@ -1144,7 +1143,7 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     }
     ui::end_panel();
 
-    ImGui::SameLine(0, gap);
+    ImGui::SameLine();
     ui::begin_panel("DebuggerWorkspace", "Debugger Workspace", ImVec2(0, work_h));
   if (ImGui::BeginTabBar("DebuggerWorkspaceTabs")) {
     if (ImGui::BeginTabItem("Registers")) {

@@ -19,14 +19,21 @@ namespace memdbg::frontend {
 
 void draw_settings(AppState &state, ImVec2 avail) {
   ensure_console_targets(state);
-  const float gap = 16.0f;
-  const float col_w = (avail.x - gap) * 0.5f;
+  const float col_w = avail.x / 3.0f;
 
+  /* ---- Column 1: Connection Defaults ---- */
   ui::begin_panel("SettingsConnection", locale::tr("settings.connection_defaults"), ImVec2(col_w, avail.y));
+  ImGui::TextColored(ui::colors().muted, "Console");
+  ImGui::Spacing();
   ImGui::InputText("Target name", state.target_name, sizeof(state.target_name));
   ImGui::InputText(locale::tr("settings.console_ipv4"), state.host, sizeof(state.host));
   ImGui::InputInt(locale::tr("settings.debug_tcp"), &state.debug_port);
   ImGui::InputInt(locale::tr("settings.udp_logs"), &state.udp_port);
+  normalize_ports(state);
+
+  ImGui::Spacing();
+  ImGui::TextColored(ui::colors().muted, "Paths");
+  ImGui::Spacing();
   ImGui::InputText(locale::tr("settings.dump_path"), state.dump_path, sizeof(state.dump_path));
   ImGui::SameLine();
   if (ImGui::SmallButton((std::string(icons::kLoad) + "##dumppath").c_str())) {
@@ -35,11 +42,14 @@ void draw_settings(AppState &state, ImVec2 avail) {
       std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", picked.c_str());
   }
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("settings.browse_dump_dir"));
-  normalize_ports(state);
+  ui::end_panel();
 
-  ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+  /* ---- Column 2: Preferences ---- */
+  ImGui::SameLine();
+  ui::begin_panel("SettingsPreferences", "Preferences", ImVec2(col_w, avail.y));
+  ImGui::TextColored(ui::colors().muted, "Options");
+  ImGui::Spacing();
 
-  // Crash logging toggle
   if (ImGui::Checkbox(locale::tr("settings.crash_logging"), &state.crash_logging_enabled)) {
     state.crash_logger.set_enabled(state.crash_logging_enabled);
     set_status(state, state.crash_logging_enabled
@@ -48,8 +58,6 @@ void draw_settings(AppState &state, ImVec2 avail) {
   }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", locale::tr("settings.crash_logging_hint"));
-
-  ImGui::Spacing();
 
   if (ImGui::Checkbox(locale::tr("settings.taskmgr_prefetch_on_connect"),
                       &state.taskmgr_prefetch_on_connect)) {
@@ -61,9 +69,7 @@ void draw_settings(AppState &state, ImVec2 avail) {
     ImGui::SetTooltip("%s", locale::tr("settings.taskmgr_prefetch_hint"));
 
   ImGui::Spacing();
-
-  // Language selector
-  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.language"));
+  ImGui::TextColored(ui::colors().muted, "Language");
   ImGui::Spacing();
   {
     auto &mgr = locale::Manager::instance();
@@ -145,7 +151,46 @@ void draw_settings(AppState &state, ImVec2 avail) {
     ImGui::SetTooltip("%s", locale::tr("settings.language_hint"));
 
   ImGui::Spacing();
-  if (ui::primary_button((std::string(icons::kSave) + "  " + locale::tr("settings.save_defaults")).c_str(), ui::full_button(40))) {
+  ImGui::TextColored(ui::colors().muted, "Theme");
+  ImGui::Spacing();
+  {
+    auto &theme_mgr = state.theme_manager;
+    const auto theme_list = theme_mgr.themes();
+    const std::string active_id = theme_mgr.active_theme_id();
+    const themes::ThemeDefinition *active_def = theme_mgr.active_theme();
+    const char *preview = active_def ? active_def->name.c_str() : "Default";
+
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##ThemeCombo", preview)) {
+      for (const auto &theme : theme_list) {
+        const bool selected = theme.id == active_id;
+        if (ImGui::Selectable(theme.name.c_str(), selected)) {
+          std::string error;
+          if (theme_mgr.set_active_theme(theme.id, &error)) {
+            theme_mgr.apply_active_theme();
+            set_status(state, std::string("Theme: ") + theme.name);
+          } else {
+            set_status(state, error);
+          }
+        }
+        if (selected) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Select the UI color theme");
+  }
+  ui::end_panel();
+
+  /* ---- Column 3: Actions + Runtime Info ---- */
+  ImGui::SameLine();
+  ui::begin_panel("SettingsActions", "Actions", ImVec2(0, avail.y));
+
+  /* Action buttons in 2x2 grid */
+  const float btn_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
+  const float btn_h = 36.0f;
+
+  if (ui::primary_button((std::string(icons::kSave) + "  " + locale::tr("settings.save_defaults")).c_str(), ImVec2(btn_w, btn_h))) {
     save_current_console_target(state);
     std::string error;
     if (save_frontend_settings(state, &error)) {
@@ -158,14 +203,26 @@ void draw_settings(AppState &state, ImVec2 avail) {
       push_notification(state, buf, 5.0);
     }
   }
-  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.apply_udp")).c_str(), ui::full_button(40))) {
+  ImGui::SameLine();
+  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.apply_udp")).c_str(), ImVec2(btn_w, btn_h))) {
     state.udp_listener.stop();
     std::string error;
     if (ensure_udp_listener(state, error)) set_status(state, locale::tr("settings.udp_applied"));
     else set_status(state, error);
   }
+
+  if (ui::soft_button((std::string(icons::kRefresh) + "  Refresh Themes").c_str(), ImVec2(btn_w, btn_h))) {
+    std::string error;
+    if (state.theme_manager.reload(&error)) {
+      state.theme_manager.apply_active_theme();
+      set_status(state, "Themes reloaded");
+    } else {
+      set_status(state, error);
+    }
+  }
+  ImGui::SameLine();
   static bool skip_reset_defaults = false;
-  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.reset_defaults")).c_str(), ui::full_button(40))) {
+  if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.reset_defaults")).c_str(), ImVec2(btn_w, btn_h))) {
     ImGui::OpenPopup("ConfirmResetDefaults");
   }
   if (ui::confirm_modal("ConfirmResetDefaults",
@@ -182,16 +239,21 @@ void draw_settings(AppState &state, ImVec2 avail) {
     save_current_console_target(state);
     set_status(state, locale::tr("settings.restored"));
   }
-  ui::end_panel();
 
-  ImGui::SameLine(0, gap);
-  ui::begin_panel("SettingsRuntime", locale::tr("settings.runtime_notes"), ImVec2(0, avail.y));
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  /* Runtime info section */
+  ImGui::TextColored(ui::colors().muted, "Runtime Info");
+  ImGui::Spacing();
   ImGui::TextWrapped("%s", locale::tr("settings.runtime_desc"));
   ImGui::Spacing();
-  ImGui::Text(locale::tr("settings.protocol_version"), MEMDBG_PROTOCOL_VERSION);
-  ImGui::Text(locale::tr("settings.max_read"), static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_READ));
-  ImGui::Text(locale::tr("settings.max_packet"), static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_PACKET));
+  ImGui::Text("Protocol: v%d", MEMDBG_PROTOCOL_VERSION);
+  ImGui::Text("Max read: %u bytes", static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_READ));
+  ImGui::Text("Max packet: %u bytes", static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_PACKET));
   ImGui::TextWrapped("%s", locale::tr("settings.console_log_path"));
+
   ui::end_panel();
 }
 

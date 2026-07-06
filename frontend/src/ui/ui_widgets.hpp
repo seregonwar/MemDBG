@@ -37,7 +37,9 @@ struct Palette {
   ImVec4 danger = ImVec4(241.0f / 255.0f, 95.0f / 255.0f, 100.0f / 255.0f, 1.0f);
 };
 
+Palette &mutable_colors();
 const Palette &colors();
+void set_palette(const Palette &palette);
 ImU32 color_u32(const ImVec4 &color);
 void apply_theme();
 float dpi_scale();
