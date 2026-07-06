@@ -56,7 +56,7 @@ using memdbg::frontend::ReleaseCheck;
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
   Trainer, Plugins, PluginGUI, Logs, Settings, Telemetry, TaskMgr, Debugger,
-  Tracer, Credits,
+  Tracer, Credits, Klog,
 };
 
 struct ProcessMapSummary {
@@ -566,6 +566,15 @@ struct AppState {
   bool tracer_was_crashed = false;
   std::string tracer_crash_dump_path;
   double tracer_crash_notification_time = 0.0;
+
+  /* ---- KLOG streaming ---- */
+  bool klog_connected = false;
+  uint16_t klog_port = 0;
+  std::vector<std::string> klog_lines;
+  std::vector<uint8_t> klog_raw;       /* partial-line buffer */
+  int klog_max_lines = 5000;
+  bool klog_auto_scroll = true;
+  double klog_last_poll = 0.0;
 };
 
 /* ---- utility functions ---- */
@@ -840,6 +849,7 @@ inline const char *screen_title(Screen s) {
   case Screen::Debugger: return "Debugger";
   case Screen::Tracer: return "Tracer";
   case Screen::Credits: return "Credits";
+  case Screen::Klog: return "Kernel Log";
   } return "MemDBG";
 }
 
@@ -862,6 +872,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::Debugger: return "Attach, stop, step and manage breakpoints/watchpoints";
   case Screen::Tracer: return "Trace syscalls and detect process crashes";
   case Screen::Credits: return "Project information";
+  case Screen::Klog: return "Stream kernel logs from the console via secondary TCP connection";
   } return "";
 }
 
@@ -926,6 +937,7 @@ void draw_telemetry(AppState &state, struct ImVec2 avail);
 void draw_taskmgr(AppState &state, struct ImVec2 avail);
 void draw_debugger(AppState &state, struct ImVec2 avail);
 void draw_tracer(AppState &state, struct ImVec2 avail);
+void draw_klog(AppState &state, struct ImVec2 avail);
 void draw_screen(AppState &state, struct ImVec2 avail);
 
 } // namespace memdbg::frontend

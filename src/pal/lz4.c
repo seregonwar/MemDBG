@@ -18,7 +18,35 @@
 #define LZ4_MIN_CINPUT     0x20U
 #define LZ4_STEPSIZE       8U
 
+/*
+ * Generation-counter hash table.
+ *
+ * Instead of memset(table, -1, 16KB) on every call, entries pack a
+ * 12-bit generation counter in the upper bits and a 20-bit position
+ * offset in the lower bits.  Incrementing the generation on each call
+ * invalidates all entries from the previous call with zero cost.
+ *
+ * 20 position bits support inputs up to 1 MiB — the typical memDBG
+ * framed-packet payload.  For larger inputs, we fall back to the
+ * traditional memset path.
+ */
+#define LZ4_POS_BITS   20U
+#define LZ4_POS_MASK   ((1U << LZ4_POS_BITS) - 1U)
+#define LZ4_GEN_SHIFT  LZ4_POS_BITS
+#define LZ4_GEN_MASK   ((1U << 12U) - 1U)
+#define LZ4_GEN_MAX    LZ4_GEN_MASK
+
 typedef uint32_t LZ4_hash_t;
+
+/*
+ * Per-thread table + generation counter.
+ *
+ * _Thread_local keeps each thread's table isolated (no races) while
+ * avoiding a 16-KiB stack allocation per call.  The generation counter
+ * eliminates the per-call memset for inputs up to 1 MiB.
+ */
+static _Thread_local uint32_t lz4_ht[LZ4_HASHTABLESIZE];
+static _Thread_local uint32_t lz4_ht_gen;
 
 static LZ4_hash_t lz4_hash_position(const uint8_t *p) {
   uint32_t v;
@@ -40,6 +68,24 @@ static void lz4_write_len(uint8_t **op, unsigned length, unsigned base) {
   *(*op)++ = (uint8_t)rem;
 }
 
+/*
+ * Put a position into the hash table for the current generation.
+ */
+static void lz4_ht_put(LZ4_hash_t h, unsigned pos) {
+  lz4_ht[h] = (lz4_ht_gen << LZ4_GEN_SHIFT) | (pos & LZ4_POS_MASK);
+}
+
+/*
+ * Look up a hash bucket.  Returns the stored position, or -1 if the
+ * entry belongs to a previous generation (stale) or was never written.
+ */
+static int lz4_ht_get(LZ4_hash_t h) {
+  uint32_t entry = lz4_ht[h];
+  if ((entry >> LZ4_GEN_SHIFT) != lz4_ht_gen)
+    return -1;
+  return (int)(entry & LZ4_POS_MASK);
+}
+
 int lz4_compress_default(const char *src, char *dst, int src_size,
                          int dst_capacity) {
   if (src == NULL || dst == NULL || src_size < (int)LZ4_MIN_CINPUT ||
@@ -56,11 +102,30 @@ int lz4_compress_default(const char *src, char *dst, int src_size,
   uint8_t *op = (uint8_t *)(void *)dst;
   uint8_t *const oend = op + (size_t)dst_capacity;
 
-  int table[LZ4_HASHTABLESIZE];
-  for (unsigned i = 0; i < LZ4_HASHTABLESIZE; ++i) {
-    table[i] = -1;
+  /*
+   * Advance generation counter and decide table-init strategy.
+   *
+   * If the input fits in 20 bits of position space (≤ 1 MiB) we use
+   * the fast generation-counter path.  For larger inputs we fall back
+   * to a traditional full-table memset.
+   */
+  lz4_ht_gen = (lz4_ht_gen + 1U) & LZ4_GEN_MASK;
+  if (lz4_ht_gen == 0U) {
+    /* Generation wrapped — force a full reset to avoid stale entries
+     * from 4096 calls ago becoming visible again.  This happens once
+     * every 4096 calls, amortising the 16-KiB memset cost. */
+    memset(lz4_ht, 0xFF, sizeof(lz4_ht));
   }
-  table[lz4_hash_position(src_base)] = 0;
+  if ((size_t)src_size <= (size_t)LZ4_POS_MASK) {
+    /* Fast path: generation counter invalidates all old entries.
+     * No per-call memset needed. */
+  } else {
+    /* Slow path: position won't fit in 20 bits; full reset. */
+    memset(lz4_ht, 0xFF, sizeof(lz4_ht));
+    lz4_ht_gen = 0U;
+  }
+
+  lz4_ht_put(lz4_hash_position(src_base), 0U);
 
   for (;;) {
     const uint8_t *match = NULL;
@@ -70,15 +135,21 @@ int lz4_compress_default(const char *src, char *dst, int src_size,
 
     do {
       LZ4_hash_t h = lz4_hash_position(forward_ip);
-      int ref_idx = table[h];
-      table[h] = (int)(forward_ip - src_base);
+      int ref_idx = lz4_ht_get(h);
+      lz4_ht_put(h, (unsigned)(forward_ip - src_base));
       if (ref_idx >= 0) {
         const uint8_t *candidate = src_base + ref_idx;
         ptrdiff_t distance = forward_ip - candidate;
-        if (distance > 0 && distance <= 65535 &&
-            memcmp(candidate, forward_ip, LZ4_MIN_MATCH) == 0) {
-          match = candidate;
-          break;
+        if (distance > 0 && distance <= 65535) {
+          /* Direct 32-bit comparison avoids memcmp call overhead
+           * in the hot match-finding loop (LZ4_MIN_MATCH == 4). */
+          uint32_t cv, fv;
+          memcpy(&cv, candidate, sizeof(cv));
+          memcpy(&fv, forward_ip, sizeof(fv));
+          if (cv == fv) {
+            match = candidate;
+            break;
+          }
         }
       }
       forward_ip += step;
@@ -88,15 +159,40 @@ int lz4_compress_default(const char *src, char *dst, int src_size,
     if (match == NULL) break;
 
     for (const uint8_t *p = ip; p < forward_ip && p <= src_mf; ++p) {
-      table[lz4_hash_position(p)] = (int)(p - src_base);
+      lz4_ht_put(lz4_hash_position(p), (unsigned)(p - src_base));
     }
     ip = forward_ip;
 
     const uint8_t *match_cursor = match + LZ4_MIN_MATCH;
     const uint8_t *match_end = ip + LZ4_MIN_MATCH;
-    while (match_end < src_limit && *match_end == *match_cursor) {
-      ++match_end;
-      ++match_cursor;
+
+    /* Word-at-a-time match extension: compare 8 bytes per iteration
+     * using 64-bit XOR.  __builtin_ctzll finds the first differing
+     * byte without branching on every byte.
+     *
+     * The remaining-byte guard keeps pointer arithmetic inside the source
+     * object while preserving the mandatory LZ4_LASTLITERALS (5)
+     * trailing-literal region, since src_limit = src_end - 5. */
+    int ext_early = 0;
+    while ((size_t)(src_limit - match_end) >= 8U) {
+      uint64_t a, b;
+      memcpy(&a, match_end, 8);
+      memcpy(&b, match_cursor, 8);
+      if (a != b) {
+        unsigned tz = (unsigned)__builtin_ctzll(a ^ b) >> 3;
+        match_end += tz;
+        ext_early = 1;
+        break;
+      }
+      match_end += 8U;
+      match_cursor += 8U;
+    }
+    /* Tail: byte-by-byte for the remaining < 8 bytes. */
+    if (!ext_early) {
+      while (match_end < src_limit && *match_end == *match_cursor) {
+        ++match_end;
+        ++match_cursor;
+      }
     }
 
     unsigned literal_len = (unsigned)(ip - anchor);
@@ -116,8 +212,18 @@ int lz4_compress_default(const char *src, char *dst, int src_size,
     }
 
     if (literal_len > 0U) {
-      memcpy(op, anchor, literal_len);
-      op += literal_len;
+      /* Fast wildcopy for short literals when the caller's output buffer has
+       * room for the full 8-byte store.  The source read is safe here because
+       * matches are found at or before src_mf (src_end - LZ4_MF_LIMIT). */
+      if (literal_len <= 8U && (size_t)(oend - op) >= 8U) {
+        uint64_t v;
+        memcpy(&v, anchor, 8);
+        memcpy(op, &v, 8);
+        op += literal_len;
+      } else {
+        memcpy(op, anchor, literal_len);
+        op += literal_len;
+      }
     }
 
     unsigned offset = (unsigned)(ip - match);
@@ -209,8 +315,32 @@ int lz4_decompress_safe(const char *src, char *dst, int compressed_size,
     if ((size_t)(oend - op) < match_len) return -1;
 
     const uint8_t *match = op - offset;
-    while (match_len-- != 0U) {
-      *op++ = *match++;
+    /* Word-at-a-time match copy.  For offset ≥ 8 the source is safely
+     * behind the destination (no overlap within 8-byte window).
+     * For small offsets we use pattern duplication to prime enough
+     * bytes for the word-at-a-time loop to take over safely. */
+    if (offset >= 8U) {
+      while (match_len >= 8U) {
+        uint64_t v;
+        memcpy(&v, match, 8);
+        memcpy(op, &v, 8);
+        match += 8U;
+        op    += 8U;
+        match_len -= 8U;
+      }
+      while (match_len-- != 0U)
+        *op++ = *match++;
+    } else if (offset == 1U) {
+      /* Single-byte repeat → memset. */
+      memset(op, match[0], match_len);
+      op += match_len;
+    } else {
+      /* offset ∈ {2,3,4,5,6,7}: overlapping copy — byte-by-byte is
+       * the simplest correct approach since the source and destination
+       * can overlap within an 8-byte window.  These small offsets are
+       * the minority case in real-world LZ4 streams. */
+      while (match_len-- != 0U)
+        *op++ = *match++;
     }
   }
 
