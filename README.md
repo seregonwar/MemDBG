@@ -421,6 +421,16 @@ Contributions are welcome around:
 For translations, update the locale JSON file, regenerate the manifest, and run
 `make check-locales` before opening a pull request.
 
+## Credits
+
+MemDBG includes a compatibility layer for the **ps5debug** protocol created by
+[SiSTR0](https://github.com/SiSTR0) / ctn and maintained in
+[ps5debug-NG](https://github.com/OpenSourcereR-dev/ps5debug-NG) by
+[OpenSourcereR-dev](https://github.com/OpenSourcereR-dev).
+This bridge allows legacy trainers and debugger tools to connect without
+modifications, while keeping the native MemDBG protocol clean and versioned.
+See [`docs/ps5debug_compat.md`](docs/ps5debug_compat.md) for details.
+
 ## Responsible Use
 
 MemDBG is built for legitimate debugging, security research, education,

@@ -325,7 +325,7 @@ static void test_nested_dump_structure(void) {
 
       JsonValue *regs = json_make_object(arena);
       (void)json_obj_setz(regs, arena, "rip",
-          hex_u64(arena, 0x7FFF1000ULL + (uint64_t)(ti * 0x1000)));
+          hex_u64(arena, 0x7FFF1000ULL + (uint64_t)ti * 0x1000ULL));
       (void)json_obj_setz(regs, arena, "rsp",
           hex_u64(arena, 0x7FFEE000ULL));
       (void)json_obj_setz(regs, arena, "rax",
@@ -342,7 +342,7 @@ static void test_nested_dump_structure(void) {
     JsonValue *maps = json_make_array(arena);
     for (int mi = 0; mi < 3; mi++) {
       JsonValue *mobj = json_make_object(arena);
-      uint64_t start = 0x10000ULL + (uint64_t)(mi * 0x10000);
+      uint64_t start = 0x10000ULL + (uint64_t)mi * 0x10000ULL;
       (void)json_obj_setz(mobj, arena, "start", hex_u64(arena, start));
       (void)json_obj_setz(mobj, arena, "end",
                           hex_u64(arena, start + 0x8000));
