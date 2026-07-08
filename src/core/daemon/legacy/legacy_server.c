@@ -99,7 +99,8 @@ static void legacy_handle_client(socket_t fd, const memdbg_config_t *cfg) {
   while (atomic_load_explicit(&g_legacy_running, memory_order_relaxed) && !memdbg_daemon_should_stop()) {
     legacy_packet_header_t header; void *body = NULL;
     int ready = legacy_wait_for_fd(fd);
-    if (ready == 0) continue; if (ready < 0) break;
+    if (ready == 0) continue;
+    if (ready < 0) break;
     if (pal_socket_read_exact(fd, &header, sizeof(header)) < 0) break;
     if (header.magic != LEGACY_PACKET_MAGIC) { (void)legacy_send_status(fd, LEGACY_CMD_ERROR); break; }
     if (header.data_len > cfg->max_packet_bytes) { (void)legacy_send_status(fd, LEGACY_CMD_ERROR); break; }
