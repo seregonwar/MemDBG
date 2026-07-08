@@ -824,7 +824,7 @@ static int snapshot_materialize(unsigned slot, struct flashscan_sess *s) {
   uint64_t vlen = s->value_len;
   int has_first = s->has_first, has_prev = s->has_prev;
 
-  uint64_t rec_size = 8 + vlen * (1 + (has_prev ? 1 : 0) + (has_first ? 1 : 0));
+  uint64_t rec_size = 8 + vlen * (1 + (has_prev ? 1U : 0U) + (has_first ? 1U : 0U));
   uint64_t records = s->survivor_count;
   if (records == 0 || rec_size * records > FS_RESCAN_WIN_CAP * 2) return 0;
 
@@ -1289,7 +1289,7 @@ int flashscan_handle_count(int fd,
       }
       if (rsctx) page_alias_release(rsctx);
 
-      uint64_t rsz = 8 + vlen * (1 + (s->has_prev ? 1 : 0) + (s->has_first ? 1 : 0));
+      uint64_t rsz = 8 + vlen * (1 + (s->has_prev ? 1U : 0U) + (s->has_first ? 1U : 0U));
       if (nc > 0 && nc <= g_fs_mat_max &&
           nc * 32 <= s->slot_count && nc * rsz <= FS_RESCAN_WIN_CAP * 2)
         snapshot_materialize(slot, s);
