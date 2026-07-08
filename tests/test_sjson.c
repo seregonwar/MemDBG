@@ -95,7 +95,7 @@ static JsonValue *hex_u64(JsonArena *arena, uint64_t value) {
 static void test_arena_lifecycle(void) {
   printf("\n--- Arena Lifecycle ---\n");
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
   TEST("arena created", arena != NULL);
 
   json_arena_destroy(arena);
@@ -116,7 +116,7 @@ static void test_arena_lifecycle(void) {
 static void test_primitives(void) {
   printf("\n--- Primitives ---\n");
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
   TEST("arena created", arena != NULL);
 
   /* json_make_int */
@@ -161,7 +161,7 @@ static void test_primitives(void) {
 static void test_hex_u64(void) {
   printf("\n--- hex_u64 Helper ---\n");
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
 
   /* Serialise to verify correct hex formatting */
   {
@@ -207,7 +207,7 @@ static void test_hex_u64(void) {
 static void test_object_building(void) {
   printf("\n--- Object Building ---\n");
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
 
   JsonValue *obj = json_make_object(arena);
   TEST("object created", obj != NULL);
@@ -256,7 +256,7 @@ static void test_object_building(void) {
 static void test_array_building(void) {
   printf("\n--- Array Building ---\n");
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
 
   JsonValue *arr = json_make_array(arena);
   TEST("array created", arr != NULL);
@@ -398,7 +398,7 @@ static void test_measure_errors(void) {
   JsonError err = json_measure(NULL, &len, NULL);
   TEST_EQ_I("measure NULL returns error", err, JSON_ERR_NULL_PARAM);
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
   JsonValue *obj = json_make_object(arena);
   (void)json_obj_setz(obj, arena, "x", json_make_int(arena, 1));
   size_t dummy_len = 0;
@@ -414,7 +414,7 @@ static void test_measure_errors(void) {
 static void test_write_errors(void) {
   printf("\n--- Write Errors ---\n");
 
-  JsonArena *arena = json_arena_create(NULL, 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
   JsonValue *obj = json_make_object(arena);
   (void)json_obj_setz(obj, arena, "key",
                       json_make_stringz(arena, "value"));
@@ -440,8 +440,7 @@ static void test_write_errors(void) {
 static void test_empty_structures(void) {
   printf("\n--- Empty Structures ---\n");
 
-  /* calloc avoids stale malloc data from arena reuse across tests */
-  JsonArena *arena = json_arena_create(calloc(1, 4096), 4096);
+  JsonArena *arena = json_arena_create(NULL, 65536);
 
   /* Empty object */
   {

@@ -2514,14 +2514,26 @@ JsonValue* json_make_stringz(JsonArena* arena, const char* s)
 JsonValue* json_make_array(JsonArena* arena)
 {
     JsonValue* v = json__new_node(arena);
-    if (v != NULL) { v->type = JSON_ARRAY; }
+    if (v != NULL) {
+        v->type      = JSON_ARRAY;
+        v->v.a.items = NULL;
+        v->v.a.len   = 0U;
+        v->v.a.cap   = 0U;
+    }
     return v;
 }
 
 JsonValue* json_make_object(JsonArena* arena)
 {
     JsonValue* v = json__new_node(arena);
-    if (v != NULL) { v->type = JSON_OBJECT; }
+    if (v != NULL) {
+        v->type            = JSON_OBJECT;
+        v->v.o.pairs       = NULL;
+        v->v.o.sorted_idx  = NULL;
+        v->v.o.len         = 0U;
+        v->v.o.cap         = 0U;
+        v->v.o.is_sorted   = false;
+    }
     return v;
 }
 

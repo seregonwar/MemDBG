@@ -112,7 +112,7 @@ memdbg_status_t handle_scan_pointer(int fd, const memdbg_packet_header_t *req,
     const req_type *aob_req = (const req_type *)body;                          \
     uint32_t pat_len = aob_req->pattern_length;                                \
     if (pat_len == 0U || pat_len > 256U) return MEMDBG_ERR_PARAM;              \
-    uint32_t expected = sizeof(req_type) + pat_len + pat_len;                  \
+    uint32_t expected = (uint32_t)sizeof(req_type) + pat_len + pat_len;                  \
     if (body_len < expected) return MEMDBG_ERR_PROTOCOL;                       \
     const uint8_t *pattern = (const uint8_t *)body + sizeof(req_type);         \
     const uint8_t *mask    = pattern + pat_len;                                \
