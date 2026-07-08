@@ -22,12 +22,20 @@ memdbg_status_t handle_memory_read(int fd, const memdbg_packet_header_t *req,
   const memdbg_memory_request_t *read_req = (const memdbg_memory_request_t *)body;
   if (read_req->length > cfg->max_read_bytes) return MEMDBG_ERR_OVERFLOW;
 
-  unsigned char *buffer = (unsigned char *)malloc(read_req->length);
-  if (buffer == NULL && read_req->length != 0U) return MEMDBG_ERR_NOMEM;
-
+  /* malloc(0) is implementation-defined and may return NULL;
+     guard the read call so a zero-length request never dereferences NULL. */
+  unsigned char *buffer = NULL;
   size_t read_len = 0U;
-  memdbg_status_t status = memdbg_memory_read(read_req->pid, read_req->address,
-      buffer, read_req->length, &read_len);
+  memdbg_status_t status;
+
+  if (read_req->length == 0U) {
+    status = MEMDBG_OK;
+  } else {
+    buffer = (unsigned char *)malloc(read_req->length);
+    if (buffer == NULL) return MEMDBG_ERR_NOMEM;
+    status = memdbg_memory_read(read_req->pid, read_req->address,
+        buffer, read_req->length, &read_len);
+  }
   if (status == MEMDBG_OK) {
     if (send_framed_response(fd, req, MEMDBG_OK, buffer, (uint32_t)read_len) != 0)
       status = MEMDBG_ERR_NET;
@@ -242,7 +250,7 @@ memdbg_status_t handle_batch_write(int fd, const memdbg_packet_header_t *req,
           results[i].status = (uint32_t)MEMDBG_ERR_NOMEM;
         }
       }
-      overall = MEMDBG_OK;
+      overall = MEMDBG_ERR_NOMEM;
     }
     }
   }

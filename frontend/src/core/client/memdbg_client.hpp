@@ -23,6 +23,7 @@ namespace memdbg::frontend {
 
 struct ProcessEntry {
   int32_t pid = 0;
+  int32_t ppid = 0;
   std::string name;
 };
 
@@ -187,6 +188,7 @@ public:
                      std::vector<StackFrame> &out, bool &truncated);
   bool process_call(const memdbg_process_call_request_t &request,
                     memdbg_process_call_response_t &out);
+  bool process_dump(int32_t pid, uint32_t flags, std::string &json_out);
 
   /* ---- Klog streaming (secondary raw TCP connection) ---- */
   bool klog_connect(const std::string &host, uint16_t &klog_port);

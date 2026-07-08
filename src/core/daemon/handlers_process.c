@@ -207,16 +207,11 @@ memdbg_status_t handle_process_call(int fd,
   if ((pid_t)cr->pid == getpid())
     return MEMDBG_ERR_PERMISSION;
 
-  bool was_attached = memdbg_debugger_is_attached();
-  int32_t prev_pid = was_attached ? memdbg_debugger_attached_pid() : 0;
   bool need_detach = false;
-
-  if (!was_attached || prev_pid != cr->pid) {
-    if (was_attached)
-      (void)memdbg_debugger_detach();
-    memdbg_status_t st = memdbg_debugger_attach(cr->pid);
+  {
+    memdbg_status_t st = memdbg_debugger_conditional_attach(
+        cr->pid, &need_detach);
     if (st != MEMDBG_OK) return st;
-    need_detach = true;
   }
 
   memdbg_status_t st = memdbg_debugger_stop();
@@ -264,7 +259,7 @@ memdbg_status_t handle_process_call(int fd,
   }
 
   memdbg_debug_regs_t call_regs = orig_regs;
-  call_regs.r_rsp = (orig_regs.r_rsp & ~0xFULL) - 8U;
+  call_regs.r_rsp = (int64_t)(((uint64_t)orig_regs.r_rsp & ~0xFULL) - 8U);
   call_regs.r_rdi  = (int64_t)cr->args[0];
   call_regs.r_rsi  = (int64_t)cr->args[1];
   call_regs.r_rdx  = (int64_t)cr->args[2];

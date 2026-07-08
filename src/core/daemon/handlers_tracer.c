@@ -26,12 +26,12 @@ memdbg_status_t handle_tracer_attach(
     return MEMDBG_ERR_PROTOCOL;
   const memdbg_tracer_attach_request_t *r =
       (const memdbg_tracer_attach_request_t *)body;
-  if (memdbg_debugger_is_attached()) {
-    memdbg_status_t detach_st = memdbg_debugger_detach();
-    if (detach_st != MEMDBG_OK)
-      return send_fn(fd, req, detach_st, NULL, 0U) == 0 ? MEMDBG_OK
-                                                        : MEMDBG_ERR_NET;
-  }
+  /* Ensure no debugger is attached; detach is idempotent and atomic.
+   * Avoids the TOCTOU between is_attached() and detach(). */
+  memdbg_status_t detach_st = memdbg_debugger_detach();
+  if (detach_st != MEMDBG_OK)
+    return send_fn(fd, req, detach_st, NULL, 0U) == 0 ? MEMDBG_OK
+                                                      : MEMDBG_ERR_NET;
   memdbg_status_t st = memdbg_tracer_daemon_start(r->pid, NULL);
   return send_fn(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }

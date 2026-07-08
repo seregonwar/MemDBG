@@ -644,7 +644,7 @@ bool pal_debug_fpregs_supported(void) { return false; }
 bool pal_debug_fsgsbase_supported(void) { return false; }
 
 long pal_debug_ptrace(int op, int pid, void *addr, long data) {
-  return ptrace(op, pid, (caddr_t)addr, data);
+  return ptrace(op, pid, (caddr_t)addr, (int)data);
 }
 
 static void pal_debug_sleep_ms(uint32_t ms) {

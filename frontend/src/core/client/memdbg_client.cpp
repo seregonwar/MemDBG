@@ -322,6 +322,7 @@ bool Client::process_list(std::vector<ProcessEntry> &out) {
     }
     ProcessEntry entry;
     entry.pid = entries[i].pid;
+    entry.ppid = entries[i].ppid;
     entry.name = fixed_string(entries[i].name, sizeof(entries[i].name));
     if (entry.name.empty()) {
       entry.name = "pid " + std::to_string(entry.pid);
@@ -1234,6 +1235,19 @@ bool Client::console_print(const std::string &text) {
 bool Client::console_reboot() {
   std::vector<uint8_t> response;
   return request(MEMDBG_CMD_CONSOLE_REBOOT, nullptr, 0, response);
+}
+
+bool Client::process_dump(int32_t pid, uint32_t flags, std::string &json_out) {
+  memdbg_process_dump_request_t body{};
+  body.pid = pid;
+  body.flags = flags;
+
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_PROCESS_DUMP, &body, sizeof(body), response))
+    return false;
+
+  json_out.assign(reinterpret_cast<const char *>(response.data()), response.size());
+  return true;
 }
 
 bool Client::debug_attach(int32_t pid) {

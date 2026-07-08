@@ -327,7 +327,7 @@ memdbg_status_t legacy_handle_proc_elf_load(socket_t fd,
 
   /* Build native memdbg_process_elf_load_request_t + inline ELF. */
   uint32_t nbody_len =
-      (uint32_t)sizeof(memdbg_process_elf_load_request_t) + lr->image_size;
+      (uint32_t)(sizeof(memdbg_process_elf_load_request_t) + lr->image_size);
   uint8_t *nbody = (uint8_t *)malloc(nbody_len > 0U ? nbody_len : 1U);
   if (nbody == NULL)
     return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0

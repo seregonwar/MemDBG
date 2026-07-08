@@ -38,9 +38,19 @@ PS5_AR ?= $(PS5_PAYLOAD_SDK)/bin/prospero-ar
 PS5_DEPLOY ?= $(PS5_PAYLOAD_SDK)/bin/prospero-deploy
 
 COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude
-COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O2
-HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L
-HOST_CFLAGS := $(COMMON_CFLAGS)
+COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
+HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
+HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+HOST_LDFLAGS := -Wl,-z,relro -Wl,-z,now
+else ifeq ($(UNAME_S),Darwin)
+HOST_LDFLAGS := -Wl,-bind_at_load
+else
+HOST_LDFLAGS :=
+endif
+
 HOST_LDLIBS := -lpthread
 
 SOURCES := $(shell find src -name '*.c' | sort)
@@ -51,7 +61,7 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon test-new-features check-locales check-headers tracer-tool FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
 
 all: host
 
@@ -59,13 +69,13 @@ host: $(HOST_TARGET)
 
 test-aob-boundary: $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o -o $(BUILD_DIR)/test_aob_boundary
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 
 test-process-aob-e2e: host tests/test_process_aob_e2e.c tests/e2e_utils.c tests/e2e_utils.h
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_aob_e2e.c tests/e2e_utils.c -o $(BUILD_DIR)/test_process_aob_e2e
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_aob_e2e.c tests/e2e_utils.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_process_aob_e2e
 	@echo "--- Running process AOB E2E test ---"
 	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e.XXXXXX); \
 	port=19120; \
@@ -77,13 +87,13 @@ test-process-aob-e2e: host tests/test_process_aob_e2e.c tests/e2e_utils.c tests/
 
 test-debugger: $(BUILD_DIR)/host/debug/session/memdbg_debugger.o tests/test_debugger.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $< -lpthread -o $(BUILD_DIR)/test_debugger
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $< $(HOST_LDFLAGS) -lpthread -o $(BUILD_DIR)/test_debugger
 	@echo "--- Running Debugger test ---"
 	$(BUILD_DIR)/test_debugger
 
 test-debugger-e2e: host tests/test_debugger_e2e.c tests/e2e_utils.c tests/e2e_utils.h
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_e2e.c tests/e2e_utils.c -o $(BUILD_DIR)/test_debugger_e2e
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_e2e.c tests/e2e_utils.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_debugger_e2e
 	@echo "--- Running Debugger E2E test ---"
 	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-dbg.XXXXXX); \
 	port=19121; \
@@ -97,43 +107,49 @@ test-debugger-protocol: tests/test_debugger_protocol.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_protocol.c \
 		src/core/daemon/handlers_debug.c src/core/daemon/handlers_process.c \
-		-o $(BUILD_DIR)/test_debugger_protocol
+		$(HOST_LDFLAGS) -o $(BUILD_DIR)/test_debugger_protocol
 	@echo "--- Running Debugger Protocol test ---"
 	$(BUILD_DIR)/test_debugger_protocol
 
 test-lz4: src/pal/lz4.c include/memdbg/pal/lz4.h tests/test_lz4.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_lz4.c src/pal/lz4.c -o $(BUILD_DIR)/test_lz4
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_lz4.c src/pal/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_lz4
 	@echo "--- Running LZ4 test ---"
 	$(BUILD_DIR)/test_lz4
 
 test-benchmarks: src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c tests/test_benchmarks.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c -o $(BUILD_DIR)/test_benchmarks
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_benchmarks
 	@echo "--- Running Benchmarks ---"
 	$(BUILD_DIR)/test_benchmarks
 
 test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< -o $(BUILD_DIR)/test_scan_partition
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_partition
 	@echo "--- Running Scan Partition test ---"
 	$(BUILD_DIR)/test_scan_partition
 
 test-tracer-daemon: src/tracer/memdbg_tracer_daemon.c tests/test_tracer_daemon.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_tracer_daemon.c src/tracer/memdbg_tracer_daemon.c -lpthread -o $(BUILD_DIR)/test_tracer_daemon
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_tracer_daemon.c src/tracer/memdbg_tracer_daemon.c $(HOST_LDFLAGS) -lpthread -o $(BUILD_DIR)/test_tracer_daemon
 	@echo "--- Running Tracer daemon lifecycle test ---"
 	$(BUILD_DIR)/test_tracer_daemon
 
+test-sjson: tests/test_sjson.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_sjson.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_sjson
+	@echo "--- Running sJson unit tests ---"
+	$(BUILD_DIR)/test_sjson
+
 test-new-features: tests/test_new_features.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc/scanner $(HOST_CFLAGS) tests/test_new_features.c -o $(BUILD_DIR)/test_new_features
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc/scanner $(HOST_CFLAGS) tests/test_new_features.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_new_features
 	@echo "--- Running New Features test ---"
 	$(BUILD_DIR)/test_new_features
 
 test-legacy-scanner-e2e: host tests/test_legacy_scanner_e2e.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_legacy_scanner_e2e.c -o $(BUILD_DIR)/test_legacy_scanner_e2e
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_legacy_scanner_e2e.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_legacy_scanner_e2e
 	@echo "--- Running Legacy Scanner E2E test ---"
 	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-scan.XXXXXX); \
 	legacy_port=19130; \
@@ -143,7 +159,19 @@ test-legacy-scanner-e2e: host tests/test_legacy_scanner_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_scanner_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features
+test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_legacy_process_e2e.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_legacy_process_e2e
+	@echo "--- Running Legacy Process/Memory E2E test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-proc.XXXXXX); \
+	legacy_port=19132; \
+	$(HOST_TARGET) --bind=127.0.0.1 --debug-port=19133 --legacy-compat --legacy-port=$$legacy_port --udp-port=19134 --data-root=$$tmpdir --no-udp-log --no-replace-existing >$$tmpdir/payload.log 2>&1 & \
+	pid=$$!; \
+	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
+	sleep 0.6; \
+	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
+
+test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)
@@ -166,7 +194,7 @@ tracer-tool: $(TRACER_TOOL)
 $(TRACER_TOOL): tools/tracer/main.c $(TRACER_SOURCES) $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) \
-	  tools/tracer/main.c $(TRACER_SOURCES) $(HOST_LDLIBS) -o $@
+	  tools/tracer/main.c $(TRACER_SOURCES) $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $@
 
 frontend:
 	cmake -S frontend -B $(BUILD_DIR)/frontend -DCMAKE_BUILD_TYPE=Release -DMEMDBG_RELEASE_VERSION="$(MEMDBG_VERSION)"
@@ -186,7 +214,7 @@ verify:
 
 $(HOST_TARGET): $(HOST_OBJECTS)
 	@mkdir -p $(dir $@)
-	$(HOST_CC) $^ $(HOST_LDLIBS) -o $@
+	$(HOST_CC) $^ $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $@
 
 $(GENERATED_VERSION_HEADER): $(VERSION_FILE) FORCE
 	@mkdir -p $(dir $@)

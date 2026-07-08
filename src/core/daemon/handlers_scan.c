@@ -24,7 +24,7 @@ static memdbg_status_t send_scan_result(int fd, const memdbg_packet_header_t *re
   if (prefix_size < MEMDBG_PROTOCOL_MAX_PACKET) {
     max_count = (MEMDBG_PROTOCOL_MAX_PACKET - prefix_size) / entry_size;
   }
-  uint32_t send_count = result->count;
+  uint32_t send_count = (uint32_t)result->count;
   bool truncated = result->truncated ? true : false;
   if ((size_t)send_count > max_count) {
     send_count = (uint32_t)max_count;

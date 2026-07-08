@@ -5,6 +5,7 @@
  */
 
 #include "app_state.hpp"
+#include "core/client/memdbg_client.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "file_picker.hpp"
@@ -18,6 +19,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <unordered_map>
 
 namespace memdbg::frontend {
 
@@ -414,6 +416,332 @@ static void refresh_maps(AppState &state) {
   request_maps_refresh_async(state);
 }
 
+/* ---- Process Tree ---- */
+
+struct ProcessTreeNode {
+  int32_t pid = 0;
+  int32_t ppid = 0;
+  std::string name;
+  std::vector<int> children;  // indices into the flat list
+};
+
+static void build_process_tree(const std::vector<ProcessEntry> &processes,
+                               std::vector<ProcessTreeNode> &nodes,
+                               std::vector<int> &roots) {
+  nodes.clear();
+  roots.clear();
+  if (processes.empty()) return;
+
+  std::unordered_map<int32_t, int> pid_to_index;
+  nodes.reserve(processes.size());
+
+  for (size_t i = 0; i < processes.size(); ++i) {
+    const auto &p = processes[i];
+    if (p.pid <= 0) continue;
+    ProcessTreeNode node;
+    node.pid = p.pid;
+    node.ppid = p.ppid;
+    node.name = p.name;
+    nodes.push_back(node);
+    pid_to_index[p.pid] = static_cast<int>(nodes.size()) - 1;
+  }
+
+  for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
+    int32_t ppid = nodes[i].ppid;
+    if (ppid <= 0 || ppid == nodes[i].pid) {
+      roots.push_back(i);
+      continue;
+    }
+    auto it = pid_to_index.find(ppid);
+    if (it != pid_to_index.end()) {
+      nodes[it->second].children.push_back(i);
+    } else {
+      roots.push_back(i);
+    }
+  }
+}
+
+static void draw_tree_node(AppState &state, const std::vector<ProcessTreeNode> &nodes,
+                           int node_idx, int depth) {
+  const auto &node = nodes[node_idx];
+  const float scl = ui::dpi_scale();
+  const float indent = static_cast<float>(depth) * 20.0f * scl;
+
+  ImGui::TableNextRow();
+
+  ImGui::TableSetColumnIndex(0);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+
+  bool has_children = !node.children.empty();
+  bool selected = node.pid == state.selected_pid;
+
+  std::string label;
+  if (has_children) {
+    label = std::string(icons::kLoad) + "  " + std::to_string(node.pid);
+  } else {
+    label = std::string(icons::kCode) + "  " + std::to_string(node.pid);
+  }
+  label += "##ptree" + std::to_string(node.pid);
+
+  ImGuiSelectableFlags flags = ImGuiSelectableFlags_SpanAllColumns;
+  if (ImGui::Selectable(label.c_str(), selected, flags)) {
+    int row = -1;
+    for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+      if (state.processes[i].pid == node.pid) { row = i; break; }
+    }
+    if (row >= 0) select_process(state, row);
+  }
+
+  ImGui::TableSetColumnIndex(1);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+  ImGui::TextUnformatted(node.name.c_str());
+  if (ImGui::IsItemHovered() && !node.name.empty())
+    ImGui::SetTooltip("%s", node.name.c_str());
+
+  ImGui::TableSetColumnIndex(2);
+  ImGui::Text("%d", node.ppid);
+
+  ImGui::TableSetColumnIndex(3);
+  ImGui::TextColored(selected ? ui::colors().primary2 : ui::colors().dim,
+                     "%s", selected ? locale::tr("processes.active") : "-");
+
+  for (int child : node.children)
+    draw_tree_node(state, nodes, child, depth + 1);
+}
+
+static void draw_process_tree(AppState &state) {
+  std::vector<ProcessTreeNode> nodes;
+  std::vector<int> roots;
+  build_process_tree(state.processes, nodes, roots);
+
+  if (nodes.empty()) {
+    ui::draw_empty_state(locale::tr("processes.no_process_selected"),
+                         locale::tr("processes.no_process_desc"));
+    return;
+  }
+
+  const ImGuiTableFlags table_flags =
+      ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+      ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+
+  if (ImGui::BeginTable("ProcessTreeTable", 4, table_flags, ImVec2(0, 0))) {
+    ImGui::TableSetupColumn(locale::tr("processes.pid_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 100);
+    ImGui::TableSetupColumn(locale::tr("processes.name_col"));
+    ImGui::TableSetupColumn(locale::tr("processes.ppid_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 70);
+    ImGui::TableSetupColumn(locale::tr("processes.state_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 78);
+    ImGui::TableHeadersRow();
+
+    for (int root : roots)
+      draw_tree_node(state, nodes, root, 0);
+
+    ImGui::EndTable();
+  }
+}
+
+/* ---- JSON Dump Dialog ---- */
+
+static void request_json_dump_async(AppState &state) {
+  if (!state.client.connected() || state.selected_pid <= 0) return;
+  if (client_async_busy(state)) return;
+
+  state.json_dump_pending = true;
+  state.json_dump_error.clear();
+  state.json_dump_start_time = ImGui::GetTime();
+
+  uint32_t flags = 0U;
+  if (state.json_dump_include_regs) flags |= 1U;
+  if (state.json_dump_include_stack) flags |= 2U;
+  if (state.json_dump_include_preview) flags |= 4U;
+
+  int32_t pid = state.selected_pid;
+  state.json_dump_future = std::async(std::launch::async, [&state, pid, flags]() -> bool {
+    try {
+      std::string json;
+      if (!state.client.process_dump(pid, flags, json)) {
+        state.json_dump_error = state.client.last_error();
+        return false;
+      }
+      state.json_dump_output = std::move(json);
+      return true;
+    } catch (const std::exception &e) {
+      state.json_dump_error = e.what();
+      return false;
+    }
+  });
+}
+
+static void poll_json_dump(AppState &state) {
+  if (!state.json_dump_pending) return;
+  if (!state.json_dump_future.valid()) {
+    state.json_dump_pending = false;
+    return;
+  }
+  auto status = state.json_dump_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) {
+    double elapsed = ImGui::GetTime() - state.json_dump_start_time;
+    if (elapsed > 30.0) {
+      state.json_dump_pending = false;
+      state.json_dump_error = "JSON dump timed out";
+    }
+    return;
+  }
+  state.json_dump_pending = false;
+  bool ok = state.json_dump_future.get();
+  if (ok) {
+    set_status(state, "JSON dump complete");
+    push_notification(state, "Process dump JSON received", 4.0);
+  } else {
+    set_status(state, "JSON dump failed: " + state.json_dump_error);
+  }
+}
+
+static void draw_json_dump_dialog(AppState &state) {
+  if (!ImGui::IsPopupOpen("JSONDumpDialog")) return;
+
+  ImGui::SetNextWindowSize(ImVec2(620, 580), ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal("JSONDumpDialog", nullptr,
+                              ImGuiWindowFlags_NoSavedSettings)) return;
+
+  ImGui::TextColored(ui::colors().primary2, "%s %s", icons::kDump,
+                     locale::tr("processes.json_dump_title"));
+  ImGui::Separator();
+
+  ImGui::Text("PID: %d  |  %s", state.selected_pid,
+              selected_process_name(state).c_str());
+  ImGui::Spacing();
+
+  ImGui::Checkbox(locale::tr("processes.json_dump_include_regs"),
+                  &state.json_dump_include_regs);
+  ImGui::SameLine();
+  ImGui::Checkbox(locale::tr("processes.json_dump_include_stack"),
+                  &state.json_dump_include_stack);
+  ImGui::SameLine();
+  ImGui::Checkbox(locale::tr("processes.json_dump_include_preview"),
+                  &state.json_dump_include_preview);
+
+  ImGui::Spacing();
+  ImGui::Separator();
+
+  /* Dump button */
+  const bool can_dump = state.client.connected() && state.selected_pid > 0 &&
+                        !state.json_dump_pending && !client_async_busy(state);
+  ImGui::BeginDisabled(!can_dump);
+  if (ui::primary_button(locale::tr("processes.json_dump_request"),
+                          ImVec2(180, 0))) {
+    request_json_dump_async(state);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (state.json_dump_pending)
+    ImGui::TextColored(ui::colors().warning, "%s %.1fs",
+                       locale::tr("processes.json_dump_waiting"),
+                       ImGui::GetTime() - state.json_dump_start_time);
+
+  ImGui::SameLine();
+  if (ui::soft_button(locale::tr("common.close"), ImVec2(80, 0)))
+    ImGui::CloseCurrentPopup();
+
+  /* Copy to clipboard button */
+  if (!state.json_dump_output.empty()) {
+    ImGui::SameLine();
+    if (ImGui::SmallButton(locale::tr("common.copy"))) {
+      ImGui::SetClipboardText(state.json_dump_output.c_str());
+      set_status(state, locale::tr("processes.json_dump_copied"));
+    }
+  }
+
+  if (!state.json_dump_error.empty())
+    ImGui::TextColored(ui::colors().danger, "%s %s",
+                       locale::tr("common.error"),
+                       state.json_dump_error.c_str());
+
+  ImGui::Spacing();
+  ImGui::Separator();
+
+  /* JSON output area */
+  if (state.json_dump_output.empty()) {
+    ImGui::TextColored(ui::colors().dim, "%s",
+                       locale::tr("processes.json_dump_placeholder"));
+  } else {
+    ImGui::TextColored(ui::colors().muted, "%s (%zu bytes):",
+                       locale::tr("processes.json_dump_output"),
+                       state.json_dump_output.size());
+    ImVec2 json_size(ImGui::GetContentRegionAvail().x,
+                     ImGui::GetContentRegionAvail().y - 10);
+    if (ImGui::BeginChild("JSONDumpOutput", json_size, true,
+                          ImGuiWindowFlags_HorizontalScrollbar)) {
+      std::istringstream stream(state.json_dump_output);
+      std::string line;
+      int line_no = 0;
+      while (std::getline(stream, line)) {
+        line_no++;
+        /* Line number */
+        char num_buf[16];
+        snprintf(num_buf, sizeof(num_buf), "%4d ", line_no);
+        ImGui::TextColored(ui::colors().dim, "%s", num_buf);
+        ImGui::SameLine(42.0f);
+
+        /* Simple syntax highlighting */
+        for (size_t ci = 0; ci < line.size();) {
+          /* Strings */
+          if (line[ci] == '"') {
+            size_t end = line.find('"', ci + 1);
+            if (end == std::string::npos) end = line.size();
+            else end++;
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.86f, 0.60f, 0.26f, 1), "%.*s",
+                               static_cast<int>(end - ci), line.c_str() + ci);
+            ci = end;
+            continue;
+          }
+          /* Numbers */
+          if ((line[ci] >= '0' && line[ci] <= '9') || line[ci] == '-') {
+            size_t end = ci;
+            while (end < line.size() &&
+                   ((static_cast<unsigned char>(line[end]) >= '0' &&
+                     static_cast<unsigned char>(line[end]) <= '9') ||
+                    line[end] == 'x' || line[end] == '.' || line[end] == '-' ||
+                    (static_cast<unsigned char>(line[end]) >= 'a' &&
+                     static_cast<unsigned char>(line[end]) <= 'f') ||
+                    (static_cast<unsigned char>(line[end]) >= 'A' &&
+                     static_cast<unsigned char>(line[end]) <= 'F')))
+              end++;
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.39f, 0.76f, 0.62f, 1), "%.*s",
+                               static_cast<int>(end - ci), line.c_str() + ci);
+            ci = end;
+            continue;
+          }
+          /* Keywords: true, false, null */
+          const char *kw = nullptr;
+          if (line.compare(ci, 4, "true") == 0) {
+            kw = "true"; ci += 4;
+          } else if (line.compare(ci, 5, "false") == 0) {
+            kw = "false"; ci += 5;
+          } else if (line.compare(ci, 4, "null") == 0) {
+            kw = "null"; ci += 4;
+          }
+          if (kw) {
+            ImGui::SameLine(0, 0);
+            ImGui::TextColored(ImVec4(0.49f, 0.65f, 1.0f, 1), "%s", kw);
+          } else {
+            /* Default char */
+            ImGui::SameLine(0, 0);
+            ImGui::Text("%.*s", 1, line.c_str() + ci);
+            ci++;
+          }
+        }
+      }
+    }
+    ImGui::EndChild();
+  }
+
+  ImGui::EndPopup();
+}
+
 /* ---- Tables ---- */
 static void draw_process_table(AppState &state) {
   if (ImGui::BeginTable("ProcessTable", 4,
@@ -487,6 +815,8 @@ static void draw_maps_table(AppState &state) {
 
 /* ---- Main draw ---- */
 void draw_processes(AppState &state, ImVec2 avail) {
+  poll_json_dump(state);
+
   const float left_w = std::max(360.0f, avail.x * 0.42f);
 
   ui::begin_panel("ProcessesPanel", locale::tr("processes.console_processes"), ImVec2(left_w, avail.y));
@@ -496,13 +826,26 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ImGui::Spacing();
     ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
+    /* Button row: Refresh + Tree toggle + JSON Dump */
     ImGui::BeginDisabled(client_async_busy(state));
-    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(180, 34))) refresh_processes(state);
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(150, 34))) refresh_processes(state);
     ImGui::EndDisabled();
     ImGui::SameLine();
+    /* Tree/List toggle */
+    static int process_view_mode = 0; // 0=list, 1=tree
+    if (ImGui::RadioButton("List", &process_view_mode, 0)) {}
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Tree", &process_view_mode, 1)) {}
+    ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, locale::tr("processes.entries"), state.processes.size());
+    ImGui::SameLine();
+    if (ui::soft_button((std::string(icons::kDump) + "  " + locale::tr("processes.json_dump")).c_str(), ImVec2(130, 34)))
+      ImGui::OpenPopup("JSONDumpDialog");
     ImGui::Spacing();
-    draw_process_table(state);
+    if (process_view_mode == 1)
+      draw_process_tree(state);
+    else
+      draw_process_table(state);
   }
   ui::end_panel();
 
@@ -583,6 +926,9 @@ void draw_processes(AppState &state, ImVec2 avail) {
     draw_maps_table(state);
   }
   ui::end_panel();
+
+  /* JSON Dump dialog */
+  draw_json_dump_dialog(state);
 }
 
 } // namespace memdbg::frontend

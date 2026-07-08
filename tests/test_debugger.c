@@ -79,6 +79,7 @@ static struct {
 
   /* step expected flag */
   bool     step_called;
+  int      single_step_count;
   int      stop_call_count;
   int      stop_errno;
   bool     suspend_called[8];
@@ -207,6 +208,7 @@ int pal_debug_single_step(int pid, int32_t lwp) {
   (void)lwp;
   if (!mock.attached) { errno = ESRCH; return -1; }
   mock.step_called = true;
+  mock.single_step_count++;
   mock.stopped = true;
   return 0;
 }
@@ -505,6 +507,119 @@ static void test_attach_detach(void) {
   TEST_ERR("double detach fails", st, MEMDBG_ERR_STATE);
 }
 
+/* ---- 1b. Detach idempotency ---- */
+
+static void test_detach_idempotency(void) {
+  printf("\n--- Detach Idempotency ---\n");
+
+  memdbg_status_t st;
+
+  /* Case 1: detach while never attached */
+  mock_reset();
+  st = memdbg_debugger_detach();
+  TEST_ERR("never attached: returns error", st, MEMDBG_ERR_STATE);
+  TEST("never attached: not attached after", !memdbg_debugger_is_attached());
+
+  /* Case 2: attach → detach → detach (double-detach) */
+  mock_reset();
+  TEST_OK("double: attach", memdbg_debugger_attach(MOCK_PID));
+  TEST("double: attached", memdbg_debugger_is_attached());
+  TEST_OK("double: first detach", memdbg_debugger_detach());
+  TEST("double: not attached after first", !memdbg_debugger_is_attached());
+  st = memdbg_debugger_detach();
+  TEST_ERR("double: second detach fails", st, MEMDBG_ERR_STATE);
+  TEST("double: still not attached after second",
+       !memdbg_debugger_is_attached());
+
+  /* Case 3: detach 5 times in a row after first detach */
+  mock_reset();
+  TEST_OK("multi: attach", memdbg_debugger_attach(MOCK_PID));
+  TEST_OK("multi: first detach", memdbg_debugger_detach());
+  for (int i = 2; i <= 5; i++) {
+    char name[64];
+    (void)snprintf(name, sizeof(name), "multi: detach #%d fails", i);
+    st = memdbg_debugger_detach();
+    TEST_ERR("%s", st, MEMDBG_ERR_STATE);
+    (void)snprintf(name, sizeof(name), "multi: not attached after #%d", i);
+    TEST("%s", !memdbg_debugger_is_attached());
+  }
+
+  /* Case 4: simulate another handler detaching first, then our detach */
+  mock_reset();
+  TEST_OK("race: attach", memdbg_debugger_attach(MOCK_PID));
+  TEST_OK("race: handler detaches first", memdbg_debugger_detach());
+  st = memdbg_debugger_detach();
+  TEST_ERR("race: our detach after handler returns error", st,
+           MEMDBG_ERR_STATE);
+  TEST("race: still not attached", !memdbg_debugger_is_attached());
+}
+
+/* ---- 1c. Conditional attach ---- */
+
+static void test_conditional_attach(void) {
+  printf("\n--- Conditional Attach ---\n");
+
+  /* ---- Same PID: already attached, no-op ---- */
+  mock_reset();
+  TEST_OK("pre-attach", memdbg_debugger_attach(MOCK_PID));
+  TEST("attached", memdbg_debugger_is_attached());
+  TEST_EQ_I("attached pid", memdbg_debugger_attached_pid(), MOCK_PID);
+
+  bool need_detach = true;
+  memdbg_status_t st = memdbg_debugger_conditional_attach(MOCK_PID, &need_detach);
+  TEST_OK("same PID: returns OK", st);
+  TEST("same PID: need_detach is false", !need_detach);
+  TEST("same PID: still attached", memdbg_debugger_is_attached());
+  TEST_EQ_I("same PID: pid unchanged", memdbg_debugger_attached_pid(), MOCK_PID);
+
+  TEST_OK("cleanup detach", memdbg_debugger_detach());
+
+  /* ---- Null need_detach_out: should not crash ---- */
+  mock_reset();
+  TEST_OK("pre-attach for null test", memdbg_debugger_attach(MOCK_PID));
+  st = memdbg_debugger_conditional_attach(MOCK_PID, NULL);
+  TEST_OK("null need_detach: returns OK", st);
+  TEST("null need_detach: still attached", memdbg_debugger_is_attached());
+  TEST_OK("cleanup detach", memdbg_debugger_detach());
+
+  /* ---- Different PID: detach from old, attach to new ---- */
+  mock_reset();
+  TEST_OK("pre-attach to 100", memdbg_debugger_attach(MOCK_PID));
+
+  need_detach = false;
+  st = memdbg_debugger_conditional_attach(MOCK_PID + 1, &need_detach);
+  TEST_OK("different PID: returns OK", st);
+  TEST("different PID: need_detach is true", need_detach);
+  TEST("different PID: attached", memdbg_debugger_is_attached());
+  TEST_EQ_I("different PID: switched to 101",
+            memdbg_debugger_attached_pid(), MOCK_PID + 1);
+
+  TEST_OK("cleanup detach", memdbg_debugger_detach());
+
+  /* ---- Attach error: detach succeeds but new attach fails ---- */
+  mock_reset();
+  TEST_OK("pre-attach to 100", memdbg_debugger_attach(MOCK_PID));
+
+  mock.attach_errno = EPERM;
+  need_detach = false;
+  st = memdbg_debugger_conditional_attach(MOCK_PID + 1, &need_detach);
+  TEST_ERR("attach error: maps to permission", st, MEMDBG_ERR_PERMISSION);
+  TEST("attach error: not attached after failure",
+       !memdbg_debugger_is_attached());
+
+  /* ---- Not already attached: fresh attach ---- */
+  mock_reset();
+  need_detach = false;
+  st = memdbg_debugger_conditional_attach(MOCK_PID, &need_detach);
+  TEST_OK("not attached: returns OK", st);
+  TEST("not attached: need_detach is true", need_detach);
+  TEST("not attached: now attached", memdbg_debugger_is_attached());
+  TEST_EQ_I("not attached: pid is 100",
+            memdbg_debugger_attached_pid(), MOCK_PID);
+
+  TEST_OK("cleanup detach", memdbg_debugger_detach());
+}
+
 /* ---- 2. Stop / Continue / Step ---- */
 
 static void test_stop_continue_step(void) {
@@ -539,6 +654,53 @@ static void test_stop_continue_step(void) {
   TEST("step called PAL single_step", mock.step_called);
 
   TEST_OK("detach", memdbg_debugger_detach());
+}
+
+/* ---- 2b. Multi-thread continue over SW breakpoints ---- */
+
+static void test_multithread_continue(void) {
+  printf("\n--- Multi-thread Continue ---\n");
+
+  mock_reset();
+  mock.memory[0x1000] = 0x90;  /* NOP — main BP */
+  mock.memory[0x2000] = 0x90;  /* NOP — worker BP */
+
+  TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
+
+  /* Set SW breakpoints at two addresses */
+  memdbg_status_t st = memdbg_debugger_set_breakpoint(0x1000ULL,
+                                                       MEMDBG_BP_SOFTWARE);
+  TEST_OK("set BP at 0x1000 (main)", st);
+  st = memdbg_debugger_set_breakpoint(0x2000ULL, MEMDBG_BP_SOFTWARE);
+  TEST_OK("set BP at 0x2000 (worker)", st);
+  TEST("INT3 at 0x1000", mock.memory[0x1000] == 0xCCU);
+  TEST("INT3 at 0x2000", mock.memory[0x2000] == 0xCCU);
+
+  /* Position main thread RIP just past BP at 0x1000 */
+  mock.regs[0].r_rip = 0x1001LL;
+  /* Position worker thread RIP just past BP at 0x2000 */
+  mock.regs[1].r_rip = 0x2001LL;
+
+  /* Continue: should step over BOTH breakpoints, not just the first one */
+  mock.single_step_count = 0;
+  st = memdbg_debugger_continue();
+  TEST_OK("continue succeeds", st);
+
+  /* Both threads should have been single-stepped */
+  TEST_EQ_I("both threads stepped", mock.single_step_count, 2);
+
+  /* Breakpoints should be reinstalled after stepping */
+  TEST("BP 0x1000 reinstalled", mock.memory[0x1000] == 0xCCU);
+  TEST("BP 0x2000 reinstalled", mock.memory[0x2000] == 0xCCU);
+
+  /* Debugger should be running (not stopped) after continue */
+  TEST("not stopped after continue", !memdbg_debugger_is_stopped());
+
+  TEST_OK("detach", memdbg_debugger_detach());
+
+  /* Detach should restore original bytes */
+  TEST("original byte restored at 0x1000", mock.memory[0x1000] == 0x90U);
+  TEST("original byte restored at 0x2000", mock.memory[0x2000] == 0x90U);
 }
 
 /* ---- 3. Thread enumeration ---- */
@@ -964,8 +1126,8 @@ static void test_poll_events(void) {
   {
     memdbg_debug_regs_t regs;
     memset(&regs, 0, sizeof(regs));
-    memdbg_status_t st = memdbg_debugger_get_regs(MOCK_LWP_WORKER, &regs);
-    TEST_OK("get worker regs", st);
+    memdbg_status_t gst = memdbg_debugger_get_regs(MOCK_LWP_WORKER, &regs);
+    TEST_OK("get worker regs", gst);
 
     int64_t saved_rip = regs.r_rip;
     regs.r_rip = 0x6001LL;
@@ -1292,7 +1454,10 @@ int main(void) {
   printf("         breakpoints (SW+HW), watchpoints, poll events, error paths\n\n");
 
   test_attach_detach();
+  test_detach_idempotency();
+  test_conditional_attach();
   test_stop_continue_step();
+  test_multithread_continue();
   test_thread_enumeration();
   test_thread_enumeration_eio_fallback();
   test_register_access();

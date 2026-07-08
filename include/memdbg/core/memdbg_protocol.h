@@ -109,6 +109,7 @@ typedef enum memdbg_command {
   MEMDBG_CMD_PROCESS_CALL = 0x010CU,
   MEMDBG_CMD_PROCESS_ELF_LOAD = 0x010DU,
   MEMDBG_CMD_PROCESS_HIJACK  = 0x010EU,
+  MEMDBG_CMD_PROCESS_DUMP    = 0x010FU,
   MEMDBG_CMD_TELEMETRY = 0x0400U,
   MEMDBG_CMD_DISCOVERY = 0x0500U,
   MEMDBG_CMD_KERNEL_BASE = 0x0800U,
@@ -251,6 +252,7 @@ typedef struct MEMDBG_PACKED memdbg_hello_response {
 
 typedef struct MEMDBG_PACKED memdbg_process_entry {
   int32_t pid;
+  int32_t ppid;
   char name[48];
 } memdbg_process_entry_t;
 
@@ -1073,6 +1075,31 @@ typedef struct MEMDBG_PACKED memdbg_process_hijack_response {
   uint32_t accepted;  /* 1 = hijack thread started, 0 = rejected */
   uint32_t reserved;
 } memdbg_process_hijack_response_t;
+
+/* ---- Process dump (full JSON snapshot) ---- */
+
+typedef struct MEMDBG_PACKED memdbg_process_dump_request {
+  int32_t pid;
+  uint32_t flags;  /* bit 0 = include register values
+                       bit 1 = include stack traces
+                       bit 2 = include region preview (first 256B) */
+} memdbg_process_dump_request_t;
+
+/* The dump response is a JSON string sent as a plain payload (no struct).
+   The payload length is variable; the JSON follows the schema:
+   {
+     "pid": int,
+     "name": string,
+     "path": string,
+     "title_id": string,
+     "content_id": string,
+     "maps": [{ "start": hex, "end": hex, "prot": int, "flags": int,
+                "name": string, "preview": hex ... }],
+     "threads": [{ "lwp": int, "state": int, "name": string,
+                    "regs": { "rax": hex, ... },
+                    "stack": [{ "fp": hex, "ret": hex, "code": hex ... }] }]
+   }
+ */
 
 #undef MEMDBG_PACKED
 

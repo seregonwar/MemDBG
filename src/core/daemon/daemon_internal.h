@@ -312,6 +312,12 @@ memdbg_status_t handle_process_stack(int fd,
 memdbg_status_t handle_process_elf_load(int fd,
     const memdbg_packet_header_t *req, const void *body, uint32_t body_len);
 
+/* ---- Process dump handler (defined in handlers_dump.c) ---- */
+
+memdbg_status_t handle_process_dump(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len);
+
 #ifdef __cplusplus
 }
 #endif

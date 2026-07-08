@@ -129,6 +129,9 @@ memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
   if (st != MEMDBG_OK) return st;
 
   out->count = plist.count;
+  /* memdbg_process_entry_t and pal_process_entry_t now share the same
+     layout ({int32_t pid; int32_t ppid; char name[48]}).  If either
+     struct changes, the other must be kept in sync. */
   out->entries = (memdbg_process_entry_t *)plist.entries; /* steal */
   memset(&plist, 0, sizeof(plist));
   return MEMDBG_OK;
@@ -231,7 +234,10 @@ static void enrich_from_param_json(memdbg_process_info_response_t *out) {
     "/user/app/%s/sce_sys/param.json", "/mnt/sandbox/%s_000/sce_sys/param.json",
   };
   for (size_t i = 0; i < sizeof(patterns)/sizeof(patterns[0]); ++i) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
     (void)snprintf(path, sizeof(path), patterns[i], out->title_id);
+#pragma GCC diagnostic pop
     if (!read_small_text_file(path, json, sizeof(json))) continue;
     json_string_field(json, "titleId", out->title_id, sizeof(out->title_id));
     json_string_field(json, "contentId", out->content_id, sizeof(out->content_id));

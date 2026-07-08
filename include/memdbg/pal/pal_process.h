@@ -25,7 +25,7 @@ extern "C" {
 
 /* ---- Process list ---- */
 
-typedef struct pal_process_entry { int pid; char name[48]; } pal_process_entry_t;
+typedef struct pal_process_entry { int pid; int ppid; char name[48]; } pal_process_entry_t;
 
 typedef struct pal_process_list {
   pal_process_entry_t *entries;

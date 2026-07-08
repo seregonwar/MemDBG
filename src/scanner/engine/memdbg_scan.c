@@ -108,12 +108,12 @@ static bool bm_build_gs_table(const unsigned char *pattern, size_t pat_len,
   suffix[pat_len - 1U] = pat_len;
   ptrdiff_t f = 0, g = (ptrdiff_t)(pat_len - 1U);
   for (ptrdiff_t i = (ptrdiff_t)(pat_len - 2U); i >= 0; --i) {
-    if (i > g && suffix[i + pat_len - 1U - (size_t)f] < (size_t)(i - g)) {
-      suffix[i] = suffix[i + pat_len - 1U - (size_t)f];
+    if (i > g && suffix[(size_t)i + pat_len - 1U - (size_t)f] < (size_t)(i - g)) {
+      suffix[(size_t)i] = suffix[(size_t)i + pat_len - 1U - (size_t)f];
     } else {
       if (i < g) g = i;
       f = i;
-      while (g >= 0 && pattern[g] == pattern[g + pat_len - 1U - (size_t)f])
+      while (g >= 0 && pattern[(size_t)g] == pattern[(size_t)g + pat_len - 1U - (size_t)f])
         --g;
       suffix[i] = (size_t)(f - g);
     }

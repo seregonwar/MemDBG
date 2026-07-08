@@ -40,13 +40,14 @@
 /* ---- Helpers shared across platforms ---- */
 
 #if defined(MEMDBG_PROCESS_HOST_ENUMERATION) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
-static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, const char *name) {
+static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, int ppid, const char *name) {
   size_t nc = list->count + 1U;
   pal_process_entry_t *next = (pal_process_entry_t *)realloc(list->entries, nc * sizeof(*list->entries));
   if (next == NULL) return NULL;
   list->entries = next;
   memset(&list->entries[list->count], 0, sizeof(list->entries[list->count]));
   list->entries[list->count].pid = pid;
+  list->entries[list->count].ppid = ppid;
   (void)snprintf(list->entries[list->count].name, sizeof(list->entries[list->count].name),
                  "%s", name && name[0] ? name : "unknown");
   list->count = nc;
@@ -106,7 +107,24 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
     if (pid <= 1) continue;
     char name[64];
     read_comm(pid, name, sizeof(name));
-    if (!proc_append(out, pid, name)) { closedir(d); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
+    /* Read PPID from /proc/<pid>/stat (4th field). */
+    int ppid = 0;
+    {
+      char stat_path[64];
+      (void)snprintf(stat_path, sizeof(stat_path), "/proc/%d/stat", pid);
+      FILE *sfp = fopen(stat_path, "r");
+      if (sfp) {
+        char stat_line[512];
+        if (fgets(stat_line, sizeof(stat_line), sfp)) {
+          /* Format: pid (comm) state ppid ...
+             Skip past the comm field (enclosed in parentheses). */
+          char *rp = strrchr(stat_line, ')');
+          if (rp) sscanf(rp + 2, "%*c %d", &ppid);
+        }
+        fclose(sfp);
+      }
+    }
+    if (!proc_append(out, pid, ppid, name)) { closedir(d); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
   }
   closedir(d);
   return MEMDBG_OK;
@@ -161,7 +179,8 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
   if (sysctl(mib, 4, procs, &len, NULL, 0) != 0) { free(procs); return MEMDBG_ERR_IO; }
   size_t n = len / sizeof(procs[0]);
   for (size_t i = 0; i < n; ++i) {
-    if (!proc_append(out, procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm))
+    int ppid = procs[i].kp_eproc.e_ppid;
+    if (!proc_append(out, procs[i].kp_proc.p_pid, ppid, procs[i].kp_proc.p_comm))
       { free(procs); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
   }
   free(procs);
@@ -256,7 +275,10 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
         proc->ki_pid > 1) {
       char name[64];
       bsd_copy_process_name(name, sizeof(name), proc, record_size);
-      if (!proc_append(out, proc->ki_pid, name))
+      int ppid = bsd_record_has_field(record_size,
+                     offsetof(struct kinfo_proc, ki_ppid),
+                     sizeof(proc->ki_ppid)) ? (int)proc->ki_ppid : 0;
+      if (!proc_append(out, proc->ki_pid, ppid, name))
         { free(buf); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
     }
     off += record_size;

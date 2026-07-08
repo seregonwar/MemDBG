@@ -129,6 +129,8 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     int r = memdbg_hijack_handle(fd, hj, (const uint8_t *)body, req->length);
     return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
   }
+  case MEMDBG_CMD_PROCESS_DUMP:
+    return handle_process_dump(fd, req, body, req->length);
   case MEMDBG_CMD_KERNEL_BASE:        return handle_kernel_base(fd, req);
   case MEMDBG_CMD_KERNEL_READ:        return handle_kernel_read(fd, req, body, req->length);
   case MEMDBG_CMD_KERNEL_WRITE:       return handle_kernel_write(fd, req, body, req->length);
@@ -276,7 +278,7 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     if (!buf) return MEMDBG_ERR_NOMEM;
     int rc = ptw_read((uint32_t)pr->pid, pr->address, pr->length, buf);
     memdbg_status_t st = (rc == 0) ? MEMDBG_OK : MEMDBG_ERR_IO;
-    int sr = send_response(fd, req, st, buf, pr->length);
+    int sr = send_response(fd, req, st, buf, (uint32_t)pr->length);
     free(buf);
     return sr == 0 ? st : MEMDBG_ERR_NET;
   }
@@ -302,7 +304,7 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     int rc = ptw_probe((uint32_t)pp->pid, pp->address, &phys_address,
                        &page_level, &page_size, &pte_value);
     resp.phys_address = phys_address;
-    resp.page_level = (uint32_t)page_level;
+    resp.page_level = (int32_t)page_level;
     resp.page_size = page_size;
     resp.pte_value = pte_value;
     if (rc == 0) resp.cached = (resp.pte_value >> 4) & 1;

@@ -367,10 +367,12 @@ static memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp) {
 
   regs.r_rip -= 1;
   if (pal_debug_set_regs((int)g_dbg.pid, lwp, &regs) != 0) {
+    (void)install_sw_breakpoint(bp);
     return pal_status_from_errno();
   }
 
   if (pal_debug_single_step((int)g_dbg.pid, lwp) != 0) {
+    (void)install_sw_breakpoint(bp);
     return pal_status_from_errno();
   }
 
@@ -494,6 +496,26 @@ memdbg_status_t memdbg_debugger_attach(int32_t pid) {
   return MEMDBG_OK;
 }
 
+memdbg_status_t memdbg_debugger_conditional_attach(int32_t pid,
+                                                    bool *need_detach_out) {
+  debugger_lock();
+  if (g_dbg.attached) {
+    if (g_dbg.pid == pid) {
+      if (need_detach_out) *need_detach_out = false;
+      debugger_unlock();
+      return MEMDBG_OK;
+    }
+    /* Different process attached — detach first, then attach new. */
+    (void)memdbg_debugger_detach();
+  }
+  memdbg_status_t st = memdbg_debugger_attach(pid);
+  if (st == MEMDBG_OK && need_detach_out) {
+    *need_detach_out = true;
+  }
+  debugger_unlock();
+  return st;
+}
+
 memdbg_status_t memdbg_debugger_detach(void) {
   debugger_lock();
   if (!g_dbg.attached) {
@@ -553,29 +575,21 @@ memdbg_status_t memdbg_debugger_continue(void) {
     return MEMDBG_ERR_STATE;
   }
 
-  int32_t lwp_to_step = 0;
-  memdbg_debug_regs_t regs;
-  memset(&regs, 0, sizeof(regs));
-
-  /* If any thread is stopped on a software breakpoint, single-step over it. */
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
   uint32_t count = 0;
   if (memdbg_debugger_get_threads(lwps, NULL, NULL, &count,
                                   MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
     for (uint32_t i = 0; i < count; ++i) {
+      memdbg_debug_regs_t regs;
+      memset(&regs, 0, sizeof(regs));
       if (pal_debug_get_regs((int)g_dbg.pid, lwps[i], &regs) != 0) continue;
       if (find_breakpoint_slot((uint64_t)(regs.r_rip - 1)) >= 0) {
-        lwp_to_step = lwps[i];
-        break;
+        memdbg_status_t st = step_over_sw_breakpoint_locked(lwps[i]);
+        if (st != MEMDBG_OK) {
+          debugger_unlock();
+          return st;
+        }
       }
-    }
-  }
-
-  if (lwp_to_step != 0) {
-    memdbg_status_t st = step_over_sw_breakpoint_locked(lwp_to_step);
-    if (st != MEMDBG_OK) {
-      debugger_unlock();
-      return st;
     }
   }
 
@@ -920,6 +934,10 @@ memdbg_status_t memdbg_debugger_set_breakpoint_cond(
       fake.installed = true;
       g_dbg.watchpoints[hw] = fake;
       st = sync_hardware_dbregs_locked();
+      if (st != MEMDBG_OK) {
+        memset(&g_dbg.watchpoints[hw], 0,
+               sizeof(g_dbg.watchpoints[hw]));
+      }
     }
   } else {
     st = MEMDBG_ERR_PARAM;
