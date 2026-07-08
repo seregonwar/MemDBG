@@ -140,7 +140,10 @@ void memdbg_log_vwrite(memdbg_log_level_t level, const char *fmt, va_list ap) {
   }
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
   (void)vsnprintf(body, sizeof(body), fmt, ap);
+#pragma GCC diagnostic pop
   (void)snprintf(line, sizeof(line),
                  "[%04d-%02d-%02d %02d:%02d:%02d] %-5s %s\n",
                  tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,

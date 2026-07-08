@@ -181,6 +181,12 @@ static void mock_backend_reset(void) {
 memdbg_status_t memdbg_debugger_attach(int32_t pid) {
   (void)pid; return g_mock_attach_st;
 }
+memdbg_status_t memdbg_debugger_conditional_attach(int32_t pid,
+                                                    bool *need_detach_out) {
+  if (need_detach_out) *need_detach_out = !g_mock_is_attached;
+  g_mock_is_attached = true;
+  (void)pid; return g_mock_attach_st;
+}
 memdbg_status_t memdbg_debugger_detach(void) {
   return g_mock_detach_st;
 }
@@ -1398,7 +1404,7 @@ static void test_proto_process_call(void) {
   mock_backend_reset(); mock_send_reset();
   g_mock_is_stopped = true; /* immediately stopped after continue */
   /* Set a known return value in RAX */
-  g_mock_regs.r_rax = 0xCAFEBABEDEADBEEFLL;
+  g_mock_regs.r_rax = (int64_t)0xCAFEBABEDEADBEEFLL;
   st = handle_process_call(g_mock_socket, &g_req, &body,
                            sizeof(body), send_response, mock_sleep_ms);
   TEST_OK("proc_call success", st);

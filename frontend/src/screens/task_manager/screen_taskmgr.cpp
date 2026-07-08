@@ -17,6 +17,7 @@
 #include <future>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace memdbg::frontend {
@@ -407,6 +408,175 @@ static std::string resource_memory_text(const TaskProcessResource *res,
   return pending ? "..." : "-";
 }
 
+/* ---- Process Tree ---- */
+
+struct TaskMgrTreeNode {
+  int32_t pid = 0;
+  int32_t ppid = 0;
+  std::string name;
+  uint64_t total_mapped = 0;
+  uint64_t fmem_used = 0;
+  uint64_t fmem_budget = 0;
+  size_t map_count = 0;
+  bool has_resource_data = false;
+  std::vector<int> children;
+};
+
+static void build_taskmgr_process_tree(AppState &state,
+                                       std::vector<TaskMgrTreeNode> &nodes,
+                                       std::vector<int> &roots) {
+  nodes.clear();
+  roots.clear();
+  if (state.processes.empty()) return;
+
+  std::unordered_map<int32_t, int> pid_to_index;
+  nodes.reserve(state.processes.size());
+
+  for (size_t i = 0; i < state.processes.size(); ++i) {
+    const auto &p = state.processes[i];
+    if (p.pid <= 0) continue;
+    TaskMgrTreeNode node;
+    node.pid = p.pid;
+    node.ppid = p.ppid;
+    node.name = p.name;
+
+    const TaskProcessResource *res = resource_for_pid(state, p.pid);
+    if (res != nullptr && res->maps.loaded && !res->maps_failed) {
+      node.total_mapped = res->maps.total_mapped;
+      node.map_count = res->maps.map_count;
+      node.has_resource_data = true;
+    }
+    const TaskFmemSample *fmem = find_fmem_sample(state, p);
+    if (fmem != nullptr && fmem->used_bytes > 0U) {
+      node.fmem_used = fmem->used_bytes;
+      node.fmem_budget = fmem->budget_bytes;
+    }
+
+    nodes.push_back(node);
+    pid_to_index[p.pid] = static_cast<int>(nodes.size()) - 1;
+  }
+
+  for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
+    int32_t ppid = nodes[i].ppid;
+    if (ppid <= 0 || ppid == nodes[i].pid) {
+      roots.push_back(i);
+      continue;
+    }
+    auto it = pid_to_index.find(ppid);
+    if (it != pid_to_index.end()) {
+      nodes[it->second].children.push_back(i);
+    } else {
+      roots.push_back(i);
+    }
+  }
+}
+
+static void draw_taskmgr_tree_node(AppState &state,
+                                   const std::vector<TaskMgrTreeNode> &nodes,
+                                   int node_idx, int depth) {
+  const auto &node = nodes[node_idx];
+  const float scl = ui::dpi_scale();
+  const float indent = static_cast<float>(depth) * 20.0f * scl;
+  const bool selected = (node.pid == state.taskmgr_selected_pid &&
+                         state.taskmgr_detail_open);
+
+  ImGui::TableNextRow();
+
+  /* PID + tree icon */
+  ImGui::TableSetColumnIndex(0);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+  bool has_children = !node.children.empty();
+  std::string pid_label;
+  if (has_children)
+    pid_label = std::string(icons::kLoad) + "  " + std::to_string(node.pid);
+  else
+    pid_label = std::string(icons::kCode) + "  " + std::to_string(node.pid);
+  pid_label += "##tm_tree_" + std::to_string(node.pid);
+
+  if (ImGui::Selectable(pid_label.c_str(), selected,
+                        ImGuiSelectableFlags_SpanAllColumns)) {
+    int row = -1;
+    for (int i = 0; i < static_cast<int>(state.processes.size()); ++i)
+      if (state.processes[i].pid == node.pid) { row = i; break; }
+    if (row >= 0) select_taskmgr_process(state, row);
+  }
+
+  /* Name */
+  ImGui::TableSetColumnIndex(1);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+  ImGui::TextUnformatted(node.name.empty() ? "?" : node.name.c_str());
+  if (ImGui::IsItemHovered() && !node.name.empty())
+    ImGui::SetTooltip("%s", node.name.c_str());
+
+  /* PPID */
+  ImGui::TableSetColumnIndex(2);
+  ImGui::Text("%d", node.ppid);
+
+  /* Maps */
+  ImGui::TableSetColumnIndex(3);
+  if (node.has_resource_data && node.map_count > 0U)
+    ImGui::Text("%zu", node.map_count);
+  else
+    ImGui::TextColored(ui::colors().dim, "-");
+
+  /* Memory */
+  ImGui::TableSetColumnIndex(4);
+  if (node.fmem_used > 0U) {
+    std::string mem_text;
+    if (node.fmem_budget > 0U)
+      mem_text = format_bytes_tm(node.fmem_used) + " / " +
+                 format_bytes_tm(node.fmem_budget);
+    else
+      mem_text = format_bytes_tm(node.fmem_used);
+    ImGui::TextColored(ui::colors().primary2, "%s", mem_text.c_str());
+  } else if (node.total_mapped > 0U) {
+    std::string mem_text = format_bytes_tm(node.total_mapped);
+    ImGui::Text("%s", mem_text.c_str());
+  } else {
+    ImGui::TextColored(ui::colors().dim, "-");
+  }
+
+  for (int child : node.children)
+    draw_taskmgr_tree_node(state, nodes, child, depth + 1);
+}
+
+static void draw_taskmgr_process_tree(AppState &state) {
+  std::vector<TaskMgrTreeNode> nodes;
+  std::vector<int> roots;
+  build_taskmgr_process_tree(state, nodes, roots);
+
+  if (nodes.empty()) {
+    ui::draw_empty_state(locale::tr("taskmgr.connect_first"),
+                         locale::tr("taskmgr.connect_first_desc"));
+    return;
+  }
+
+  const ImGuiTableFlags table_flags =
+      ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+      ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+
+  if (ImGui::BeginTable("TaskMgrTreeTable", 5, table_flags, ImVec2(0, 0))) {
+    ImGui::TableSetupColumn(locale::tr("taskmgr.col_pid"),
+                            ImGuiTableColumnFlags_WidthFixed, 100);
+    ImGui::TableSetupColumn(locale::tr("taskmgr.col_name"),
+                            ImGuiTableColumnFlags_WidthStretch, 1.5f);
+    ImGui::TableSetupColumn(locale::tr("processes.ppid_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 70);
+    ImGui::TableSetupColumn(locale::tr("taskmgr.col_maps"),
+                            ImGuiTableColumnFlags_WidthFixed, 72);
+    ImGui::TableSetupColumn(locale::tr("taskmgr.col_memory"),
+                            ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableHeadersRow();
+
+    for (int root : roots)
+      draw_taskmgr_tree_node(state, nodes, root, 0);
+
+    ImGui::EndTable();
+  }
+}
+
+/* ---- Process table (list view) ---- */
+
 static void draw_process_table(AppState &state, float height) {
   const float scl = ui::dpi_scale();
   if (!state.client.connected()) {
@@ -477,6 +647,8 @@ static void draw_process_table(AppState &state, float height) {
     ImGui::EndTable();
   }
 }
+
+/* ---- Shared helpers ---- */
 
 static void draw_usage_bar(const char *label, uint64_t bytes, uint64_t total,
                            ImVec4 color) {
@@ -653,11 +825,21 @@ void draw_taskmgr(AppState &state, ImVec2 avail) {
 
   ui::begin_panel("TaskMgrPanel", locale::tr("taskmgr.title"), avail);
 
+  /* Header: title + count + view toggle + refresh */
   ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("taskmgr.process_table"));
   ImGui::SameLine();
   ImGui::TextColored(ui::colors().dim, "%zu %s", state.processes.size(),
                      locale::tr("taskmgr.processes"));
 
+  /* Tree/List toggle */
+  ImGui::SameLine();
+  static int taskmgr_view_mode = 0; /* 0=table, 1=tree */
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16.0f * scl);
+  if (ImGui::RadioButton(locale::tr("processes.list_view"), &taskmgr_view_mode, 0)) {}
+  ImGui::SameLine();
+  if (ImGui::RadioButton(locale::tr("processes.tree_view"), &taskmgr_view_mode, 1)) {}
+
+  /* Refresh button */
   ImGui::SameLine();
   const float refresh_w = 172.0f * scl;
   const float right_x = ImGui::GetWindowContentRegionMax().x - refresh_w;
@@ -683,33 +865,66 @@ void draw_taskmgr(AppState &state, ImVec2 avail) {
   ImGui::Separator();
   ImGui::Spacing();
 
+  /* Main content area */
   const float content_h = std::max(180.0f * scl, ImGui::GetContentRegionAvail().y);
   const bool show_detail = state.taskmgr_detail_open &&
                            state.taskmgr_selected_pid > 0;
   const bool side_by_side = show_detail && ImGui::GetContentRegionAvail().x >= 880.0f * scl;
+  const float gap = 12.0f * scl;
+  const float list_w = std::max(420.0f * scl,
+      (ImGui::GetContentRegionAvail().x - gap) * 0.46f);
 
-  if (side_by_side) {
-    const float gap = 12.0f * scl;
-    const float table_w = std::max(420.0f * scl,
-        (ImGui::GetContentRegionAvail().x - gap) * 0.46f);
-    ImGui::BeginChild("TaskMgrTablePane", ImVec2(table_w, content_h), false);
-    draw_process_table(state, ImGui::GetContentRegionAvail().y);
-    ImGui::EndChild();
+  if (taskmgr_view_mode == 1) {
+    /* ---- Tree View ---- */
+    if (side_by_side) {
+      ImGui::BeginChild("TaskMgrTreePane", ImVec2(list_w, content_h), false);
+      draw_taskmgr_process_tree(state);
+      ImGui::EndChild();
 
-    ImGui::SameLine(0.0f, gap);
-    ImGui::BeginChild("TaskMgrDetailPane", ImVec2(0, content_h), true);
-    draw_detail_title_bar(state);
-    draw_detail_panel(state);
-    ImGui::EndChild();
-  } else {
-    const float detail_h = show_detail ? 390.0f * scl : 0.0f;
-    draw_process_table(state, content_h - detail_h - (show_detail ? 12.0f * scl : 0.0f));
-    if (show_detail) {
-      ImGui::Spacing();
-      ImGui::BeginChild("TaskMgrDetailPaneStacked", ImVec2(0, detail_h), true);
+      ImGui::SameLine(0.0f, gap);
+      ImGui::BeginChild("TaskMgrTreeDetailPane", ImVec2(0, content_h), true);
       draw_detail_title_bar(state);
       draw_detail_panel(state);
       ImGui::EndChild();
+    } else {
+      const float detail_h = show_detail ? 390.0f * scl : 0.0f;
+      ImGui::BeginChild("TaskMgrTreePaneStacked",
+                         ImVec2(0, content_h - detail_h -
+                                     (show_detail ? 12.0f * scl : 0.0f)), false);
+      draw_taskmgr_process_tree(state);
+      ImGui::EndChild();
+      if (show_detail) {
+        ImGui::Spacing();
+        ImGui::BeginChild("TaskMgrTreeDetailPaneStacked",
+                           ImVec2(0, detail_h), true);
+        draw_detail_title_bar(state);
+        draw_detail_panel(state);
+        ImGui::EndChild();
+      }
+    }
+  } else {
+    /* ---- Table View ---- */
+    if (side_by_side) {
+      ImGui::BeginChild("TaskMgrTablePane", ImVec2(list_w, content_h), false);
+      draw_process_table(state, ImGui::GetContentRegionAvail().y);
+      ImGui::EndChild();
+
+      ImGui::SameLine(0.0f, gap);
+      ImGui::BeginChild("TaskMgrDetailPane", ImVec2(0, content_h), true);
+      draw_detail_title_bar(state);
+      draw_detail_panel(state);
+      ImGui::EndChild();
+    } else {
+      const float detail_h = show_detail ? 390.0f * scl : 0.0f;
+      draw_process_table(state, content_h - detail_h -
+                                  (show_detail ? 12.0f * scl : 0.0f));
+      if (show_detail) {
+        ImGui::Spacing();
+        ImGui::BeginChild("TaskMgrDetailPaneStacked", ImVec2(0, detail_h), true);
+        draw_detail_title_bar(state);
+        draw_detail_panel(state);
+        ImGui::EndChild();
+      }
     }
   }
 

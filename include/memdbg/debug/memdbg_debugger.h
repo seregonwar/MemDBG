@@ -55,6 +55,8 @@ typedef struct memdbg_watchpoint {
 bool memdbg_debugger_supported(void);
 
 memdbg_status_t memdbg_debugger_attach(int32_t pid);
+memdbg_status_t memdbg_debugger_conditional_attach(int32_t pid,
+                                                    bool *need_detach_out);
 memdbg_status_t memdbg_debugger_detach(void);
 
 bool memdbg_debugger_is_attached(void);

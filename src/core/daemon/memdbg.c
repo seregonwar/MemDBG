@@ -376,7 +376,7 @@ static bool sockaddr_ipv4_host(const struct sockaddr_storage *ss, char *host,
   }
 
   sin = (const struct sockaddr_in *)ss;
-  return inet_ntop(AF_INET, &sin->sin_addr, host, host_len) != NULL;
+  return inet_ntop(AF_INET, &sin->sin_addr, host, (socklen_t)host_len) != NULL;
 }
 
 static bool client_peer_allowed(const memdbg_config_t *cfg,

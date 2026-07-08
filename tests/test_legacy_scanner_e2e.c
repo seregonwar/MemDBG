@@ -478,10 +478,10 @@ static void test_turboscan_multi_chunk(void) {
     if (n == 4096U) {
       cont_calls++;
       TEST("send CONT #%u", send_legacy_command(LEGACY_CMD_SCAN_CONT, NULL, 0) == 0,
-           "CONT send failed", cont_calls);
+           "CONT send failed (count=%u)", cont_calls);
       uint32_t next_count = 0;
       if (read_all(&next_count, sizeof(next_count)) != 0 || next_count > 200000U) {
-        TEST("CONT #%u read next count", 0, "read failed or bad count %u", cont_calls, next_count);
+        TEST("CONT #%u read next count", 0, "read failed (CONT #%u) or bad count %u", cont_calls, next_count);
         break;
       }
       n = next_count;

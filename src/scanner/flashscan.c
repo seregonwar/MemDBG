@@ -223,7 +223,11 @@ void flashscan_free_slot(unsigned int slot) {
 }
 
 static inline void bitmap_clear(uint8_t *bm, uint64_t i) {
-  bm[i >> 3] &= (uint8_t)~(1u << (i & 7));
+  /* Atomic clear: necessary because parallel rescan workers may clear
+     different bits within the same byte concurrently.  Plain &= would
+     lose one update when the read-modify-write races across threads.
+     __sync_fetch_and_and provides a full barrier on all architectures. */
+  (void)__sync_fetch_and_and(&bm[i >> 3], (uint8_t)~(1u << (i & 7)));
 }
 
 static uint64_t bitmap_next_set(const uint8_t *bm, uint64_t from, uint64_t n) {
@@ -371,6 +375,11 @@ static int snapshot_create(int fd, unsigned slot,
   if (chunk_size == 0) chunk_size = step;
   uint8_t *read_buf = (uint8_t *)malloc(chunk_size);
   uint8_t *pack_buf = (step != vlen) ? (uint8_t *)malloc(chunk_size) : NULL;
+
+  if (!read_buf || (step != vlen && !pack_buf)) {
+    free(read_buf); free(pack_buf);
+    ok = 0;
+  }
 
   uint64_t prev_zeroes = include_zeros ? 0 : (uint64_t)-1;
   (void)prev_zeroes;
@@ -686,6 +695,11 @@ static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
   if (nworkers == 1) {
     uint8_t *rb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
     uint8_t *bb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+    if (!rb || !bb) {
+      free(rb); free(bb);
+      s->survivor_count = 0;
+      return 0;
+    }
     uint64_t nc = snapshot_rescan(fd, s, cmp_type, val_type, vlen,
                            pattern, mask, between_hi, includes_prev,
                            rb, bb, NULL);
@@ -702,6 +716,11 @@ static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
     free(ctxs); free(surv); free(tids);
     uint8_t *rb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
     uint8_t *bb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+    if (!rb || !bb) {
+      free(rb); free(bb);
+      s->survivor_count = 0;
+      return 0;
+    }
     uint64_t nc = snapshot_rescan(fd, s, cmp_type, val_type, vlen,
                            pattern, mask, between_hi, includes_prev,
                            rb, bb, NULL);
@@ -725,7 +744,13 @@ static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
     ctxs[w].survivors_out = &surv[w];
     ctxs[w].worker_id     = w;
 
-    pthread_create(&tids[w], NULL, rescan_worker_thread, &ctxs[w]);
+    if (pthread_create(&tids[w], NULL, rescan_worker_thread, &ctxs[w]) != 0) {
+      /* pthread_create failed -- mark this slot so the join loop runs
+         it inline instead of calling pthread_join on an invalid tid. */
+      ctxs[w].survivors_out = NULL;
+      surv[w] = 0;
+      tids[w] = (pthread_t)0;
+    }
   }  // Send approximate progress while workers run
   for (uint32_t w = 0; w < nworkers; w++) {
     struct timespec ts = {0, 50000000L};
@@ -736,8 +761,16 @@ static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
 
   uint64_t total_survivors = 0;
   for (uint32_t w = 0; w < nworkers; w++) {
-    pthread_join(tids[w], NULL);
-    total_survivors += surv[w];
+    if (ctxs[w].survivors_out != NULL) {
+      pthread_join(tids[w], NULL);
+      total_survivors += surv[w];
+    } else {
+      /* This worker was launched inline because pthread_create failed;
+         run it synchronously now. */
+      ctxs[w].survivors_out = &surv[w];
+      rescan_worker_thread(&ctxs[w]);
+      total_survivors += surv[w];
+    }
   }
 
   free(ctxs); free(surv); free(tids);
@@ -769,7 +802,7 @@ static uint32_t snapshot_fetch(int fd, struct flashscan_sess *s,
     if (seen < start) { seen++; continue; }
     uint64_t addr = slot_to_addr(s, i);
     if (out_len + ent > out_cap) {
-      socket_send_all(fd, out_buf, (int)out_len);
+      socket_send_all(fd, out_buf, (size_t)out_len);
       out_len = 0;
     }
     uint8_t *o = out_buf + out_len;
@@ -783,7 +816,7 @@ static uint32_t snapshot_fetch(int fd, struct flashscan_sess *s,
       flashscan_pread_all(s->first_fd, o + 8 + 2 * vlen, vlen, i * vlen);
     out_len += ent; emitted++; seen++;
   }
-  if (out_len) socket_send_all(fd, out_buf, (int)out_len);
+  if (out_len) socket_send_all(fd, out_buf, (size_t)out_len);
   return (uint32_t)emitted;
 }
 
@@ -855,9 +888,9 @@ static int snapshot_materialize(unsigned slot, struct flashscan_sess *s) {
   s->value_len  = vlen;
   s->pid        = pid;
   s->value_type = vt;
-  s->has_first  = has_first;
+  s->has_first  = (uint8_t)has_first;
   s->first_fd   = -1;
-  s->has_prev   = has_prev;
+  s->has_prev   = (uint8_t)has_prev;
   s->prev_fd    = -1;
   return 1;
 }
@@ -893,7 +926,7 @@ static int scan_range_stream(int fd,
 
     if (simd_ok) {
       size_t nm = memdbg_simd_find_exact(req->value_type, src, to_read,
-                                         pattern, vlen, simd_offs, simd_max);
+                                         pattern, (uint32_t)vlen, simd_offs, simd_max);
       for (size_t k = 0; k < nm; k++) {
         uint32_t coff = simd_offs[k];
         if (sess) {
@@ -909,7 +942,7 @@ static int scan_range_stream(int fd,
         } else {
           if (result_len > flush_thresh) {
             *(uint64_t *)result_buf = result_len;
-            socket_send_all(fd, result_buf, (int)(result_len + 8));
+            socket_send_all(fd, result_buf, (size_t)(result_len + 8));
             result_len = 0;
           }
           uint32_t offset = (uint32_t)((addr + coff) - req->address);
@@ -945,7 +978,7 @@ static int scan_range_stream(int fd,
           } else {
             if (result_len > flush_thresh) {
               *(uint64_t *)result_buf = result_len;
-              socket_send_all(fd, result_buf, (int)(result_len + 8));
+              socket_send_all(fd, result_buf, (size_t)(result_len + 8));
               result_len = 0;
             }
             uint32_t offset = (uint32_t)((addr + j) - req->address);
@@ -967,7 +1000,7 @@ static int scan_range_stream(int fd,
 
   if (!sess && result_len) {
     *(uint64_t *)result_buf = result_len;
-    socket_send_all(fd, result_buf, (int)(result_len + 8));
+    socket_send_all(fd, result_buf, (size_t)(result_len + 8));
   }
   return 1;
 }
@@ -1053,7 +1086,7 @@ int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *r
 
   socket_send_int32(fd, 0);
   socket_send_all(fd, &n, 4);
-  if (n) socket_send_all(fd, out, (int)((size_t)n * sizeof(*out)));
+  if (n) socket_send_all(fd, out, (size_t)n * sizeof(*out));
   socket_send_int32(fd, 0);
 
   free(out); free(probe); memdbg_process_maps_free(&map_list);
@@ -1127,7 +1160,7 @@ int flashscan_handle_start(int fd,
         segs = (memdbg_quickscan_segment_t *)malloc(
             (size_t)nseg * sizeof(*segs));
         if (segs)
-          socket_recv_all(fd, segs, (int)(nseg * sizeof(*segs)));
+          socket_recv_all(fd, segs, (size_t)(nseg * sizeof(*segs)));
         else
           seg_ok = 0;
       } else { seg_ok = 0; }
@@ -1275,7 +1308,9 @@ int flashscan_handle_count(int fd,
       uint64_t  n        = s->count;
       uint64_t  win_start = 0, win_end = 0;
       uint8_t  *rw_buf = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
+      if (!rw_buf) { s->count = 0; new_count = 0; }
 
+      if (rw_buf) {
       page_alias_ctx_t *rsctx = (req->request_flags & MEMDBG_QS_FL_ALIAS_RESCAN)
                                 ? alias_context_get(slot, s->pid) : NULL;
       const uint8_t *win_base = rw_buf;
@@ -1326,6 +1361,7 @@ int flashscan_handle_count(int fd,
       if (win_aliased) page_alias_release(rsctx);
       s->count = new_count;
       free(rw_buf);
+      }
     }
 
     uint64_t prog_sentinel = 0xFFFFFFFFFFFFFFFFULL;
@@ -1341,6 +1377,12 @@ int flashscan_handle_count(int fd,
   uint8_t *result_buf = (uint8_t *)malloc(0x40000);
   uint8_t *mem_buf    = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
 
+  if (!chunk_buf || !result_buf || !mem_buf) {
+    free(chunk_buf); free(result_buf); free(mem_buf);
+    socket_send_int32(fd, -1);
+    return 1;
+  }
+
   page_alias_ctx_t *rsctx = (req->request_flags & MEMDBG_QS_FL_ALIAS_RESCAN)
                             ? alias_context_get(slot, (uint32_t)req->pid) : NULL;
 
@@ -1355,7 +1397,7 @@ int flashscan_handle_count(int fd,
     }
     if (chunk_len > 0x40000u) break;
 
-    socket_recv_all(fd, chunk_buf, (int)chunk_len);
+    socket_recv_all(fd, chunk_buf, (size_t)chunk_len);
 
     uint64_t win_start = 0, win_end = 0, result_len = 0;
     const uint8_t *win_base = mem_buf;
@@ -1394,7 +1436,7 @@ int flashscan_handle_count(int fd,
       if (matched) {
         if (result_len > flush_thresh) {
           *(uint64_t *)result_buf = result_len;
-          socket_send_all(fd, result_buf, (int)(result_len + 8));
+          socket_send_all(fd, result_buf, (size_t)(result_len + 8));
           result_len = 0;
         }
         memcpy(result_buf + 8 + result_len,     &eoff, 4);
@@ -1406,7 +1448,7 @@ int flashscan_handle_count(int fd,
 
     if (result_len) {
       *(uint64_t *)result_buf = result_len;
-      socket_send_all(fd, result_buf, (int)(result_len + 8));
+      socket_send_all(fd, result_buf, (size_t)(result_len + 8));
     }
 
     uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
@@ -1468,7 +1510,7 @@ int flashscan_handle_fetch(int fd,
   for (uint64_t i = start; i < end; i++) {
     uint8_t *rec = recs + i * rec_size;
     if (out_len + ent_size > out_cap) {
-      socket_send_all(fd, out_buf, (int)out_len);
+      socket_send_all(fd, out_buf, (size_t)out_len);
       out_len = 0;
     }
     uint8_t *o = out_buf + out_len;
@@ -1479,7 +1521,7 @@ int flashscan_handle_fetch(int fd,
       memcpy(o + 8 + 2 * vlen, rec + first_off, vlen);
     out_len += ent_size;
   }
-  if (out_len) socket_send_all(fd, out_buf, (int)out_len);
+  if (out_len) socket_send_all(fd, out_buf, (size_t)out_len);
 
   free(out_buf);
   socket_send_int32(fd, 0);

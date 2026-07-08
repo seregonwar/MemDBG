@@ -52,7 +52,7 @@ int memdbg_asm_encode(int fd, const uint8_t *body, uint32_t body_len) {
     const char *msg = ks_strerror(err);
     uint32_t mlen = msg ? (uint32_t)strlen(msg) : 0;
     pal_socket_write_all(fd, &mlen, 4);
-    if (mlen) pal_socket_write_all(fd, msg, (int)mlen);
+    if (mlen) pal_socket_write_all(fd, msg, (size_t)mlen);
     return 1;
   }
 
@@ -83,7 +83,7 @@ int memdbg_asm_encode(int fd, const uint8_t *body, uint32_t body_len) {
   uint32_t ic = (uint32_t)insn_count;
   pal_socket_write_all(fd, &bc, 4);
   pal_socket_write_all(fd, &ic, 4);
-  if (enc_size) pal_socket_write_all(fd, enc, (int)enc_size);
+  if (enc_size) pal_socket_write_all(fd, enc, enc_size);
 
   ks_free(enc);
   ks_close(ks);
@@ -94,7 +94,7 @@ int memdbg_asm_encode(int fd, const uint8_t *body, uint32_t body_len) {
   const char *msg = "Keystone not available";
   uint32_t mlen = (uint32_t)strlen(msg);
   pal_socket_write_all(fd, &mlen, 4);
-  pal_socket_write_all(fd, msg, (int)mlen);
+  pal_socket_write_all(fd, msg, (size_t)mlen);
 #endif
   return 0;
 }

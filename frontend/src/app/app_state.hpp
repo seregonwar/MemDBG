@@ -300,6 +300,19 @@ struct AppState {
   int process_dump_max_mb = 128;
   std::string process_analysis_report;
 
+  /* ---- Process Tree ---- */
+  bool process_tree_expand_all = false;
+
+  /* ---- JSON Dump dialog ---- */
+  bool json_dump_include_regs = false;
+  bool json_dump_include_stack = false;
+  bool json_dump_include_preview = true;
+  std::string json_dump_output;
+  bool json_dump_pending = false;
+  std::future<bool> json_dump_future;
+  std::string json_dump_error;
+  double json_dump_start_time = 0.0;
+
   bool gadget_selected_map_only = true;
   bool gadget_exec_only = true;
   int gadget_max_results = 256;
@@ -899,7 +912,7 @@ inline bool client_async_busy(const AppState &state) {
          state.debugger_attach_pending || state.debugger_threads_pending ||
          state.tracer_pending || state.tracer_status_pending ||
          state.tracer_events_pending ||
-         state.elf_load_pending ||
+         state.elf_load_pending || state.json_dump_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||
          state.plugin_gui_starting;
