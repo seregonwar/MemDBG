@@ -91,7 +91,7 @@ toolchain.
 - Pointer Scan and AOB Scan: dedicated workflows for stable addresses and
   wildcard byte signatures.
 - Trainer: cheat entries, live OFF-value capture, lock intervals, batchcode
-  import, and `.cht` persistence.
+  import, high-performance GoldHEN JSON parsing, and `.cht` persistence.
 - Debugger: registers, threads, stepping, breakpoints, watchpoints,
   disassembly, Patch Studio, and Analysis Notebook.
 - Logs and Telemetry: live UDP feed, sender stats, dropped/evicted counters,
