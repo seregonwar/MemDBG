@@ -6,6 +6,7 @@
 
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
+#include "file_picker.hpp"
 #include "locale/locale.hpp"
 
 #include "core/client/memdbg_client.hpp"
@@ -325,6 +326,80 @@ void draw_scan_progress(const std::string &label, const char *icon, double elaps
     int secs = static_cast<int>(elapsed) % 60;
     ImGui::TextColored(colors().muted, "Elapsed: %dm %ds", mins, secs);
   }
+}
+
+/* ---- Reusable file/folder picker widgets ---- */
+
+bool file_path_input(char *buffer, size_t buffer_size,
+                     const FilePathOptions &opts) {
+  const float scl = dpi_scale();
+  const float btn_w = opts.button_size.x > 0 ? opts.button_size.x : 42.0f * scl;
+  const float btn_h = opts.button_size.y > 0 ? opts.button_size.y : 0.0f;
+  bool picked = false;
+
+  if (opts.label != nullptr)
+    ImGui::TextColored(colors().muted, "%s", opts.label);
+
+  if (ImGui::BeginTable(opts.id, 2,
+        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
+    ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Btn", ImGuiTableColumnFlags_WidthFixed, btn_w + 8.0f * scl);
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::SetNextItemWidth(-1.0f);
+    const char *hint = opts.placeholder ? opts.placeholder : "";
+    ImGui::InputTextWithHint(opts.id, hint, buffer, buffer_size);
+    ImGui::TableSetColumnIndex(1);
+
+    const char *icon = icons::kLoad;
+    if (ImGui::Button((std::string(icon) + "##" + opts.id + "_btn").c_str(),
+                      ImVec2(btn_w, btn_h))) {
+      std::string result;
+      if (opts.folder_mode)
+        result = pickFolder(opts.dialog_title);
+      else if (opts.save_mode)
+        result = pickSaveFile(opts.dialog_title, opts.default_name ? opts.default_name : "",
+                              opts.filter_desc, opts.filter_ext);
+      else
+        result = pickFile(opts.dialog_title, opts.filter_desc, opts.filter_ext);
+      if (!result.empty()) {
+        std::snprintf(buffer, buffer_size, "%s", result.c_str());
+        picked = true;
+      }
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", opts.dialog_title);
+    ImGui::EndTable();
+  }
+  return picked;
+}
+
+std::string file_open_button(const char *label, const FilePathOptions &opts) {
+  const float scl = dpi_scale();
+  const float btn_w = opts.button_size.x > 0 ? opts.button_size.x : 0;
+  const float btn_h = opts.button_size.y > 0 ? opts.button_size.y : 0;
+  ImVec2 size(btn_w, btn_h);
+  if (btn_w <= 0) size.x = ImGui::CalcTextSize(label).x + 24.0f * scl;
+
+  std::string result;
+  if (soft_button(label, size)) {
+    if (opts.folder_mode)
+      result = pickFolder(opts.dialog_title);
+    else if (opts.save_mode)
+      result = pickSaveFile(opts.dialog_title, opts.default_name ? opts.default_name : "",
+                            opts.filter_desc, opts.filter_ext);
+    else
+      result = pickFile(opts.dialog_title, opts.filter_desc, opts.filter_ext);
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", opts.dialog_title);
+  return result;
+}
+
+std::string file_save_button(const char *label, const FilePathOptions &opts) {
+  FilePathOptions save_opts = opts;
+  save_opts.save_mode = true;
+  return file_open_button(label, save_opts);
 }
 
 } // namespace memdbg::frontend::ui
