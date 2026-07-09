@@ -267,6 +267,7 @@ void draw_app(AppState &state) {
   poll_map_refresh(state);
   poll_tracer(state);
   poll_plugin_tasks(state);
+  poll_cheat_tasks(state);
   poll_session_health(state);
   handle_global_shortcuts(state);
 
@@ -468,10 +469,20 @@ void init_app_shared(AppState &state, float dpi_scale) {
   ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
   state.plugin_manager.set_bundle_root(s_executable_dir);
+  std::snprintf(state.plugin_bundle_root, sizeof(state.plugin_bundle_root),
+                "%s", s_executable_dir.string().c_str());
   {
     std::string plugin_error;
     if (!state.plugin_manager.load(&plugin_error) && !plugin_error.empty()) {
       set_status(state, plugin_error);
+    }
+  }
+
+  state.cheat_repository.set_bundle_root(s_executable_dir);
+  {
+    std::string cheat_error;
+    if (!state.cheat_repository.load(&cheat_error) && !cheat_error.empty()) {
+      set_status(state, cheat_error);
     }
   }
 

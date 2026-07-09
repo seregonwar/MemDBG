@@ -6,6 +6,7 @@
 
 #include "plugin_manager.hpp"
 
+#include "core/repo_utils.hpp"
 #include "platform.hpp"
 
 #include <nlohmann/json.hpp>
@@ -45,31 +46,22 @@ namespace {
 
 constexpr size_t kMaxCapturedOutput = 256U * 1024U;
 
-bool starts_with(const std::string &value, const char *prefix) {
-  const std::string p(prefix);
-  return value.size() >= p.size() && value.compare(0, p.size(), p) == 0;
-}
+using memdbg::frontend::starts_with;
+using memdbg::frontend::trim_copy;
+using memdbg::frontend::lower_copy;
+using memdbg::frontend::fnv1a64;
+using memdbg::frontend::slugify;
+using memdbg::frontend::make_source_id;
+using memdbg::frontend::is_remote_url;
+using memdbg::frontend::json_string;
+using memdbg::frontend::json_bool;
+using memdbg::frontend::json_u64;
+using memdbg::frontend::find_bundled_manifest;
 
 bool ends_with(const std::string &value, const char *suffix) {
   const std::string s(suffix);
   return value.size() >= s.size() &&
          value.compare(value.size() - s.size(), s.size(), s) == 0;
-}
-
-std::string trim_copy(std::string value) {
-  auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
-  value.erase(value.begin(), std::find_if(value.begin(), value.end(),
-      [&](char c) { return !is_space(static_cast<unsigned char>(c)); }));
-  value.erase(std::find_if(value.rbegin(), value.rend(),
-      [&](char c) { return !is_space(static_cast<unsigned char>(c)); }).base(),
-      value.end());
-  return value;
-}
-
-std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
 }
 
 std::vector<std::string> split_path(std::string value) {
@@ -83,50 +75,10 @@ std::vector<std::string> split_path(std::string value) {
   return parts;
 }
 
-uint64_t fnv1a64(const std::string &value) {
-  uint64_t hash = 1469598103934665603ULL;
-  for (unsigned char c : value) {
-    hash ^= c;
-    hash *= 1099511628211ULL;
-  }
-  return hash;
-}
-
-std::string hex_u64(uint64_t value) {
-  std::ostringstream oss;
-  oss << std::hex << std::nouppercase << value;
-  return oss.str();
-}
-
-std::string slugify(const std::string &value, const char *fallback) {
-  std::string out;
-  out.reserve(value.size());
-  bool prev_dash = false;
-  for (unsigned char c : value) {
-    if (std::isalnum(c) != 0) {
-      out.push_back(static_cast<char>(std::tolower(c)));
-      prev_dash = false;
-    } else if (!prev_dash && !out.empty()) {
-      out.push_back('-');
-      prev_dash = true;
-    }
-  }
-  while (!out.empty() && out.back() == '-') out.pop_back();
-  if (out.empty()) out = fallback;
-  return out;
-}
-
-std::string make_source_id(const std::string &url) {
-  return slugify(url, "source") + "-" + hex_u64(fnv1a64(url));
-}
-
 std::string make_package_dir_name(const std::string &id) {
-  return slugify(id, "plugin") + "-" + hex_u64(fnv1a64(id));
-}
-
-bool is_remote_url(const std::string &value) {
-  const std::string lower = lower_copy(value);
-  return starts_with(lower, "http://") || starts_with(lower, "https://");
+  std::ostringstream oss;
+  oss << std::hex << std::nouppercase << fnv1a64(id);
+  return slugify(id, "plugin") + "-" + oss.str();
 }
 
 bool is_file_url(const std::string &value) {
@@ -526,50 +478,6 @@ PluginRunResult run_embedded_lua_script(const std::filesystem::path &entry,
 }
 #endif
 
-std::string json_string(const nlohmann::json &doc,
-                        std::initializer_list<const char *> keys,
-                        const std::string &fallback = {}) {
-  for (const char *key : keys) {
-    auto it = doc.find(key);
-    if (it != doc.end() && it->is_string())
-      return trim_copy(it->get<std::string>());
-  }
-  return fallback;
-}
-
-bool json_bool(const nlohmann::json &doc, const char *key, bool fallback) {
-  auto it = doc.find(key);
-  if (it == doc.end()) return fallback;
-  if (it->is_boolean()) return it->get<bool>();
-  if (it->is_string()) {
-    const std::string value = lower_copy(trim_copy(it->get<std::string>()));
-    return value == "1" || value == "true" || value == "yes" || value == "on";
-  }
-  return fallback;
-}
-
-uint64_t json_u64(const nlohmann::json &doc,
-                  std::initializer_list<const char *> keys,
-                  uint64_t fallback = 0) {
-  for (const char *key : keys) {
-    auto it = doc.find(key);
-    if (it == doc.end()) continue;
-    if (it->is_number_unsigned()) return it->get<uint64_t>();
-    if (it->is_number_integer()) {
-      const int64_t value = it->get<int64_t>();
-      return value > 0 ? static_cast<uint64_t>(value) : 0U;
-    }
-    if (it->is_string()) {
-      try {
-        const std::string value = trim_copy(it->get<std::string>());
-        if (!value.empty()) return static_cast<uint64_t>(std::stoull(value));
-      } catch (...) {
-      }
-    }
-  }
-  return fallback;
-}
-
 std::vector<std::string> json_string_array(const nlohmann::json &doc,
                                            std::initializer_list<const char *> keys) {
   std::vector<std::string> out;
@@ -611,27 +519,6 @@ bool parse_json_file(const std::filesystem::path &path,
     return false;
   }
   return true;
-}
-
-std::filesystem::path find_bundled_manifest(const std::filesystem::path &bundle_root) {
-  std::vector<std::filesystem::path> roots;
-  if (!bundle_root.empty()) roots.push_back(bundle_root);
-  std::error_code ec;
-  roots.push_back(std::filesystem::current_path(ec));
-
-  for (const auto &root : roots) {
-    if (root.empty()) continue;
-    std::filesystem::path current = root;
-    for (int depth = 0; depth < 8; ++depth) {
-      const auto candidate = current / "plugin-repository" / "manifest.json";
-      ec.clear();
-      if (std::filesystem::exists(candidate, ec) && !ec)
-        return std::filesystem::weakly_canonical(candidate, ec);
-      if (!current.has_parent_path() || current.parent_path() == current) break;
-      current = current.parent_path();
-    }
-  }
-  return {};
 }
 
 std::string resolve_url_or_path(const std::string &base_manifest_url,
@@ -862,7 +749,7 @@ PluginLanguage language_from_string(const std::string &value) {
 void PluginManager::set_bundle_root(std::filesystem::path root) {
   std::lock_guard<std::mutex> lock(mutex_);
   bundle_root_ = std::move(root);
-  bundled_manifest_path_ = find_bundled_manifest(bundle_root_);
+  bundled_manifest_path_ = find_bundled_manifest(bundle_root_, "plugin-repository");
 }
 
 std::filesystem::path PluginManager::bundled_manifest_path() const {
@@ -892,7 +779,7 @@ bool PluginManager::load_unlocked(std::string *error) {
   catalog_.clear();
   installed_.clear();
 
-  if (bundled_manifest_path_.empty()) bundled_manifest_path_ = find_bundled_manifest(bundle_root_);
+  if (bundled_manifest_path_.empty()) bundled_manifest_path_ = find_bundled_manifest(bundle_root_, "plugin-repository");
 
   nlohmann::json doc;
   const auto path = config_path();

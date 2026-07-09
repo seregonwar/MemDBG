@@ -890,12 +890,14 @@ void draw_processes(AppState &state, ImVec2 avail) {
       dump_filtered_maps(state);
     }
     ImGui::Spacing();
-    ImGui::InputText(locale::tr("processes.dump_output"), state.dump_path, sizeof(state.dump_path));
-    ImGui::SameLine();
-    if (ImGui::SmallButton((std::string(icons::kLoad) + "##dumppath").c_str())) {
-      std::string picked = memdbg::frontend::ui::pickFile(locale::tr("file_picker.select_dump_dir"));
-      if (!picked.empty())
-        std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", picked.c_str());
+    {
+      ui::FilePathOptions dump_opts;
+      dump_opts.label = locale::tr("processes.dump_output");
+      dump_opts.id = "##DumpPathProcesses";
+      dump_opts.dialog_title = locale::tr("file_picker.select_dump_dir");
+      dump_opts.folder_mode = true;
+      dump_opts.placeholder = "dumps";
+      ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts);
     }
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", locale::tr("processes.dump_dir_tooltip"));
