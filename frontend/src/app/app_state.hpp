@@ -8,12 +8,14 @@
 #define MEMDBG_FRONTEND_APP_STATE_HPP
 
 #include "core/client/memdbg_client.hpp"
+#include "core/repo_utils.hpp"
 #include "crash_logger.hpp"
 #include "discovery_client.hpp"
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
 #include "release_check.hpp"
 #include "plugins/repository/plugin_manager.hpp"
+#include "cheats/cheat_repository.hpp"
 #include "scanner/structure_compare.hpp"
 #include "ui/theme_manager.hpp"
 #include "memdbg/core/memdbg.h"
@@ -250,6 +252,7 @@ struct AppState {
   GitHubProfile github_profile;
   ReleaseCheck release_check;
   plugins::PluginManager plugin_manager;
+  cheats::CheatRepository cheat_repository;
   themes::ThemeManager theme_manager;
 
   char host[64] = "192.168.1.100";
@@ -288,6 +291,7 @@ struct AppState {
   char write_address[32] = "0x0";
   char write_bytes[512] = "";
   char dump_path[512] = "dumps";
+  char plugin_bundle_root[512] = "";
 
   char alloc_address[32] = "0x0";
   char alloc_size[32] = "0x100";
@@ -499,6 +503,17 @@ struct AppState {
   std::string plugin_last_command;
   std::string plugin_last_id;
 
+  /* ---- Cheat repository ---- */
+  char cheat_repo_filter[128] = "";
+  char cheat_source_name[96] = "HEN Cheats Collection";
+  char cheat_source_url[512] = "";
+  int cheat_source_filter = 0;
+  int cheat_selected_row = -1;
+  bool cheat_add_source_modal_open = false;
+  bool cheat_refresh_pending = false;
+  std::future<bool> cheat_refresh_future;
+  std::string cheat_refresh_error;
+
   /* ---- GUI plugin bridge ----
    *   shared_ptr works with incomplete types; unique_ptr would need the
    *   complete GuiBridge definition in every translation unit that includes
@@ -639,6 +654,8 @@ inline bool bytes_to_number(int type, const std::vector<uint8_t> &bytes,
   }
 }
 
+/* hex_u64 with optional 0x prefix and width (supersedes the simpler one in repo_utils).
+   Defined here so Screen code and trainer code both see the same overload. */
 inline std::string hex_u64(uint64_t value, int width = 0) {
   std::ostringstream oss;
   oss << "0x" << std::hex << std::uppercase;
@@ -661,12 +678,7 @@ inline bool parse_u64(const char *text, uint64_t &out) {
   return true;
 }
 
-inline std::string trim_copy(std::string value) {
-  auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
-  value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](char c) { return !is_space(static_cast<unsigned char>(c)); }));
-  value.erase(std::find_if(value.rbegin(), value.rend(), [&](char c) { return !is_space(static_cast<unsigned char>(c)); }).base(), value.end());
-  return value;
-}
+/* trim_copy now provided by repo_utils.hpp — included above. */
 
 inline bool is_hex_digit_string(const std::string &value) {
   return std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
@@ -777,11 +789,15 @@ template <typename T> inline void append_value(std::vector<uint8_t> &out, T valu
   out.insert(out.end(), p, p + sizeof(T));
 }
 
-inline bool build_scan_value(int type, const char *text, std::array<uint8_t, 16> &value, uint32_t &value_len) {
+inline bool build_scan_value(int type, const char *text, std::array<uint8_t, 16> &value, uint32_t &value_len,
+                              bool force_hex = false) {
   std::vector<uint8_t> bytes;
   value.fill(0);
   int base = 10;
-  if (text != nullptr && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) base = 16;
+  if (text != nullptr) {
+    if (force_hex) base = 16;
+    else if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) base = 16;
+  }
   try {
     switch (type) {
     case MEMDBG_VALUE_BYTES: if (!parse_hex_bytes(text, bytes) || bytes.size() > value.size()) return false; break;
@@ -800,12 +816,13 @@ inline bool build_scan_value(int type, const char *text, std::array<uint8_t, 16>
   return true;
 }
 
-inline bool build_value_bytes(int type, const char *text, std::vector<uint8_t> &out) {
+inline bool build_value_bytes(int type, const char *text, std::vector<uint8_t> &out,
+                             bool force_hex = false) {
   out.clear();
   if (type == MEMDBG_VALUE_BYTES) return parse_hex_bytes(text, out);
   std::array<uint8_t,16> value{};
   uint32_t value_len=0;
-  if (!build_scan_value(type, text, value, value_len)) return false;
+  if (!build_scan_value(type, text, value, value_len, force_hex)) return false;
   out.assign(value.begin(), value.begin()+value_len);
   return true;
 }
@@ -822,10 +839,7 @@ inline const char *value_type_name(int type) {
 
 inline std::string prot_text(uint32_t prot) { std::string t; t+=(prot&1U)?'r':'-'; t+=(prot&2U)?'w':'-'; t+=(prot&4U)?'x':'-'; return t; }
 
-inline std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
+/* lower_copy now provided by repo_utils.hpp — included above. */
 
 inline bool map_is_system_like(const MapEntry &map) {
   const std::string name = lower_copy(map.name);
@@ -949,6 +963,7 @@ void draw_trainer(AppState &state, struct ImVec2 avail);
 void draw_plugins(AppState &state, struct ImVec2 avail);
 void draw_plugin_gui(AppState &state, struct ImVec2 avail);
 void poll_plugin_tasks(AppState &state);
+void poll_cheat_tasks(AppState &state);
 void draw_logs(AppState &state, struct ImVec2 avail);
 void draw_settings(AppState &state, struct ImVec2 avail);
 void draw_credits(AppState &state, struct ImVec2 avail);
