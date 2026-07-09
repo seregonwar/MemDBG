@@ -42,6 +42,7 @@ bool trainer_format_supports_save(TrainerFormat fmt);
 
 struct CheatEntry;
 struct AppState;
+struct MapEntry;
 
 /* Load trainer entries from a file into the state's cheat list.
    Returns number of entries imported, or -1 on file error.
@@ -51,6 +52,16 @@ int load_trainer_file(AppState &state, const std::string &path);
 /* Save trainer entries to a file.
    Uses the file extension to choose format. */
 bool save_trainer_file(AppState &state, const std::string &path);
+
+/* Parse GoldHEN JSON content into a list of CheatEntry structs.
+   Handles the standard `mods[{name, memory[{offset, on/off/type}]}]` layout,
+   OFF-only note entries, flexible numeric/string/array offset/value fields,
+   and section-based addressing (maps required to resolve sections).
+   Does NOT call capture_off_value — the caller should do that if connected. */
+std::vector<CheatEntry> parse_goldhen_mods(const std::string &json_content,
+                                            int32_t selected_pid,
+                                            std::string *error = nullptr,
+                                            const std::vector<MapEntry> *maps = nullptr);
 
 /* Capture the current memory value at a cheat's address as the OFF value.
    Called automatically after loading trainer entries and manually via the UI. */
