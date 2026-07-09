@@ -68,6 +68,34 @@ void draw_hex_view(const std::vector<uint8_t> &data, uint64_t base,
 void draw_capabilities(const ::memdbg::frontend::HelloInfo &hello);
 void draw_scan_progress(const std::string &label, const char *icon, double elapsed, float bar_width);
 
+/* ---- Reusable file/folder picker widgets ---- */
+
+struct FilePathOptions {
+  const char *label = nullptr;      /* label text (null = no label) */
+  const char *id = "##FilePath";   /* ImGui ID */
+  const char *dialog_title = "Select File";
+  const char *filter_desc = "All Files";
+  const char *filter_ext = "*.*";
+  const char *default_name = nullptr; /* for save dialogs */
+  const char *placeholder = nullptr;  /* input hint text */
+  ImVec2 button_size = {};          /* {} = default 42x0 (auto height) */
+  bool save_mode = false;           /* use Save dialog instead of Open */
+  bool folder_mode = false;         /* pick folder instead of file */
+};
+
+/// Reusable labeled file/folder path input with browse button.
+/// Returns true if a file/folder was picked this frame.
+bool file_path_input(char *buffer, size_t buffer_size,
+                     const FilePathOptions &opts = {});
+
+/// Standalone button that opens a file-open dialog.
+/// Returns the selected path (empty if cancelled).
+std::string file_open_button(const char *label, const FilePathOptions &opts = {});
+
+/// Standalone button that opens a file-save dialog.
+/// Returns the selected path (empty if cancelled).
+std::string file_save_button(const char *label, const FilePathOptions &opts = {});
+
 } // namespace memdbg::frontend::ui
 
 #endif /* MEMDBG_FRONTEND_UI_WIDGETS_HPP */

@@ -26,6 +26,8 @@ std::string pickSaveFile(const std::string &title = "Save File",
                          const std::string &filter_desc = "All Files",
                          const std::string &filter_ext = "*.*");
 
+std::string pickFolder(const std::string &title = "Select Folder");
+
 } // namespace memdbg::frontend::ui
 
 #endif /* MEMDBG_FRONTEND_UI_FILE_PICKER_HPP */

@@ -166,4 +166,43 @@ std::string pickSaveFile(const std::string &title,
 #endif
 }
 
+std::string pickFolder(const std::string &title) {
+#if defined(_WIN32)
+  BROWSEINFOA bi;
+  char path[MAX_PATH] = {0};
+  ZeroMemory(&bi, sizeof(bi));
+  bi.hwndOwner = nullptr;
+  bi.lpszTitle = title.c_str();
+  bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX;
+  LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
+  if (pidl != nullptr) {
+    SHGetPathFromIDListA(pidl, path);
+    CoTaskMemFree(pidl);
+    return path;
+  }
+  return "";
+
+#elif defined(__APPLE__)
+  std::string cmd =
+      "osascript -e 'POSIX path of (choose folder with prompt \""
+      + title + "\")' 2>/dev/null";
+  return execCommand(cmd.c_str());
+
+#elif defined(__ORBIS__) || defined(__PROSPERO__)
+  (void)title;
+  return "";
+
+#else
+  std::string cmd_zen =
+      "zenity --file-selection --directory --title=\"" + title + "\" 2>/dev/null";
+  std::string result = execCommand(cmd_zen.c_str());
+  if (!result.empty()) return result;
+
+  std::string cmd_kde =
+      "kdialog --getexistingdirectory --title \"" + title + "\" 2>/dev/null";
+  result = execCommand(cmd_kde.c_str());
+  return result;
+#endif
+}
+
 } // namespace memdbg::frontend::ui
