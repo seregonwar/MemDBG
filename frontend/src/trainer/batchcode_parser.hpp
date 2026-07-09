@@ -16,6 +16,7 @@ namespace memdbg::frontend {
 struct BatchcodeEntry {
   uint64_t offset = 0;
   std::vector<uint8_t> bytes;
+  std::vector<bool> wildcard_mask; /* true = byte is a wildcard (??), do not write */
   uint64_t size = 0; /* optional; 0 means "use bytes length" */
 };
 
