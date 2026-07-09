@@ -72,12 +72,22 @@ FetchContent_Declare(
 )
 
 FetchContent_Declare(
+  simdjson
+  GIT_REPOSITORY https://github.com/simdjson/simdjson.git
+  GIT_TAG v3.11.4
+)
+
+FetchContent_Declare(
   lua
   GIT_REPOSITORY https://github.com/lua/lua.git
   GIT_TAG v5.4.8
 )
 
-FetchContent_MakeAvailable(glfw imgui stb nlohmann_json lua)
+FetchContent_MakeAvailable(glfw imgui stb nlohmann_json simdjson lua)
+
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
+  PROPERTIES COMPILE_DEFINITIONS "JSON_IMPLEMENTATION")
 
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
@@ -194,6 +204,9 @@ add_executable(memdbg_frontend
   src/plugins/repository/plugin_manager.cpp
   src/plugins/repository/gui_bridge.cpp
 
+  # cheats (repository sources and catalog)
+  src/cheats/cheat_repository.cpp
+
   # ui (widgets, theme, fonts, icons, file picker)
   src/ui/icon_font.cpp
   src/ui/ui_widgets.cpp
@@ -244,6 +257,9 @@ add_executable(memdbg_frontend
   # scanner (heuristics and structure comparison)
   src/scanner/heuristics/auto_search.cpp
   src/scanner/structure_compare.cpp
+
+  # sJson (C99 JSON parser, compiled once)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
 )
 
 target_include_directories(memdbg_frontend PRIVATE
@@ -277,9 +293,11 @@ target_include_directories(memdbg_frontend PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/cheats
   ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
   ${stb_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson
 )
 
 target_compile_definitions(memdbg_frontend PRIVATE MEMDBG_ENABLE_EMBEDDED_LUA)
@@ -319,6 +337,11 @@ if(APPLE)
             "$<TARGET_FILE_DIR:memdbg_frontend>/theme-repository"
     COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_FILE_DIR:memdbg_frontend>/theme-repository/.DS_Store"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/../cheat-repository"
+            "$<TARGET_FILE_DIR:memdbg_frontend>/cheat-repository"
+    COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:memdbg_frontend>/cheat-repository/.DS_Store"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:memdbg_frontend>/Resources/assets"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MEMDBG_APP_ICON_PNG}"
@@ -405,6 +428,7 @@ target_include_directories(memdbg_auto_search_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner/heuristics
   ${imgui_SOURCE_DIR}
+  ${nlohmann_json_SOURCE_DIR}/include
 )
 
 # ---- memdbg_structure_compare_test ----
@@ -432,6 +456,7 @@ target_include_directories(memdbg_app_state_parsing_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${imgui_SOURCE_DIR}
+  ${nlohmann_json_SOURCE_DIR}/include
 )
 
 # ---- memdbg_trainer_formats_test ----
@@ -445,6 +470,9 @@ add_executable(memdbg_trainer_formats_test
   src/core/udp_log_listener.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+
+  # sJson (C99 JSON parser, compiled once)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
 )
 
 target_link_libraries(memdbg_trainer_formats_test PRIVATE imgui Threads::Threads)
@@ -457,9 +485,13 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson
   ${imgui_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
+  ${simdjson_SOURCE_DIR}/singleheader
 )
+
+target_link_libraries(memdbg_trainer_formats_test PRIVATE simdjson)
 
 # ---- memdbg_locale_manager_test ----
 

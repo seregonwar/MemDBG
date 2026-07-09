@@ -890,6 +890,11 @@ static JsonError json__obj_sort(JsonValue* obj, JsonArena* arena)
 
     for (i = 0U; i < o->len; i++) {
         o->sorted_idx[i] = i;
+        /* Ensure hashes are ready before introsort (deferred hashing). */
+        if (o->pairs[i].key.hash == 0U) {
+            o->pairs[i].key.hash = json_fnv1a(o->pairs[i].key.data,
+                                               o->pairs[i].key.len);
+        }
     }
 
     ctx.pairs = o->pairs;
@@ -1028,27 +1033,73 @@ static uint32_t json__encode_utf8(uint32_t cp, uint8_t* buf)
  */
 static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
 {
-    /* Two-pass: first measure, then allocate+copy.
-     * This avoids reallocations and is cache-friendly. */
+    /* Fast-path: scan for closing quote or escape.  If no escape is found
+     * before '"', we can do a single-pass memcpy without measuring first.
+     * This is the common case for 99%+ of strings in typical JSON (hex
+     * values, identifiers, etc.).  Only strings with \n, \t, \uXXXX etc.
+     * fall back to the original two-pass decode. */
     size_t start_pos = l->pos; /* After opening quote */
     size_t out_len   = 0U;
     bool   has_escape= false;
-    uint32_t raw_hash = 0x811C9DC5UL;
     size_t scan_pos;
     char*  out_buf;
     size_t write_pos;
 
     JSON_ASSERT(l != NULL && arena != NULL && str != NULL);
 
-    /* ── Pass 1: Measure output length ─── */
+    /* ── Combined scan: find '"' or '\\' or control char ─── */
     scan_pos = l->pos;
+    while (scan_pos < l->len) {
+        uint8_t c = (uint8_t)l->src[scan_pos];
+
+        if (c == '"') { break; }
+        if (c == '\\') { has_escape = true; break; }
+        if (c < 0x20U) {
+            l->err = JSON_ERR_INVALID_STRING;
+            return JSON_ERR_INVALID_STRING;
+        }
+        scan_pos++;
+    }
+
+    if (scan_pos >= l->len) {
+        l->err = JSON_ERR_UNEXPECTED_EOF;
+        return JSON_ERR_UNEXPECTED_EOF;
+    }
+
+    if (!has_escape) {
+        /* Escape-free fast path: length is known immediately.
+         * Allocate once and memcpy directly from source. */
+        out_len = scan_pos - start_pos;
+        if (out_len > JSON_MAX_STRING_LEN) {
+            l->err = JSON_ERR_OVERFLOW;
+            return JSON_ERR_OVERFLOW;
+        }
+        out_buf = (out_len > 0U)
+                  ? (char*)json__arena_alloc_uninit(arena, out_len)
+                  : NULL;
+        if (out_len > 0U && JSON_UNLIKELY(out_buf == NULL)) {
+            l->err = JSON_ERR_OOM;
+            return JSON_ERR_OOM;
+        }
+        if (out_len > 0U) {
+            JSON_MEMCPY(out_buf, l->src + start_pos, out_len);
+        }
+        l->pos = scan_pos + 1U; /* Consume closing '"' */
+        str->data = out_buf;
+        str->len  = (uint32_t)out_len;
+        str->hash = 0U; /* Deferred — only computed when used as object key */
+        return JSON_OK;
+    }
+
+    /* ── Escaped string: fall back to two-pass ─── */
+    /* Pass 1 (resumed from where the fast scan stopped): measure output len */
+    out_len = scan_pos - start_pos;
     while (scan_pos < l->len) {
         uint8_t c = (uint8_t)l->src[scan_pos];
 
         if (c == '"') { break; }
 
         if (c == '\\') {
-            has_escape = true;
             scan_pos++;
             if (scan_pos >= l->len) {
                 l->err = JSON_ERR_UNEXPECTED_EOF;
@@ -1061,7 +1112,6 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
                     scan_pos++;
                     break;
                 case 'u': {
-                    /* \uXXXX or \uXXXX\uXXXX (surrogate pair) */
                     uint16_t hi_cp;
                     scan_pos++;
                     if (!json__parse_hex4(l->src + scan_pos,
@@ -1071,7 +1121,6 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
                     }
                     scan_pos += 4U;
                     if (hi_cp >= 0xD800U && hi_cp <= 0xDBFFU) {
-                        /* High surrogate — expect low surrogate */
                         uint16_t lo_cp;
                         if (scan_pos + 1U >= l->len ||
                             l->src[scan_pos] != '\\' ||
@@ -1090,18 +1139,11 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
                             l->err = JSON_ERR_INVALID_STRING;
                             return JSON_ERR_INVALID_STRING;
                         }
-                        out_len += 4U; /* UTF-8 for supplementary plane */
+                        out_len += 4U;
                     } else if (hi_cp >= 0xDC00U && hi_cp <= 0xDFFFU) {
-                        /* Lone low surrogate — invalid */
                         l->err = JSON_ERR_INVALID_STRING;
                         return JSON_ERR_INVALID_STRING;
                     } else {
-                        /* DESIGN: exact byte count, not a constant 3.
-                         *   U+0000–U+007F  → 1 byte
-                         *   U+0080–U+07FF  → 2 bytes
-                         *   U+0800–U+FFFF  → 3 bytes
-                         * Using the maximum (3) over-allocates and corrupts
-                         * str->len, breaking key lookup and equality. */
                         out_len += (hi_cp < 0x80U) ? 1U
                                  : (hi_cp < 0x800U) ? 2U : 3U;
                     }
@@ -1112,12 +1154,9 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
                     return JSON_ERR_INVALID_STRING;
             }
         } else if (c < 0x20U) {
-            /* Control chars must be escaped */
             l->err = JSON_ERR_INVALID_STRING;
             return JSON_ERR_INVALID_STRING;
         } else {
-            raw_hash ^= (uint32_t)c;
-            raw_hash *= 0x01000193UL;
             out_len++;
             scan_pos++;
         }
@@ -1133,7 +1172,7 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
         return JSON_ERR_OVERFLOW;
     }
 
-    /* ── Pass 2: Allocate and decode ─── */
+    /* Pass 2: Allocate and decode */
     out_buf = (out_len > 0U)
               ? (char*)json__arena_alloc_uninit(arena, out_len)
               : NULL;
@@ -1146,57 +1185,48 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
     write_pos = 0U;
     l->pos    = start_pos;
 
-    if (!has_escape) {
-        /* Fast path: no escapes — memcpy and validate UTF-8 */
-        if (out_len > 0U) {
-            JSON_MEMCPY(out_buf, l->src + l->pos, out_len);
-        }
-        l->pos += out_len;
-    } else {
-        /* Slow path: decode escapes */
-        while (l->pos < l->len && l->src[l->pos] != '"') {
-            uint8_t c = (uint8_t)l->src[l->pos];
-            if (c == '\\') {
-                l->pos++;
-                switch (l->src[l->pos]) {
-                    case '"':  out_buf[write_pos++] = '"';  l->pos++; break;
-                    case '\\': out_buf[write_pos++] = '\\'; l->pos++; break;
-                    case '/':  out_buf[write_pos++] = '/';  l->pos++; break;
-                    case 'b':  out_buf[write_pos++] = '\b'; l->pos++; break;
-                    case 'f':  out_buf[write_pos++] = '\f'; l->pos++; break;
-                    case 'n':  out_buf[write_pos++] = '\n'; l->pos++; break;
-                    case 'r':  out_buf[write_pos++] = '\r'; l->pos++; break;
-                    case 't':  out_buf[write_pos++] = '\t'; l->pos++; break;
-                    case 'u': {
-                        uint16_t hi_cp, lo_cp;
-                        uint32_t codepoint;
-                        uint32_t bytes;
-                        l->pos++;
+    while (l->pos < l->len && l->src[l->pos] != '"') {
+        uint8_t c = (uint8_t)l->src[l->pos];
+        if (c == '\\') {
+            l->pos++;
+            switch (l->src[l->pos]) {
+                case '"':  out_buf[write_pos++] = '"';  l->pos++; break;
+                case '\\': out_buf[write_pos++] = '\\'; l->pos++; break;
+                case '/':  out_buf[write_pos++] = '/';  l->pos++; break;
+                case 'b':  out_buf[write_pos++] = '\b'; l->pos++; break;
+                case 'f':  out_buf[write_pos++] = '\f'; l->pos++; break;
+                case 'n':  out_buf[write_pos++] = '\n'; l->pos++; break;
+                case 'r':  out_buf[write_pos++] = '\r'; l->pos++; break;
+                case 't':  out_buf[write_pos++] = '\t'; l->pos++; break;
+                case 'u': {
+                    uint16_t hi_cp, lo_cp;
+                    uint32_t codepoint;
+                    uint32_t bytes;
+                    l->pos++;
+                    json__parse_hex4(l->src + l->pos,
+                                     l->len - l->pos, &hi_cp);
+                    l->pos += 4U;
+                    if (hi_cp >= 0xD800U && hi_cp <= 0xDBFFU) {
+                        l->pos += 2U;
                         json__parse_hex4(l->src + l->pos,
-                                         l->len - l->pos, &hi_cp);
+                                         l->len - l->pos, &lo_cp);
                         l->pos += 4U;
-                        if (hi_cp >= 0xD800U && hi_cp <= 0xDBFFU) {
-                            l->pos += 2U; /* skip \u */
-                            json__parse_hex4(l->src + l->pos,
-                                             l->len - l->pos, &lo_cp);
-                            l->pos += 4U;
-                            codepoint = 0x10000U +
-                                ((uint32_t)(hi_cp - 0xD800U) << 10U) +
-                                 (uint32_t)(lo_cp - 0xDC00U);
-                        } else {
-                            codepoint = hi_cp;
-                        }
-                        bytes = json__encode_utf8(codepoint,
-                                   (uint8_t*)out_buf + write_pos);
-                        write_pos += bytes;
-                        break;
+                        codepoint = 0x10000U +
+                            ((uint32_t)(hi_cp - 0xD800U) << 10U) +
+                             (uint32_t)(lo_cp - 0xDC00U);
+                    } else {
+                        codepoint = hi_cp;
                     }
-                    default: l->pos++; break; /* unreachable after pass 1 */
+                    bytes = json__encode_utf8(codepoint,
+                               (uint8_t*)out_buf + write_pos);
+                    write_pos += bytes;
+                    break;
                 }
-            } else {
-                out_buf[write_pos++] = (char)c;
-                l->pos++;
+                default: l->pos++; break;
             }
+        } else {
+            out_buf[write_pos++] = (char)c;
+            l->pos++;
         }
     }
 
@@ -1208,7 +1238,7 @@ static JsonError json__parse_string(JsonLex* l, JsonArena* arena, JsonStr* str)
 
     str->data = out_buf;
     str->len  = (uint32_t)out_len;
-    str->hash = has_escape ? json_fnv1a(out_buf, out_len) : raw_hash;
+    str->hash = 0U; /* Deferred — only computed when used as object key */
     return JSON_OK;
 }
 
@@ -1987,7 +2017,9 @@ JsonError json_obj_get_n(const JsonValue* v, const char* key, size_t klen,
         uint32_t i;
         hash = json_fnv1a(key, klen);
         for (i = 0U; i < o->len; i++) {
-            const JsonStr* k = &o->pairs[i].key;
+            /* Cast away const: lazy hash compute on first key access. */
+            JsonStr* k = (JsonStr*)&o->pairs[i].key;
+            if (k->hash == 0U) { k->hash = json_fnv1a(k->data, k->len); }
             if (k->hash == hash && k->len == (uint32_t)klen &&
                 JSON_MEMCMP(k->data, key, klen) == 0) {
                 *out = o->pairs[i].val;
@@ -2490,7 +2522,7 @@ JsonValue* json_make_string(JsonArena* arena, const char* s, uint32_t len)
         v->type    = JSON_STRING;
         v->v.s.data= NULL;
         v->v.s.len = 0U;
-        v->v.s.hash= json_fnv1a(NULL, 0U);
+        v->v.s.hash= 0U; /* Deferred */
         return v;
     }
 
@@ -2501,7 +2533,7 @@ JsonValue* json_make_string(JsonArena* arena, const char* s, uint32_t len)
     v->type    = JSON_STRING;
     v->v.s.data= copy;
     v->v.s.len = len;
-    v->v.s.hash= json_fnv1a(copy, len);
+    v->v.s.hash= 0U; /* Deferred — computed on-demand when used as object key */
     return v;
 }
 
@@ -2574,6 +2606,8 @@ JsonError json_obj_set(JsonValue* obj, JsonArena* arena,
         uint32_t  i;
         for (i = 0U; i < o->len; i++) {
             JsonStr* k = &o->pairs[i].key;
+            /* Lazy hash: compute on first access if deferred. */
+            if (k->hash == 0U) { k->hash = json_fnv1a(k->data, k->len); }
             if (k->hash == hash && k->len == klen &&
                 JSON_MEMCMP(k->data, key, klen) == 0) {
                 o->pairs[i].val = val;
