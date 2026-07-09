@@ -951,6 +951,29 @@ void draw_plugins(AppState &state, ImVec2 avail) {
   draw_package_details(state, selected);
   draw_output(state);
   ImGui::EndChild();
+
+  /* Pinned path configuration — always visible, doesn't scroll away */
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  ImGui::TextColored(ui::colors().muted, "%s", "Repository paths");
+  ImGui::Spacing();
+  {
+    ui::FilePathOptions opts;
+    opts.label = "Bundle root";
+    opts.id = "##PluginBundleRoot";
+    opts.dialog_title = "Select plugin bundle root folder";
+    opts.folder_mode = true;
+    if (ui::file_path_input(state.plugin_bundle_root,
+                            sizeof(state.plugin_bundle_root), opts)) {
+      state.plugin_manager.set_bundle_root(state.plugin_bundle_root);
+      start_refresh(state);
+    }
+  }
+  {
+    std::string data_dir = state.plugin_manager.plugin_data_dir().string();
+    ImGui::TextColored(ui::colors().dim, "Data dir: %s", data_dir.c_str());
+  }
   ui::end_panel();
 
   ImGui::EndChild();

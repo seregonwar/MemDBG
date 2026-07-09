@@ -34,14 +34,16 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Paths");
   ImGui::Spacing();
-  ImGui::InputText(locale::tr("settings.dump_path"), state.dump_path, sizeof(state.dump_path));
-  ImGui::SameLine();
-  if (ImGui::SmallButton((std::string(icons::kLoad) + "##dumppath").c_str())) {
-    std::string picked = memdbg::frontend::ui::pickFile(locale::tr("file_picker.select_dump_dir"));
-    if (!picked.empty())
-      std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", picked.c_str());
+  ImGui::Spacing();
+  {
+    ui::FilePathOptions dump_opts;
+    dump_opts.label = locale::tr("settings.dump_path");
+    dump_opts.id = "##DumpPathSettings";
+    dump_opts.dialog_title = locale::tr("file_picker.select_dump_dir");
+    dump_opts.folder_mode = true;
+    dump_opts.placeholder = "dumps";
+    ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts);
   }
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("settings.browse_dump_dir"));
   ui::end_panel();
 
   /* ---- Column 2: Preferences ---- */
