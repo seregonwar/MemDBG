@@ -301,17 +301,16 @@ void draw_cheat_source_modal(AppState &state) {
   if (!open) state.cheat_add_source_modal_open = false;
 }
 
-void draw_cheat_sources(AppState &state, ImVec2 avail) {
+void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
   const float scl = ui::dpi_scale();
-  const float gap = 12.0f * scl;
   const float min_left_w = 480.0f * scl;
   const float min_right_w = 380.0f * scl;
-  const bool stacked = avail.x < (min_left_w + min_right_w + gap);
-  const float left_w = stacked ? avail.x
-      : std::clamp((avail.x - gap) * 0.58f, min_left_w, avail.x - min_right_w - gap);
-  const float right_w = stacked ? avail.x : std::max(min_right_w, avail.x - left_w - gap);
-  const float left_h = stacked ? std::max(280.0f * scl, avail.y * 0.52f) : avail.y;
-  const float right_h = stacked ? std::max(200.0f * scl, avail.y - left_h - gap) : avail.y;
+  const bool stacked = content_avail.x < (min_left_w + min_right_w);
+  const float left_w = stacked ? content_avail.x
+      : std::clamp(content_avail.x * 0.58f, min_left_w, content_avail.x - min_right_w);
+  const float right_w = stacked ? content_avail.x : std::max(min_right_w, content_avail.x - left_w);
+  const float left_h = stacked ? std::max(280.0f * scl, content_avail.y * 0.52f) : content_avail.y;
+  const float right_h = stacked ? std::max(200.0f * scl, content_avail.y - left_h) : content_avail.y;
 
   std::vector<cheats::CheatSource> sources = state.cheat_repository.sources();
   std::vector<cheats::CheatCatalogEntry> catalog = state.cheat_repository.catalog();
@@ -450,7 +449,7 @@ void draw_cheat_sources(AppState &state, ImVec2 avail) {
   ui::end_panel();
 
   /* ---- Right panel: details ---- */
-  if (!stacked) ImGui::SameLine();
+  if (!stacked) ImGui::SameLine(0, 0);
   ui::begin_panel("CheatSourcesDetail", "Details", ImVec2(right_w, right_h));
 
   const cheats::CheatCatalogEntry *selected_cheat = nullptr;
@@ -721,8 +720,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
 
   if (trainer_tab == 1) {
     /* List-only tab */
-    const float list_h = content_avail.y;
-    ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"), ImVec2(0, list_h));
+    ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"), ImVec2(0, content_avail.y));
     apply_locked_cheats(state);
 
     static bool skip_apply_enabled2 = false;
@@ -859,13 +857,13 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     state.dropped_files.clear();
   }
 
-  const bool stacked = avail.x < 900.0f * scl;
+  const bool stacked = content_avail.x < 900.0f * scl;
   const float left_w = stacked
-      ? avail.x
-      : std::clamp(avail.x * 0.40f, 360.0f * scl,
-                   std::max(360.0f * scl, avail.x * 0.54f));
-  const float left_h = stacked ? std::max(330.0f * scl, avail.y * 0.48f)
-                               : avail.y;
+      ? content_avail.x
+      : std::clamp(content_avail.x * 0.40f, 360.0f * scl,
+                   std::max(360.0f * scl, content_avail.x * 0.54f));
+  const float left_h = stacked ? std::max(330.0f * scl, content_avail.y * 0.48f)
+                               : content_avail.y;
   const char *type_names[] = {"Bytes","u8","u16","u32","u64","float","double","pointer"};
 
   ui::begin_panel("TrainerBuilder", locale::tr("trainer.cheat_builder"), ImVec2(left_w, left_h));
@@ -983,10 +981,10 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   if (stacked) {
     ImGui::Spacing();
   } else {
-    ImGui::SameLine();
+    ImGui::SameLine(0, 0);
   }
-  const float list_h = stacked ? std::max(220.0f * scl, avail.y - left_h)
-                               : avail.y;
+  const float list_h = stacked ? std::max(220.0f * scl, content_avail.y - left_h)
+                               : content_avail.y;
   ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"),
                   ImVec2(0, list_h));
 

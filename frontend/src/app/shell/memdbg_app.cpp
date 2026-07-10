@@ -293,8 +293,15 @@ void draw_app(AppState &state) {
   draw_top_bar(state, ImVec2(win_size.x, top_h));
   ImGui::SetCursorPos(ImVec2(0, top_h));
   draw_sidebar(state, ImVec2(sidebar_w, content_h));
+
+  /* Wrap the content area in a child window so a misbehaved screen cannot
+   * draw over the sidebar/topbar even if it resets the cursor position. */
   ImGui::SetCursorPos(ImVec2(sidebar_w, top_h));
+  ImGui::BeginChild("AppContent", ImVec2(content_w, content_h), false,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   draw_screen(state, ImVec2(content_w, content_h));
+  ImGui::EndChild();
+
   ImGui::SetCursorPos(ImVec2(0, win_size.y-status_h));
   draw_status_bar(state, ImVec2(win_size.x, status_h));
 

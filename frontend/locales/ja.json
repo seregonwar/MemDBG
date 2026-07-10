@@ -1098,5 +1098,9 @@
   "trainer.col_credits": "クレジット",
   "trainer.col_installed": "インストール済",
   "trainer.mod_count": "%d 個のMOD",
-  "trainer.confirm_load_trainer": "このチートをTrainerに読み込みますか？\n\n現在のチートリストは、選択したファイルのMODに置き換わります。"
+  "trainer.confirm_load_trainer": "このチートをTrainerに読み込みますか？\n\n現在のチートリストは、選択したファイルのMODに置き換わります。",
+  "tracer.use_global_pid": "PID:",
+  "tracer.select_pid_global": "トレーサーをアタッチする前に有効な PID を選択してください",
+  "processes.json_dump_save": "Save to File",
+  "processes.json_dump_save_title": "Save JSON Dump"
 }

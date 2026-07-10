@@ -1098,5 +1098,9 @@
   "trainer.col_credits": "크레딧",
   "trainer.col_installed": "설치됨",
   "trainer.mod_count": "%d개의 모드",
-  "trainer.confirm_load_trainer": "이 치트를 Trainer에 불러올까요?\n\n현재 치트 목록이 선택한 파일의 모드로 대체됩니다."
+  "trainer.confirm_load_trainer": "이 치트를 Trainer에 불러올까요?\n\n현재 치트 목록이 선택한 파일의 모드로 대체됩니다.",
+  "tracer.use_global_pid": "PID:",
+  "tracer.select_pid_global": "트레이서를 연결하기 전에 유효한 PID를 선택하세요",
+  "processes.json_dump_save": "Save to File",
+  "processes.json_dump_save_title": "Save JSON Dump"
 }

@@ -313,7 +313,7 @@ struct AppState {
   bool json_dump_include_preview = true;
   std::string json_dump_output;
   bool json_dump_pending = false;
-  std::future<bool> json_dump_future;
+  std::future<std::tuple<bool, std::string, std::string>> json_dump_future;
   std::string json_dump_error;
   double json_dump_start_time = 0.0;
 
@@ -926,7 +926,7 @@ inline bool client_async_busy(const AppState &state) {
          state.debugger_attach_pending || state.debugger_threads_pending ||
          state.tracer_pending || state.tracer_status_pending ||
          state.tracer_events_pending ||
-         state.elf_load_pending || state.json_dump_pending ||
+          state.elf_load_pending || state.json_dump_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||
          state.plugin_gui_starting;

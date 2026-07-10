@@ -1097,5 +1097,9 @@
   "credits.donations_link": "Donations link is available in the desktop credits",
   "credits.x_profile": "X profile: SeregonWar",
   "credits.bluesky_selected": "Bluesky profile selected",
-  "app.ping_ok": "Ping OK"
+  "app.ping_ok": "Ping OK",
+  "tracer.use_global_pid": "Use Global",
+  "tracer.select_pid_global": "Select a process from the topbar first",
+  "processes.json_dump_save": "Save to File",
+  "processes.json_dump_save_title": "Save JSON Dump"
 }
