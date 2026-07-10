@@ -283,20 +283,48 @@ void draw_app(AppState &state) {
   ui::draw_background(ImGui::GetWindowDrawList(), win_pos, win_size);
 
   const float scl = ui::dpi_scale();
-  const float sidebar_w = std::clamp(win_size.x * 0.15f, 160.0f * scl, 224.0f * scl);
+  const float sidebar_min = 160.0f * scl;
+  const float sidebar_max = std::min(400.0f * scl, win_size.x * 0.35f);
+  float sidebar_w = state.sidebar_width > 0.0f
+      ? std::clamp(state.sidebar_width, sidebar_min, sidebar_max)
+      : std::clamp(win_size.x * 0.15f, sidebar_min, 224.0f * scl);
   const float top_h = 46.0f * scl;
   const float status_h = 26.0f * scl;
   const float content_h = win_size.y - top_h - status_h;
-  const float content_w = win_size.x - sidebar_w;
 
   ImGui::SetCursorPos(ImVec2(0,0));
   draw_top_bar(state, ImVec2(win_size.x, top_h));
   ImGui::SetCursorPos(ImVec2(0, top_h));
   draw_sidebar(state, ImVec2(sidebar_w, content_h));
 
+  /* ── Resize handle ── */
+  const float handle_w = 5.0f * scl;
+  ImGui::SetCursorPos(ImVec2(sidebar_w, top_h));
+  ImGui::InvisibleButton("##SidebarResize", ImVec2(handle_w, content_h));
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  if (ImGui::IsItemActive()) {
+    sidebar_w = std::clamp(sidebar_w + ImGui::GetIO().MouseDelta.x, sidebar_min, sidebar_max);
+    state.sidebar_width = sidebar_w;
+  }
+  /* Draw a subtle grip line in the handle area */
+  {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const float cx = sidebar_w + handle_w * 0.5f;
+    const float mid_y = top_h + content_h * 0.5f;
+    const float grip_h = 24.0f * scl;
+    ImVec4 grip_c = ui::colors().border;
+    grip_c.w *= ImGui::IsItemHovered() ? 0.9f : 0.4f;
+    const ImU32 grip_col = ui::color_u32(grip_c);
+    dl->AddLine(ImVec2(cx - 1.0f * scl, mid_y - grip_h), ImVec2(cx - 1.0f * scl, mid_y + grip_h), grip_col, 1.5f);
+    dl->AddLine(ImVec2(cx + 1.0f * scl, mid_y - grip_h), ImVec2(cx + 1.0f * scl, mid_y + grip_h), grip_col, 1.5f);
+  }
+
+  const float content_w = win_size.x - sidebar_w - handle_w;
+
   /* Wrap the content area in a child window so a misbehaved screen cannot
    * draw over the sidebar/topbar even if it resets the cursor position. */
-  ImGui::SetCursorPos(ImVec2(sidebar_w, top_h));
+  ImGui::SetCursorPos(ImVec2(sidebar_w + handle_w, top_h));
   ImGui::BeginChild("AppContent", ImVec2(content_w, content_h), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   draw_screen(state, ImVec2(content_w, content_h));
@@ -579,6 +607,8 @@ void init_app_shared(AppState &state, float dpi_scale) {
 }
 
 void shutdown_app_shared(AppState &state) {
+  save_frontend_settings(state);
+
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   state.taskmgr_resource_pending = false;
   if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();

@@ -77,3 +77,4 @@ docs/x_project_article.md
 /mobile/android/build
 /mobile/android/captures
 *.tmp
+/build-sandbox-asan

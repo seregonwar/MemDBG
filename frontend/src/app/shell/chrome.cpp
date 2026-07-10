@@ -8,6 +8,7 @@
 #include "platform.hpp"
 #include <cstring>
 #include <cstdio>
+#include <cctype>
 namespace memdbg::frontend {
 
 static float s_notification_bottom_reserved = 0.0f;
@@ -45,9 +46,23 @@ void text_ellipsis(const char *text, float max_width, ImVec4 color) {
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text);
 }
 
-static void sidebar_section(const char *label) {
-  ImGui::SetCursorPosX(10.0f * ui::dpi_scale());
-  ImGui::TextColored(alpha(ui::colors().primary2, 0.70f), "%s", label);
+static bool sidebar_section_header(AppState &state, int section_index, const char *label) {
+  const float scl = ui::dpi_scale();
+  ImGui::SetCursorPosX(10.0f * scl);
+
+  bool &expanded = state.sidebar_sections_expanded[section_index];
+
+  std::string header = (expanded ? icons::kCaretDown : icons::kCaretRight) + std::string("  ") + std::string(label);
+
+  const ImVec4 col = alpha(ui::colors().primary2, 0.70f);
+  ImGui::PushStyleColor(ImGuiCol_Text, col);
+  const bool clicked = ImGui::Selectable(header.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(ImGui::GetContentRegionAvail().x, 0));
+  ImGui::PopStyleColor();
+
+  if (clicked) expanded = !expanded;
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", expanded ? "Click to collapse" : "Click to expand");
+
+  return expanded;
 }
 
 static void stop_gui_plugin_if_idle(AppState &state) {
@@ -168,6 +183,25 @@ static void draw_gui_plugin_launcher(AppState &state) {
   }
 
   ImGui::Dummy(ImVec2(0, 2));
+}
+
+static bool label_matches(const char *label, const char *query) {
+  if (query == nullptr || query[0] == '\0') return true;
+  const char *l = label, *q = query;
+  while (*l) {
+    const char *ls = l, *qs = q;
+    while (*ls && *qs && std::tolower(static_cast<unsigned char>(*ls)) == std::tolower(static_cast<unsigned char>(*qs))) {
+      ++ls; ++qs;
+    }
+    if (*qs == '\0') return true;
+    ++l;
+  }
+  return false;
+}
+
+static bool nav_item_visible(const char *query, const char *label) {
+  if (query == nullptr || query[0] == '\0') return true;
+  return label_matches(label, query);
 }
 
 static void nav_item(AppState &state, Screen screen, const char *icon, const char *label) {
@@ -300,39 +334,111 @@ void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 1));
   ImGui::BeginChild("SidebarNavList", ImVec2(0, nav_h), true);
 
-  ImGui::Dummy(ImVec2(0, 3));
-  sidebar_section(locale::tr("sidebar.section.main"));
-  nav_item(state, Screen::Home, icons::kHome, locale::tr("nav.home"));
-  nav_item(state, Screen::Consoles, icons::kConsole, locale::tr("nav.consoles"));
+  /* ── Quick search ── */
+  static char nav_search[64] = "";
+  const bool searching = nav_search[0] != '\0';
+  ImGui::Dummy(ImVec2(0, 4.0f * scl));
+  ImGui::SetCursorPosX(6.0f * scl);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 10.0f * scl);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f * scl, 4.0f * scl));
+  if (ImGui::InputTextWithHint("##NavSearch",
+        (std::string(icons::kSearch) + "  " + "Filter pages...").c_str(),
+        nav_search, sizeof(nav_search)))
+    ImGui::SetKeyboardFocusHere(-1);
+  ImGui::PopStyleVar();
+  ImGui::Dummy(ImVec2(0, 3.0f * scl));
+
+  /* When searching, auto-expand all sections so results are visible */
+  const bool main_vis = searching || sidebar_section_header(state, 0, locale::tr("sidebar.section.main"));
+  if (main_vis) {
+    if (nav_item_visible(nav_search, locale::tr("nav.home")))
+      nav_item(state, Screen::Home, icons::kHome, locale::tr("nav.home"));
+    if (nav_item_visible(nav_search, locale::tr("nav.consoles")))
+      nav_item(state, Screen::Consoles, icons::kConsole, locale::tr("nav.consoles"));
+  }
 
   ImGui::Dummy(ImVec2(0, 3));
-  sidebar_section(locale::tr("sidebar.section.tools"));
-  nav_item(state, Screen::Processes, icons::kProcess, locale::tr("nav.processes"));
-  nav_item(state, Screen::Memory, icons::kMemory, locale::tr("nav.memory"));
-  nav_item(state, Screen::Scanner, icons::kScanner, locale::tr("nav.scanner"));
-  nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
-  nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
-  nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
-  nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
+  const bool tools_vis = searching || sidebar_section_header(state, 1, locale::tr("sidebar.section.tools"));
+  if (tools_vis) {
+    if (nav_item_visible(nav_search, locale::tr("nav.processes")))
+      nav_item(state, Screen::Processes, icons::kProcess, locale::tr("nav.processes"));
+    if (nav_item_visible(nav_search, locale::tr("nav.memory")))
+      nav_item(state, Screen::Memory, icons::kMemory, locale::tr("nav.memory"));
+    if (nav_item_visible(nav_search, locale::tr("nav.scanner")))
+      nav_item(state, Screen::Scanner, icons::kScanner, locale::tr("nav.scanner"));
+    if (nav_item_visible(nav_search, locale::tr("nav.trainer")))
+      nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
+    if (nav_item_visible(nav_search, locale::tr("nav.lua")))
+      nav_item(state, Screen::Lua, icons::kTerminal, locale::tr("nav.lua"));
+    if (nav_item_visible(nav_search, locale::tr("nav.plugins")))
+      nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
 
-  /* GUI plugin launcher */
-  draw_gui_plugin_launcher(state);
+    /* GUI plugin launcher — hide when searching */
+    if (!searching) draw_gui_plugin_launcher(state);
 
-  if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
-    nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
+    if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER)) {
+      if (nav_item_visible(nav_search, locale::tr("nav.debugger")))
+        nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
+    }
+  }
 
   ImGui::Dummy(ImVec2(0, 3));
-  sidebar_section(locale::tr("sidebar.section.observe"));
-  nav_item(state, Screen::TaskMgr, icons::kGauge, locale::tr("nav.taskmgr"));
-  nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
-  nav_item(state, Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
-  nav_item(state, Screen::Tracer, icons::kSearch, locale::tr("nav.tracer"));
+  const bool mon_vis = searching || sidebar_section_header(state, 2, locale::tr("sidebar.section.monitoring"));
+  if (mon_vis) {
+    if (nav_item_visible(nav_search, locale::tr("nav.monitoring")))
+      nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.monitoring"));
+  }
 
   ImGui::Dummy(ImVec2(0, 3));
-  sidebar_section(locale::tr("sidebar.section.system"));
-  nav_item(state, Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
-  nav_item(state, Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
-  nav_item(state, Screen::Klog, icons::kTerminal, locale::tr("nav.klog"));
+  const bool sys_vis = searching || sidebar_section_header(state, 3, locale::tr("sidebar.section.system"));
+  if (sys_vis) {
+    if (nav_item_visible(nav_search, locale::tr("nav.settings")))
+      nav_item(state, Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
+    if (nav_item_visible(nav_search, locale::tr("nav.credits")))
+      nav_item(state, Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
+  }
+
+  /* ── Enter to navigate when only one item matches ── */
+  if (searching && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+    struct Candidate { Screen screen; const char *label; };
+    std::vector<Candidate> matches;
+    auto try_add = [&](Screen s, const char *lbl) {
+      if (nav_item_visible(nav_search, lbl)) matches.push_back({s, lbl});
+    };
+    try_add(Screen::Home, locale::tr("nav.home"));
+    try_add(Screen::Consoles, locale::tr("nav.consoles"));
+    try_add(Screen::Processes, locale::tr("nav.processes"));
+    try_add(Screen::Memory, locale::tr("nav.memory"));
+    try_add(Screen::Scanner, locale::tr("nav.scanner"));
+    try_add(Screen::Trainer, locale::tr("nav.trainer"));
+    try_add(Screen::Lua, locale::tr("nav.lua"));
+    try_add(Screen::Plugins, locale::tr("nav.plugins"));
+    try_add(Screen::Debugger, locale::tr("nav.debugger"));
+    try_add(Screen::Logs, locale::tr("nav.monitoring"));
+    try_add(Screen::Settings, locale::tr("nav.settings"));
+    try_add(Screen::Credits, locale::tr("nav.credits"));
+    if (matches.size() == 1U) {
+      state.screen = matches[0].screen;
+      nav_search[0] = '\0';
+    }
+  }
+
+  /* ── No results hint ── */
+  if (searching) {
+    bool any = false;
+    auto check = [&](const char *lbl) { if (nav_item_visible(nav_search, lbl)) any = true; };
+    check(locale::tr("nav.home")); check(locale::tr("nav.consoles"));
+    check(locale::tr("nav.processes")); check(locale::tr("nav.memory"));
+    check(locale::tr("nav.scanner")); check(locale::tr("nav.trainer"));
+    check(locale::tr("nav.lua"));
+    check(locale::tr("nav.plugins")); check(locale::tr("nav.debugger"));
+    check(locale::tr("nav.monitoring"));
+    check(locale::tr("nav.settings")); check(locale::tr("nav.credits"));
+    if (!any) {
+      ImGui::SetCursorPosX(14.0f * scl);
+      ImGui::TextColored(ui::colors().dim, "%s", "No matching pages");
+    }
+  }
 
   ImGui::EndChild();
   ImGui::PopStyleVar(2);

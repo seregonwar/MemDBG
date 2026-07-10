@@ -163,6 +163,16 @@ bool load_frontend_settings(AppState &state, std::string *error) {
           value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "selected_target") {
       saved_selected_target = std::atoi(value.c_str());
+    } else if (key == "sidebar_section_0") {
+      state.sidebar_sections_expanded[0] = value == "1" || value == "true";
+    } else if (key == "sidebar_section_1") {
+      state.sidebar_sections_expanded[1] = value == "1" || value == "true";
+    } else if (key == "sidebar_section_2") {
+      state.sidebar_sections_expanded[2] = value == "1" || value == "true";
+    } else if (key == "sidebar_section_3") {
+      state.sidebar_sections_expanded[3] = value == "1" || value == "true";
+    } else if (key == "sidebar_width") {
+      state.sidebar_width = static_cast<float>(std::atof(value.c_str()));
     } else if (key.rfind("target.", 0) == 0) {
       const std::string rest = key.substr(7);
       const size_t dot = rest.find('.');
@@ -234,6 +244,10 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr_prefetch_on_connect ? 1 : 0) << "\n";
   out << "selected_target=" << selected_target << "\n";
+  for (int i = 0; i < 4; ++i)
+    out << "sidebar_section_" << i << "=" << (state.sidebar_sections_expanded[i] ? 1 : 0) << "\n";
+  if (state.sidebar_width > 0.0f)
+    out << "sidebar_width=" << state.sidebar_width << "\n";
   out << "target_count=" << targets.size() << "\n";
   for (size_t i = 0; i < targets.size(); ++i) {
     const ConsoleTarget &target = targets[i];

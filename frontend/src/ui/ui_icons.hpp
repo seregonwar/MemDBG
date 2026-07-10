@@ -68,6 +68,8 @@ constexpr const char *kTelemetry  = u8"\uf201"; /* chart-line */
 constexpr const char *kNotify     = u8"\uf0f3"; /* bell */
 constexpr const char *kGauge      = u8"\uf3fd"; /* gauge-high */
 constexpr const char *kMore       = u8"\uf142"; /* ellipsis-vertical */
+constexpr const char *kCaretDown  = u8"\uf107"; /* angle-down */
+constexpr const char *kCaretRight = u8"\uf105"; /* angle-right */
 
 } // namespace memdbg::frontend::icons
 
