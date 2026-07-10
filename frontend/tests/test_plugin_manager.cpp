@@ -120,14 +120,25 @@ int main() {
   context.scan_hit_count = 3;
   context.trainer_entry_count = 4;
 
+  const plugins::PluginRunResult blocked_run =
+      manager.run_plugin(installed->id, context);
+  require(!blocked_run.ok, "sandbox blocks Python plugin");
+  require(blocked_run.error.find("secure Python isolation is unavailable") !=
+              std::string::npos,
+          "Python block explains missing isolation");
+  require(blocked_run.command.find("blocked-python") != std::string::npos,
+          "Python block command marker");
+
+  context.sandbox_enabled = false;
   const plugins::PluginRunResult run = manager.run_plugin(installed->id, context);
   if (run.error.find("interpreter not found") == std::string::npos) {
-    require(run.ok, "run context dump plugin");
+    require(run.ok, "run explicitly trusted context dump plugin");
     require(run.output.find("MemDBG Python plugin context") != std::string::npos,
             "context dump output header");
     require(run.output.find("pid=1234") != std::string::npos,
             "context dump output PID");
   }
+  context.sandbox_enabled = true;
 
   require(manager.uninstall_package(installed->id, &error),
           "uninstall context dump package");
@@ -165,13 +176,9 @@ int main() {
                          std::ios::binary | std::ios::trunc);
     script <<
         "print('MemDBG Lua plugin context')\n"
-        "print('context=' .. tostring(MEMDBG_CONTEXT))\n"
-        "local file = assert(io.open(MEMDBG_CONTEXT, 'rb'))\n"
-        "local context = file:read('*a')\n"
-        "file:close()\n"
-        "print('pid=' .. tostring(context:match('\"pid\"%s*:%s*(%d+)')))\n"
-        "print('bytes=' .. tostring(#context))\n"
-        "print('dir=' .. tostring(memdbg.plugin_dir))\n";
+        "print('context_json=' .. tostring(MEMDBG_CONTEXT_JSON))\n"
+        "print('bytes=' .. tostring(#MEMDBG_CONTEXT_JSON))\n"
+        "print('dir=' .. tostring(MEMDBG_PLUGIN_DIR))\n";
   }
 
   require(manager.add_source("Local Lua Test", lua_source.string(), &error),
@@ -189,11 +196,11 @@ int main() {
   const plugins::PluginRunResult lua_run =
       manager.run_plugin("local.memdbg.lua-echo", context);
   require(lua_run.ok, "run embedded Lua plugin");
-  require(lua_run.command.find("embedded-lua") != std::string::npos,
-          "embedded Lua command marker");
+  require(lua_run.command.find("sandboxed-lua") != std::string::npos,
+          "sandboxed Lua command marker");
   require(lua_run.output.find("MemDBG Lua plugin context") != std::string::npos,
           "Lua output header");
-  require(lua_run.output.find("pid=1234") != std::string::npos,
+  require(lua_run.output.find("\"pid\": 1234") != std::string::npos,
           "Lua output PID");
 #endif
 
