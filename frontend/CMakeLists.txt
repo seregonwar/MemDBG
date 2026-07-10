@@ -128,6 +128,7 @@ set(MEMDBG_LUA_SOURCES
   ${lua_SOURCE_DIR}/loadlib.c
   ${lua_SOURCE_DIR}/lobject.c
   ${lua_SOURCE_DIR}/lopcodes.c
+  ${lua_SOURCE_DIR}/loslib.c
   ${lua_SOURCE_DIR}/lparser.c
   ${lua_SOURCE_DIR}/lstate.c
   ${lua_SOURCE_DIR}/lstring.c
@@ -203,6 +204,11 @@ add_executable(memdbg_frontend
   # plugins (repository manifests + Lua/Python script runner)
   src/plugins/repository/plugin_manager.cpp
   src/plugins/repository/gui_bridge.cpp
+  src/plugins/repository/lua_engine.cpp
+
+  # sandbox (standalone hardened script execution)
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_lua.cpp
 
   # cheats (repository sources and catalog)
   src/cheats/cheat_repository.cpp
@@ -249,6 +255,7 @@ add_executable(memdbg_frontend
   src/screens/debugger/debugger_notebook.cpp
   src/screens/debugger/screen_debugger.cpp
   src/screens/tracer/screen_tracer.cpp
+  src/screens/lua/screen_lua.cpp
 
   # trainer
   src/trainer/batchcode_parser.cpp
@@ -287,12 +294,14 @@ target_include_directories(memdbg_frontend PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/task_manager
   ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/telemetry
   ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/trainer
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/lua
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner/heuristics
   ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
   ${CMAKE_CURRENT_SOURCE_DIR}/src/cheats
   ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
   ${stb_SOURCE_DIR}
@@ -513,6 +522,8 @@ target_include_directories(memdbg_locale_manager_test PRIVATE
 add_executable(memdbg_plugin_manager_test
   tests/test_plugin_manager.cpp
   src/plugins/repository/plugin_manager.cpp
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_lua.cpp
   src/core/platform.cpp
 )
 
@@ -528,9 +539,114 @@ target_include_directories(memdbg_plugin_manager_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
   ${nlohmann_json_SOURCE_DIR}/include
 )
-target_link_libraries(memdbg_plugin_manager_test PRIVATE memdbg_lua)
+target_link_libraries(memdbg_plugin_manager_test PRIVATE memdbg_lua Threads::Threads)
+
+# ---- memdbg_sandbox_lua_test ----
+
+add_executable(memdbg_sandbox_lua_test
+  tests/sandbox/test_sandbox_lua.cpp
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_lua.cpp
+)
+
+target_compile_definitions(memdbg_sandbox_lua_test PRIVATE
+  MEMDBG_ENABLE_EMBEDDED_LUA
+  MEMDBG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+target_include_directories(memdbg_sandbox_lua_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+target_link_libraries(memdbg_sandbox_lua_test PRIVATE memdbg_lua Threads::Threads)
+
+# ---- memdbg_sandbox_fuzz_test ----
+
+add_executable(memdbg_sandbox_fuzz_test
+  tests/sandbox/test_sandbox_fuzz.cpp
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_lua.cpp
+)
+
+target_compile_definitions(memdbg_sandbox_fuzz_test PRIVATE
+  MEMDBG_ENABLE_EMBEDDED_LUA
+  MEMDBG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+target_include_directories(memdbg_sandbox_fuzz_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+target_link_libraries(memdbg_sandbox_fuzz_test PRIVATE memdbg_lua Threads::Threads)
+
+# ---- memdbg_sandbox_limits_test ----
+
+add_executable(memdbg_sandbox_limits_test
+  tests/sandbox/test_sandbox_limits.cpp
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_lua.cpp
+)
+
+target_compile_definitions(memdbg_sandbox_limits_test PRIVATE
+  MEMDBG_ENABLE_EMBEDDED_LUA
+  MEMDBG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+target_include_directories(memdbg_sandbox_limits_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+target_link_libraries(memdbg_sandbox_limits_test PRIVATE memdbg_lua Threads::Threads)
+
+# ---- memdbg_sandbox_hardened_test (regression suite for all known vulnerability vectors) ----
+
+add_executable(memdbg_sandbox_hardened_test
+  tests/sandbox/test_sandbox_hardened.cpp
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_lua.cpp
+)
+
+target_compile_definitions(memdbg_sandbox_hardened_test PRIVATE
+  MEMDBG_ENABLE_EMBEDDED_LUA
+  MEMDBG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+target_include_directories(memdbg_sandbox_hardened_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+target_link_libraries(memdbg_sandbox_hardened_test PRIVATE memdbg_lua Threads::Threads)
+
+# ---- memdbg_sandbox_python_test ----
+
+add_executable(memdbg_sandbox_python_test
+  tests/sandbox/test_sandbox_python.cpp
+  src/sandbox/sandbox_common.cpp
+  src/sandbox/sandbox_python.cpp
+)
+
+target_include_directories(memdbg_sandbox_python_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
+)
+target_link_libraries(memdbg_sandbox_python_test PRIVATE Threads::Threads)
 
 # ---- platform specific ----
 
@@ -543,10 +659,18 @@ if(WIN32)
   target_compile_definitions(memdbg_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_trainer_formats_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_plugin_manager_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_sandbox_lua_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_sandbox_fuzz_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_sandbox_limits_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_sandbox_python_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_trainer_formats_test PRIVATE ws2_32)
   target_link_libraries(memdbg_plugin_manager_test PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_sandbox_lua_test PRIVATE ws2_32)
+  target_link_libraries(memdbg_sandbox_fuzz_test PRIVATE ws2_32)
+  target_link_libraries(memdbg_sandbox_limits_test PRIVATE ws2_32)
+  target_link_libraries(memdbg_sandbox_python_test PRIVATE ws2_32)
 endif()
 
 if(MSVC)
@@ -558,6 +682,10 @@ if(MSVC)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
   target_compile_options(memdbg_plugin_manager_test PRIVATE /W4)
+  target_compile_options(memdbg_sandbox_lua_test PRIVATE /W4)
+  target_compile_options(memdbg_sandbox_fuzz_test PRIVATE /W4)
+  target_compile_options(memdbg_sandbox_limits_test PRIVATE /W4)
+  target_compile_options(memdbg_sandbox_python_test PRIVATE /W4)
 else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -567,4 +695,8 @@ else()
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_plugin_manager_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_sandbox_lua_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_sandbox_fuzz_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_sandbox_limits_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_sandbox_python_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()

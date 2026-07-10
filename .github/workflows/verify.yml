@@ -148,6 +148,14 @@ jobs:
           run_frontend_test memdbg_app_state_parsing_test
           run_frontend_test memdbg_trainer_formats_test
           run_frontend_test memdbg_locale_manager_test
+          run_frontend_test memdbg_plugin_manager_test
+
+          # ── Sandbox security regression tests ──
+          run_frontend_test memdbg_sandbox_lua_test
+          run_frontend_test memdbg_sandbox_fuzz_test
+          run_frontend_test memdbg_sandbox_limits_test
+          run_frontend_test memdbg_sandbox_hardened_test
+          run_frontend_test memdbg_sandbox_python_test
 
   payload:
     name: Payload compile (${{ matrix.platform }})
