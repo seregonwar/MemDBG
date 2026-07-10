@@ -1,5 +1,5 @@
 /*
- * MemDBG - Logs screen.
+ * MemDBG - Monitoring screen (unified UDP Logs, Kernel Log, Telemetry, Tracer).
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -11,7 +11,8 @@
 
 namespace memdbg::frontend {
 
-void draw_logs(AppState &state, ImVec2 avail) {
+/* ---- UDP Logs (original draw_logs content) ---- */
+static void draw_logs_tab(AppState &state, ImVec2 avail) {
   ui::begin_panel("LogsPanel", locale::tr("logs.udp_telemetry"), avail);
 
   if (!state.udp_listener.running()) {
@@ -76,6 +77,38 @@ void draw_logs(AppState &state, ImVec2 avail) {
   ImGui::EndChild();
 
   ui::end_panel();
+}
+
+/* ---- Unified Monitoring screen ---- */
+void draw_logs(AppState &state, ImVec2 avail) {
+  static int mon_tab = 0; /* 0=UDP Logs, 1=Kernel Log, 2=Telemetry, 3=Tracer */
+
+  if (ImGui::BeginTabBar("MonitoringTabs")) {
+    if (ImGui::BeginTabItem(locale::tr("nav.logs"))) {
+      mon_tab = 0;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("nav.klog"))) {
+      mon_tab = 1;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("nav.telemetry"))) {
+      mon_tab = 2;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("nav.tracer"))) {
+      mon_tab = 3;
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+
+  switch (mon_tab) {
+  case 0: draw_logs_tab(state, avail); break;
+  case 1: draw_klog(state, avail); break;
+  case 2: draw_telemetry(state, avail); break;
+  case 3: draw_tracer(state, avail); break;
+  }
 }
 
 } // namespace memdbg::frontend

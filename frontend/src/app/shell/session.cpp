@@ -145,6 +145,7 @@ void draw_screen(AppState &state, ImVec2 avail) {
   case Screen::Settings:  draw_settings(state, avail); break;
   case Screen::Credits:   draw_credits(state, avail); break;
   case Screen::Klog:     draw_klog(state, avail); break;
+  case Screen::Lua:      draw_lua(state, avail); break;
   }
 }
 
@@ -153,13 +154,14 @@ void handle_global_shortcuts(AppState &state) {
   if (io.WantTextInput) return;
 
   if (ImGui::IsKeyPressed(ImGuiKey_F1)) state.screen = Screen::Home;
+  if (ImGui::IsKeyPressed(ImGuiKey_F4)) state.screen = Screen::Lua;
   if (ImGui::IsKeyPressed(ImGuiKey_F6)) state.screen = Screen::Processes;
   if (ImGui::IsKeyPressed(ImGuiKey_F7)) state.screen = Screen::Scanner;
   if (ImGui::IsKeyPressed(ImGuiKey_F8)) state.screen = Screen::Memory;
   if (ImGui::IsKeyPressed(ImGuiKey_F9)) state.screen = Screen::Trainer;
   if (ImGui::IsKeyPressed(ImGuiKey_F10)) state.screen = Screen::Logs;
   if (ImGui::IsKeyPressed(ImGuiKey_F11)) state.screen = Screen::Plugins;
-  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending) {
+  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending && state.screen != Screen::Lua) {
     if (client_async_busy(state)) {
       set_status(state, "Wait for the active operation to finish");
     } else if (state.client.connected()) {
