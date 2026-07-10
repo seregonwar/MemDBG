@@ -379,6 +379,18 @@ bool load_frontend_settings(AppState &state, std::string *error) {
     } else if (key == "taskmgr_prefetch_on_connect") {
       state.taskmgr_prefetch_on_connect =
           value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "sandbox_enabled") {
+      state.sandbox_enabled = value != "0" && value != "false" && value != "off";
+    } else if (key == "sandbox_filesystem") {
+      state.sandbox_filesystem = value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "sandbox_subprocess") {
+      state.sandbox_subprocess = value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "sandbox_network") {
+      state.sandbox_network = value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "sandbox_native_modules") {
+      state.sandbox_native_modules = value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "sandbox_require_whitelist") {
+      std::snprintf(state.sandbox_require_whitelist, sizeof(state.sandbox_require_whitelist), "%s", value.c_str());
     } else if (key == "selected_target") {
       saved_selected_target = std::atoi(value.c_str());
     } else if (key.rfind("target.", 0) == 0) {
@@ -451,6 +463,13 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "dump_path=" << state.dump_path << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr_prefetch_on_connect ? 1 : 0) << "\n";
+  out << "sandbox_enabled=" << (state.sandbox_enabled ? 1 : 0) << "\n";
+  out << "sandbox_filesystem=" << (state.sandbox_filesystem ? 1 : 0) << "\n";
+  out << "sandbox_subprocess=" << (state.sandbox_subprocess ? 1 : 0) << "\n";
+  out << "sandbox_network=" << (state.sandbox_network ? 1 : 0) << "\n";
+  out << "sandbox_native_modules=" << (state.sandbox_native_modules ? 1 : 0) << "\n";
+  if (state.sandbox_require_whitelist[0] != '\0')
+    out << "sandbox_require_whitelist=" << state.sandbox_require_whitelist << "\n";
   out << "selected_target=" << selected_target << "\n";
   out << "target_count=" << targets.size() << "\n";
   for (size_t i = 0; i < targets.size(); ++i) {

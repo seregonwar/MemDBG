@@ -173,6 +173,14 @@ static plugins::PluginRunContext mobile_build_plugin_context(
   context.map_count = state.maps.size();
   context.scan_hit_count = state.scan_result.addresses.size();
   context.trainer_entry_count = state.cheats.size();
+  // Sandbox settings
+  context.sandbox_enabled = state.sandbox_enabled;
+  context.sandbox_filesystem = state.sandbox_filesystem;
+  context.sandbox_subprocess = state.sandbox_subprocess;
+  context.sandbox_network = state.sandbox_network;
+  context.sandbox_native_modules = state.sandbox_native_modules;
+  std::snprintf(context.sandbox_require_whitelist, sizeof(context.sandbox_require_whitelist),
+                "%s", state.sandbox_require_whitelist);
   return context;
 }
 

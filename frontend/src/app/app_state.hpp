@@ -15,6 +15,7 @@
 #include "github_profile.hpp"
 #include "release_check.hpp"
 #include "plugins/repository/plugin_manager.hpp"
+#include "plugins/repository/lua_engine.hpp"
 #include "cheats/cheat_repository.hpp"
 #include "scanner/structure_compare.hpp"
 #include "ui/theme_manager.hpp"
@@ -59,7 +60,7 @@ using memdbg::frontend::ReleaseCheck;
 enum class Screen {
   Home, Consoles, Processes, Memory, Scanner, PointerScanner, AOBScanner,
   Trainer, Plugins, PluginGUI, Logs, Settings, Telemetry, TaskMgr, Debugger,
-  Tracer, Credits, Klog,
+  Tracer, Credits, Klog, Lua,
 };
 
 struct ProcessMapSummary {
@@ -266,6 +267,12 @@ struct AppState {
   Screen screen = Screen::Home;
   HelloInfo hello;
   bool has_hello = false;
+
+  /* Sidebar section expand/collapse (MAIN, TOOLS, MONITORING, SYSTEM) */
+  bool sidebar_sections_expanded[4] = {true, true, true, true};
+
+  /* Sidebar width (-1 = auto, otherwise clamped between min and max) */
+  float sidebar_width = -1.0f;
 
   std::vector<ProcessEntry> processes;
   std::vector<MapEntry> maps;
@@ -598,6 +605,29 @@ struct AppState {
   std::string tracer_crash_dump_path;
   double tracer_crash_notification_time = 0.0;
 
+  /* ---- Lua Engine ---- */
+  plugins::LuaEngine lua_engine;
+  std::string lua_output;
+  char lua_editor_text[65536] = "-- MemDBG Lua Script\n-- Write your script here and press F5 to run\n\nprint(\"Hello from MemDBG!\")\nprint(\"Target PID:\", memdbg.get_pid())\n";
+  std::string lua_last_script_path;
+  bool lua_save_modal_open = false;
+  bool lua_load_modal_open = false;
+  char lua_save_path[512] = "myscript.lua";
+  int lua_timeout_ms = 5000;
+
+  /* ---- Lua REPL history ---- */
+  static constexpr size_t kLuaReplHistoryMax = 50;
+  std::deque<std::string> lua_repl_history;
+  int lua_repl_history_index = -1;
+
+  /* ---- Sandbox policy (plugin execution security) ---- */
+  bool sandbox_enabled = true;
+  bool sandbox_filesystem = false;
+  bool sandbox_subprocess = false;
+  bool sandbox_network = false;
+  bool sandbox_native_modules = false;
+  char sandbox_require_whitelist[512] = "";  // comma-separated module names
+
   /* ---- KLOG streaming ---- */
   bool klog_connected = false;
   uint16_t klog_port = 0;
@@ -883,6 +913,7 @@ inline const char *screen_title(Screen s) {
   case Screen::Tracer: return "Tracer";
   case Screen::Credits: return "Credits";
   case Screen::Klog: return "Kernel Log";
+  case Screen::Lua: return "Lua Console";
   } return "MemDBG";
 }
 
@@ -906,6 +937,7 @@ inline const char *screen_subtitle(Screen s) {
   case Screen::Tracer: return "Trace syscalls and detect process crashes";
   case Screen::Credits: return "Project information";
   case Screen::Klog: return "Stream kernel logs from the console via secondary TCP connection";
+  case Screen::Lua: return "Interactive Lua REPL and script editor with MemDBG API";
   } return "";
 }
 
@@ -972,6 +1004,7 @@ void draw_taskmgr(AppState &state, struct ImVec2 avail);
 void draw_debugger(AppState &state, struct ImVec2 avail);
 void draw_tracer(AppState &state, struct ImVec2 avail);
 void draw_klog(AppState &state, struct ImVec2 avail);
+void draw_lua(AppState &state, struct ImVec2 avail);
 void draw_screen(AppState &state, struct ImVec2 avail);
 
 } // namespace memdbg::frontend

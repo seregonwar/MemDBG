@@ -85,6 +85,14 @@ struct PluginRunContext {
   size_t map_count = 0;
   size_t scan_hit_count = 0;
   size_t trainer_entry_count = 0;
+
+  // Sandbox policy (from user settings)
+  bool sandbox_enabled = true;
+  bool sandbox_filesystem = false;
+  bool sandbox_subprocess = false;
+  bool sandbox_network = false;
+  bool sandbox_native_modules = false;
+  char sandbox_require_whitelist[512] = "";
 };
 
 struct PluginRunResult {

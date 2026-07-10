@@ -182,6 +182,77 @@ void draw_settings(AppState &state, ImVec2 avail) {
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Select the UI color theme");
   }
+
+  ImGui::Spacing();
+  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.sandbox_title"));
+  ImGui::Spacing();
+  {
+    static bool skip_sandbox_confirm = false;
+    if (ImGui::Checkbox(locale::tr("settings.sandbox_enabled"), &state.sandbox_enabled)) {
+      if (!state.sandbox_enabled) {
+        // User is trying to disable sandbox — show confirmation
+        ImGui::OpenPopup("ConfirmDisableSandbox");
+        state.sandbox_enabled = true;  // revert until confirmed
+      } else {
+        set_status(state, locale::tr("settings.sandbox_on"));
+      }
+    }
+    if (ui::confirm_modal("ConfirmDisableSandbox",
+                          locale::tr("settings.sandbox_confirm_disable"),
+                          locale::tr("settings.sandbox_confirm_disable_desc"),
+                          &skip_sandbox_confirm, true)) {
+      state.sandbox_enabled = false;
+      set_status(state, locale::tr("settings.sandbox_off"));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.sandbox_enabled_tip"));
+
+    ImGui::BeginDisabled(!state.sandbox_enabled);
+    ImGui::Indent(12.0f);
+    if (ImGui::Checkbox(locale::tr("settings.sandbox_filesystem"), &state.sandbox_filesystem)) {
+      set_status(state, state.sandbox_filesystem
+          ? locale::tr("settings.sandbox_fs_on")
+          : locale::tr("settings.sandbox_fs_off"));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.sandbox_filesystem_tip"));
+
+    if (ImGui::Checkbox(locale::tr("settings.sandbox_subprocess"), &state.sandbox_subprocess)) {
+      set_status(state, state.sandbox_subprocess
+          ? locale::tr("settings.sandbox_sp_on")
+          : locale::tr("settings.sandbox_sp_off"));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.sandbox_subprocess_tip"));
+
+    if (ImGui::Checkbox(locale::tr("settings.sandbox_network"), &state.sandbox_network)) {
+      set_status(state, state.sandbox_network
+          ? locale::tr("settings.sandbox_net_on")
+          : locale::tr("settings.sandbox_net_off"));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.sandbox_network_tip"));
+
+    if (ImGui::Checkbox(locale::tr("settings.sandbox_native_modules"), &state.sandbox_native_modules)) {
+      set_status(state, state.sandbox_native_modules
+          ? locale::tr("settings.sandbox_native_on")
+          : locale::tr("settings.sandbox_native_off"));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.sandbox_native_modules_tip"));
+
+    ImGui::Spacing();
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.sandbox_whitelist"));
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##SandboxRequireWhitelist", locale::tr("settings.sandbox_whitelist_hint"),
+                             state.sandbox_require_whitelist, sizeof(state.sandbox_require_whitelist));
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.sandbox_whitelist_tip"));
+
+    ImGui::Unindent(12.0f);
+    ImGui::EndDisabled();
+  }
+
   ui::end_panel();
 
   /* ---- Column 3: Actions + Runtime Info ---- */
