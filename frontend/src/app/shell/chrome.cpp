@@ -293,51 +293,49 @@ void draw_sidebar(AppState &state, ImVec2 size) {
   /* Footer: fixed height, drawn first so scrollable area gets remaining space */
   const float footer_h = 38.0f * scl;
   const float avail_y = ImGui::GetContentRegionAvail().y;
-  const float nav_h = avail_y - footer_h - 4.0f * scl;
+  const float nav_h = std::max(40.0f * scl, avail_y - footer_h - 4.0f * scl);
 
   /* Scrollable nav area */
-  if (nav_h > 40.0f * scl) {
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 1));
-    ImGui::BeginChild("SidebarNavList", ImVec2(0, nav_h), true);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 1));
+  ImGui::BeginChild("SidebarNavList", ImVec2(0, nav_h), true);
 
-    ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section(locale::tr("sidebar.section.main"));
-    nav_item(state, Screen::Home, icons::kHome, locale::tr("nav.home"));
-    nav_item(state, Screen::Consoles, icons::kConsole, locale::tr("nav.consoles"));
+  ImGui::Dummy(ImVec2(0, 3));
+  sidebar_section(locale::tr("sidebar.section.main"));
+  nav_item(state, Screen::Home, icons::kHome, locale::tr("nav.home"));
+  nav_item(state, Screen::Consoles, icons::kConsole, locale::tr("nav.consoles"));
 
-    ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section(locale::tr("sidebar.section.tools"));
-    nav_item(state, Screen::Processes, icons::kProcess, locale::tr("nav.processes"));
-    nav_item(state, Screen::Memory, icons::kMemory, locale::tr("nav.memory"));
-    nav_item(state, Screen::Scanner, icons::kScanner, locale::tr("nav.scanner"));
-    nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
-    nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
-    nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
-    nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
+  ImGui::Dummy(ImVec2(0, 3));
+  sidebar_section(locale::tr("sidebar.section.tools"));
+  nav_item(state, Screen::Processes, icons::kProcess, locale::tr("nav.processes"));
+  nav_item(state, Screen::Memory, icons::kMemory, locale::tr("nav.memory"));
+  nav_item(state, Screen::Scanner, icons::kScanner, locale::tr("nav.scanner"));
+  nav_item(state, Screen::PointerScanner, icons::kPointer, locale::tr("nav.pointer_scanner"));
+  nav_item(state, Screen::AOBScanner, icons::kCode, locale::tr("nav.aob_scanner"));
+  nav_item(state, Screen::Trainer, icons::kTrainer, locale::tr("nav.trainer"));
+  nav_item(state, Screen::Plugins, icons::kPlugins, locale::tr("nav.plugins"));
 
-    /* GUI plugin launcher */
-    draw_gui_plugin_launcher(state);
+  /* GUI plugin launcher */
+  draw_gui_plugin_launcher(state);
 
-    if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
-      nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
+  if (!state.client.connected() || payload_supports(state, MEMDBG_CAP_DEBUGGER))
+    nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
 
-    ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section(locale::tr("sidebar.section.observe"));
-    nav_item(state, Screen::TaskMgr, icons::kGauge, locale::tr("nav.taskmgr"));
-    nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
-    nav_item(state, Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
-    nav_item(state, Screen::Tracer, icons::kSearch, locale::tr("nav.tracer"));
+  ImGui::Dummy(ImVec2(0, 3));
+  sidebar_section(locale::tr("sidebar.section.observe"));
+  nav_item(state, Screen::TaskMgr, icons::kGauge, locale::tr("nav.taskmgr"));
+  nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
+  nav_item(state, Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
+  nav_item(state, Screen::Tracer, icons::kSearch, locale::tr("nav.tracer"));
 
-    ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section(locale::tr("sidebar.section.system"));
-    nav_item(state, Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
-    nav_item(state, Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
-    nav_item(state, Screen::Klog, icons::kTerminal, locale::tr("nav.klog"));
+  ImGui::Dummy(ImVec2(0, 3));
+  sidebar_section(locale::tr("sidebar.section.system"));
+  nav_item(state, Screen::Settings, icons::kSettings, locale::tr("nav.settings"));
+  nav_item(state, Screen::Credits, icons::kCredits, locale::tr("nav.credits"));
+  nav_item(state, Screen::Klog, icons::kTerminal, locale::tr("nav.klog"));
 
-    ImGui::EndChild();
-    ImGui::PopStyleVar(2);
-  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar(2);
 
   /* Fixed footer */
   ImGui::SetCursorPosY(size.y - footer_h - ImGui::GetStyle().WindowPadding.y);

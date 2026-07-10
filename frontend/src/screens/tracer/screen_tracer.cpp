@@ -204,6 +204,11 @@ static void draw_syscall_viewer(AppState &state, ImVec2 avail) {
 void draw_tracer(AppState &state, ImVec2 avail) {
   static int tracer_tab = 0; // 0=events, 1=syscall reference
 
+  /* Auto-populate PID from the global process selection. */
+  if (state.selected_pid > 0 && state.tracer_pid_input[0] == '\0')
+    std::snprintf(state.tracer_pid_input, sizeof(state.tracer_pid_input),
+                  "%d", state.selected_pid);
+
   ui::begin_panel("TracerPanel", locale::tr("tracer.title"), avail);
 
   /* ── Tab bar ── */
@@ -265,9 +270,19 @@ void draw_tracer(AppState &state, ImVec2 avail) {
     ImGui::AlignTextToFramePadding();
     ImGui::Text("%s", locale::tr("tracer.pid"));
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(120);
+    ImGui::SetNextItemWidth(100);
     ImGui::InputText("##pid_input", state.tracer_pid_input, sizeof(state.tracer_pid_input),
                      ImGuiInputTextFlags_CharsDecimal);
+    ImGui::SameLine();
+    if (ui::soft_button(locale::tr("tracer.use_global_pid"), ImVec2(0, 0))) {
+      if (state.selected_pid > 0)
+        std::snprintf(state.tracer_pid_input, sizeof(state.tracer_pid_input),
+                      "%d", state.selected_pid);
+      else
+        set_status(state, locale::tr("tracer.select_pid_global"));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("PID %d from topbar", state.selected_pid);
 
     ImGui::SameLine();
     bool is_idle  = (state.tracer_status.state == MEMDBG_TRACER_STATE_IDLE ||

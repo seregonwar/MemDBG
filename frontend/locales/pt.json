@@ -1097,5 +1097,9 @@
   "trainer.col_credits": "Créditos",
   "trainer.col_installed": "Instalado",
   "trainer.mod_count": "%d mod(s)",
-  "trainer.confirm_load_trainer": "Carregar estes cheats no Trainer?\n\nIsso substituirá a lista de cheats atual pelos mods do arquivo selecionado."
+  "trainer.confirm_load_trainer": "Carregar estes cheats no Trainer?\n\nIsso substituirá a lista de cheats atual pelos mods do arquivo selecionado.",
+  "tracer.use_global_pid": "PID:",
+  "tracer.select_pid_global": "Selecione um PID válido antes de anexar o tracer",
+  "processes.json_dump_save": "Save to File",
+  "processes.json_dump_save_title": "Save JSON Dump"
 }

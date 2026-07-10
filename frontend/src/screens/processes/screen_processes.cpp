@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <tuple>
 #include <unordered_map>
 
 namespace memdbg::frontend {
@@ -549,6 +550,7 @@ static void request_json_dump_async(AppState &state) {
 
   state.json_dump_pending = true;
   state.json_dump_error.clear();
+  state.json_dump_output.clear();
   state.json_dump_start_time = ImGui::GetTime();
 
   uint32_t flags = 0U;
@@ -557,20 +559,25 @@ static void request_json_dump_async(AppState &state) {
   if (state.json_dump_include_preview) flags |= 4U;
 
   int32_t pid = state.selected_pid;
-  state.json_dump_future = std::async(std::launch::async, [&state, pid, flags]() -> bool {
-    try {
-      std::string json;
-      if (!state.client.process_dump(pid, flags, json)) {
-        state.json_dump_error = state.client.last_error();
-        return false;
-      }
-      state.json_dump_output = std::move(json);
-      return true;
-    } catch (const std::exception &e) {
-      state.json_dump_error = e.what();
-      return false;
-    }
-  });
+  std::string host = state.host;
+  uint16_t port = static_cast<uint16_t>(state.debug_port);
+
+  state.json_dump_future = std::async(std::launch::async,
+      [host, port, pid, flags]() -> std::tuple<bool, std::string, std::string> {
+        try {
+          Client local_client;
+          if (!local_client.connect_to(host, port)) {
+            return {false, "", "JSON dump connect failed: " + local_client.last_error()};
+          }
+          std::string json;
+          if (!local_client.process_dump(pid, flags, json)) {
+            return {false, "", "JSON dump request failed: " + local_client.last_error()};
+          }
+          return {true, std::move(json), ""};
+        } catch (const std::exception &e) {
+          return {false, "", std::string("JSON dump exception: ") + e.what()};
+        }
+      });
 }
 
 static void poll_json_dump(AppState &state) {
@@ -582,19 +589,24 @@ static void poll_json_dump(AppState &state) {
   auto status = state.json_dump_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) {
     double elapsed = ImGui::GetTime() - state.json_dump_start_time;
-    if (elapsed > 30.0) {
+    if (elapsed > 60.0) {
       state.json_dump_pending = false;
-      state.json_dump_error = "JSON dump timed out";
+      state.json_dump_error = "JSON dump timed out after 60s";
+      set_status(state, state.json_dump_error);
     }
     return;
   }
   state.json_dump_pending = false;
-  bool ok = state.json_dump_future.get();
+  auto [ok, output, error] = state.json_dump_future.get();
   if (ok) {
-    set_status(state, "JSON dump complete");
+    state.json_dump_output = std::move(output);
+    state.json_dump_error.clear();
+    set_status(state, "JSON dump complete (" + std::to_string(state.json_dump_output.size()) + " bytes)");
     push_notification(state, "Process dump JSON received", 4.0);
   } else {
-    set_status(state, "JSON dump failed: " + state.json_dump_error);
+    state.json_dump_output.clear();
+    state.json_dump_error = std::move(error);
+    set_status(state, state.json_dump_error);
   }
 }
 
@@ -626,8 +638,22 @@ static void draw_json_dump_dialog(AppState &state) {
   ImGui::Separator();
 
   /* Dump button */
-  const bool can_dump = state.client.connected() && state.selected_pid > 0 &&
-                        !state.json_dump_pending && !client_async_busy(state);
+  const bool connected = state.client.connected();
+  const bool has_pid = state.selected_pid > 0;
+  const bool busy = client_async_busy(state);
+  const bool can_dump = connected && has_pid && !state.json_dump_pending && !busy;
+
+  if (!connected) {
+    ImGui::TextColored(ui::colors().danger, "%s",
+                       "Connect to a console before requesting a JSON dump.");
+  } else if (!has_pid) {
+    ImGui::TextColored(ui::colors().danger, "%s",
+                       "Select a process from the list before requesting a JSON dump.");
+  } else if (busy && !state.json_dump_pending) {
+    ImGui::TextColored(ui::colors().warning, "%s",
+                       "Another operation is in progress; wait for it to finish.");
+  }
+
   ImGui::BeginDisabled(!can_dump);
   if (ui::primary_button(locale::tr("processes.json_dump_request"),
                           ImVec2(180, 0))) {
@@ -644,12 +670,30 @@ static void draw_json_dump_dialog(AppState &state) {
   if (ui::soft_button(locale::tr("common.close"), ImVec2(80, 0)))
     ImGui::CloseCurrentPopup();
 
-  /* Copy to clipboard button */
+  /* Copy to clipboard and save buttons */
   if (!state.json_dump_output.empty()) {
     ImGui::SameLine();
     if (ImGui::SmallButton(locale::tr("common.copy"))) {
       ImGui::SetClipboardText(state.json_dump_output.c_str());
       set_status(state, locale::tr("processes.json_dump_copied"));
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(locale::tr("processes.json_dump_save"))) {
+      std::string default_name = "pid_" + std::to_string(state.selected_pid) + "_" +
+                                 selected_process_name(state) + ".json";
+      std::string picked = memdbg::frontend::ui::pickSaveFile(
+          locale::tr("processes.json_dump_save_title"), default_name,
+          "JSON files", "*.json");
+      if (!picked.empty()) {
+        std::ofstream out(picked);
+        if (out) {
+          out << state.json_dump_output;
+          set_status(state, "JSON dump saved to " + picked);
+          push_notification(state, "JSON dump saved", 4.0);
+        } else {
+          set_status(state, "Failed to save JSON dump");
+        }
+      }
     }
   }
 
@@ -897,7 +941,10 @@ void draw_processes(AppState &state, ImVec2 avail) {
       dump_opts.dialog_title = locale::tr("file_picker.select_dump_dir");
       dump_opts.folder_mode = true;
       dump_opts.placeholder = "dumps";
-      ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts);
+      if (ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts)) {
+        std::string err;
+        (void)save_frontend_settings(state, &err);
+      }
     }
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", locale::tr("processes.dump_dir_tooltip"));

@@ -1098,5 +1098,9 @@
   "trainer.col_credits": "Авторы",
   "trainer.col_installed": "Установлен",
   "trainer.mod_count": "%d мод.",
-  "trainer.confirm_load_trainer": "Загрузить эти читы в Trainer?\n\nТекущий список читов будет заменён модами из выбранного файла."
+  "trainer.confirm_load_trainer": "Загрузить эти читы в Trainer?\n\nТекущий список читов будет заменён модами из выбранного файла.",
+  "tracer.use_global_pid": "PID:",
+  "tracer.select_pid_global": "Выберите допустимый PID перед подключением tracer",
+  "processes.json_dump_save": "Save to File",
+  "processes.json_dump_save_title": "Save JSON Dump"
 }
