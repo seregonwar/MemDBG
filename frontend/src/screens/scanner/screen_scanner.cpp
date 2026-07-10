@@ -12,9 +12,189 @@
 
 namespace memdbg::frontend {
 
+/* ---- Structure Compare helper (shared between Exact scan panel and standalone tab) ---- */
+static void draw_structure_compare_section(AppState &state) {
+  ImGui::TextWrapped("%s", locale::tr("scanner.structure_compare_desc"));
+  ImGui::Spacing();
+  ImGui::InputText("Player base", state.structure_player_base,
+                   sizeof(state.structure_player_base));
+  ImGui::InputText("Enemy A base", state.structure_enemy_a_base,
+                   sizeof(state.structure_enemy_a_base));
+  ImGui::Checkbox("Compare a second enemy", &state.structure_compare_has_enemy_b);
+  if (state.structure_compare_has_enemy_b) {
+    ImGui::InputText("Enemy B base", state.structure_enemy_b_base,
+                     sizeof(state.structure_enemy_b_base));
+  }
+  ImGui::InputInt("Structure size (bytes)", &state.structure_compare_size);
+  state.structure_compare_size = std::clamp(state.structure_compare_size, 1, 64 * 1024);
+
+  static const int structure_types[] = {
+      MEMDBG_VALUE_U8, MEMDBG_VALUE_U16, MEMDBG_VALUE_U32, MEMDBG_VALUE_U64,
+      MEMDBG_VALUE_F32, MEMDBG_VALUE_F64, MEMDBG_VALUE_POINTER,
+  };
+  static const char *structure_type_names[] = {
+      "u8", "u16", "u32", "u64", "float", "double", "pointer",
+  };
+  int type_index = 0;
+  for (int i = 0; i < IM_ARRAYSIZE(structure_types); ++i) {
+    if (state.structure_compare_type == structure_types[i]) {
+      type_index = i;
+      break;
+    }
+  }
+  if (ImGui::Combo("Field type", &type_index, structure_type_names,
+                   IM_ARRAYSIZE(structure_type_names))) {
+    state.structure_compare_type = structure_types[type_index];
+  }
+
+  const bool can_compare = state.client.connected() && state.selected_pid > 0 &&
+                           payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
+                           !client_async_busy(state);
+  ImGui::BeginDisabled(!can_compare);
+  if (ui::primary_button((std::string(icons::kTarget) +
+                          "  Compare player vs enemies").c_str(),
+                         ui::full_button(38))) {
+    start_structure_compare(state);
+  }
+  ImGui::EndDisabled();
+
+  if (state.structure_compare_pending) {
+    ui::draw_scan_progress("Comparing structures", icons::kTarget,
+                           ImGui::GetTime() - state.structure_compare_start_time,
+                           ImGui::GetContentRegionAvail().x);
+  }
+  ImGui::TextColored(ui::colors().dim, "%s", state.structure_compare_status);
+
+  if (!state.structure_compare_fields.empty()) {
+    const size_t player_vs_enemies = static_cast<size_t>(std::count_if(
+        state.structure_compare_fields.begin(), state.structure_compare_fields.end(),
+        [](const StructureCompareField &field) {
+          return field.relation == StructureFieldRelation::PlayerVsEnemies;
+        }));
+    const bool has_second_enemy = std::any_of(
+        state.structure_compare_fields.begin(), state.structure_compare_fields.end(),
+        [](const StructureCompareField &field) { return !field.enemy_b.empty(); });
+    if (has_second_enemy) {
+      ImGui::TextColored(ui::colors().success,
+                         "%zu high-confidence player-vs-enemies fields", player_vs_enemies);
+    } else {
+      ImGui::TextColored(ui::colors().warning,
+                         "Two-way comparison: add a second enemy to isolate player-only fields");
+    }
+    ImGui::Checkbox("Show all fields", &state.structure_compare_show_all);
+
+    std::vector<size_t> visible_fields;
+    visible_fields.reserve(state.structure_compare_fields.size());
+    for (size_t i = 0U; i < state.structure_compare_fields.size(); ++i) {
+      const auto &field = state.structure_compare_fields[i];
+      const bool focus = field.relation == StructureFieldRelation::PlayerVsEnemies ||
+                         (field.enemy_b.empty() &&
+                          field.relation == StructureFieldRelation::Different);
+      if (state.structure_compare_show_all || focus) visible_fields.push_back(i);
+    }
+
+    if (visible_fields.empty()) {
+      ImGui::TextColored(ui::colors().warning,
+                         "No player-vs-enemies fields. Try two enemies of the same type or show all fields.");
+    } else if (ImGui::BeginTable("StructureCompareResults", 5,
+                                 ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+                                 ImVec2(0, 220.0f))) {
+      ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+      ImGui::TableSetupColumn("Player");
+      ImGui::TableSetupColumn("Enemy A");
+      ImGui::TableSetupColumn("Enemy B");
+      ImGui::TableSetupColumn("Relation");
+      ImGui::TableHeadersRow();
+
+      ImGuiListClipper clipper;
+      clipper.Begin(static_cast<int>(visible_fields.size()));
+      while (clipper.Step()) {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+          const auto &field = state.structure_compare_fields[
+              visible_fields[static_cast<size_t>(row)]];
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          const std::string offset = "+" + hex_u64(field.offset, 4) + "##struct" +
+                                     std::to_string(visible_fields[static_cast<size_t>(row)]);
+          if (ImGui::Selectable(offset.c_str(), false,
+                                ImGuiSelectableFlags_SpanAllColumns)) {
+            uint64_t player_base = 0U;
+            if (parse_u64(state.structure_player_base, player_base) &&
+                player_base <= std::numeric_limits<uint64_t>::max() - field.offset) {
+              const std::string address = hex_u64(player_base + field.offset);
+              std::snprintf(state.read_address, sizeof(state.read_address), "%s", address.c_str());
+              std::snprintf(state.write_address, sizeof(state.write_address), "%s", address.c_str());
+              state.screen = Screen::Memory;
+            }
+          }
+          ImGui::TableSetColumnIndex(1);
+          ImGui::TextUnformatted(structure_field_value(field.player,
+                                                        state.structure_compare_type).c_str());
+          ImGui::TableSetColumnIndex(2);
+          ImGui::TextUnformatted(structure_field_value(field.enemy_a,
+                                                        state.structure_compare_type).c_str());
+          ImGui::TableSetColumnIndex(3);
+          ImGui::TextUnformatted(field.enemy_b.empty() ? "-" :
+              structure_field_value(field.enemy_b, state.structure_compare_type).c_str());
+          ImGui::TableSetColumnIndex(4);
+          ImGui::TextColored(structure_relation_color(field.relation), "%s",
+                             structure_relation_name(field.relation));
+        }
+      }
+      ImGui::EndTable();
+    }
+  }
+}
+
 /* ---- Main draw ---- */
 
 void draw_scanner(AppState &state, ImVec2 avail) {
+
+  static int scanner_tab = 0; /* 0=Exact, 1=Pointer, 2=AOB */
+
+  /* ---- Tab bar (shared across all scanner modes) ---- */
+  if (ImGui::BeginTabBar("ScannerTabs")) {
+    if (ImGui::BeginTabItem(locale::tr("scanner.exact_scan"))) {
+      scanner_tab = 0;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("pointer_scanner.title"))) {
+      scanner_tab = 1;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("aob_scanner.title"))) {
+      scanner_tab = 2;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("scanner.structure_compare"))) {
+      scanner_tab = 3;
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+
+  if (scanner_tab == 1) {
+    draw_pointer_scanner(state, avail);
+    return;
+  }
+  if (scanner_tab == 2) {
+    draw_aob_scanner(state, avail);
+    return;
+  }
+  if (scanner_tab == 3) {
+    poll_structure_compare(state);
+    /* Structure Compare as standalone tab */
+    const float left_w = std::max(420.0f, avail.x * 0.38f);
+    ui::begin_panel("ScannerStruct", locale::tr("scanner.structure_compare"), ImVec2(left_w, avail.y));
+    ImGui::Text(locale::tr("scanner.active_pid"), state.selected_pid);
+    ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
+    ImGui::Spacing();
+    draw_structure_compare_section(state);
+    ui::end_panel();
+    return;
+  }
+
   poll_scanner_async(state);
   poll_structure_compare(state);
 
@@ -379,137 +559,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
   if (ImGui::CollapsingHeader(locale::tr("scanner.structure_compare"),
                               ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::TextWrapped("%s", locale::tr("scanner.structure_compare_desc"));
-    ImGui::Spacing();
-    ImGui::InputText("Player base", state.structure_player_base,
-                     sizeof(state.structure_player_base));
-    ImGui::InputText("Enemy A base", state.structure_enemy_a_base,
-                     sizeof(state.structure_enemy_a_base));
-    ImGui::Checkbox("Compare a second enemy", &state.structure_compare_has_enemy_b);
-    if (state.structure_compare_has_enemy_b) {
-      ImGui::InputText("Enemy B base", state.structure_enemy_b_base,
-                       sizeof(state.structure_enemy_b_base));
-    }
-    ImGui::InputInt("Structure size (bytes)", &state.structure_compare_size);
-    state.structure_compare_size = std::clamp(state.structure_compare_size, 1, 64 * 1024);
-
-    static const int structure_types[] = {
-        MEMDBG_VALUE_U8, MEMDBG_VALUE_U16, MEMDBG_VALUE_U32, MEMDBG_VALUE_U64,
-        MEMDBG_VALUE_F32, MEMDBG_VALUE_F64, MEMDBG_VALUE_POINTER,
-    };
-    static const char *structure_type_names[] = {
-        "u8", "u16", "u32", "u64", "float", "double", "pointer",
-    };
-    int type_index = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(structure_types); ++i) {
-      if (state.structure_compare_type == structure_types[i]) {
-        type_index = i;
-        break;
-      }
-    }
-    if (ImGui::Combo("Field type", &type_index, structure_type_names,
-                     IM_ARRAYSIZE(structure_type_names))) {
-      state.structure_compare_type = structure_types[type_index];
-    }
-
-    const bool can_compare = state.client.connected() && state.selected_pid > 0 &&
-                             payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
-                             !client_async_busy(state);
-    ImGui::BeginDisabled(!can_compare);
-    if (ui::primary_button((std::string(icons::kTarget) +
-                            "  Compare player vs enemies").c_str(),
-                           ui::full_button(38))) {
-      start_structure_compare(state);
-    }
-    ImGui::EndDisabled();
-
-    if (state.structure_compare_pending) {
-      ui::draw_scan_progress("Comparing structures", icons::kTarget,
-                             ImGui::GetTime() - state.structure_compare_start_time,
-                             ImGui::GetContentRegionAvail().x);
-    }
-    ImGui::TextColored(ui::colors().dim, "%s", state.structure_compare_status);
-
-    if (!state.structure_compare_fields.empty()) {
-      const size_t player_vs_enemies = static_cast<size_t>(std::count_if(
-          state.structure_compare_fields.begin(), state.structure_compare_fields.end(),
-          [](const StructureCompareField &field) {
-            return field.relation == StructureFieldRelation::PlayerVsEnemies;
-          }));
-      const bool has_second_enemy = std::any_of(
-          state.structure_compare_fields.begin(), state.structure_compare_fields.end(),
-          [](const StructureCompareField &field) { return !field.enemy_b.empty(); });
-      if (has_second_enemy) {
-        ImGui::TextColored(ui::colors().success,
-                           "%zu high-confidence player-vs-enemies fields", player_vs_enemies);
-      } else {
-        ImGui::TextColored(ui::colors().warning,
-                           "Two-way comparison: add a second enemy to isolate player-only fields");
-      }
-      ImGui::Checkbox("Show all fields", &state.structure_compare_show_all);
-
-      std::vector<size_t> visible_fields;
-      visible_fields.reserve(state.structure_compare_fields.size());
-      for (size_t i = 0U; i < state.structure_compare_fields.size(); ++i) {
-        const auto &field = state.structure_compare_fields[i];
-        const bool focus = field.relation == StructureFieldRelation::PlayerVsEnemies ||
-                           (field.enemy_b.empty() &&
-                            field.relation == StructureFieldRelation::Different);
-        if (state.structure_compare_show_all || focus) visible_fields.push_back(i);
-      }
-
-      if (visible_fields.empty()) {
-        ImGui::TextColored(ui::colors().warning,
-                           "No player-vs-enemies fields. Try two enemies of the same type or show all fields.");
-      } else if (ImGui::BeginTable("StructureCompareResults", 5,
-                                   ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                                   ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
-                                   ImVec2(0, 220.0f))) {
-        ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 82.0f);
-        ImGui::TableSetupColumn("Player");
-        ImGui::TableSetupColumn("Enemy A");
-        ImGui::TableSetupColumn("Enemy B");
-        ImGui::TableSetupColumn("Relation");
-        ImGui::TableHeadersRow();
-
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(visible_fields.size()));
-        while (clipper.Step()) {
-          for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-            const auto &field = state.structure_compare_fields[
-                visible_fields[static_cast<size_t>(row)]];
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            const std::string offset = "+" + hex_u64(field.offset, 4) + "##struct" +
-                                       std::to_string(visible_fields[static_cast<size_t>(row)]);
-            if (ImGui::Selectable(offset.c_str(), false,
-                                  ImGuiSelectableFlags_SpanAllColumns)) {
-              uint64_t player_base = 0U;
-              if (parse_u64(state.structure_player_base, player_base) &&
-                  player_base <= std::numeric_limits<uint64_t>::max() - field.offset) {
-                const std::string address = hex_u64(player_base + field.offset);
-                std::snprintf(state.read_address, sizeof(state.read_address), "%s", address.c_str());
-                std::snprintf(state.write_address, sizeof(state.write_address), "%s", address.c_str());
-                state.screen = Screen::Memory;
-              }
-            }
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(structure_field_value(field.player,
-                                                          state.structure_compare_type).c_str());
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextUnformatted(structure_field_value(field.enemy_a,
-                                                          state.structure_compare_type).c_str());
-            ImGui::TableSetColumnIndex(3);
-            ImGui::TextUnformatted(field.enemy_b.empty() ? "-" :
-                structure_field_value(field.enemy_b, state.structure_compare_type).c_str());
-            ImGui::TableSetColumnIndex(4);
-            ImGui::TextColored(structure_relation_color(field.relation), "%s",
-                               structure_relation_name(field.relation));
-          }
-        }
-        ImGui::EndTable();
-      }
-    }
+    draw_structure_compare_section(state);
   }
   ui::end_panel();
 
