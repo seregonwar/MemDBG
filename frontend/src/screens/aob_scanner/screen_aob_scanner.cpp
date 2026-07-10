@@ -92,7 +92,7 @@ static void poll_aob_async(AppState &state) {
     state.scan_async_error = "Unknown AOB scanner error";
   }
 
-  if (state.scan_async_owner != Screen::AOBScanner) return;
+  if (state.scan_async_owner != Screen::Scanner && state.scan_async_owner != Screen::AOBScanner) return;
 
 
   if (!ok) {
@@ -151,7 +151,7 @@ static void run_aob_scan(AppState &state) {
 
     state.scan_async_start_time = ImGui::GetTime();
     state.scan_async_pending = true;
-    state.scan_async_owner = Screen::AOBScanner;
+    state.scan_async_owner = Screen::Scanner;
 
     memdbg_scan_process_aob_request_t request{};
     request.pid = state.selected_pid;
@@ -193,7 +193,7 @@ static void run_aob_scan(AppState &state) {
 
     state.scan_async_start_time = ImGui::GetTime();
     state.scan_async_pending = true;
-    state.scan_async_owner = Screen::AOBScanner;
+    state.scan_async_owner = Screen::Scanner;
 
     auto &client = state.client;
     auto &temp_result = state.scan_async_temp_result;

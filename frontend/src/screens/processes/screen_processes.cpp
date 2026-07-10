@@ -859,6 +859,25 @@ static void draw_maps_table(AppState &state) {
 
 /* ---- Main draw ---- */
 void draw_processes(AppState &state, ImVec2 avail) {
+  static int proc_tab = 0; /* 0=Process Explorer, 1=Task Manager */
+
+  if (ImGui::BeginTabBar("ProcessesTabs")) {
+    if (ImGui::BeginTabItem(locale::tr("nav.processes"))) {
+      proc_tab = 0;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(locale::tr("nav.taskmgr"))) {
+      proc_tab = 1;
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+
+  if (proc_tab == 1) {
+    draw_taskmgr(state, avail);
+    return;
+  }
+
   poll_json_dump(state);
 
   const float left_w = std::max(360.0f, avail.x * 0.42f);

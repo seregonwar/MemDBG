@@ -35,7 +35,7 @@ static void poll_pointer_async(AppState &state) {
     state.scan_async_error = "Unknown pointer scanner error";
   }
 
-  if (state.scan_async_owner != Screen::PointerScanner) return;
+  if (state.scan_async_owner != Screen::Scanner && state.scan_async_owner != Screen::PointerScanner) return;
 
 
   if (!ok) {
@@ -97,7 +97,7 @@ static void run_pointer_scan(AppState &state) {
   state.scan_async_label = "Pointer scan";
   state.scan_async_start_time = ImGui::GetTime();
   state.scan_async_pending = true;
-  state.scan_async_owner = Screen::PointerScanner;
+  state.scan_async_owner = Screen::Scanner;
 
   auto &client = state.client;
   auto &temp_result = state.scan_async_temp_result;
