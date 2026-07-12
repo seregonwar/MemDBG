@@ -163,7 +163,10 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     ImGui::BeginDisabled(client_async_busy(state));
     if (ui::soft_button((std::string(icons::kGauge) + "  " + locale::tr("consoles.ping_payload")).c_str(),
                         ui::full_button(40))) {
-      set_status(state, state.client.ping() ? locale::tr("consoles.ping_ok") : state.client.last_error());
+      const bool ping_ok = state.client.ping();
+      set_status(state, ping_ok ? locale::tr("consoles.ping_ok") : state.client.last_error());
+      if (state.crash_logging_enabled)
+        state.crash_logger.log("ping", ping_ok ? "Ping OK" : state.client.last_error().c_str());
     }
     if (ui::danger_button((std::string(icons::kDisconnect) + "  " + locale::tr("consoles.shutdown_payload")).c_str(),
                           ui::full_button(40))) {

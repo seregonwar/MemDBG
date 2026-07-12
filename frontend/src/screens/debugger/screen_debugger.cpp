@@ -78,6 +78,10 @@ bool refresh_debugger_process_list(AppState &state) {
 }
 
 void draw_debugger_pid_selector(AppState &state, DebuggerState &ds) {
+  /* Pre-fill with the last attached PID if available and not already set */
+  if (!ds.attached && ds.pid_input_source == 0 && state.last_debugger_pid > 0) {
+    set_debugger_pid_input(ds, state.last_debugger_pid);
+  }
   if (!ds.attached && state.selected_pid > 0 && state.selected_pid != ds.pid_input_source) {
     set_debugger_pid_input(ds, state.selected_pid);
   }
@@ -365,6 +369,9 @@ void poll_debugger_attach(AppState &state, DebuggerState &ds) {
   ds.breakpoints = std::move(result.breakpoints);
   ds.watchpoints = std::move(result.watchpoints);
   if (result.has_regs) ds.regs = result.regs;
+
+  /* Save the successfully attached PID as the default for next session */
+  state.last_debugger_pid = result.pid;
 
   set_status(state, locale::tr("debugger.attached") +
                     std::to_string(result.pid));
@@ -814,6 +821,8 @@ void draw_debugger(AppState &state, ImVec2 avail) {
 
     ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, "PID %d", ds.pid);
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().dim, "Port %d", state.debug_port);
     ImGui::SameLine();
     ImGui::TextColored(ds.stopped ? ui::colors().warning : ui::colors().success,
                        "%s", ds.stopped ? "STOPPED" : "RUNNING");

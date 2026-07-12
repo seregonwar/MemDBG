@@ -266,6 +266,7 @@ struct AppState {
 
   Screen screen = Screen::Home;
   Screen previous_screen = Screen::Home;  /* restored when toggling F4 off the Lua console */
+  int32_t last_debugger_pid = 0;   /* default PID to pre-fill on debugger attach */
   HelloInfo hello;
   bool has_hello = false;
 

@@ -680,7 +680,10 @@ void draw_top_bar(AppState &state, ImVec2 size) {
   if (connected) {
     ImGui::BeginDisabled(client_async_busy(state));
     if (topbar_button("TopbarPing", icons::kGauge, locale::tr("topbar.ping"), btn_w))
-      set_status(state, state.client.ping() ? "Ping OK" : state.client.last_error());
+      const bool ping_ok = state.client.ping();
+      set_status(state, ping_ok ? "Ping OK" : state.client.last_error());
+      if (state.crash_logging_enabled)
+        state.crash_logger.log("ping", ping_ok ? "Ping OK" : state.client.last_error().c_str());
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (topbar_button("TopbarLogs", icons::kLogs, locale::tr("topbar.logs"), btn_w))
