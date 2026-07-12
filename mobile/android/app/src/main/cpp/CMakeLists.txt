@@ -268,6 +268,7 @@ target_include_directories(memdbg PRIVATE
   ${FRONTEND_ROOT}/src/proto
   ${stb_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
+  ${REPO_ROOT}/external/sjson
 )
 
 target_link_libraries(memdbg PRIVATE

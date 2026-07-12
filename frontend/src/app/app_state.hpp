@@ -265,6 +265,7 @@ struct AppState {
   char status[512] = "Ready";
 
   Screen screen = Screen::Home;
+  Screen previous_screen = Screen::Home;  /* restored when toggling F4 off the Lua console */
   HelloInfo hello;
   bool has_hello = false;
 

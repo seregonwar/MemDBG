@@ -222,6 +222,15 @@ void draw_lua(AppState &state, ImVec2 avail) {
   const float scl = ui::dpi_scale();
   const auto &palette = ui::colors();
 
+  /* Wrap the entire Lua screen in a scrollable child window so content
+   * never overflows and clips against the AppContent boundary. */
+  ImGui::BeginChild("LuaScreen", avail, false,
+                    ImGuiWindowFlags_HorizontalScrollbar);
+  const ImVec2 inner_avail(ImGui::GetContentRegionAvail().x,
+                           ImGui::GetContentRegionAvail().y);
+
+  ImGui::Dummy(ImVec2(0, 4.0f * scl));
+
   /* ── Ensure LuaEngine is initialized ── */
   plugins::LuaEngine &lua = state.lua_engine;
   static bool lua_init_attempted = false;
@@ -264,8 +273,12 @@ void draw_lua(AppState &state, ImVec2 avail) {
   ImGui::Dummy(ImVec2(0, 6.0f * scl));
 
   /* ── Shared output console (bottom half) ── */
-  const float output_h = std::max(100.0f * scl, avail.y * 0.38f);
-  const float input_h = avail.y - output_h - 46.0f * scl;
+  /* Chrome: 4(top pad) + 28(tab bar) + 6(spacer) + 26(buttons) + 2(spacer)
+             + 2(pre-status spacer) = 68px fixed, plus 2 text lines. */
+  const float line_h = ImGui::GetTextLineHeightWithSpacing();
+  const float chrome_h = 68.0f * scl + 2.0f * line_h;
+  const float output_h = std::max(100.0f * scl, inner_avail.y * 0.38f);
+  const float input_h = inner_avail.y - output_h - chrome_h;
 
   /* ── REPL tab ── */
   if (lua_tab == 0) {
@@ -275,12 +288,12 @@ void draw_lua(AppState &state, ImVec2 avail) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, palette.bg3);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.46f, 0.82f, 0.55f, 1.0f));
-    ImGui::SetNextItemWidth(avail.x - 4.0f * scl);
+    ImGui::SetNextItemWidth(inner_avail.x - 4.0f * scl);
     const ImGuiInputTextFlags repl_flags =
         ImGuiInputTextFlags_AllowTabInput |
         ImGuiInputTextFlags_CtrlEnterForNewLine;
     ImGui::InputTextMultiline("##LuaReplInput", repl_buf, sizeof(repl_buf),
-                              ImVec2(avail.x - 4.0f * scl, input_h), repl_flags);
+                              ImVec2(inner_avail.x - 4.0f * scl, input_h), repl_flags);
     const bool repl_focused = ImGui::IsItemActive();
 
     /* ── History navigation (up/down arrows) ── */
@@ -383,7 +396,7 @@ void draw_lua(AppState &state, ImVec2 avail) {
     const ImVec4 num_color(0.90f, 0.70f, 0.40f, 1.0f); // amber (numbers)
     const ImVec4 def_color(0.85f, 0.85f, 0.88f, 1.0f); // light grey (default)
 
-    const float editor_w = avail.x - 4.0f * scl;
+    const float editor_w = inner_avail.x - 4.0f * scl;
     const float editor_h = input_h;
 
     // Layout: background → highlighted text → transparent InputTextMultiline
@@ -429,7 +442,7 @@ void draw_lua(AppState &state, ImVec2 avail) {
     if (ImGui::Button((std::string(icons::kTerminal) + " Run (F5)").c_str(),
                       ImVec2(130.0f * scl, 26.0f * scl))) {
       lua_append_line(state.lua_output, "-- Running script...");
-      auto result = lua.exec(state.lua_editor_text);
+      auto result = lua.exec(state.lua_editor_text, /*capture_returns=*/false);
       if (!result.output.empty())
         lua_append_line(state.lua_output, result.output);
       if (!result.error.empty())
@@ -460,7 +473,7 @@ void draw_lua(AppState &state, ImVec2 avail) {
     // F5 shortcut — works even when editor is focused (F-keys bypass WantTextInput)
     if (ImGui::IsKeyPressed(ImGuiKey_F5)) {
       lua_append_line(state.lua_output, "-- Running script (F5)...");
-      auto result = lua.exec(state.lua_editor_text);
+      auto result = lua.exec(state.lua_editor_text, /*capture_returns=*/false);
       if (!result.output.empty())
         lua_append_line(state.lua_output, result.output);
       if (!result.error.empty())
@@ -486,7 +499,7 @@ void draw_lua(AppState &state, ImVec2 avail) {
   ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.06f, 0.08f, 0.10f, 1.0f));
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.82f, 0.88f, 1.0f));
   ImGui::InputTextMultiline("##LuaOutput", output_buf, copy_len,
-                            ImVec2(avail.x - 4.0f * scl, output_h),
+                            ImVec2(inner_avail.x - 4.0f * scl, output_h),
                             ImGuiInputTextFlags_ReadOnly);
   ImGui::PopStyleColor(2);
   ImGui::PopStyleVar();
@@ -582,6 +595,8 @@ void draw_lua(AppState &state, ImVec2 avail) {
   ImGui::SameLine();
   ImGui::TextColored(palette.muted, "|  timeout: %d ms  |  sandboxed (no io/os)",
                      state.lua_timeout_ms);
+
+  ImGui::EndChild();
 }
 
 } // namespace memdbg::frontend

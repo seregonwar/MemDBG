@@ -86,7 +86,7 @@ void apply_theme() {
   c[ImGuiCol_ResizeGripActive] = p.primary;
   c[ImGuiCol_Tab] = p.bg1;
   c[ImGuiCol_TabHovered] = p.primary;
-  c[ImGuiCol_TabActive] = p.bg2;
+  c[ImGuiCol_TabSelected] = p.bg2;
   c[ImGuiCol_TableHeaderBg] = p.bg1;
   c[ImGuiCol_TableBorderStrong] = p.border_hot;
   c[ImGuiCol_TableBorderLight] = p.border;

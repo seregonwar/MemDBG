@@ -29,16 +29,24 @@ std::string SandboxPolicy::describe() const {
 
 // Helper: min treating 0 as "unbounded" (infinity)
 static inline int32_t safe_min32(int32_t a, int32_t b) {
-  if (a == 0) return b; if (b == 0) return a; return a < b ? a : b;
+  if (a == 0) return b;
+  if (b == 0) return a;
+  return a < b ? a : b;
 }
 static inline int64_t safe_min64(int64_t a, int64_t b) {
-  if (a == 0) return b; if (b == 0) return a; return a < b ? a : b;
+  if (a == 0) return b;
+  if (b == 0) return a;
+  return a < b ? a : b;
 }
 static inline size_t s_min(size_t a, size_t b) {
-  if (a == 0) return b; if (b == 0) return a; return a < b ? a : b;
+  if (a == 0) return b;
+  if (b == 0) return a;
+  return a < b ? a : b;
 }
 static inline int safe_min_int(int a, int b) {
-  if (a == 0) return b; if (b == 0) return a; return a < b ? a : b;
+  if (a == 0) return b;
+  if (b == 0) return a;
+  return a < b ? a : b;
 }
 
 SandboxLimits SandboxLimits::clamp(const SandboxLimits &other) const {

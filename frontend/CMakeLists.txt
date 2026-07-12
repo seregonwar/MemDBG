@@ -478,13 +478,17 @@ add_executable(memdbg_trainer_formats_test
   src/core/crash_logger.cpp
   src/core/udp_log_listener.cpp
   src/core/platform.cpp
+  src/plugins/repository/lua_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 
   # sJson (C99 JSON parser, compiled once)
   ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
 )
 
-target_link_libraries(memdbg_trainer_formats_test PRIVATE imgui Threads::Threads)
+target_link_libraries(memdbg_trainer_formats_test PRIVATE imgui memdbg_lua Threads::Threads)
+
+target_compile_definitions(memdbg_trainer_formats_test PRIVATE
+  MEMDBG_ENABLE_EMBEDDED_LUA)
 
 target_include_directories(memdbg_trainer_formats_test PRIVATE
   ${MEMDBG_GENERATED_INCLUDE_DIR}
@@ -494,6 +498,9 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
   ${CMAKE_CURRENT_SOURCE_DIR}/src/trainer
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sandbox
   ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson
   ${imgui_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
