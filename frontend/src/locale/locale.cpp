@@ -115,7 +115,7 @@ Manager &Manager::instance() {
 }
 
 bool Manager::load(const char *json_path) {
-  std::ifstream in(json_path);
+  std::ifstream in(json_path, std::ios::binary);
   if (!in) return false;
 
   nlohmann::json doc;
