@@ -126,6 +126,13 @@ int pal_debug_attach(int pid) {
          * issue an explicit stop/poll if needed. */
         return 0;
       }
+      /* ECONNRESET can occur when the console's internal debugger daemon
+       * momentarily resets the connection.  Retry instead of failing
+       * immediately; a subsequent poll usually succeeds. */
+      if (wait_errno == ECONNRESET) {
+        pal_debug_sleep_ms(50U);
+        continue;
+      }
 #endif
       if (wait_errno != EINTR) break;
     }

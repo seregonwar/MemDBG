@@ -131,7 +131,9 @@ const char *payload_status_hint(uint16_t command, int32_t status) {
     }
   }
 
-  if (command == MEMDBG_CMD_SCAN_PROCESS_EXACT ||
+  if (command == MEMDBG_CMD_SCAN_EXACT ||
+      command == MEMDBG_CMD_SCAN_PROCESS_EXACT ||
+      command == MEMDBG_CMD_SCAN_AOB ||
       command == MEMDBG_CMD_SCAN_PROCESS_AOB ||
       command == MEMDBG_CMD_SCAN_UNKNOWN ||
       command == MEMDBG_CMD_SCAN_POINTER) {
@@ -140,6 +142,8 @@ const char *payload_status_hint(uint16_t command, int32_t status) {
       return "another process-wide scan is already running; wait for it to finish before starting a new one";
     case MEMDBG_ERR_NOT_FOUND:
       return "the target process no longer exists; refresh PIDs";
+    case MEMDBG_ERR_PROTOCOL:
+      return "scan request size mismatch; the frontend and payload protocol versions may be out of sync";
     default:
       break;
     }

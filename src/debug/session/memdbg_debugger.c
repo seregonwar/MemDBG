@@ -75,6 +75,10 @@ static memdbg_status_t pal_status_from_errno_code(int code) {
   case ETIMEDOUT:
     return MEMDBG_ERR_STATE;
 #endif
+#ifdef ECONNRESET
+  case ECONNRESET:
+    return MEMDBG_ERR_NET;
+#endif
 #ifdef EBUSY
   case EBUSY:
     return MEMDBG_ERR_STATE;
