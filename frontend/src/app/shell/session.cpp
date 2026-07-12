@@ -154,7 +154,14 @@ void handle_global_shortcuts(AppState &state) {
   if (io.WantTextInput) return;
 
   if (ImGui::IsKeyPressed(ImGuiKey_F1)) state.screen = Screen::Home;
-  if (ImGui::IsKeyPressed(ImGuiKey_F4)) state.screen = Screen::Lua;
+  if (ImGui::IsKeyPressed(ImGuiKey_F4)) {
+    if (state.screen == Screen::Lua) {
+      state.screen = state.previous_screen;
+    } else {
+      state.previous_screen = state.screen;
+      state.screen = Screen::Lua;
+    }
+  }
   if (ImGui::IsKeyPressed(ImGuiKey_F6)) state.screen = Screen::Processes;
   if (ImGui::IsKeyPressed(ImGuiKey_F7)) state.screen = Screen::Scanner;
   if (ImGui::IsKeyPressed(ImGuiKey_F8)) state.screen = Screen::Memory;

@@ -66,7 +66,10 @@ public:
   bool is_initialized() const { return L_ != nullptr; }
 
   /// Execute a code string (REPL or one-shot).  Returns captured output.
-  LuaExecResult exec(const std::string &code);
+  /// When `capture_returns` is true (REPL), return values are appended to
+  /// the output after the captured print() stream. For batch scripts,
+  /// pass false so only print() / log() output is shown.
+  LuaExecResult exec(const std::string &code, bool capture_returns = true);
 
   /// Execute a Lua file within a plugin directory.  Changes CWD to `root`
   /// while the script runs (restores afterward), configures package.path,

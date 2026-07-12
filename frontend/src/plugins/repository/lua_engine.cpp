@@ -528,7 +528,7 @@ void LuaEngine::install_timeout_hook() {
   lua_sethook(L_, timeout_hook, LUA_MASKCOUNT, 100000);
 }
 
-LuaExecResult LuaEngine::exec(const std::string &code) {
+LuaExecResult LuaEngine::exec(const std::string &code, bool capture_returns) {
   LuaExecResult result;
   std::lock_guard<std::mutex> lock(exec_mutex_);
   if (L_ == nullptr) {
@@ -584,17 +584,19 @@ LuaExecResult LuaEngine::exec(const std::string &code) {
     return result;
   }
 
-  int nresults = lua_gettop(L_);
-  if (nresults > 0) {
-    for (int i = 1; i <= nresults; ++i) {
-      if (i > 1) append_captured(result.output, output_truncated, "\t", 1U);
-      size_t len = 0;
-      const char *s = luaL_tolstring(L_, i, &len);
-      append_captured(result.output, output_truncated, s, len);
-      lua_pop(L_, 1);
+  if (capture_returns) {
+    int nresults = lua_gettop(L_);
+    if (nresults > 0) {
+      for (int i = 1; i <= nresults; ++i) {
+        if (i > 1) append_captured(result.output, output_truncated, "\t", 1U);
+        size_t len = 0;
+        const char *s = luaL_tolstring(L_, i, &len);
+        append_captured(result.output, output_truncated, s, len);
+        lua_pop(L_, 1);
+      }
+      append_captured(result.output, output_truncated, "\n", 1U);
+      if (output_truncated) result.output += "\n[MemDBG] Output truncated.\n";
     }
-    append_captured(result.output, output_truncated, "\n", 1U);
-    if (output_truncated) result.output += "\n[MemDBG] Output truncated.\n";
   }
   lua_settop(L_, 0);
 

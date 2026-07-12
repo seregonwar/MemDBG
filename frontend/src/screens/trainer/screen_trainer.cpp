@@ -671,7 +671,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   const float tab_h = 36.0f * scl;
   const float content_avail_y = avail.y - tab_h - 8.0f * scl;
   ImGui::PushStyleColor(ImGuiCol_Tab, ui::colors().bg1);
-  ImGui::PushStyleColor(ImGuiCol_TabActive, ui::colors().bg2);
+  ImGui::PushStyleColor(ImGuiCol_TabSelected, ui::colors().bg2);
   ImGui::PushStyleColor(ImGuiCol_TabHovered, ui::colors().bg3);
   if (ImGui::BeginTabBar("TrainerTabBar")) {
     if (ImGui::BeginTabItem(locale::tr("trainer.tab_builder"))) { trainer_tab = 0; ImGui::EndTabItem(); }
