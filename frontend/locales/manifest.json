@@ -80,8 +80,8 @@
       "name": "Русский",
       "filename": "ru.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/ru.json",
-      "size": 75151,
-      "sha256": "28b57008ee0b4b67a6fbb8c190a1838f7130f3f6d68ebefda36cc60763573aa9",
+      "size": 75743,
+      "sha256": "e7e936316e9e82b9f0afade63a5acbb7be8b7c49fc7525ac0a3f348465e11ec3",
       "embedded": false
     }
   ]
