@@ -276,6 +276,7 @@ static void test_goldhen_json_schema() {
     TEST("schema file is valid JSON", true);
   } catch (...) {
     TEST("schema file is valid JSON", false);
+    in.close();
     (void)std::filesystem::remove(tmp);
     return;
   }
@@ -321,6 +322,9 @@ static void test_goldhen_json_schema() {
   /* Verify credits is empty array (no credits configured) */
   TEST("credits is empty", json["credits"].is_array() && json["credits"].empty());
 
+  /* Windows does not allow removing a file while this stream still owns a
+     handle to it.  Close it explicitly before deleting the test fixture. */
+  in.close();
   (void)std::filesystem::remove(tmp);
 }
 

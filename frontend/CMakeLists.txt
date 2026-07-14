@@ -76,8 +76,6 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/simdjson/simdjson.git
   GIT_TAG v3.11.4
 )
-# Force static library: avoids runtime DLL dependency (exit 127) on Windows CI
-set(SIMDJSON_BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
   lua
