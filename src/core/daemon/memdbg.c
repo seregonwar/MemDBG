@@ -26,6 +26,8 @@
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/privilege/privilege.h"
 #include "memdbg/scanner/flashscan.h"
+#include "shellui_embed.h"
+#include "sprx_injector.h"
 #include "memdbg/telemetry/discovery.h"
 #include "memdbg/telemetry/udp_log.h"
 #include "memdbg/pal/pal_time.h"
@@ -642,6 +644,11 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   }
 
   flashscan_init();
+
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+  shellui_embed_extract();
+  sprx_inject_auto();
+#endif
 
   if (notification_ready)
     pal_notification_send("MemDBG by seregonwar started");
