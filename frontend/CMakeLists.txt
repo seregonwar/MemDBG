@@ -198,6 +198,7 @@ add_executable(memdbg_frontend
   src/core/github_profile.cpp
   src/core/client/memdbg_client.cpp
   src/core/platform.cpp
+  src/core/payload_fetcher.cpp
   src/core/release_check.cpp
   src/core/udp_log_listener.cpp
 
@@ -440,6 +441,13 @@ target_include_directories(memdbg_auto_search_test PRIVATE
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
+# Standalone test — no DLL dependencies.  Static MSVC runtime produces
+# a single self-contained .exe that works on any Windows machine.
+if(MSVC)
+  set_property(TARGET memdbg_auto_search_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # ---- memdbg_structure_compare_test ----
 
 add_executable(memdbg_structure_compare_test
@@ -451,6 +459,12 @@ target_include_directories(memdbg_structure_compare_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
 )
+
+# Standalone test — no DLL dependencies.
+if(MSVC)
+  set_property(TARGET memdbg_structure_compare_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # ---- memdbg_app_state_parsing_test ----
 
@@ -467,6 +481,31 @@ target_include_directories(memdbg_app_state_parsing_test PRIVATE
   ${imgui_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
 )
+
+# Standalone test — no DLL dependencies.
+if(MSVC)
+  set_property(TARGET memdbg_app_state_parsing_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# ---- memdbg_payload_fetcher_test ----
+
+add_executable(memdbg_payload_fetcher_test
+  tests/test_payload_fetcher.cpp
+)
+
+target_include_directories(memdbg_payload_fetcher_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+)
+
+# Standalone test — no DLL dependencies.
+if(MSVC)
+  set_property(TARGET memdbg_payload_fetcher_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # ---- memdbg_trainer_formats_test ----
 
@@ -524,6 +563,13 @@ target_include_directories(memdbg_locale_manager_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/locale
   ${nlohmann_json_SOURCE_DIR}/include
 )
+
+# Static MSVC runtime avoids runtime DLL dependency that causes exit 127
+# on Windows CI runners when the redistributable DLL search path differs.
+if(MSVC)
+  set_property(TARGET memdbg_locale_manager_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # ---- memdbg_plugin_manager_test ----
 
@@ -687,6 +733,7 @@ if(MSVC)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4)
   target_compile_options(memdbg_structure_compare_test PRIVATE /W4)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
+  target_compile_options(memdbg_payload_fetcher_test PRIVATE /W4)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
   target_compile_options(memdbg_plugin_manager_test PRIVATE /W4)
@@ -700,6 +747,7 @@ else()
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_structure_compare_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_payload_fetcher_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_plugin_manager_test PRIVATE -Wall -Wextra -Wpedantic)

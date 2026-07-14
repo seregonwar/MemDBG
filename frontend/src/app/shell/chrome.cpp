@@ -733,6 +733,19 @@ void draw_status_bar(AppState &state, ImVec2 size) {
   if (avail_for_status < 80.0f * scl) avail_for_status = 80.0f * scl;
   text_ellipsis(state.status, avail_for_status, ui::colors().text);
 
+  /* Payload outdated warning — shown after the status text */
+  if (state.payload_outdated && !state.payload_outdated_remote_tag.empty()) {
+    ImGui::SameLine();
+    char warn_buf[256];
+    std::snprintf(warn_buf, sizeof(warn_buf),
+                  locale::tr("payload.outdated_warning"),
+                  state.hello.version.c_str(),
+                  state.payload_outdated_remote_tag.c_str());
+    ImGui::TextColored(ui::colors().warning, "%s", warn_buf);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("payload.outdated_hint"));
+  }
+
   const auto log_stats = state.udp_listener.stats();
   ImGui::SameLine();
   ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - rhs_width));

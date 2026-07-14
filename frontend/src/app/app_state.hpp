@@ -13,6 +13,7 @@
 #include "discovery_client.hpp"
 #include "udp_log_listener.hpp"
 #include "github_profile.hpp"
+#include "payload_fetcher.hpp"
 #include "release_check.hpp"
 #include "plugins/repository/plugin_manager.hpp"
 #include "plugins/repository/lua_engine.hpp"
@@ -251,6 +252,11 @@ struct AppState {
   uint64_t crash_udp_last_received = 0;
   UdpLogListener udp_listener;
   GitHubProfile github_profile;
+  PayloadFetcher payload_fetcher;
+  bool payload_auto_fetch = false;
+  int payload_platform = 0;  /* 0 = Auto, 1 = PS4, 2 = PS5 */
+  bool payload_outdated = false;          /* true when hello.version < remote tag */
+  std::string payload_outdated_remote_tag; /* latest GitHub tag for status bar warning */
   ReleaseCheck release_check;
   plugins::PluginManager plugin_manager;
   cheats::CheatRepository cheat_repository;
@@ -612,9 +618,6 @@ struct AppState {
   std::string lua_output;
   char lua_editor_text[65536] = "-- MemDBG Lua Script\n-- Write your script here and press F5 to run\n\nprint(\"Hello from MemDBG!\")\nprint(\"Target PID:\", memdbg.get_pid())\n";
   std::string lua_last_script_path;
-  bool lua_save_modal_open = false;
-  bool lua_load_modal_open = false;
-  char lua_save_path[512] = "myscript.lua";
   int lua_timeout_ms = 5000;
 
   /* ---- Lua REPL history ---- */

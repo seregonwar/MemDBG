@@ -7,6 +7,7 @@
 #include "../internal.hpp"
 #include "trainer/trainer_format.hpp"
 #include "trainer/batchcode_parser.hpp"
+#include "file_picker.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1928,11 +1929,17 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
   ImGui::InputTextWithHint("Path##MobileTrainerPath", "trainers/session.cht",
                            state.trainer_file_path,
                            sizeof(state.trainer_file_path));
-  if (mobile_action_button(std::string(icons::kLoad) + "  Load", false)) {
-    const int count = load_trainer_file(state, state.trainer_file_path);
-    if (count >= 0)
-      set_status(state, "Loaded " + std::to_string(count) +
-                            " trainer entries");
+  /* Browse button using native OS file picker */
+  if (mobile_action_button(std::string(icons::kLoad) + "  Browse...", false)) {
+    std::string picked = ui::pickFile("Open Trainer File", "Trainer Files", "*.cht");
+    if (!picked.empty()) {
+      std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+                    "%s", picked.c_str());
+      const int count = load_trainer_file(state, state.trainer_file_path);
+      if (count >= 0)
+        set_status(state, "Loaded " + std::to_string(count) +
+                              " trainer entries");
+    }
   }
   if (mobile_action_button(std::string(icons::kSave) + "  Save", false))
     save_trainer_file(state, state.trainer_file_path);

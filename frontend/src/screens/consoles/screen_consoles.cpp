@@ -252,12 +252,83 @@ void draw_consoles(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
   ImGui::Separator();
   ImGui::Spacing();
+
+  /* ── Payload Fetcher status ── */
+  {
+    PayloadInfo info = state.payload_fetcher.info();
+    const bool checking = state.payload_fetcher.busy();
+
+    ImGui::TextColored(ui::colors().muted, "Payload Auto-Fetch");
+    ImGui::Spacing();
+
+    if (ImGui::Checkbox("Auto-fetch payload from GitHub",
+                         &state.payload_auto_fetch)) {
+      state.payload_fetcher.set_auto_fetch(state.payload_auto_fetch);
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Automatically download the latest MemDBG payload from GitHub releases.");
+
+    ImGui::Spacing();
+    const char *platform_opts[] = {
+      locale::tr("settings.payload_platform_auto"),
+      locale::tr("settings.payload_platform_ps4"),
+      locale::tr("settings.payload_platform_ps5"),
+      locale::tr("settings.payload_platform_ps6")
+    };
+    if (ImGui::Combo(locale::tr("settings.payload_platform"), &state.payload_platform, platform_opts, 4)) {
+      state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("settings.payload_platform_hint"));
+
+    if (checking) {
+      ImGui::TextColored(ui::colors().primary2, "  Checking...");
+    } else if (!state.payload_fetcher.checked()) {
+      ImGui::TextColored(ui::colors().muted, "  Waiting for first check...");
+    } else if (info.available && info.up_to_date) {
+      ImGui::TextColored(ui::colors().success, "  Up to date (%s)", info.tag_name.c_str());
+    } else if (info.available && !info.up_to_date) {
+      ImGui::TextColored(ui::colors().warning, "  Update available: %s", info.tag_name.c_str());
+    } else if (!info.error.empty()) {
+      ImGui::TextColored(ui::colors().danger, "  Error: %s", info.error.c_str());
+    } else {
+      ImGui::TextColored(ui::colors().muted, "  No payload found");
+    }
+
+    if (info.downloaded) {
+      ImGui::TextColored(ui::colors().success, "  Downloaded: %s", info.local_path.c_str());
+    }
+
+    ImGui::Spacing();
+    if (ui::soft_button("Check Now", ImVec2(120.0f, 28.0f))) {
+      state.payload_fetcher.refresh();
+    }
+
+    if (!connected && info.available && info.up_to_date && !info.local_path.empty()) {
+      ImGui::SameLine();
+      if (ui::primary_button("Inject & Connect", ImVec2(150.0f, 28.0f))) {
+        /* Attempt connection; if it fails, we already have the payload cached. */
+        save_current_console_target(state);
+        connect_console(state);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Payload cached at %s. Ready to connect.", info.local_path.c_str());
+    }
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
   ImGui::Text("Auto-Discovery");
   ImGui::TextWrapped("Broadcast a UDP ping to find MemDBG payloads on the LAN.");
   ImGui::Spacing();
 
   if (state.discovery_pending) {
-    ImGui::Text("Searching...");
+    ImGui::Text("%s", locale::tr("consoles.searching"));
+    ImGui::SameLine();
+    if (ui::soft_button(locale::tr("common.cancel"), ImVec2(80.0f, 28.0f))) {
+      state.discovery_client.cancel();
+    }
   } else if (ui::soft_button("Discover Consoles", ui::full_button(40))) {
     state.discovery_pending = true;
     state.discovery_error.clear();

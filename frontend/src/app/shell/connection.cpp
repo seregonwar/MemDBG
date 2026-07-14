@@ -608,6 +608,7 @@ void poll_connect(AppState &state) {
   state.client.take_fd(s_temp_client.release_fd());
   state.hello = s_temp_hello;
   state.has_hello = true;
+  update_payload_version_check(state);
   state.taskmgr_resources.clear();
   state.taskmgr_fmem_by_name.clear();
   state.taskmgr_last_log_received = 0U;

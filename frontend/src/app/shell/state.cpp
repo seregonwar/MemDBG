@@ -163,6 +163,13 @@ bool load_frontend_settings(AppState &state, std::string *error) {
     } else if (key == "taskmgr_prefetch_on_connect") {
       state.taskmgr_prefetch_on_connect =
           value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "payload_auto_fetch") {
+      state.payload_auto_fetch =
+          value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "payload_platform") {
+      state.payload_platform = std::atoi(value.c_str());
+      if (state.payload_platform < 0 || state.payload_platform > 3)
+        state.payload_platform = 0;
     } else if (key == "selected_target") {
       saved_selected_target = std::atoi(value.c_str());
     } else if (key == "sidebar_section_0") {
@@ -246,6 +253,8 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "last_debugger_pid=" << state.last_debugger_pid << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr_prefetch_on_connect ? 1 : 0) << "\n";
+  out << "payload_auto_fetch=" << (state.payload_auto_fetch ? 1 : 0) << "\n";
+  out << "payload_platform=" << state.payload_platform << "\n";
   out << "selected_target=" << selected_target << "\n";
   for (int i = 0; i < 4; ++i)
     out << "sidebar_section_" << i << "=" << (state.sidebar_sections_expanded[i] ? 1 : 0) << "\n";
