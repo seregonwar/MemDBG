@@ -549,8 +549,6 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
   ${simdjson_SOURCE_DIR}/singleheader
 )
 
-target_link_libraries(memdbg_trainer_formats_test PRIVATE simdjson)
-
 # ---- memdbg_locale_manager_test ----
 
 add_executable(memdbg_locale_manager_test
