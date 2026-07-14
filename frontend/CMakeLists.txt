@@ -515,6 +515,8 @@ add_executable(memdbg_trainer_formats_test
   src/trainer/trainer_format.cpp
   src/core/client/memdbg_client.cpp
   src/core/crash_logger.cpp
+  src/core/discovery_client.cpp
+  src/core/payload_fetcher.cpp
   src/core/udp_log_listener.cpp
   src/core/platform.cpp
   src/locale/locale.cpp

@@ -569,7 +569,28 @@ memdbg_status_t memdbg_debugger_stop(void) {
     return pal_status_from_errno();
   }
   debugger_unlock();
-  return memdbg_debugger_poll_events();
+
+  /* Wait for the target to actually enter the stopped state.
+   * SIGSTOP delivery is asynchronous on console firmware; a single
+   * WNOHANG poll is not enough.  Timeout after 5 seconds. */
+  const uint32_t timeout_ms = 5000U;
+  uint32_t waited_ms = 0U;
+  while (waited_ms < timeout_ms) {
+    memdbg_status_t st = memdbg_debugger_poll_events();
+    if (st != MEMDBG_OK) {
+      return st;
+    }
+    if (memdbg_debugger_is_stopped()) {
+      return MEMDBG_OK;
+    }
+    debugger_sleep_ms(10U);
+    waited_ms += 10U;
+    if (!memdbg_debugger_is_attached()) {
+      return MEMDBG_ERR_STATE;
+    }
+  }
+
+  return MEMDBG_ERR_STATE;
 }
 
 memdbg_status_t memdbg_debugger_continue(void) {
