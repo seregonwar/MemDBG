@@ -1146,7 +1146,6 @@
   "settings.sandbox_whitelist_tip": "Comma-separated list of Lua modules allowed via require(). Empty = block all. Example: table, string, mymodule",
   "settings.sandbox_confirm_disable": "Disable sandbox protections?",
   "settings.sandbox_confirm_disable_desc": "This will allow plugins unrestricted access to filesystem, shell commands, network connections, and native modules. Only disable if you trust all installed plugins. This can be re-enabled at any time.",
-
   "lua.api.get_pid_desc": "current target PID",
   "lua.api.get_pid_label": "Get PID & print",
   "lua.api.read_memory_desc": "returns hex string",
