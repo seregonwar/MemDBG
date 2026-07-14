@@ -190,6 +190,7 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/core/github_profile.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/platform.cpp
+  ${FRONTEND_ROOT}/src/core/payload_fetcher.cpp
   ${FRONTEND_ROOT}/src/core/release_check.cpp
   ${FRONTEND_ROOT}/src/core/udp_log_listener.cpp
 
@@ -369,11 +370,12 @@ endif()
 # containing the .app).  Run a shell snippet after linking so that both local
 # Xcode builds and CI produce an unsigned .ipa alongside the .app.
 #
-# NOTE: The entire script is a SINGLE argument to 'bash -c'.  Breaking it
-# across multiple CMake strings would pass them as separate argv entries
-# (positional parameters $$0, $$1, ...), which bash never executes.
+# NOTE: The entire script is a SINGLE argument to 'bash -c'. Xcode supplies
+# TARGET_BUILD_DIR and WRAPPER_NAME at build time; keep the shell variables as
+# single-dollar references so the inner bash expands them instead of treating
+# `$$` as its process ID.
 add_custom_command(TARGET MemDBGMobile POST_BUILD
-  COMMAND /bin/bash -c "set -euo pipefail; app_dir='$<TARGET_BUNDLE_DIR:MemDBGMobile>'; app_name='$<TARGET_FILE_BASE_NAME:MemDBGMobile>'; out_dir='${CMAKE_BINARY_DIR}'; rm -rf \"$$out_dir/Payload\"; mkdir -p \"$$out_dir/Payload\"; cp -R \"$$app_dir\" \"$$out_dir/Payload/$$app_name.app\"; cd \"$$out_dir\"; zip -qry \"$$app_name.ipa\" Payload; rm -rf \"$$out_dir/Payload\""
+  COMMAND /bin/bash -c "set -euo pipefail; app_dir=\"$TARGET_BUILD_DIR/$WRAPPER_NAME\"; app_name='$<TARGET_FILE_BASE_NAME:MemDBGMobile>'; out_dir='${CMAKE_BINARY_DIR}'; rm -rf \"$out_dir/Payload\"; mkdir -p \"$out_dir/Payload\"; cp -R \"$app_dir\" \"$out_dir/Payload/$app_name.app\"; cd \"$out_dir\"; zip -qry \"$app_name.ipa\" Payload; rm -rf \"$out_dir/Payload\""
   VERBATIM
   COMMENT "Packaging unsigned .ipa from .app bundle"
 )
