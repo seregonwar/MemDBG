@@ -361,10 +361,13 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   const float base_text_size = 16.0f;
   const float text_size = std::roundf(base_text_size * dpi_scale);
 
-  // Build comprehensive glyph ranges: Default + Cyrillic
+  // Default and Cyrillic ranges omit punctuation such as U+2014 (em dash),
+  // which is used by several translated strings.
   ImFontGlyphRangesBuilder ranges_builder;
   ranges_builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
   ranges_builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+  static const ImWchar punctuation_ranges[] = {0x2000, 0x206F, 0};
+  ranges_builder.AddRanges(punctuation_ranges);
   ImVector<ImWchar> glyph_ranges;
   ranges_builder.BuildRanges(&glyph_ranges);
 

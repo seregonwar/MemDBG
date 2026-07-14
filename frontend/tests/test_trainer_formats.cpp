@@ -20,7 +20,9 @@ extern "C" {
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#if !defined(_WIN32)
 #include <sys/resource.h>
+#endif
 
 namespace memdbg::frontend {
 namespace {
@@ -658,12 +660,16 @@ static void test_parse_goldhen_mods_variants() {
 /* Sample the current peak RSS (resident set size) via getrusage.
    On macOS ru_maxrss is bytes; on Linux it is KiB. Normalise to KiB. */
 static long sample_peak_rss_kb() {
+#if defined(_WIN32)
+  return -1;
+#else
   struct rusage usage;
   if (getrusage(RUSAGE_SELF, &usage) != 0) return -1;
 #ifdef __APPLE__
   return usage.ru_maxrss / 1024L;
 #else
   return usage.ru_maxrss;
+#endif
 #endif
 }
 

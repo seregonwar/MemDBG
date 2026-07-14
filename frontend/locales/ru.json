@@ -664,6 +664,7 @@
   "common.platform": "Платформа",
   "file_picker.select_dump_dir": "Выбрать папку дампа",
   "file_picker.open_trainer": "Открыть трейнер",
+  "file_picker.save_trainer": "Сохранить трейнер",
   "file_picker.trainer_files": "Файлы трейнера",
   "file_picker.save_memory_dump": "Сохранить дамп",
   "file_picker.binary_files": "Бинарные файлы",

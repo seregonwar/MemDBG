@@ -40,6 +40,7 @@ def dim(text: str) -> str:
 # ── format specifier extraction ──────────────────────────────────────────────
 
 FORMAT_RE = re.compile(r"%(?:[0-9]*\.?[0-9]*)?[diouxXeEfFgGaAcspn%]|%zu|%ll[duixX]|%lu|%l[du]")
+SOURCE_LOCALE_RE = re.compile(r'(?:locale::tr|\btr)\(\s*"([^"]+)"\s*\)')
 
 def extract_specifiers(text: str) -> list[str]:
     """Return ordered list of printf-style format specifiers in *text*."""
@@ -135,6 +136,34 @@ def check_manifest(locales_dir: Path, locale_files: list[str]) -> list[str]:
     return errors
 
 
+def check_source_references(locales_dir: Path, reference: dict) -> list[str]:
+    """Verify every literal locale lookup in frontend/src exists in en.json."""
+    source_dir = locales_dir.parent / "src"
+    if not source_dir.is_dir():
+        return []
+
+    referenced: dict[str, list[str]] = defaultdict(list)
+    for path in source_dir.rglob("*"):
+        if path.suffix not in {".c", ".cpp", ".h", ".hpp", ".mm"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return [f"{path}: read error while checking locale references: {exc}"]
+        for match in SOURCE_LOCALE_RE.finditer(text):
+            referenced[match.group(1)].append(
+                str(path.relative_to(source_dir.parent))
+            )
+
+    errors = []
+    for key in sorted(set(referenced) - set(reference)):
+        locations = ", ".join(sorted(set(referenced[key])))
+        errors.append(
+            f"en.json: missing source-referenced key '{key}' ({locations})"
+        )
+    return errors
+
+
 # ── main validation ──────────────────────────────────────────────────────────
 
 def validate(locales_dir: Path) -> int:
@@ -226,6 +255,9 @@ def validate(locales_dir: Path) -> int:
 
     # ── 6. Remote manifest consistency ───────────────────────────────────
     errors.extend(check_manifest(locales_dir, langs))
+
+    # Literal source references must exist in the English catalog.
+    errors.extend(check_source_references(locales_dir, parsed[ref_name]))
 
     # ── 7. Report ────────────────────────────────────────────────────────
     print()

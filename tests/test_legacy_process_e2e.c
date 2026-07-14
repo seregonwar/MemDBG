@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -875,6 +876,9 @@ static void test_error_handling(void) {
 /* ---- Main ---- */
 
 int main(int argc, char **argv) {
+#ifdef SIGPIPE
+  (void)signal(SIGPIPE, SIG_IGN);
+#endif
   const char *host = "127.0.0.1";
   uint16_t port    = 744;
   if (argc >= 2) host = argv[1];

@@ -722,6 +722,7 @@
   "common.platform": "Platform",
   "file_picker.select_dump_dir": "Select Dump Directory",
   "file_picker.open_trainer": "Open Trainer File",
+  "file_picker.save_trainer": "Save Trainer File",
   "file_picker.trainer_files": "Trainer Files",
   "file_picker.save_memory_dump": "Save Memory Dump",
   "file_picker.binary_files": "Binary Files",

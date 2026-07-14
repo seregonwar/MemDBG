@@ -478,6 +478,7 @@ add_executable(memdbg_trainer_formats_test
   src/core/crash_logger.cpp
   src/core/udp_log_listener.cpp
   src/core/platform.cpp
+  src/locale/locale.cpp
   src/plugins/repository/lua_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
 
@@ -670,7 +671,7 @@ if(WIN32)
   target_compile_definitions(memdbg_sandbox_fuzz_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_limits_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_python_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
-  target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32 comdlg32 ole32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_trainer_formats_test PRIVATE ws2_32)
   target_link_libraries(memdbg_plugin_manager_test PRIVATE ws2_32 shell32)

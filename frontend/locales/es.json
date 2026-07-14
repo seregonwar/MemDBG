@@ -663,6 +663,7 @@
   "common.platform": "Plataforma",
   "file_picker.select_dump_dir": "Seleccionar Directorio de Volcado",
   "file_picker.open_trainer": "Abrir Archivo de Entrenador",
+  "file_picker.save_trainer": "Guardar Archivo de Entrenador",
   "file_picker.trainer_files": "Archivos de Entrenador",
   "file_picker.save_memory_dump": "Guardar Volcado de Memoria",
   "file_picker.binary_files": "Archivos Binarios",
