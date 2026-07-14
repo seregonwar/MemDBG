@@ -428,6 +428,7 @@ void LuaSandbox::configure_sandbox(const std::filesystem::path &root) {
     }
     lua_pop(L_, 1);
   }
+#if !defined(MEMDBG_PLATFORM_IOS)
   if (policy_.allow_subprocess) {
     luaL_requiref(L_, LUA_OSLIBNAME, luaopen_os, 1); lua_pop(L_, 1);
     lua_getglobal(L_, "os");
@@ -445,6 +446,7 @@ void LuaSandbox::configure_sandbox(const std::filesystem::path &root) {
     }
     lua_pop(L_, 1);
   }
+#endif
 }
 
 // ── print / hooks ────────────────────────────────────────────────────────
