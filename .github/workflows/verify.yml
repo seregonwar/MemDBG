@@ -179,24 +179,40 @@ jobs:
               printf '    %s\n' "${paths[@]}" >&2
             fi
 
-            # ── Diagnostics: what did we find? ──
+            # ── Diagnostics ──
             echo "==> $name: $exe"
+            ls -la "$exe" || true
             if command -v file &>/dev/null; then
               file "$exe" || true
             fi
-            if ! [ -x "$exe" ]; then
-              echo "==> ERROR: $exe is NOT executable" >&2
-              ls -la "$exe" || true
-              exit 1
+
+            # Unix execute-bit check; skip on Windows (Git Bash / MSYS
+            # doesn't set +x on .exe files).
+            if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* ]]; then
+              if ! [ -x "$exe" ]; then
+                echo "==> ERROR: $exe is NOT executable" >&2
+                exit 1
+              fi
             fi
+
             if [[ "$OSTYPE" == linux-gnu* ]] && command -v ldd &>/dev/null; then
               ldd "$exe" || true
             elif [[ "$OSTYPE" == darwin* ]] && command -v otool &>/dev/null; then
               otool -L "$exe" || true
             fi
-            echo "==> Running $exe..."
 
-            "$exe"
+            echo "==> Running $exe..."
+            "$exe" || {
+              rc=$?
+              echo "==> $name exited with code $rc" >&2
+              # 127 usually means missing DLL / dynamic-link error;
+              # surface a helpful hint on Windows.
+              if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && [ "$rc" -eq 127 ]; then
+                echo "==> Hint: exit 127 on Windows often means a required DLL is missing." >&2
+                echo "==> Try running: dumpbin /dependents $exe" >&2
+              fi
+              exit "$rc"
+            }
           }
 
           run_frontend_test memdbg_auto_search_test
