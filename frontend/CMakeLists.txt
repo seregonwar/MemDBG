@@ -553,13 +553,6 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
 
 target_link_libraries(memdbg_trainer_formats_test PRIVATE simdjson)
 
-# Static MSVC runtime avoids runtime DLL dependency that causes exit 127
-# on Windows CI runners.
-if(MSVC)
-  set_property(TARGET memdbg_trainer_formats_test PROPERTY
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
 # ---- memdbg_locale_manager_test ----
 
 add_executable(memdbg_locale_manager_test
