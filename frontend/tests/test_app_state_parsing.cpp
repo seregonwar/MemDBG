@@ -5,6 +5,7 @@
  */
 
 #include "app_state.hpp"
+#include "core/client/process_list_parser.hpp"
 
 #include <array>
 #include <cstdint>
@@ -108,6 +109,74 @@ static void test_text_helpers() {
        bytes_to_readable_text(bytes) == "Hello.. \xC3\xA8");
 }
 
+template <typename T>
+static void append_wire(std::vector<uint8_t> &out, const T &value) {
+  const auto *bytes = reinterpret_cast<const uint8_t *>(&value);
+  out.insert(out.end(), bytes, bytes + sizeof(value));
+}
+
+static void test_process_list_compatibility() {
+  std::printf("\n--- process-list wire compatibility ---\n");
+
+  {
+    std::vector<uint8_t> payload;
+    const uint32_t count = 2;
+    append_wire(payload, count);
+    memdbg_process_entry_t first{};
+    first.pid = 101;
+    first.ppid = 1;
+    std::memcpy(first.name, "SceShellCore", 12U);
+    memdbg_process_entry_t second{};
+    second.pid = 202;
+    second.ppid = 101;
+    std::memcpy(second.name, "eboot.bin", 9U);
+    append_wire(payload, first);
+    append_wire(payload, second);
+
+    std::vector<ProcessEntry> decoded;
+    std::string error;
+    TEST("current process records parse",
+         detail::parse_process_list_response(payload, decoded, error));
+    TEST("current process count", decoded.size() == 2U);
+    TEST("current ppid preserved", decoded.size() == 2U &&
+                                       decoded[1].ppid == 101);
+    TEST("current name preserved", decoded.size() == 2U &&
+                                       decoded[0].name == "SceShellCore");
+  }
+
+  {
+    std::vector<uint8_t> payload;
+    const uint32_t count = 2;
+    append_wire(payload, count);
+    auto append_legacy = [&](int32_t pid, const char *name) {
+      append_wire(payload, pid);
+      std::array<char, 48> wire_name{};
+      const size_t name_len =
+          std::min(std::strlen(name), wire_name.size() - 1U);
+      std::memcpy(wire_name.data(), name, name_len);
+      const auto *bytes = reinterpret_cast<const uint8_t *>(wire_name.data());
+      payload.insert(payload.end(), bytes, bytes + wire_name.size());
+    };
+    append_legacy(303, "SceSystemService");
+    append_legacy(404, "game.elf");
+
+    std::vector<ProcessEntry> decoded;
+    std::string error;
+    TEST("v0.2.0 process records parse",
+         detail::parse_process_list_response(payload, decoded, error));
+    TEST("legacy process count", decoded.size() == 2U);
+    TEST("legacy ppid defaults to zero", decoded.size() == 2U &&
+                                            decoded[0].ppid == 0);
+    TEST("legacy name preserved", decoded.size() == 2U &&
+                                      decoded[1].name == "game.elf");
+
+    payload.pop_back();
+    TEST("genuinely truncated records rejected",
+         !detail::parse_process_list_response(payload, decoded, error) &&
+             error == "truncated process list response");
+  }
+}
+
 } // namespace
 } // namespace memdbg::frontend
 
@@ -118,6 +187,7 @@ int main() {
   test_parse_u64();
   test_build_scan_value();
   test_text_helpers();
+  test_process_list_compatibility();
 
   std::printf("\n=== Results ======================================\n");
   int total = g_passed + g_failed;

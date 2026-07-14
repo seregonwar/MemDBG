@@ -5,6 +5,7 @@
  */
 
 #include "memdbg_client.hpp"
+#include "process_list_parser.hpp"
 
 #include "memdbg/core/memdbg.h"
 
@@ -60,9 +61,6 @@ namespace memdbg::frontend {
 
 namespace {
 
-constexpr uint32_t kMaxProcessEntries =
-    (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
-    sizeof(memdbg_process_entry_t);
 constexpr uint32_t kMaxMapEntries =
     (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
     sizeof(memdbg_map_entry_t);
@@ -298,40 +296,10 @@ bool Client::process_list(std::vector<ProcessEntry> &out) {
   if (!request(MEMDBG_CMD_PROCESS_LIST, nullptr, 0, response)) {
     return false;
   }
-  if (response.size() < sizeof(uint32_t)) {
-    set_error("short process list response");
+  std::string parse_error;
+  if (!detail::parse_process_list_response(response, out, parse_error)) {
+    set_error(parse_error);
     return false;
-  }
-
-  uint32_t count = 0;
-  std::memcpy(&count, response.data(), sizeof(count));
-  if (count > kMaxProcessEntries) {
-    set_error("process list response has an invalid item count");
-    return false;
-  }
-  size_t expected = sizeof(count) + static_cast<size_t>(count) *
-                                       sizeof(memdbg_process_entry_t);
-  if (response.size() < expected) {
-    set_error("truncated process list response");
-    return false;
-  }
-
-  out.clear();
-  out.reserve(count);
-  const auto *entries = reinterpret_cast<const memdbg_process_entry_t *>(
-      response.data() + sizeof(count));
-  for (uint32_t i = 0; i < count; ++i) {
-    if (entries[i].pid <= 0) {
-      continue;
-    }
-    ProcessEntry entry;
-    entry.pid = entries[i].pid;
-    entry.ppid = entries[i].ppid;
-    entry.name = fixed_string(entries[i].name, sizeof(entries[i].name));
-    if (entry.name.empty()) {
-      entry.name = "pid " + std::to_string(entry.pid);
-    }
-    out.push_back(std::move(entry));
   }
   return true;
 }
