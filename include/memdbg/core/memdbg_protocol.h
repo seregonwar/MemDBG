@@ -151,6 +151,9 @@ typedef enum memdbg_command {
   /* Klog streaming */
   MEMDBG_CMD_KLOG_CONNECT = 0x0D02U,
 
+  /* SPRX injection (load + init shared library into target process) */
+  MEMDBG_CMD_SPRX_INJECT = 0x0D03U,
+
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
 
@@ -1100,6 +1103,25 @@ typedef struct MEMDBG_PACKED memdbg_process_dump_request {
                     "stack": [{ "fp": hex, "ret": hex, "code": hex ... }] }]
    }
  */
+
+/* SPRX injection: load a shared-library ELF from a filesystem path
+ * into a target process and invoke its entry point.
+ *
+ * Request:  memdbg_sprx_inject_request_t (followed by path bytes)
+ * Response: memdbg_sprx_inject_response_t */
+typedef struct MEMDBG_PACKED memdbg_sprx_inject_request {
+  int32_t pid;
+  uint32_t flags;             /* reserved for future use (set to 0) */
+  uint32_t path_len;          /* length of the path string that follows */
+  uint32_t reserved;
+  /* followed by path_len bytes of the SPRX file path (not NUL-terminated) */
+} memdbg_sprx_inject_request_t;
+
+typedef struct MEMDBG_PACKED memdbg_sprx_inject_response {
+  int32_t  result;      /* 0 = success, negative = error code */
+  uint64_t entry_addr;  /* entry-point address in target */
+  uint64_t load_base;   /* base address where ELF was loaded */
+} memdbg_sprx_inject_response_t;
 
 #undef MEMDBG_PACKED
 

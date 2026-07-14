@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ---- External declarations for features without dedicated headers ---- */
 
@@ -34,6 +35,8 @@ extern int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_re
                                          const uint8_t *body, uint32_t body_len);
 extern int memdbg_hijack_handle(int fd, const memdbg_process_hijack_request_t *req,
                                 const uint8_t *body, uint32_t body_len);
+extern int sprx_inject_file_ex(const char *path, int target_pid,
+                                 uint64_t *entry_out, uint64_t *base_out);
 
 /* ---- Platform helper ---- */
 
@@ -348,6 +351,30 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
                ? MEMDBG_OK
                : MEMDBG_ERR_NET;
 #endif
+  }
+
+  case MEMDBG_CMD_SPRX_INJECT: {
+    if (req->length < sizeof(memdbg_sprx_inject_request_t)) return MEMDBG_ERR_PROTOCOL;
+    const memdbg_sprx_inject_request_t *sr = (const memdbg_sprx_inject_request_t *)body;
+    uint32_t path_len = sr->path_len;
+    if (path_len == 0U || path_len > 256U) return MEMDBG_ERR_PARAM;
+    if (req->length < sizeof(*sr) + path_len) return MEMDBG_ERR_PROTOCOL;
+    if (sr->pid <= 1 || (pid_t)sr->pid == getpid()) return MEMDBG_ERR_PERMISSION;
+
+    char path[257];
+    memcpy(path, (const uint8_t *)body + sizeof(*sr), path_len);
+    path[path_len] = '\0';
+
+    uint64_t entry_addr = 0U, base = 0U;
+    int rc = sprx_inject_file_ex(path, sr->pid, &entry_addr, &base);
+    memdbg_sprx_inject_response_t resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.result     = rc;
+    resp.entry_addr = (rc == 0) ? entry_addr : 0U;
+    resp.load_base  = (rc == 0) ? base : 0U;
+
+    return send_response(fd, req, rc == 0 ? MEMDBG_OK : MEMDBG_ERR_IO,
+                         &resp, sizeof(resp)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 
   default:

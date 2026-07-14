@@ -229,35 +229,87 @@ int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
+#include <ps5/mdbg.h>
+#include "memdbg/debug/memdbg_debugger.h"
 
-static long remote_syscall(int pid, long no, long a, long b, long c,
-                           long d, long e, long f) {
-  (void)pid; (void)no; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-  volatile long ret;
-  __asm__ volatile(
-    "mov %[no], %%rax\n"
-    "mov %[a], %%rdi\n"
-    "mov %[b], %%rsi\n"
-    "mov %[c], %%rdx\n"
-    "mov %[d], %%r10\n"
-    "mov %[e], %%r8\n"
-    "mov %[f], %%r9\n"
-    "syscall\n"
-    "mov %%rax, %[ret]\n"
-    : [ret] "=r" (ret)
-    : [no] "r" (no), [a] "r" (a), [b] "r" (b), [c] "r" (c),
-      [d] "r" (d), [e] "r" (e), [f] "r" (f)
-    : "rax", "rdi", "rsi", "rdx", "r10", "r8", "r9", "rcx", "r11", "memory"
-  );
-  return ret;
+static int64_t dbg_step_syscall(int pid, int32_t lwp,
+                                 memdbg_debug_regs_t *orig_regs,
+                                 long sysno, long a, long b, long c,
+                                 long d, long e, long f) {
+  intptr_t gate = kernel_dynlib_resolve((pid_t)pid, 0x1, "HoLVWNanBBc");
+  if (!gate)
+    gate = kernel_dynlib_resolve((pid_t)pid, 0x2001, "HoLVWNanBBc");
+  if (!gate) return -1;
+  gate += 0xa;
+
+  memdbg_debug_regs_t call_regs = *orig_regs;
+  call_regs.r_rip = (int64_t)gate;
+  call_regs.r_rax = sysno;
+  call_regs.r_rdi = a;
+  call_regs.r_rsi = b;
+  call_regs.r_rdx = c;
+  call_regs.r_r10 = d;
+  call_regs.r_r8  = e;
+  call_regs.r_r9  = f;
+
+  if (memdbg_debugger_set_regs(lwp, &call_regs) != MEMDBG_OK)
+    return -1;
+
+  int64_t rax_result = -1;
+  while (1) {
+    if (memdbg_debugger_step(lwp) != MEMDBG_OK) break;
+    memdbg_debug_regs_t cur;
+    memset(&cur, 0, sizeof(cur));
+    if (memdbg_debugger_get_regs(lwp, &cur) != MEMDBG_OK) break;
+    if ((uint64_t)cur.r_rsp > (uint64_t)orig_regs->r_rsp - 8) break;
+    rax_result = cur.r_rax;
+    break;
+  }
+
+  memdbg_debugger_set_regs(lwp, orig_regs);
+  return rax_result;
 }
 
-static int jit_shm_create(int pid, uint64_t size, int prot) {
-  return (int)remote_syscall(pid, 0x215, (long)0, (long)size, (long)prot, 0, 0, 0);
+int64_t dbg_remote_mmap(int pid, uint64_t addr, uint64_t len,
+                         int prot, int flags) {
+  int32_t lwps[1] = {0};
+  uint32_t count = 1U;
+  {
+    char names_buf[1][24];
+    uint32_t states[1];
+    memdbg_debugger_get_threads(lwps, names_buf, states, &count, 1U);
+  }
+  if (count == 0U) return -1;
+  int32_t lwp = lwps[0];
+
+  memdbg_debug_regs_t orig_regs;
+  memset(&orig_regs, 0, sizeof(orig_regs));
+  if (memdbg_debugger_get_regs(lwp, &orig_regs) != MEMDBG_OK)
+    return -1;
+
+  return dbg_step_syscall(pid, lwp, &orig_regs,
+                           477, (long)addr, (long)len, (long)prot,
+                           (long)flags, -1, 0);
 }
 
-static int jit_shm_alias(int pid, int shm_fd, int prot) {
-  return (int)remote_syscall(pid, 0x216, (long)shm_fd, (long)prot, 0, 0, 0, 0);
+int64_t dbg_remote_munmap(int pid, uint64_t addr, uint64_t len) {
+  int32_t lwps[1] = {0};
+  uint32_t count = 1U;
+  {
+    char names_buf[1][24];
+    uint32_t states[1];
+    memdbg_debugger_get_threads(lwps, names_buf, states, &count, 1U);
+  }
+  if (count == 0U) return -1;
+  int32_t lwp = lwps[0];
+
+  memdbg_debug_regs_t orig_regs;
+  memset(&orig_regs, 0, sizeof(orig_regs));
+  if (memdbg_debugger_get_regs(lwp, &orig_regs) != MEMDBG_OK)
+    return -1;
+
+  return dbg_step_syscall(pid, lwp, &orig_regs,
+                           73, (long)addr, (long)len, 0, 0, 0, 0);
 }
 
 int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
@@ -278,7 +330,8 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
   const uint8_t *phdr_base = elf + e_phoff;
   const uint8_t *shdr_base = elf + e_shoff;
 
-  // Compute address range
+  const uint64_t page_mask = 0x3FFFULL;
+
   uint64_t min_addr = ~0ULL, max_addr = 0;
   if (e_phnum) {
     for (uint16_t i = 0; i < e_phnum; i++) {
@@ -294,19 +347,15 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
     }
   }
 
-  // Round to pages
-  const uint64_t page_mask = 0x3FFFULL;
   uint64_t min_aligned = min_addr & ~page_mask;
   uint64_t total_size = ((max_addr + page_mask) & ~page_mask) - min_aligned;
 
-  uint64_t base;
-  int      use_existing_region = (target_region && target_region[0] != '\0');
+  uint64_t base = 0;
+  int use_existing_region = (target_region && target_region[0] != '\0');
 
   if (use_existing_region) {
-    // Find the named VM region in the target process
     memdbg_map_list_t map_list;
-    if (memdbg_process_maps(pid, &map_list) != 0)
-      return -1;
+    if (memdbg_process_maps(pid, &map_list) != 0) return -1;
 
     uint64_t region_base = 0, region_end = 0;
     for (size_t i = 0; i < map_list.count; i++) {
@@ -318,26 +367,23 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
     }
     memdbg_process_maps_free(&map_list);
 
-    if (region_base == 0 || region_end <= region_base)
-      return -1;
-
-    uint64_t available = region_end - region_base;
-    if (total_size > available)
-      return -1;
-
+    if (region_base == 0 || region_end <= region_base) return -1;
+    if (total_size > region_end - region_base) return -1;
     base = region_base + min_aligned;
   } else {
-    // Allocate new memory in target
-    int mmap_flags = (e_type == 2) ? 0x1012 : 0x1002;
-    uint64_t base_request = (e_type == 2) ? min_aligned : 0;
-    void *base_p = (void *)(uintptr_t)base_request;
-    int rc = pal_memory_alloc(pid, base_request, total_size, 0,
-                              (uint32_t)mmap_flags, (uint64_t *)&base_p);
-    if (rc != 0) return -1;
-    base = (uint64_t)(uintptr_t)base_p;
+    /* Allocate via remote mmap in target (debugger already attached) */
+    int64_t result = dbg_remote_mmap(pid, (e_type == 2) ? min_aligned : 0,
+                                      total_size, PROT_READ | PROT_WRITE,
+                                      0x1012);
+    if (result < 0 || (result & page_mask) != 0) return -1;
+    base = (uint64_t)result;
   }
 
-  // Load segments
+  /* Build ELF in local mirror, then bulk copyin */
+  uint8_t *mirror = (uint8_t *)malloc((size_t)total_size);
+  if (!mirror) return -1;
+  memset(mirror, 0, (size_t)total_size);
+
   if (e_phnum) {
     for (uint16_t i = 0; i < e_phnum; i++) {
       const uint8_t *ph = phdr_base + (uint64_t)i * 56;
@@ -345,64 +391,25 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
       if (p_type != 1) continue;
       uint64_t p_memsz  = *(const uint64_t *)(ph + 40);
       if (p_memsz == 0) continue;
-      uint32_t p_flags  = *(const uint32_t *)(ph + 4);
       uint64_t p_offset = *(const uint64_t *)(ph + 8);
       uint64_t p_vaddr  = *(const uint64_t *)(ph + 16);
-
-      int seg_prot = ((p_flags & 1) ? 4 : 0) |
-                     ((p_flags & 2) ? 2 : 0) |
-                     ((p_flags & 4) ? 1 : 0);
-      uint64_t aligned_sz = (p_memsz + page_mask) & ~page_mask;
-      uint64_t tgt_addr   = base + p_vaddr;
-
-      if ((p_flags & 1) && !use_existing_region) {
-        // Executable (new allocation): use JIT shared memory
-        int shm_fd = jit_shm_create(pid, aligned_sz, ((p_flags >> 2) & 1) | 6);
-        if (shm_fd < 0) continue;
-
-        void *exe_p = (void *)(uintptr_t)tgt_addr;
-        pal_memory_alloc(pid, tgt_addr, aligned_sz, (uint32_t)seg_prot,
-                         0x11, (uint64_t *)&exe_p);
-        if ((uint64_t)(uintptr_t)exe_p != tgt_addr) return -1;
-
-        int alias_fd = jit_shm_alias(pid, shm_fd, 3);
-        if (alias_fd < 0) return -1;
-
-        void *rw_p = NULL;
-        pal_memory_alloc(pid, 0, aligned_sz, 3, 1,
-                         (uint64_t *)(uintptr_t)&rw_p);
-
-        size_t wb = 0;
-        memdbg_memory_write(pid, (uint64_t)(uintptr_t)rw_p,
-                            elf + p_offset, p_memsz, &wb);
-
-        pal_memory_free(pid, (uint64_t)(uintptr_t)rw_p, aligned_sz);
-      } else {
-        // Non-executable or existing region: direct write
-        uint32_t old_prot = 0;
-        if (use_existing_region && (p_flags & 1))
-          pal_memory_protect(pid, tgt_addr, aligned_sz, 7, &old_prot);
-
-        size_t wb = 0;
-        memdbg_memory_write(pid, tgt_addr, elf + p_offset, p_memsz, &wb);
-
-        if (use_existing_region && (p_flags & 1) && wb != p_memsz) {
-          pal_memory_protect(pid, tgt_addr, aligned_sz, old_prot, NULL);
-          return -1;
-        }
-        if (use_existing_region && (p_flags & 1))
-          pal_memory_protect(pid, tgt_addr, aligned_sz, old_prot, NULL);
+      uint64_t p_filesz = *(const uint64_t *)(ph + 32);
+      uint64_t copy_sz = (p_filesz < p_memsz) ? p_filesz : p_memsz;
+      if (copy_sz > 0) {
+        uint64_t off = p_vaddr - min_aligned;
+        if (off + copy_sz <= total_size)
+          memcpy(mirror + off, elf + p_offset, (size_t)copy_sz);
       }
     }
   }
 
-  // Apply RELA relocations
+  /* Apply R_X86_64_RELATIVE relocations in mirror */
   if (e_shnum) {
     for (uint16_t i = 0; i < e_shnum; i++) {
       const uint8_t *sh = shdr_base + (uint64_t)i * 64;
       uint32_t sh_type = *(const uint32_t *)(sh + 4);
       if (sh_type != 4) continue;
-      uint64_t sh_size   = *(const uint64_t *)(sh + 0x20);
+      uint64_t sh_size = *(const uint64_t *)(sh + 0x20);
       if (sh_size < 24) continue;
       uint64_t sh_offset = *(const uint64_t *)(sh + 0x18);
       const uint8_t *rela_base = elf + sh_offset;
@@ -411,18 +418,30 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
       for (uint64_t j = 0; j < n_rela; j++) {
         const uint8_t *r = rela_base + j * 24;
         uint32_t r_type = *(const uint32_t *)(r + 8);
-        if (r_type != 8) continue; // R_X86_64_RELATIVE
+        if (r_type != 8) continue;
         uint64_t r_offset = *(const uint64_t *)(r + 0);
         uint64_t r_addend = *(const uint64_t *)(r + 16);
-        uint64_t target   = base + r_offset;
-        uint64_t value    = base + r_addend;
-        size_t wb = 0;
-        memdbg_memory_write(pid, target, &value, 8, &wb);
+        uint64_t mirror_off = r_offset - min_aligned;
+        if (mirror_off + 8 <= total_size) {
+          *(int64_t *)(mirror + mirror_off) = (int64_t)(base + r_addend);
+        }
       }
     }
   }
 
-  // Fix segment protections after loading
+  /* Bulk copy to target */
+  if (use_existing_region) {
+    /* Make region writable for copyin, then fix protections after */
+    kernel_mprotect((pid_t)pid, (intptr_t)base, (size_t)total_size,
+                     PROT_READ | PROT_WRITE);
+  }
+  if (mdbg_copyin((pid_t)pid, mirror, (intptr_t)base, (size_t)total_size) != 0) {
+    free(mirror);
+    return -1;
+  }
+  free(mirror);
+
+  /* Fix segment protections */
   if (e_phnum) {
     for (uint16_t i = 0; i < e_phnum; i++) {
       const uint8_t *ph = phdr_base + (uint64_t)i * 56;
@@ -430,14 +449,23 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
       if (p_type != 1) continue;
       uint64_t p_memsz = *(const uint64_t *)(ph + 40);
       if (p_memsz == 0) continue;
-      uint32_t p_flags  = *(const uint32_t *)(ph + 4);
-      uint64_t p_vaddr  = *(const uint64_t *)(ph + 16);
+      uint32_t p_flags = *(const uint32_t *)(ph + 4);
+      uint64_t p_vaddr = *(const uint64_t *)(ph + 16);
       uint64_t aligned_sz = (p_memsz + page_mask) & ~page_mask;
-      uint64_t tgt_addr   = base + p_vaddr;
-      int seg_prot = ((p_flags & 1) ? 4 : 0) |
-                     ((p_flags & 2) ? 2 : 0) |
-                     ((p_flags & 4) ? 1 : 0);
-      pal_memory_protect(pid, tgt_addr, aligned_sz, (uint32_t)seg_prot, NULL);
+      uint64_t tgt_addr = base + p_vaddr;
+
+      int seg_prot = 0;
+      if (p_flags & 1) seg_prot |= PROT_READ;
+      if (p_flags & 2) seg_prot |= PROT_WRITE;
+      if (p_flags & 4) seg_prot |= PROT_EXEC;
+
+      if (p_flags & 4) {
+        kernel_mprotect((pid_t)pid, (intptr_t)tgt_addr,
+                        (size_t)aligned_sz, seg_prot);
+      } else if (!use_existing_region) {
+        kernel_mprotect((pid_t)pid, (intptr_t)tgt_addr,
+                        (size_t)aligned_sz, seg_prot);
+      }
     }
   }
 
