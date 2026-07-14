@@ -199,6 +199,9 @@ jobs:
               ldd "$exe" || true
             elif [[ "$OSTYPE" == darwin* ]] && command -v otool &>/dev/null; then
               otool -L "$exe" || true
+            elif [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then
+              echo "==> DLL dependencies:"
+              objdump -p "$exe" 2>/dev/null | grep -i 'DLL Name' || echo "    (objdump not available)"
             fi
 
             echo "==> Running $exe..."

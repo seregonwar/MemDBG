@@ -70,6 +70,30 @@ void draw_settings(AppState &state, ImVec2 avail) {
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", locale::tr("settings.taskmgr_prefetch_hint"));
 
+  if (ImGui::Checkbox(locale::tr("settings.payload_auto_fetch"),
+                      &state.payload_auto_fetch)) {
+    state.payload_fetcher.set_auto_fetch(state.payload_auto_fetch);
+    set_status(state, state.payload_auto_fetch
+        ? locale::tr("settings.payload_auto_fetch_on")
+        : locale::tr("settings.payload_auto_fetch_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.payload_auto_fetch_hint"));
+
+  const char *platform_opts[] = {
+    locale::tr("settings.payload_platform_auto"),
+    locale::tr("settings.payload_platform_ps4"),
+    locale::tr("settings.payload_platform_ps5"),
+    locale::tr("settings.payload_platform_ps6")
+  };
+  if (ImGui::Combo(locale::tr("settings.payload_platform"), &state.payload_platform, platform_opts, 4)) {
+    state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+    int idx = std::clamp(state.payload_platform, 0, 3);
+    set_status(state, std::string(locale::tr("settings.payload_platform_changed")) + ": " + platform_opts[idx]);
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.payload_platform_hint"));
+
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Language");
   ImGui::Spacing();

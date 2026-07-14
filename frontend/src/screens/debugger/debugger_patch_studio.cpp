@@ -5,6 +5,7 @@
  */
 
 #include "debugger_internal.hpp"
+#include "file_picker.hpp"
 
 namespace memdbg::frontend {
 
@@ -448,9 +449,16 @@ void draw_patch_studio(AppState &state, DebuggerState &ds,
   ImGui::Spacing();
 
   ImGui::BeginDisabled(client_busy);
-  ImGui::SetNextItemWidth(220.0f * scl);
-  ImGui::InputText("##patchfile", ds.patch_filename,
+  ImGui::SetNextItemWidth(170.0f * scl);
+  ImGui::InputTextWithHint("##patchfile", "patches.txt", ds.patch_filename,
                    sizeof(ds.patch_filename));
+  ImGui::SameLine();
+  if (ImGui::Button((std::string(icons::kLoad) + " Browse").c_str(),
+                      ImVec2(82.0f * scl, 0))) {
+    std::string picked = ui::pickFile("Open Patches", "Text Files", "*.txt");
+    if (!picked.empty())
+      std::snprintf(ds.patch_filename, sizeof(ds.patch_filename), "%s", picked.c_str());
+  }
   ImGui::SameLine();
   if (ui::soft_button((std::string(icons::kSave) + "  Save").c_str(),
                       ImVec2(88.0f * scl, 0))) {

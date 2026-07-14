@@ -5,8 +5,28 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "internal.hpp"
+#include "payload_fetcher.hpp"
 #include <mutex>
 namespace memdbg::frontend {
+
+void update_payload_version_check(AppState &state) {
+  if (!state.has_hello || state.hello.version.empty()) {
+    state.payload_outdated = false;
+    state.payload_outdated_remote_tag.clear();
+    return;
+  }
+
+  PayloadInfo info = state.payload_fetcher.info();
+  if (!info.available || info.tag_name.empty()) return;
+
+  /* Strip optional 'v' prefix from tag for comparison. */
+  std::string remote = info.tag_name;
+  if (!remote.empty() && (remote[0] == 'v' || remote[0] == 'V'))
+    remote.erase(0, 1);
+
+  state.payload_outdated = (state.hello.version != remote);
+  state.payload_outdated_remote_tag = info.tag_name;
+}
 
 void poll_release_check(AppState &state) {
   if (!state.release_check.worker_done.load()) return;

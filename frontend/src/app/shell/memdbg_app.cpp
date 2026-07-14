@@ -9,6 +9,7 @@
 #include "embedded_logo.hpp"
 #include "embedded_assets.inc"
 #include "github_profile.hpp"
+#include "payload_fetcher.hpp"
 #include "release_check.hpp"
 
 #include "imgui.h"
@@ -270,6 +271,22 @@ void draw_app(AppState &state) {
   poll_cheat_tasks(state);
   poll_session_health(state);
   handle_global_shortcuts(state);
+
+  /* PayloadFetcher toast: fire once when a new payload release is detected. */
+  {
+    std::string notify_tag = state.payload_fetcher.take_notify();
+    if (!notify_tag.empty()) {
+      char buf[256];
+      std::snprintf(buf, sizeof(buf),
+                    locale::tr("payload.new_version"), notify_tag.c_str());
+      push_notification(state, buf, 10.0);
+    }
+
+    /* Re-check payload version comparison when the fetcher has fresh data
+     * (catches the case where the user connects before the first check completes). */
+    if (state.has_hello && state.payload_fetcher.checked())
+      update_payload_version_check(state);
+  }
 
   ImGuiViewport *viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -598,6 +615,11 @@ void init_app_shared(AppState &state, float dpi_scale) {
   (void)locale_repo.start_startup_sync(requested_lang);
   github_profile_start(state.github_profile);
   release_check_start(state.release_check, MEMDBG_VERSION_STRING);
+  state.payload_fetcher.start("memdbg_payload");
+  state.payload_fetcher.set_auto_fetch(state.payload_auto_fetch);
+  {
+    state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+  }
   {
     std::string udp_error;
     if (!ensure_udp_listener(state, udp_error))
@@ -623,6 +645,7 @@ void shutdown_app_shared(AppState &state) {
   if (state.plugin_gui_bridge && state.plugin_gui_bridge->running())
     state.plugin_gui_bridge->stop();
   state.udp_listener.stop(); state.client.disconnect();
+  state.payload_fetcher.stop();
   release_check_shutdown(state.release_check);
   github_profile_shutdown(state.github_profile);
   locale::Repository::instance().shutdown();

@@ -8,6 +8,7 @@
 #include "app_state.hpp"
 #include "ui_icons.hpp"
 #include "ui_widgets.hpp"
+#include "file_picker.hpp"
 #include "locale/locale.hpp"
 
 #include <algorithm>
@@ -254,23 +255,100 @@ void draw_lua(AppState &state, ImVec2 avail) {
     }
   }
 
+  /* ── Collapsible API Reference ── */
+  if (ImGui::CollapsingHeader((std::string(icons::kInfo) + "  API Reference").c_str(),
+                              ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::Spacing();
+
+    struct ApiEntry {
+      const char *signature;
+      const char *desc_key;
+      const char *example;
+      const char *label_key;
+    };
+    static const ApiEntry api_entries[] = {
+      {"memdbg.get_pid()",         "lua.api.get_pid_desc",
+       "local pid = memdbg.get_pid(); print(\"PID: \" .. pid)",
+       "lua.api.get_pid_label"},
+      {"memdbg.read_memory(addr, len)", "lua.api.read_memory_desc",
+       "local data = memdbg.read_memory(0x400000, 64); print(data)",
+       "lua.api.read_memory_label"},
+      {"memdbg.write_memory(addr, hexstr)", "lua.api.write_memory_desc",
+       "memdbg.write_memory(0x400000, \"DEADBEEF\")",
+       "lua.api.write_memory_label"},
+      {"memdbg.get_processes()",   "lua.api.get_processes_desc",
+       "local procs = memdbg.get_processes()\nfor _, p in ipairs(procs) do\n  print(p.pid, p.name)\nend",
+       "lua.api.get_processes_label"},
+      {"memdbg.get_maps(pid)",     "lua.api.get_maps_desc",
+       "local maps = memdbg.get_maps(memdbg.get_pid())\nfor _, m in ipairs(maps) do\n  print(string.format(\"%x-%x %s\", m.start, m.end, m.name))\nend",
+       "lua.api.get_maps_label"},
+      {"memdbg.scan_exact(val, type, start, len)", "lua.api.scan_exact_desc",
+       "local hits = memdbg.scan_exact(100, \"u32\", 0x400000, 0x10000)\nprint(#hits .. \" hits found\")",
+       "lua.api.scan_exact_label"},
+      {"memdbg.log(msg)",          "lua.api.log_desc",
+       "memdbg.log(\"Hello from Lua!\")",
+       "lua.api.log_label"},
+    };
+
+    const float scl = ui::dpi_scale();
+    const float copy_btn_w = 105.0f * scl;
+    const float row_h = ImGui::GetTextLineHeightWithSpacing();
+
+    for (const auto &entry : api_entries) {
+      ImGui::PushID(entry.signature);
+
+      /* Signature in accent colour */
+      ImGui::TextColored(palette.primary2, "%s", entry.signature);
+
+      /* Description (localized) */
+      ImGui::SameLine();
+      ImGui::TextColored(palette.dim, "-- %s", locale::tr(entry.desc_key));
+
+      /* Copy button (localized label) */
+      ImGui::SameLine(ImGui::GetContentRegionAvail().x - copy_btn_w + ImGui::GetStyle().ItemSpacing.x);
+      const char *label = locale::tr(entry.label_key);
+      if (ImGui::SmallButton((std::string(icons::kCopy) + " " + label).c_str())) {
+        ImGui::SetClipboardText(entry.example);
+        char status_buf[128];
+        std::snprintf(status_buf, sizeof(status_buf),
+                      locale::tr("lua.api.copied"), label);
+        set_status(state, status_buf);
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(entry.example);
+        ImGui::EndTooltip();
+      }
+
+      ImGui::PopID();
+    }
+
+    ImGui::Spacing();
+  }
+
   /* ── Tab bar ── */
   static int lua_tab = 0; // 0 = REPL, 1 = Script Editor
   ImGui::BeginGroup();
-  const char *tabs[] = {"REPL", "Script Editor"};
+  const char *tabs[] = {" >_  Interactive Console", " { }  Script Editor"};
   for (int i = 0; i < 2; ++i) {
     if (i > 0) ImGui::SameLine();
     if (lua_tab == i) {
       ImGui::PushStyleColor(ImGuiCol_Button, palette.primary);
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,1,1,1));
     }
-    if (ImGui::Button(tabs[i], ImVec2(120.0f * scl, 28.0f * scl)))
+    if (ImGui::Button(tabs[i], ImVec2(210.0f * scl, 28.0f * scl)))
       lua_tab = i;
     if (lua_tab == i) ImGui::PopStyleColor(2);
   }
   ImGui::EndGroup();
 
-  ImGui::Dummy(ImVec2(0, 6.0f * scl));
+  ImGui::Dummy(ImVec2(0, 4.0f * scl));
+  if (lua_tab == 0)
+    ui::text_dim("Explore memory interactively. Type a Lua expression and press Shift+Enter to execute.");
+  else
+    ui::text_dim("Write and run multi-line Lua scripts. Press F5 to execute, Ctrl+S to save.");
+
+  ImGui::Dummy(ImVec2(0, 4.0f * scl));
 
   /* ── Shared output console (bottom half) ── */
   /* Chrome: 4(top pad) + 28(tab bar) + 6(spacer) + 26(buttons) + 2(spacer)
@@ -453,13 +531,46 @@ void draw_lua(AppState &state, ImVec2 avail) {
     ImGui::SameLine();
 
     if (ImGui::Button((std::string(icons::kSave) + " Save").c_str(),
-                      ImVec2(90.0f * scl, 26.0f * scl)))
-      state.lua_save_modal_open = true;
+                      ImVec2(90.0f * scl, 26.0f * scl))) {
+      std::string path = ui::pickSaveFile("Save Lua Script", "script.lua",
+                                          "Lua Scripts", "*.lua");
+      if (!path.empty()) {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (out) {
+          out << state.lua_editor_text;
+          state.lua_last_script_path = path;
+          lua_append_line(state.lua_output, "-- Saved: " + path);
+          set_status(state, "Saved: " + path);
+        } else {
+          lua_append_line(state.lua_output, "-- Failed to write: " + path);
+        }
+      }
+    }
     ImGui::SameLine();
 
     if (ImGui::Button((std::string(icons::kLoad) + " Load").c_str(),
-                      ImVec2(90.0f * scl, 26.0f * scl)))
-      state.lua_load_modal_open = true;
+                      ImVec2(90.0f * scl, 26.0f * scl))) {
+      std::string path = ui::pickFile("Load Lua Script", "Lua Scripts", "*.lua");
+      if (!path.empty()) {
+        std::ifstream in(path, std::ios::binary);
+        if (in) {
+          std::string content((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+          if (content.size() < sizeof(state.lua_editor_text)) {
+            std::strncpy(state.lua_editor_text, content.c_str(),
+                         sizeof(state.lua_editor_text) - 1);
+            state.lua_editor_text[sizeof(state.lua_editor_text) - 1] = '\0';
+          }
+          state.lua_last_script_path = path;
+          lua_append_line(state.lua_output,
+                          "-- Loaded: " + path +
+                          " (" + std::to_string(content.size()) + " bytes)");
+          set_status(state, "Loaded: " + path);
+        } else {
+          lua_append_line(state.lua_output, "-- Failed to load: " + path);
+        }
+      }
+    }
     ImGui::SameLine();
 
     if (ImGui::Button((std::string(icons::kTrash) + " New").c_str(),
@@ -508,93 +619,27 @@ void draw_lua(AppState &state, ImVec2 avail) {
   if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 10.0f)
     ImGui::SetScrollHereY(1.0f);
 
-  /* ── Save-as modal ── */
-  if (state.lua_save_modal_open) {
-    ImGui::OpenPopup("Save Lua Script##LuaSaveModal");
-    state.lua_save_modal_open = false;
-  }
-  ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-  if (ImGui::BeginPopupModal("Save Lua Script##LuaSaveModal", nullptr,
-                             ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextColored(palette.primary2, "Save Lua Script");
-    ImGui::Dummy(ImVec2(0, 6.0f * scl));
-    ImGui::SetNextItemWidth(340.0f * scl);
-    ImGui::InputTextWithHint("##LuaSavePath", "Path (e.g. myscript.lua)",
-                             state.lua_save_path, sizeof(state.lua_save_path));
-    ImGui::Dummy(ImVec2(0, 6.0f * scl));
-    if (ImGui::Button("Save", ImVec2(90.0f * scl, 0))) {
-      std::ofstream out(state.lua_save_path, std::ios::binary | std::ios::trunc);
-      if (out) {
-        out << state.lua_editor_text;
-        if (!out) {
-          lua_append_line(state.lua_output,
-                          "-- Failed to write: " + std::string(state.lua_save_path));
-        } else {
-          state.lua_last_script_path = state.lua_save_path;
-          lua_append_line(state.lua_output,
-                          "-- Saved: " + std::string(state.lua_save_path));
-          ImGui::CloseCurrentPopup();
-        }
-      } else {
-        lua_append_line(state.lua_output,
-                        "-- Cannot open: " + std::string(state.lua_save_path));
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(90.0f * scl, 0)))
-      ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
-
-  /* ── Load modal ── */
-  if (state.lua_load_modal_open) {
-    ImGui::OpenPopup("Load Lua Script##LuaLoadModal");
-    state.lua_load_modal_open = false;
-  }
-  if (ImGui::BeginPopupModal("Load Lua Script##LuaLoadModal", nullptr,
-                             ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextColored(palette.primary2, "Load Lua Script");
-    ImGui::Dummy(ImVec2(0, 6.0f * scl));
-    ImGui::SetNextItemWidth(340.0f * scl);
-    ImGui::InputTextWithHint("##LuaLoadPath", "Path to .lua file",
-                             state.lua_save_path, sizeof(state.lua_save_path));
-    ImGui::Dummy(ImVec2(0, 6.0f * scl));
-    if (ImGui::Button("Load", ImVec2(90.0f * scl, 0))) {
-      std::ifstream in(state.lua_save_path, std::ios::binary);
-      if (in) {
-        std::string content((std::istreambuf_iterator<char>(in)),
-                             std::istreambuf_iterator<char>());
-        if (content.size() < sizeof(state.lua_editor_text)) {
-          std::strncpy(state.lua_editor_text, content.c_str(),
-                       sizeof(state.lua_editor_text) - 1);
-          state.lua_editor_text[sizeof(state.lua_editor_text) - 1] = '\0';
-        }
-        state.lua_last_script_path = state.lua_save_path;
-        lua_append_line(state.lua_output,
-                        "-- Loaded: " + std::string(state.lua_save_path) +
-                        " (" + std::to_string(content.size()) + " bytes)");
-        ImGui::CloseCurrentPopup();
-      } else {
-        lua_append_line(state.lua_output,
-                        "-- Failed to load: " + std::string(state.lua_save_path));
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(90.0f * scl, 0)))
-      ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
-
   /* ── Status bar ── */
-  ImGui::Dummy(ImVec2(0, 2.0f * scl));
-  ImGui::TextColored(lua.is_initialized() ? palette.success : palette.dim,
-                     "%s Lua 5.4 %s",
-                     icons::kCode,
-                     lua.is_initialized() ? "ready" : "not initialized");
+  ImGui::Dummy(ImVec2(0, 4.0f * scl));
+  ImGui::Separator();
+  ImGui::Dummy(ImVec2(0, 3.0f * scl));
+
+  ui::status_dot(lua.is_initialized() ? palette.success : palette.danger);
   ImGui::SameLine();
-  ImGui::TextColored(palette.muted, "|  timeout: %d ms  |  sandboxed (no io/os)",
-                     state.lua_timeout_ms);
+  ImGui::TextColored(lua.is_initialized() ? palette.text : palette.danger,
+                     "Lua 5.4 Engine: %s",
+                     lua.is_initialized() ? "Online" : "Offline");
+  ImGui::SameLine();
+  ImGui::TextColored(palette.warning, "  %s  Sandboxed (no OS/IO)", icons::kLock);
+  ImGui::SameLine();
+  ImGui::TextColored(palette.muted, "  |  Timeout: %d ms", state.lua_timeout_ms);
+  if (!state.lua_last_script_path.empty()) {
+    ImGui::SameLine();
+    std::string short_path = state.lua_last_script_path;
+    if (short_path.size() > 40)
+      short_path = "..." + short_path.substr(short_path.size() - 37);
+    ImGui::TextColored(palette.dim, "  |  Last: %s", short_path.c_str());
+  }
 
   ImGui::EndChild();
 }

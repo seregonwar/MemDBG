@@ -62,6 +62,7 @@ void topbar_select_process(AppState &state, int row);
 void poll_release_check(AppState &state);
 void poll_locale_repository(AppState &state);
 void poll_session_health(AppState &state);
+void update_payload_version_check(AppState &state);
 void draw_screen(AppState &state, ImVec2 avail);
 void handle_global_shortcuts(AppState &state);
 

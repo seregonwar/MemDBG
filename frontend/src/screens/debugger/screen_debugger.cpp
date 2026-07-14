@@ -5,6 +5,7 @@
  */
 
 #include "debugger_internal.hpp"
+#include "file_picker.hpp"
 
 namespace memdbg::frontend {
 
@@ -1413,8 +1414,15 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::Spacing();
       /* Save / Load breakpoints */
       ImGui::BeginDisabled(client_busy);
-      ImGui::SetNextItemWidth(200.0f * scl);
-      ImGui::InputText("##bpfname", ds.bp_filename, sizeof(ds.bp_filename));
+      ImGui::SetNextItemWidth(160.0f * scl);
+      ImGui::InputTextWithHint("##bpfname", "bp.txt", ds.bp_filename, sizeof(ds.bp_filename));
+      ImGui::SameLine();
+      if (ImGui::Button((std::string(icons::kLoad) + " Browse").c_str(),
+                        ImVec2(82.0f * scl, 0))) {
+        std::string picked = ui::pickFile("Open Breakpoints", "Text Files", "*.txt");
+        if (!picked.empty())
+          std::snprintf(ds.bp_filename, sizeof(ds.bp_filename), "%s", picked.c_str());
+      }
       ImGui::SameLine();
       if (ui::soft_button((std::string(icons::kSave) + "  Save BP").c_str(),
                           ImVec2(108.0f * scl, 0))) {
@@ -1862,8 +1870,15 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::Spacing();
       /* Save / Load watchpoints */
       ImGui::BeginDisabled(client_busy);
-      ImGui::SetNextItemWidth(200.0f * scl);
-      ImGui::InputText("##wpfname", ds.wp_filename, sizeof(ds.wp_filename));
+      ImGui::SetNextItemWidth(160.0f * scl);
+      ImGui::InputTextWithHint("##wpfname", "wp.txt", ds.wp_filename, sizeof(ds.wp_filename));
+      ImGui::SameLine();
+      if (ImGui::Button((std::string(icons::kLoad) + " Browse").c_str(),
+                        ImVec2(82.0f * scl, 0))) {
+        std::string picked = ui::pickFile("Open Watchpoints", "Text Files", "*.txt");
+        if (!picked.empty())
+          std::snprintf(ds.wp_filename, sizeof(ds.wp_filename), "%s", picked.c_str());
+      }
       ImGui::SameLine();
       if (ui::soft_button((std::string(icons::kSave) + "  Save WP").c_str(),
                           ImVec2(108.0f * scl, 0))) {

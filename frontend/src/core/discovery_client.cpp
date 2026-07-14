@@ -15,38 +15,45 @@
 
 namespace memdbg::frontend {
 
+DiscoveryClient::~DiscoveryClient() {
+  cancel();
+}
+
 bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
                                std::vector<DiscoveryConsole> &out,
                                std::string &error) {
   out.clear();
   error.clear();
+  cancelled_.store(false);
 
   if (!platform::socket_startup(&error)) {
     return false;
   }
 
-  platform::socket_handle_t fd = platform::invalid_socket();
+  fd_ = platform::invalid_socket();
 
 #if defined(_WIN32)
-  fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  fd_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 #else
-  fd = socket(AF_INET, SOCK_DGRAM, 0);
+  fd_ = socket(AF_INET, SOCK_DGRAM, 0);
 #endif
 
-  if (!platform::socket_valid(fd)) {
+  if (!platform::socket_valid(fd_)) {
     error = "discovery: socket failed: " +
             platform::socket_error_text(platform::socket_last_error_code());
     platform::socket_cleanup();
+    fd_ = platform::invalid_socket();
     return false;
   }
 
-  platform::socket_set_reuse_addr(fd);
-  (void)platform::socket_set_nosigpipe(fd);
-  if (!platform::socket_set_broadcast(fd)) {
+  platform::socket_set_reuse_addr(fd_);
+  (void)platform::socket_set_nosigpipe(fd_);
+  if (!platform::socket_set_broadcast(fd_)) {
     error = "discovery: broadcast not available: " +
             platform::socket_error_text(platform::socket_last_error_code());
-    platform::socket_close(fd);
+    platform::socket_close(fd_);
     platform::socket_cleanup();
+    fd_ = platform::invalid_socket();
     return false;
   }
 
@@ -55,18 +62,19 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
   bind_addr.sin_family = AF_INET;
   bind_addr.sin_addr.s_addr = INADDR_ANY;
   bind_addr.sin_port = 0;
-  if (bind(fd, reinterpret_cast<const sockaddr *>(&bind_addr),
+  if (bind(fd_, reinterpret_cast<const sockaddr *>(&bind_addr),
            sizeof(bind_addr)) != 0) {
     error = "discovery: bind failed: " +
             platform::socket_error_text(platform::socket_last_error_code());
-    platform::socket_close(fd);
+    platform::socket_close(fd_);
     platform::socket_cleanup();
+    fd_ = platform::invalid_socket();
     return false;
   }
 
   const uint32_t timeout_ms = static_cast<uint32_t>(
       std::max(100.0, timeout_seconds * 1000.0));
-  platform::socket_set_recv_timeout(fd, timeout_ms);
+  platform::socket_set_recv_timeout(fd_, timeout_ms);
 
   memdbg_discovery_ping_t ping{};
   ping.magic = MEMDBG_PACKET_MAGIC;
@@ -78,7 +86,7 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
   broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
   broadcast_addr.sin_port = htons(discovery_port);
 
-  if (sendto(fd, reinterpret_cast<const char *>(&ping), sizeof(ping),
+  if (sendto(fd_, reinterpret_cast<const char *>(&ping), sizeof(ping),
 #if defined(_WIN32)
              0,
 #else
@@ -88,25 +96,27 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
              sizeof(broadcast_addr)) < 0) {
     error = "discovery: sendto failed: " +
             platform::socket_error_text(platform::socket_last_error_code());
-    platform::socket_close(fd);
+    platform::socket_close(fd_);
     platform::socket_cleanup();
+    fd_ = platform::invalid_socket();
     return false;
   }
 
   std::set<std::string> seen;
   const auto start = std::chrono::steady_clock::now();
   const auto end = start + std::chrono::milliseconds(timeout_ms);
-  while (std::chrono::steady_clock::now() < end) {
+  while (std::chrono::steady_clock::now() < end && !cancelled_.load()) {
     memdbg_discovery_response_t resp{};
     sockaddr_in sender{};
     platform::socklen_type sender_len = sizeof(sender);
 
     int n = platform::socket_recvfrom(
-        fd, &resp, sizeof(resp), reinterpret_cast<sockaddr *>(&sender),
+        fd_, &resp, sizeof(resp), reinterpret_cast<sockaddr *>(&sender),
         &sender_len);
 
     if (n < 0) {
       const int code = platform::socket_last_error_code();
+      if (cancelled_.load()) break;
       if (platform::socket_error_would_block(code) ||
           platform::socket_error_interrupted(code)) {
         continue;
@@ -140,9 +150,23 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
     out.push_back(std::move(console));
   }
 
-  platform::socket_close(fd);
+  auto fd_to_close = fd_;
+  fd_ = platform::invalid_socket();
+  platform::socket_close(fd_to_close);
   platform::socket_cleanup();
+
+  if (cancelled_.load()) {
+    error = "discovery cancelled";
+    return false;
+  }
   return true;
+}
+
+void DiscoveryClient::cancel() {
+  cancelled_.store(true);
+  if (platform::socket_valid(fd_)) {
+    platform::socket_shutdown_both(fd_);
+  }
 }
 
 } // namespace memdbg::frontend

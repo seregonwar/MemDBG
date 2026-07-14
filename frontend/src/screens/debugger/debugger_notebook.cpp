@@ -5,6 +5,7 @@
  */
 
 #include "debugger_internal.hpp"
+#include "file_picker.hpp"
 
 namespace memdbg::frontend {
 
@@ -297,9 +298,16 @@ void draw_analysis_notebook(AppState &state, DebuggerState &ds,
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(190.0f * scl);
-  ImGui::InputText("##notebookfile", ds.notebook_filename,
+  ImGui::SetNextItemWidth(160.0f * scl);
+  ImGui::InputTextWithHint("##notebookfile", "notebook.txt", ds.notebook_filename,
                    sizeof(ds.notebook_filename));
+  ImGui::SameLine();
+  if (ImGui::Button((std::string(icons::kLoad) + " Browse").c_str(),
+                      ImVec2(82.0f * scl, 0))) {
+    std::string picked = ui::pickFile("Open Notebook", "Text Files", "*.txt");
+    if (!picked.empty())
+      std::snprintf(ds.notebook_filename, sizeof(ds.notebook_filename), "%s", picked.c_str());
+  }
   ImGui::SameLine();
   if (ui::soft_button((std::string(icons::kSave) + "  Save").c_str(),
                       ImVec2(86.0f * scl, 0))) {
@@ -312,9 +320,16 @@ void draw_analysis_notebook(AppState &state, DebuggerState &ds,
   }
 
   ImGui::Spacing();
-  ImGui::SetNextItemWidth(190.0f * scl);
-  ImGui::InputText("##notebookreport", ds.notebook_report_filename,
+  ImGui::SetNextItemWidth(160.0f * scl);
+  ImGui::InputTextWithHint("##notebookreport", "report.md", ds.notebook_report_filename,
                    sizeof(ds.notebook_report_filename));
+  ImGui::SameLine();
+  if (ImGui::Button((std::string(icons::kLoad) + " Browse").c_str(),
+                      ImVec2(82.0f * scl, 0))) {
+    std::string picked = ui::pickSaveFile("Export Report", "report.md", "Markdown", "*.md");
+    if (!picked.empty())
+      std::snprintf(ds.notebook_report_filename, sizeof(ds.notebook_report_filename), "%s", picked.c_str());
+  }
   ImGui::SameLine();
   if (ui::soft_button((std::string(icons::kExport) + "  Report").c_str(),
                       ImVec2(106.0f * scl, 0))) {
