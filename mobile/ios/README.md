@@ -26,24 +26,18 @@ cmake -S mobile/ios -B build/ios -G Xcode \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
   -DMEMDBG_RELEASE_VERSION=0.0.0
 
-# Archive an unsigned bundle.
+# Build — a POST_BUILD step in CMakeLists.txt automatically packages the
+# .app bundle into an unsigned .ipa in the build directory.
 xcodebuild \
   -project build/ios/memdbg_mobile.xcodeproj \
   -scheme MemDBGMobile \
   -configuration Release \
   -sdk iphoneos \
-  -archivePath build/ios/MemDBG.xcarchive \
   -derivedDataPath build/ios/derived \
   CODE_SIGNING_ALLOWED=NO \
-  archive
+  build
 
-# Wrap the archived .app into an unsigned .ipa.
-app_path=$(find build/ios/MemDBG.xcarchive/Products/Applications \
-  -maxdepth 1 -type d -name '*.app' -print -quit)
-mkdir -p build/ios/Payload dist
-cp -R "$app_path" build/ios/Payload/MemDBG.app
-(cd build/ios && zip -qry "../../dist/MemDBG-mobile-ios.ipa" Payload)
-```
+# The unsigned .ipa is at build/ios/MemDBG.ipa (alongside the .app).
 
 For a signed device build, pass an Apple Developer Team ID:
 
@@ -54,16 +48,17 @@ cmake -S mobile/ios -B build/ios -G Xcode -DIOS_SIGNING_TEAM=YOUR_TEAM_ID \
 
 ## Release workflow
 
-The `mobile-ios` job in `.github/workflows/release.yml` runs the CMake +
-xcodebuild steps above with `CODE_SIGNING_ALLOWED=NO` and uploads the resulting
-unsigned `.ipa`. Signed distribution can be added later via repository secrets
-and an Apple Developer certificate.
+The `mobile-ios` job in `.github/workflows/release.yml` uses `xcodebuild build`
+and the CMake POST_BUILD step produces an unsigned `.ipa` automatically. The
+workflow also falls back to manual wrapping if the auto-generated `.ipa` is not
+found. Signed distribution can be added later via repository secrets and an
+Apple Developer certificate.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `CMakeLists.txt` | Fetches imgui/stb/nlohmann_json, builds the Metal imgui lib and the `MemDBGMobile` app target |
+| `CMakeLists.txt` | Fetches imgui/stb/nlohmann_json/lua, builds the Metal imgui lib, the `MemDBGMobile` app target, and auto-packages the `.ipa` via POST_BUILD |
 | `main.ios.mm` | `UIApplicationMain` entry point |
 | `AppDelegate.h` / `AppDelegate.mm` | App lifecycle, window + root view controller |
 | `ViewController.h` / `ViewController.mm` | `MTKView` render surface, Metal device/queue, ImGui Metal backend, touch handling |

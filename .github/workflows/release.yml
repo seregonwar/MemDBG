@@ -145,6 +145,22 @@ jobs:
             echo "/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
           fi
 
+      - name: Setup ccache
+        if: matrix.kind == 'host' || matrix.kind == 'frontend'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-${{ matrix.kind }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-${{ matrix.kind }}-ccache-
+          max-size: 400M
+
+      - name: Cache FetchContent dependencies
+        if: matrix.kind == 'frontend'
+        uses: actions/cache@v4
+        with:
+          path: build/frontend/_deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('frontend/CMakeLists.txt') }}
+          restore-keys: ${{ runner.os }}-deps-
+
       - name: Validate vendored PS4 SDK
         if: matrix.kind == 'ps4'
         run: |
@@ -171,17 +187,24 @@ jobs:
           set -euo pipefail
           case "${{ matrix.kind }}" in
             host)
-              make clean host MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}"
+              make clean host MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}" \
+                HOST_CC="ccache cc"
               if [ "${{ runner.os }}" = "Linux" ]; then
-                make test MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}"
+                make test MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}" \
+                  HOST_CC="ccache cc"
               fi
               ;;
             frontend)
+              rm -rf build
               if [ "${{ runner.os }}" = "Windows" ]; then
-                cmake -S frontend -B build/frontend -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
-                cmake --build build/frontend --config Release --parallel 4
+                cmake -S frontend -B build/frontend \
+                  -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
+                cmake --build build/frontend --config Release
               else
-                make clean frontend MEMDBG_VERSION="${MEMDBG_RELEASE_VERSION}"
+                cmake -S frontend -B build/frontend -G Ninja \
+                  -DCMAKE_BUILD_TYPE=Release \
+                  -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
+                cmake --build build/frontend --config Release
               fi
               ;;
             ps4)
@@ -368,16 +391,37 @@ jobs:
           printf '%s\n' "${version}" > VERSION
           echo "MEMDBG_RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
 
+      - name: Setup ccache (iOS)
+        if: steps.detect.outputs.enabled != 'none'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-ios-ccache-${{ github.sha }}
+          restore-keys: macos-ios-ccache-
+          max-size: 400M
+
+      - name: Cache iOS FetchContent dependencies
+        if: steps.detect.outputs.enabled != 'none'
+        uses: actions/cache@v4
+        with:
+          path: build/ios/_deps
+          key: macos-ios-deps-${{ hashFiles('mobile/ios/CMakeLists.txt') }}
+          restore-keys: macos-ios-deps-
+
       - name: Generate Xcode project
         if: steps.detect.outputs.enabled != 'none'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/ios
+          # Xcode generator is required for iOS (code signing, storyboard
+          # compilation); Ninja cannot replace it.  ccache is enabled via
+          # the compiler-launcher flags below (also exported by ccache-action).
           cmake -S mobile/ios -B build/ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
 
       - name: Build unsigned IPA
@@ -393,20 +437,28 @@ jobs:
             -derivedDataPath build/ios/derived \
             CODE_SIGNING_ALLOWED=NO \
             build
-          app_path="build/ios/Release-iphoneos/MemDBG.app"
-          if [ ! -d "$app_path" ]; then
-            app_path=$(find build/ios/derived -maxdepth 8 -type d -name 'MemDBG.app' -print -quit)
+          # The POST_BUILD step in CMakeLists.txt already packages the .ipa.
+          ipa_file=$(find build/ios -maxdepth 3 -type f -name 'MemDBG*.ipa' -print -quit)
+          if [ ! -f "$ipa_file" ]; then
+            # Fallback: look in derived data or Release-iphoneos.
+            ipa_file=$(find build/ios/derived build/ios/Release-iphoneos -maxdepth 8 -type f -name 'MemDBG*.ipa' -print -quit 2>/dev/null || true)
           fi
-          if [ ! -d "$app_path" ]; then
-            echo "MemDBG.app not found" >&2
-            find build/ios -maxdepth 6 -print | sort
-            exit 1
+          if [ -z "$ipa_file" ] || [ ! -f "$ipa_file" ]; then
+            echo "MemDBG.ipa not found — falling back to manual wrapping" >&2
+            app_path=$(find build/ios -maxdepth 8 -type d -name 'MemDBG.app' -print -quit)
+            if [ ! -d "$app_path" ]; then
+              echo "MemDBG.app also not found" >&2
+              find build/ios -maxdepth 6 -print | sort
+              exit 1
+            fi
+            mkdir -p build/ios/Payload
+            rm -rf build/ios/Payload/MemDBG.app
+            cp -R "$app_path" build/ios/Payload/MemDBG.app
+            (cd build/ios && zip -qry "../../dist/MemDBG-mobile-ios.ipa" Payload)
+          else
+            mkdir -p dist
+            cp "$ipa_file" dist/MemDBG-mobile-ios.ipa
           fi
-          echo "Using built app: $app_path"
-          mkdir -p build/ios/Payload dist
-          rm -rf build/ios/Payload/MemDBG.app
-          cp -R "$app_path" build/ios/Payload/MemDBG.app
-          (cd build/ios && zip -qry "../../dist/MemDBG-mobile-ios.ipa" Payload)
 
       - name: Upload iOS artifact
         if: steps.detect.outputs.enabled != 'none'
@@ -458,9 +510,31 @@ jobs:
           yes | "${SDK}/cmdline-tools/latest/bin/sdkmanager" \
             "ndk;26.1.10909125" "cmake;3.22.1" >/dev/null || true
 
+      - name: Cache Gradle
+        if: steps.detect.outputs.enabled == '1'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            mobile/android/app/.cxx
+            mobile/android/.gradle
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/android/**/*.gradle.kts', 'mobile/android/**/*.gradle', 'mobile/android/gradle.properties', 'mobile/android/app/src/main/cpp/CMakeLists.txt') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Setup ccache (Android NDK)
+        if: steps.detect.outputs.enabled == '1'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-android-ccache-${{ github.sha }}
+          restore-keys: linux-android-ccache-
+          max-size: 400M
+
       - name: Build release APK
         if: steps.detect.outputs.enabled == '1'
         shell: bash
+        env:
+          NDK_CCACHE: ccache
         run: |
           set -euo pipefail
           cd mobile/android

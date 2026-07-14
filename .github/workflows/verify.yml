@@ -36,10 +36,17 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential make python3
+          sudo apt-get install -y build-essential make python3 ccache
+
+      - name: Setup ccache (host)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-host-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-host-ccache-
+          max-size: 200M
 
       - name: Build host payload
-        run: make clean host
+        run: make clean host HOST_CC="ccache cc"
 
       - name: Run host tests
         run: make test
@@ -118,13 +125,32 @@ jobs:
           brew update
           brew install cmake ninja pkg-config
 
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-ccache-
+          max-size: 400M
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/frontend/_deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('frontend/CMakeLists.txt') }}
+          restore-keys: ${{ runner.os }}-deps-
+
       - name: Configure frontend
         shell: bash
-        run: cmake -S frontend -B build/frontend -DCMAKE_BUILD_TYPE=Release
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cmake -S frontend -B build/frontend -DCMAKE_BUILD_TYPE=Release
+          else
+            cmake -S frontend -B build/frontend -G Ninja -DCMAKE_BUILD_TYPE=Release
+          fi
 
       - name: Build frontend and test binaries
         shell: bash
-        run: cmake --build build/frontend --config Release --parallel 4
+        run: cmake --build build/frontend --config Release
 
       - name: Run frontend tests
         shell: bash
@@ -133,13 +159,43 @@ jobs:
 
           run_frontend_test() {
             local name="$1"
-            local exe
-            exe=$(find build/frontend -type f \( -name "$name" -o -name "$name.exe" \) | head -n 1)
-            if [ -z "$exe" ]; then
+
+            # Read matches into an array to avoid 'find | head' SIGPIPE
+            # races that can produce spurious exit code 127 with pipefail.
+            local paths=()
+            while IFS= read -r p; do
+              paths+=("$p")
+            done < <(find build/frontend -type f \( -name "$name" -o -name "$name.exe" \) 2>/dev/null || true)
+
+            if [ ${#paths[@]} -eq 0 ]; then
               echo "Could not find frontend test binary: $name" >&2
-              find build/frontend -maxdepth 5 -type f | sort
+              find build/frontend -maxdepth 5 -type f 2>/dev/null | sort || true
               exit 1
             fi
+
+            local exe="${paths[0]}"
+            if [ ${#paths[@]} -gt 1 ]; then
+              echo "==> Warning: multiple candidates for $name, using $exe" >&2
+              printf '    %s\n' "${paths[@]}" >&2
+            fi
+
+            # ── Diagnostics: what did we find? ──
+            echo "==> $name: $exe"
+            if command -v file &>/dev/null; then
+              file "$exe" || true
+            fi
+            if ! [ -x "$exe" ]; then
+              echo "==> ERROR: $exe is NOT executable" >&2
+              ls -la "$exe" || true
+              exit 1
+            fi
+            if [[ "$OSTYPE" == linux-gnu* ]] && command -v ldd &>/dev/null; then
+              ldd "$exe" || true
+            elif [[ "$OSTYPE" == darwin* ]] && command -v otool &>/dev/null; then
+              otool -L "$exe" || true
+            fi
+            echo "==> Running $exe..."
+
             "$exe"
           }
 

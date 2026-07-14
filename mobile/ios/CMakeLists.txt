@@ -363,3 +363,17 @@ target_sources(MemDBGMobile PRIVATE
 if(NOT MSVC)
   target_compile_options(MemDBGMobile PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# ---- Auto-package .ipa from the .app bundle (POST_BUILD) --------------------
+# iOS apps are distributed as .ipa archives (a zip with a Payload/ directory
+# containing the .app).  Run a shell snippet after linking so that both local
+# Xcode builds and CI produce an unsigned .ipa alongside the .app.
+#
+# NOTE: The entire script is a SINGLE argument to 'bash -c'.  Breaking it
+# across multiple CMake strings would pass them as separate argv entries
+# (positional parameters $$0, $$1, ...), which bash never executes.
+add_custom_command(TARGET MemDBGMobile POST_BUILD
+  COMMAND /bin/bash -c "set -euo pipefail; app_dir='$<TARGET_BUNDLE_DIR:MemDBGMobile>'; app_name='$<TARGET_FILE_BASE_NAME:MemDBGMobile>'; out_dir='${CMAKE_BINARY_DIR}'; rm -rf \"$$out_dir/Payload\"; mkdir -p \"$$out_dir/Payload\"; cp -R \"$$app_dir\" \"$$out_dir/Payload/$$app_name.app\"; cd \"$$out_dir\"; zip -qry \"$$app_name.ipa\" Payload; rm -rf \"$$out_dir/Payload\""
+  VERBATIM
+  COMMENT "Packaging unsigned .ipa from .app bundle"
+)
