@@ -53,7 +53,7 @@ endif
 
 HOST_LDLIBS := -lpthread
 
-SOURCES := $(shell find src -name '*.c' | sort)
+SOURCES := $(shell find src -name '*.c' ! -path 'src/shellui/*' | sort)
 LIB_SOURCES := $(filter-out src/core/main.c,$(SOURCES))
 HOST_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/host/%.o,$(SOURCES))
 PS4_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4/%.o,$(SOURCES))
@@ -61,7 +61,7 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-shellui-xml test-shellui-config test-shellui-plugin test-shellui-embed check-locales check-headers tracer-tool FORCE
 
 all: host
 
@@ -171,7 +171,51 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e
+test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-shellui-xml test-shellui-config test-shellui-plugin test-shellui-embed
+
+# ---- ShellUI module (PS5 settings PRX) ----
+
+SHELLUI_TARGET ?= $(BUILD_DIR)/ps5/memdbg_shellui.sprx
+SHELLUI_SOURCES := src/shellui/shellui_xml_gen.c src/shellui/shellui_config.c src/shellui/shellui_ipc.c src/shellui/shellui_plugin.c src/shellui/shellui_hooks.c src/shellui/shellui_main.c
+SHELLUI_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SHELLUI_SOURCES))
+
+$(SHELLUI_TARGET): $(SHELLUI_OBJECTS)
+	@mkdir -p $(dir $@)
+	$(PS5_CC) -shared -fPIC -Wl,--unresolved-symbols=ignore-all $^ -o $@
+
+SHELLUI_EMBED_HEADER := $(GENERATED_INCLUDE_DIR)/memdbg_shellui_embedded.h
+
+$(SHELLUI_EMBED_HEADER): $(SHELLUI_TARGET)
+	@mkdir -p $(dir $@)
+	xxd -i $< | sed 's/build_ps5_memdbg_shellui_sprx/memdbg_shellui_sprx/g' > $@
+
+payload-ps5: $(SHELLUI_TARGET) $(SHELLUI_EMBED_HEADER) $(PS5_TARGET)
+
+# ---- ShellUI host tests ----
+
+test-shellui-xml: tests/test_shellui_xml.c src/shellui/shellui_xml_gen.c src/shellui/shellui_config.c src/shellui/shellui_plugin.c $(GENERATED_VERSION_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -I$(CURDIR) -Isrc/shellui $(HOST_CFLAGS) tests/test_shellui_xml.c src/shellui/shellui_xml_gen.c src/shellui/shellui_config.c src/shellui/shellui_plugin.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_shellui_xml
+	@echo "--- Running ShellUI XML test ---"
+	$(BUILD_DIR)/test_shellui_xml
+
+test-shellui-config: tests/test_shellui_config.c src/shellui/shellui_config.c src/shellui/shellui_xml_gen.c src/shellui/shellui_plugin.c $(GENERATED_VERSION_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -I$(CURDIR) -Isrc/shellui $(HOST_CFLAGS) tests/test_shellui_config.c src/shellui/shellui_config.c src/shellui/shellui_xml_gen.c src/shellui/shellui_plugin.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_shellui_config
+	@echo "--- Running ShellUI Config test ---"
+	$(BUILD_DIR)/test_shellui_config
+
+test-shellui-plugin: tests/test_shellui_plugin.c src/shellui/shellui_plugin.c src/shellui/shellui_xml_gen.c src/shellui/shellui_config.c $(GENERATED_VERSION_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -I$(CURDIR) -Isrc/shellui $(HOST_CFLAGS) tests/test_shellui_plugin.c src/shellui/shellui_plugin.c src/shellui/shellui_xml_gen.c src/shellui/shellui_config.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_shellui_plugin
+	@echo "--- Running ShellUI Plugin test ---"
+	$(BUILD_DIR)/test_shellui_plugin
+
+test-shellui-embed: tests/test_shellui_embed.c src/core/daemon/shellui_embed.c $(SHELLUI_EMBED_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -I$(CURDIR) -Isrc/core/daemon -DSHELLUI_EMBED_HOST_TEST $(HOST_CFLAGS) tests/test_shellui_embed.c src/core/daemon/shellui_embed.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_shellui_embed
+	@echo "--- Running ShellUI Embed test ---"
+	$(BUILD_DIR)/test_shellui_embed
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)

@@ -59,7 +59,7 @@ bool write_text_file(const std::filesystem::path &path, const std::string &conte
 }
 
 /* Return the size of a file on disk, or 0 if absent / unreadable. */
-int64_t file_size(const std::filesystem::path &path) {
+int64_t local_file_size(const std::filesystem::path &path) {
   std::error_code ec;
   auto sz = std::filesystem::file_size(path, ec);
   return ec ? 0 : static_cast<int64_t>(sz);
@@ -163,7 +163,7 @@ void PayloadFetcher::worker_loop() {
 
         if (platform::download_file(result.download_url, dest)) {
           result.local_path = dest.string();
-          result.local_size = file_size(dest);
+          result.local_size = local_file_size(dest);
           result.downloaded = true;
           result.up_to_date = (result.local_size == result.asset_size);
           result.error.clear();
@@ -268,7 +268,7 @@ PayloadInfo PayloadFetcher::check_now() {
   /* 3. Compare fingerprint with local cache (tag + size). */
   std::filesystem::path local_path = cache_dir() / result.asset_name;
   result.local_path = local_path.string();
-  result.local_size = file_size(local_path);
+  result.local_size = local_file_size(local_path);
 
   /* Read persisted metadata. */
   auto meta_path = cache_dir() / "payload_meta.json";
