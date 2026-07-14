@@ -81,8 +81,7 @@ static int map_index_for_address(const AppState &state, uint64_t addr) {
 static std::string process_label(const AppState &state) {
   if (state.has_process_info && !state.selected_process_info.title_id.empty())
     return state.selected_process_info.title_id;
-  std::string n = selected_process_name(state);
-  return n == "No process selected" ? "unknown" : n;
+  return state.selected_pid > 0 ? selected_process_name(state) : "unknown";
 }
 
 static const char *cht_type_name(int type) {
@@ -590,7 +589,9 @@ static bool save_goldhen_json(const AppState &state, const std::string &path) {
   std::string name = state.has_process_info &&
                              !state.selected_process_info.title_id.empty()
                          ? state.selected_process_info.title_id
-                         : selected_process_name(state);
+                         : (state.selected_pid > 0
+                                ? selected_process_name(state)
+                                : "unknown");
   json_obj_setz(root, arena, "name", json_make_stringz(arena, name.c_str()));
 
   std::string tid = state.has_process_info

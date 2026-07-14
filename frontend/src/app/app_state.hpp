@@ -890,7 +890,9 @@ inline std::string bytes_per_second(uint64_t bytes, uint64_t elapsed_ns) {
 
 inline std::string selected_process_name(const AppState &state) {
   for (const auto &p : state.processes) if (p.pid==state.selected_pid) return p.name;
-  return "No process selected";
+  static constexpr const char *key = "processes.no_process_selected";
+  const char *translated = locale::tr(key);
+  return std::strcmp(translated, key) == 0 ? "No process selected" : translated;
 }
 
 inline bool payload_supports(const AppState &state, uint32_t capability) {

@@ -281,17 +281,26 @@ bool socket_error_permission(int code) {
 
 std::string socket_error_text(int code) {
 #if defined(_WIN32)
-  char *message = nullptr;
+  wchar_t *message = nullptr;
   DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
                 FORMAT_MESSAGE_IGNORE_INSERTS;
-  DWORD len = FormatMessageA(flags, nullptr, static_cast<DWORD>(code), 0,
-                             reinterpret_cast<LPSTR>(&message), 0, nullptr);
+  DWORD len = FormatMessageW(flags, nullptr, static_cast<DWORD>(code), 0,
+                             reinterpret_cast<LPWSTR>(&message), 0, nullptr);
   std::string out;
   if (len != 0 && message != nullptr) {
-    out.assign(message, message + len);
-    while (!out.empty() && (out.back() == '\r' || out.back() == '\n' ||
-                            out.back() == ' ')) {
-      out.pop_back();
+    while (len > 0 && (message[len - 1U] == L'\r' ||
+                       message[len - 1U] == L'\n' ||
+                       message[len - 1U] == L' ')) {
+      --len;
+    }
+    const int utf8_size = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, message, static_cast<int>(len), nullptr,
+        0, nullptr, nullptr);
+    if (utf8_size > 0) {
+      out.resize(static_cast<size_t>(utf8_size));
+      (void)WideCharToMultiByte(
+          CP_UTF8, WC_ERR_INVALID_CHARS, message, static_cast<int>(len),
+          out.data(), utf8_size, nullptr, nullptr);
     }
     LocalFree(message);
   }

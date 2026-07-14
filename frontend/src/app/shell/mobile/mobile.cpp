@@ -1823,19 +1823,26 @@ static void mobile_apply_enabled_cheats(AppState &state) {
 
 static void mobile_import_batchcode(AppState &state) {
   if (state.selected_pid <= 0) {
-    set_status(state, "Select a process before importing batchcode");
+    set_status(state, locale::tr("trainer.select_process_for_batch"));
     return;
   }
   std::string error;
   std::vector<BatchcodeEntry> entries;
   const int imported = parse_batchcode(state.batchcode_text, entries, error);
   if (imported < 0) {
-    set_status(state, "Batchcode error: " + error);
+    char error_buffer[512];
+    std::snprintf(error_buffer, sizeof(error_buffer),
+                  locale::tr("trainer.batchcode_error"), error.c_str());
+    set_status(state, error_buffer);
     return;
   }
   for (size_t i = 0; i < entries.size(); ++i) {
     CheatEntry cheat;
-    cheat.description = "Batchcode " + std::to_string(i + 1U);
+    char name_buffer[128];
+    std::snprintf(name_buffer, sizeof(name_buffer),
+                  locale::tr("trainer.batchcode_name"),
+                  static_cast<int>(i + 1U));
+    cheat.description = name_buffer;
     cheat.pid = state.selected_pid;
     cheat.address = entries[i].offset;
     cheat.value_type = MEMDBG_VALUE_BYTES;
@@ -1845,8 +1852,16 @@ static void mobile_import_batchcode(AppState &state) {
     if (state.client.connected()) (void)capture_off_value(state, cheat);
     state.cheats.push_back(std::move(cheat));
   }
-  set_status(state, "Imported " + std::to_string(imported) +
-                        " batchcode entries");
+  char import_buffer[256];
+  if (imported > 0) {
+    std::snprintf(import_buffer, sizeof(import_buffer),
+                  locale::tr("trainer.imported_n"),
+                  static_cast<unsigned>(imported));
+  } else {
+    std::snprintf(import_buffer, sizeof(import_buffer), "%s",
+                  locale::tr("trainer.no_batchcode"));
+  }
+  set_status(state, import_buffer);
 }
 
 static void draw_mobile_trainer(AppState &state, ImVec2 size) {
@@ -2673,6 +2688,71 @@ static void draw_mobile_tools_sheet(AppState &state, ImVec2 tab_pos,
 
   draw_mobile_fallback(state, size);
   ImGui::PopStyleVar(3);
+}
+
+void draw_mobile_app(AppState &state) {
+  poll_locale_repository(state);
+  poll_connect(state);
+  poll_taskmgr_prefetch(state);
+  poll_telemetry(state);
+  poll_map_refresh(state);
+  poll_tracer(state);
+  poll_plugin_tasks(state);
+  poll_session_health(state);
+
+  ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(viewport->WorkPos);
+  ImGui::SetNextWindowSize(viewport->WorkSize);
+
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_NoBringToFrontOnFocus;
+  ImGui::Begin("MemDBG Mobile", nullptr, flags);
+
+  const ImVec2 win_pos = ImGui::GetWindowPos();
+  const ImVec2 win_size = ImGui::GetWindowSize();
+  ui::draw_background(ImGui::GetWindowDrawList(), win_pos, win_size);
+
+  const float scl = ui::dpi_scale();
+  const float left = s_mobile_safe_area.left;
+  const float top = s_mobile_safe_area.top;
+  const float right = s_mobile_safe_area.right;
+  const float bottom = s_mobile_safe_area.bottom;
+  const float layout_x = left;
+  const float layout_w = std::max(240.0f * scl, win_size.x - left - right);
+  const float top_h = 48.0f * scl;
+  const float status_h = 26.0f * scl;
+  const float tab_h = 54.0f * scl;
+  const float gap = 6.0f * scl;
+  const float content_pad = 8.0f * scl;
+  const float bottom_edge = win_size.y - bottom;
+  const float tab_y = bottom_edge - tab_h;
+  const float status_y = tab_y - status_h;
+  const float content_y = top + top_h + gap;
+  const float content_h =
+      std::max(120.0f * scl, status_y - content_y - gap);
+
+  ImGui::SetCursorPos(ImVec2(layout_x, top));
+  draw_mobile_top_bar(state, ImVec2(layout_w, top_h));
+
+  ImGui::SetCursorPos(ImVec2(layout_x + content_pad, content_y));
+  draw_mobile_content(
+      state,
+      ImVec2(std::max(120.0f * scl, layout_w - content_pad * 2.0f),
+             content_h));
+
+  ImGui::SetCursorPos(ImVec2(layout_x, status_y));
+  draw_mobile_status_bar(state, ImVec2(layout_w, status_h));
+
+  draw_bottom_tab_bar(state, ImVec2(win_pos.x + layout_x, win_pos.y + tab_y),
+                      ImVec2(layout_w, tab_h));
+
+  set_notification_bottom_reserved(bottom + tab_h + status_h + 8.0f * scl);
+  draw_notifications(state);
+  draw_connect_spinner(state);
+
+  ImGui::End();
 }
 
 } // namespace

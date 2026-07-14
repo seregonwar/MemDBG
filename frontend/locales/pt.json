@@ -663,6 +663,7 @@
   "common.platform": "Plataforma",
   "file_picker.select_dump_dir": "Selecionar Diretório Dump",
   "file_picker.open_trainer": "Abrir Arquivo Trainer",
+  "file_picker.save_trainer": "Salvar Arquivo Trainer",
   "file_picker.trainer_files": "Arquivos Trainer",
   "file_picker.save_memory_dump": "Salvar Dump Memória",
   "file_picker.binary_files": "Arquivos Binários",

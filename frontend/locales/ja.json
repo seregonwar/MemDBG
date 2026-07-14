@@ -664,6 +664,7 @@
   "common.platform": "プラットフォーム",
   "file_picker.select_dump_dir": "ダンプフォルダ選択",
   "file_picker.open_trainer": "トレーナーを開く",
+  "file_picker.save_trainer": "トレーナーファイルを保存",
   "file_picker.trainer_files": "トレーナーファイル",
   "file_picker.save_memory_dump": "メモリダンプ保存",
   "file_picker.binary_files": "バイナリファイル",

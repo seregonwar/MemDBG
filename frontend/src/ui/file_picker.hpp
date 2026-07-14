@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Provides a platform-native file-open dialog.
- *   - Windows:  GetOpenFileNameA (commdlg)
+ *   - Windows:  UTF-16 common dialogs converted to/from UTF-8
  *   - macOS:    AppleScript osascript choose-file
  *   - PS4/PS5:  Returns empty (no native picker available)
  *   - Other:    Returns empty

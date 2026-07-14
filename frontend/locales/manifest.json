@@ -8,8 +8,8 @@
       "name": "Deutsch",
       "filename": "de.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/de.json",
-      "size": 61734,
-      "sha256": "bf26e3b91fa64111a7bcc97ba5d778c459bf5d9bad63be4455dc53a5d3a86d8b",
+      "size": 61791,
+      "sha256": "3d283f3117ebe2322518ae6390c8a25c23210873b7fc41a3a56d5aef7fe49eb4",
       "embedded": false
     },
     {
@@ -17,8 +17,8 @@
       "name": "English",
       "filename": "en.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/en.json",
-      "size": 58283,
-      "sha256": "7eb9c4f37c5cb55d19e444f11a6a573a245f15e8a788594650fb88bca42c1c78",
+      "size": 58335,
+      "sha256": "1875a65d8bb69b7d7eed75233e0ca21e6aa463e44b65e3fa37b8e2206dc9b0a5",
       "embedded": true
     },
     {
@@ -26,8 +26,8 @@
       "name": "Español",
       "filename": "es.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/es.json",
-      "size": 62918,
-      "sha256": "03202626b22be0b48ee883f21c2b40fa6ef40d10cf7a6b6bd34eec59ae57bcb0",
+      "size": 62981,
+      "sha256": "97fd706aab3e8c9565ec81f83622b60a4172e5515d02cf223f237a010176fc4b",
       "embedded": false
     },
     {
@@ -35,8 +35,8 @@
       "name": "Français",
       "filename": "fr.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/fr.json",
-      "size": 63439,
-      "sha256": "d0c4fdf94674224f00be2af6e3f4c0570fb58bd99218698b4c898fcc12a38528",
+      "size": 63503,
+      "sha256": "c0d1985cf434a0f3332accae663b12a1a1b91f41d74479cac4aafe83c972b569",
       "embedded": false
     },
     {
@@ -44,8 +44,8 @@
       "name": "Italiano",
       "filename": "it.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/it.json",
-      "size": 61392,
-      "sha256": "6de3a581e00b36fca5f4e45edeb1b775084d4746587e8e5bd160787d63f6a523",
+      "size": 61444,
+      "sha256": "c13fcda3c9caa5ced311cc4f6a74a0800a126a87c5a33a8b289a8ee67335fb35",
       "embedded": false
     },
     {
@@ -53,8 +53,8 @@
       "name": "日本語",
       "filename": "ja.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/ja.json",
-      "size": 66823,
-      "sha256": "93eb3b2f8ef6fd6b6ce5da7c3f645f179f9c50db2bb43fc24ebaa4029da7f27b",
+      "size": 66893,
+      "sha256": "a62a7de4266caf44c99c31e1c8ec26ac085839e8dc9ff4ecce2a35b7086a3421",
       "embedded": false
     },
     {
@@ -62,8 +62,8 @@
       "name": "한국어",
       "filename": "ko.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/ko.json",
-      "size": 67209,
-      "sha256": "046a6c790e10a09f4c51136275c003761a001a3c651136dd8305a577a7a89189",
+      "size": 67269,
+      "sha256": "3d01cd52bc952bbef23158f4b3fc659fe872ed0cf422643cee99230c10c35ea8",
       "embedded": false
     },
     {
@@ -71,8 +71,8 @@
       "name": "Português",
       "filename": "pt.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/pt.json",
-      "size": 62025,
-      "sha256": "95bf0c55652d4a1fada44b6c3ae701fc5269a5126bb1b33ea3c5fd5b2129726f",
+      "size": 62081,
+      "sha256": "e17a2e9cdca425f74f258df7d9317860de956a7611845191edd785e85c7c316c",
       "embedded": false
     },
     {
@@ -80,8 +80,8 @@
       "name": "Русский",
       "filename": "ru.json",
       "url": "https://raw.githubusercontent.com/seregonwar/memDBG/main/frontend/locales/ru.json",
-      "size": 75743,
-      "sha256": "e7e936316e9e82b9f0afade63a5acbb7be8b7c49fc7525ac0a3f348465e11ec3",
+      "size": 75810,
+      "sha256": "bc67d317a6995a020238488617d5bd00feffa9b5b63df58e6a9c419aa3b9a9d9",
       "embedded": false
     }
   ]

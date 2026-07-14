@@ -664,6 +664,7 @@
   "common.platform": "플랫폼",
   "file_picker.select_dump_dir": "덤프 폴더 선택",
   "file_picker.open_trainer": "트레이너 파일 열기",
+  "file_picker.save_trainer": "트레이너 파일 저장",
   "file_picker.trainer_files": "트레이너 파일",
   "file_picker.save_memory_dump": "메모리 덤프 저장",
   "file_picker.binary_files": "이진 파일",

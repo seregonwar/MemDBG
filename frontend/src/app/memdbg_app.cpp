@@ -1183,7 +1183,7 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
       nav_item(state, Screen::Debugger, icons::kBug, locale::tr("nav.debugger"));
 
     ImGui::Dummy(ImVec2(0, 3));
-    sidebar_section(locale::tr("sidebar.section.observe"));
+    sidebar_section(locale::tr("sidebar.section.monitoring"));
     nav_item(state, Screen::TaskMgr, icons::kGauge, locale::tr("nav.taskmgr"));
     nav_item(state, Screen::Logs, icons::kLogs, locale::tr("nav.logs"));
     nav_item(state, Screen::Telemetry, icons::kTelemetry, locale::tr("nav.telemetry"));
@@ -1897,10 +1897,13 @@ static void setup_fonts(ImGuiIO &io, float dpi_scale) {
   const float base_text_size = 16.0f;
   const float text_size = std::roundf(base_text_size * dpi_scale);
 
-  // Build comprehensive glyph ranges: Default + Cyrillic
+  // Default and Cyrillic ranges omit punctuation such as U+2014 (em dash),
+  // which is used by several translated strings.
   ImFontGlyphRangesBuilder ranges_builder;
   ranges_builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
   ranges_builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+  static const ImWchar punctuation_ranges[] = {0x2000, 0x206F, 0};
+  ranges_builder.AddRanges(punctuation_ranges);
   ImVector<ImWchar> glyph_ranges;
   ranges_builder.BuildRanges(&glyph_ranges);
 

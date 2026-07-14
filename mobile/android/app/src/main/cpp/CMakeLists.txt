@@ -148,6 +148,7 @@ set(MEMDBG_LUA_SOURCES
   ${lua_SOURCE_DIR}/loadlib.c
   ${lua_SOURCE_DIR}/lobject.c
   ${lua_SOURCE_DIR}/lopcodes.c
+  ${lua_SOURCE_DIR}/loslib.c
   ${lua_SOURCE_DIR}/lparser.c
   ${lua_SOURCE_DIR}/lstate.c
   ${lua_SOURCE_DIR}/lstring.c
@@ -171,6 +172,11 @@ set(MOBILE_NATIVE_SOURCES
 
 set(MEMDBG_FRONTEND_SOURCES
   ${FRONTEND_ROOT}/src/app/shell/memdbg_app.cpp
+  ${FRONTEND_ROOT}/src/app/shell/state.cpp
+  ${FRONTEND_ROOT}/src/app/shell/connection.cpp
+  ${FRONTEND_ROOT}/src/app/shell/chrome.cpp
+  ${FRONTEND_ROOT}/src/app/shell/session.cpp
+  ${FRONTEND_ROOT}/src/app/shell/mobile/mobile.cpp
 
   ${FRONTEND_ROOT}/src/core/crash_logger.cpp
   ${FRONTEND_ROOT}/src/core/discovery_client.cpp
@@ -182,9 +188,16 @@ set(MEMDBG_FRONTEND_SOURCES
 
   ${FRONTEND_ROOT}/src/plugins/repository/plugin_manager.cpp
   ${FRONTEND_ROOT}/src/plugins/repository/gui_bridge.cpp
+  ${FRONTEND_ROOT}/src/plugins/repository/lua_engine.cpp
+
+  ${FRONTEND_ROOT}/src/sandbox/sandbox_common.cpp
+  ${FRONTEND_ROOT}/src/sandbox/sandbox_lua.cpp
+
+  ${FRONTEND_ROOT}/src/cheats/cheat_repository.cpp
 
   ${FRONTEND_ROOT}/src/ui/icon_font.cpp
   ${FRONTEND_ROOT}/src/ui/ui_widgets.cpp
+  ${FRONTEND_ROOT}/src/ui/theme_manager.cpp
   ${FRONTEND_ROOT}/src/ui/file_picker.cpp
 
   ${FRONTEND_ROOT}/src/locale/locale.cpp
@@ -197,6 +210,10 @@ set(MEMDBG_FRONTEND_SOURCES
   ${FRONTEND_ROOT}/src/screens/consoles/screen_consoles.cpp
   ${FRONTEND_ROOT}/src/screens/processes/screen_processes.cpp
   ${FRONTEND_ROOT}/src/screens/memory/screen_memory.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_helpers.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_compare.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_session.cpp
+  ${FRONTEND_ROOT}/src/screens/scanner/scanner_async.cpp
   ${FRONTEND_ROOT}/src/screens/scanner/screen_scanner.cpp
   ${FRONTEND_ROOT}/src/screens/pointer_scanner/screen_pointer_scanner.cpp
   ${FRONTEND_ROOT}/src/screens/aob_scanner/screen_aob_scanner.cpp
@@ -204,19 +221,30 @@ set(MEMDBG_FRONTEND_SOURCES
   ${FRONTEND_ROOT}/src/screens/plugins/screen_plugins.cpp
   ${FRONTEND_ROOT}/src/screens/plugins/screen_plugin_gui.cpp
   ${FRONTEND_ROOT}/src/screens/logs/screen_logs.cpp
+  ${FRONTEND_ROOT}/src/screens/klog/screen_klog.cpp
   ${FRONTEND_ROOT}/src/screens/telemetry/screen_telemetry.cpp
   ${FRONTEND_ROOT}/src/screens/task_manager/screen_taskmgr.cpp
   ${FRONTEND_ROOT}/src/screens/settings/screen_settings.cpp
   ${FRONTEND_ROOT}/src/screens/credits/screen_credits.cpp
   ${FRONTEND_ROOT}/src/screens/debugger/debugger_disassembly.cpp
+  ${FRONTEND_ROOT}/src/screens/debugger/debugger_patch_studio.cpp
+  ${FRONTEND_ROOT}/src/screens/debugger/debugger_notebook.cpp
   ${FRONTEND_ROOT}/src/screens/debugger/screen_debugger.cpp
   ${FRONTEND_ROOT}/src/screens/tracer/screen_tracer.cpp
+  ${FRONTEND_ROOT}/src/screens/lua/screen_lua.cpp
 
   ${FRONTEND_ROOT}/src/trainer/batchcode_parser.cpp
   ${FRONTEND_ROOT}/src/trainer/trainer_format.cpp
 
   ${FRONTEND_ROOT}/src/scanner/heuristics/auto_search.cpp
   ${FRONTEND_ROOT}/src/scanner/structure_compare.cpp
+
+  ${REPO_ROOT}/external/sjson/sJson.c
+)
+
+set_source_files_properties(
+  ${REPO_ROOT}/external/sjson/sJson.c
+  PROPERTIES COMPILE_DEFINITIONS "JSON_IMPLEMENTATION"
 )
 
 add_library(memdbg SHARED ${MOBILE_NATIVE_SOURCES} ${MEMDBG_FRONTEND_SOURCES})
@@ -250,6 +278,7 @@ target_include_directories(memdbg PRIVATE
   ${FRONTEND_ROOT}/src/screens/debugger
   ${FRONTEND_ROOT}/src/screens/home
   ${FRONTEND_ROOT}/src/screens/logs
+  ${FRONTEND_ROOT}/src/screens/klog
   ${FRONTEND_ROOT}/src/screens/memory
   ${FRONTEND_ROOT}/src/screens/plugins
   ${FRONTEND_ROOT}/src/screens/pointer_scanner
@@ -259,12 +288,15 @@ target_include_directories(memdbg PRIVATE
   ${FRONTEND_ROOT}/src/screens/task_manager
   ${FRONTEND_ROOT}/src/screens/telemetry
   ${FRONTEND_ROOT}/src/screens/tracer
+  ${FRONTEND_ROOT}/src/screens/lua
   ${FRONTEND_ROOT}/src/trainer
   ${FRONTEND_ROOT}/src/scanner
   ${FRONTEND_ROOT}/src/scanner/heuristics
   ${FRONTEND_ROOT}/src/locale
   ${FRONTEND_ROOT}/src/plugins
   ${FRONTEND_ROOT}/src/plugins/repository
+  ${FRONTEND_ROOT}/src/sandbox
+  ${FRONTEND_ROOT}/src/cheats
   ${FRONTEND_ROOT}/src/proto
   ${stb_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include

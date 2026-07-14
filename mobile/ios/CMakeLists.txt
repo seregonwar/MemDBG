@@ -195,9 +195,16 @@ set(MOBILE_SOURCES
 
   ${FRONTEND_ROOT}/src/plugins/repository/plugin_manager.cpp
   ${FRONTEND_ROOT}/src/plugins/repository/gui_bridge.cpp
+  ${FRONTEND_ROOT}/src/plugins/repository/lua_engine.cpp
+
+  ${FRONTEND_ROOT}/src/sandbox/sandbox_common.cpp
+  ${FRONTEND_ROOT}/src/sandbox/sandbox_lua.cpp
+
+  ${FRONTEND_ROOT}/src/cheats/cheat_repository.cpp
 
   ${FRONTEND_ROOT}/src/ui/icon_font.cpp
   ${FRONTEND_ROOT}/src/ui/ui_widgets.cpp
+  ${FRONTEND_ROOT}/src/ui/theme_manager.cpp
   ${FRONTEND_ROOT}/src/ui/file_picker.cpp
 
   ${FRONTEND_ROOT}/src/locale/locale.cpp
@@ -221,6 +228,7 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/screens/plugins/screen_plugins.cpp
   ${FRONTEND_ROOT}/src/screens/plugins/screen_plugin_gui.cpp
   ${FRONTEND_ROOT}/src/screens/logs/screen_logs.cpp
+  ${FRONTEND_ROOT}/src/screens/klog/screen_klog.cpp
   ${FRONTEND_ROOT}/src/screens/telemetry/screen_telemetry.cpp
   ${FRONTEND_ROOT}/src/screens/task_manager/screen_taskmgr.cpp
   ${FRONTEND_ROOT}/src/screens/settings/screen_settings.cpp
@@ -230,12 +238,20 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/screens/debugger/debugger_notebook.cpp
   ${FRONTEND_ROOT}/src/screens/debugger/screen_debugger.cpp
   ${FRONTEND_ROOT}/src/screens/tracer/screen_tracer.cpp
+  ${FRONTEND_ROOT}/src/screens/lua/screen_lua.cpp
 
   ${FRONTEND_ROOT}/src/trainer/batchcode_parser.cpp
   ${FRONTEND_ROOT}/src/trainer/trainer_format.cpp
 
   ${FRONTEND_ROOT}/src/scanner/heuristics/auto_search.cpp
   ${FRONTEND_ROOT}/src/scanner/structure_compare.cpp
+
+  ${REPO_ROOT}/external/sjson/sJson.c
+)
+
+set_source_files_properties(
+  ${REPO_ROOT}/external/sjson/sJson.c
+  PROPERTIES COMPILE_DEFINITIONS "JSON_IMPLEMENTATION"
 )
 
 add_executable(MemDBGMobile ${MOBILE_SOURCES})
@@ -262,6 +278,7 @@ target_include_directories(MemDBGMobile PRIVATE
   ${FRONTEND_ROOT}/src/screens/debugger
   ${FRONTEND_ROOT}/src/screens/home
   ${FRONTEND_ROOT}/src/screens/logs
+  ${FRONTEND_ROOT}/src/screens/klog
   ${FRONTEND_ROOT}/src/screens/memory
   ${FRONTEND_ROOT}/src/screens/plugins
   ${FRONTEND_ROOT}/src/screens/pointer_scanner
@@ -271,12 +288,15 @@ target_include_directories(MemDBGMobile PRIVATE
   ${FRONTEND_ROOT}/src/screens/task_manager
   ${FRONTEND_ROOT}/src/screens/telemetry
   ${FRONTEND_ROOT}/src/screens/tracer
+  ${FRONTEND_ROOT}/src/screens/lua
   ${FRONTEND_ROOT}/src/trainer
   ${FRONTEND_ROOT}/src/scanner
   ${FRONTEND_ROOT}/src/scanner/heuristics
   ${FRONTEND_ROOT}/src/locale
   ${FRONTEND_ROOT}/src/plugins
   ${FRONTEND_ROOT}/src/plugins/repository
+  ${FRONTEND_ROOT}/src/sandbox
+  ${FRONTEND_ROOT}/src/cheats
   ${FRONTEND_ROOT}/src/proto
   ${stb_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
