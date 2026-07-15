@@ -5,7 +5,7 @@ on:
     tags:
       - "v*"
   schedule:
-    # Keep the rolling nightly candidate fresh without replacing published betas.
+    # Keep the rolling nightly release fresh and marked as Latest.
     - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
@@ -14,7 +14,7 @@ on:
         required: false
         type: string
       nightly:
-        description: "Build and update the rolling nightly candidate"
+        description: "Build and update the rolling Latest nightly release"
         required: false
         default: false
         type: boolean
@@ -685,19 +685,19 @@ jobs:
             run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             commit_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
             notes=$(printf '%s\n\n%s\n\n%s\n%s\n\n%s\n' \
-              'Automated nightly candidate built from the latest `main` branch.' \
-              'Nightly builds are prerelease candidates. After testing, the exact commit can be promoted to the next beta and rebuilt with the official beta version.' \
+              'Automated rolling nightly built from the latest `main` branch.' \
+              'This nightly is always the GitHub Latest release. After testing, the exact commit can be promoted to the next beta and rebuilt with the official beta version.' \
               "- Commit: [${GITHUB_SHA:0:7}](${commit_url})" \
               "- Workflow run: [${GITHUB_RUN_ID}](${run_url})" \
               'Please report regressions in the [issue tracker](https://github.com/seregonwar/MemDBG/issues/new/choose). Pull requests are welcome.')
-            flags=(--title "MemDBG Nightly" --notes "${notes}" --prerelease --latest=false --verify-tag)
+            flags=(--title "MemDBG Nightly" --notes "${notes}" --latest --verify-tag)
           else
-            flags=(--title "MemDBG ${tag}" --generate-notes)
+            flags=(--title "MemDBG ${tag}" --generate-notes --latest=false)
           fi
-          if [ "${INPUT_DRAFT:-false}" = "true" ]; then
+          if [ "${MEMDBG_NIGHTLY}" != "true" ] && [ "${INPUT_DRAFT:-false}" = "true" ]; then
             flags+=(--draft)
           fi
-          if [ "${INPUT_PRERELEASE:-false}" = "true" ]; then
+          if [ "${MEMDBG_NIGHTLY}" != "true" ] && [ "${INPUT_PRERELEASE:-false}" = "true" ]; then
             flags+=(--prerelease)
           fi
 
@@ -708,9 +708,15 @@ jobs:
                 --title "MemDBG Nightly" \
                 --notes "${notes}" \
                 --target "${GITHUB_SHA}" \
-                --prerelease \
-                --latest=false
+                --prerelease=false \
+                --latest
             fi
           else
             gh release create "${tag}" release-assets/* "${flags[@]}"
+          fi
+
+          # Official releases remain accessible snapshots, while the rolling
+          # nightly permanently owns GitHub's Latest badge.
+          if [ "${MEMDBG_NIGHTLY}" != "true" ] && gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --prerelease=false --latest
           fi

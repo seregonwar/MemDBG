@@ -378,11 +378,12 @@ candidate.
 | `mobile-android` | `MemDBG-mobile-android.apk` |
 
 The rolling [`nightly`](https://github.com/seregonwar/MemDBG/releases/tag/nightly)
-prerelease follows the latest successfully packaged `main` commit. Nightly
-artifacts are release candidates: after testing, the selected build can be
-promoted from the same commit to the next beta. The official release build then
-stamps that beta version consistently into every artifact. Published beta tags
-and their assets remain historical snapshots.
+release follows the latest successfully packaged `main` commit and is always
+marked as GitHub Latest. Nightly artifacts are release candidates: after
+testing, the selected build can be promoted from the same commit to the next
+beta. The official release build then stamps that beta version consistently
+into every artifact. Published beta tags and their assets remain accessible
+historical snapshots, without taking the Latest badge from the nightly.
 
 `VERSION` records the current official repository version for local builds. A
 single resolver derives tagged/manual release versions and independent nightly

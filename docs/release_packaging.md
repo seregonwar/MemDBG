@@ -20,13 +20,15 @@ app has icons and a local plugin catalog even without a network refresh.
 ## Nightly candidates
 
 The release workflow runs every day at 03:17 UTC and updates the rolling
-`nightly` prerelease from the current `main` commit. Each artifact embeds a
+`nightly` release from the current `main` commit. Each artifact embeds a
 version in the form `0.2.0-nightly.<run>.g<commit>`, and the release notes link
 to the exact commit and successful workflow run.
 
-The nightly release is never marked as Latest and never replaces a published
-beta. Once a nightly has been validated, its exact commit can be promoted to the
-next beta; the official build is then stamped consistently with the beta tag.
+The nightly release is always marked as Latest. Published betas remain
+accessible as immutable versioned snapshots but do not replace the rolling
+nightly as Latest. Once a nightly has been validated, its exact commit can be
+promoted to the next beta; the official build is then stamped consistently with
+the beta tag.
 
 Linux currently ships a `.tar.gz` bundle with a `.desktop` file and hicolor icon
 data. AppImage can be added later once the runtime dependency bundle is stable
