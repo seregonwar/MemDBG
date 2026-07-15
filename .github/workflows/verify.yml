@@ -15,6 +15,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  versioning:
+    name: Version resolution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test official and nightly version resolution
+        run: python3 tools/test_resolve_build_version.py
+
   host:
     name: Host build and tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

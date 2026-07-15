@@ -362,7 +362,8 @@ machines must connect, and prefer `--allow=<frontend-ip>` for LAN sessions.
 ## Release Pipeline
 
 GitHub Actions release jobs build desktop, payload, library, and mobile
-artifacts for tags matching `v*` and manual dispatches.
+artifacts for tags matching `v*`, manual dispatches, and the daily nightly
+candidate.
 
 | Job | Artifact |
 |---|---|
@@ -376,9 +377,17 @@ artifacts for tags matching `v*` and manual dispatches.
 | `mobile-ios` | `MemDBG-mobile-ios.ipa` |
 | `mobile-android` | `MemDBG-mobile-android.apk` |
 
-`VERSION` is the checked-in version source for local builds. Release workflows
-resolve the version from the tag or manual input, pass it to Make/CMake, and
-publish artifacts with `SHA256SUMS.txt`.
+The rolling [`nightly`](https://github.com/seregonwar/MemDBG/releases/tag/nightly)
+prerelease follows the latest successfully packaged `main` commit. Nightly
+artifacts are release candidates: after testing, the selected build can be
+promoted from the same commit to the next beta. The official release build then
+stamps that beta version consistently into every artifact. Published beta tags
+and their assets remain historical snapshots.
+
+`VERSION` records the current official repository version for local builds. A
+single resolver derives tagged/manual release versions and independent nightly
+versions, then writes the resolved value before every desktop, payload, iOS,
+and Android build. Release artifacts include `SHA256SUMS.txt`.
 
 ## Documentation
 
