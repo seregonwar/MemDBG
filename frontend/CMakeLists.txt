@@ -210,6 +210,7 @@ add_executable(memdbg_frontend
   # sandbox (standalone hardened script execution)
   src/sandbox/sandbox_common.cpp
   src/sandbox/sandbox_lua.cpp
+  src/sandbox/sandbox_python.cpp
 
   # cheats (repository sources and catalog)
   src/cheats/cheat_repository.cpp
@@ -580,6 +581,7 @@ add_executable(memdbg_plugin_manager_test
   src/plugins/repository/plugin_manager.cpp
   src/sandbox/sandbox_common.cpp
   src/sandbox/sandbox_lua.cpp
+  src/sandbox/sandbox_python.cpp
   src/core/platform.cpp
 )
 

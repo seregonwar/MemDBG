@@ -41,7 +41,7 @@ struct SandboxLimits {
   int32_t python_timeout_sec = 30;    ///< SIGALRM / subprocess timeout
   int32_t python_max_mb      = 64;    ///< RLIMIT_AS / virtual memory limit in MiB
   int32_t python_max_procs   = 1;     ///< RLIMIT_NPROC
-  int32_t python_max_files   = 0;     ///< RLIMIT_NOFILE (0 = no file descriptors allowed)
+  int32_t python_max_files   = 64;    ///< RLIMIT_NOFILE, including interpreter internals
 
   /// Return the strictest of *this and `other` (min of every field).
   SandboxLimits clamp(const SandboxLimits &other) const;
@@ -56,7 +56,7 @@ struct SandboxLimits {
     l.python_timeout_sec = 30;
     l.python_max_mb = 64;
     l.python_max_procs = 1;
-    l.python_max_files = 0;
+    l.python_max_files = 64;
     return l;
   }
 

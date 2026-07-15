@@ -122,12 +122,21 @@ int main() {
 
   const plugins::PluginRunResult blocked_run =
       manager.run_plugin(installed->id, context);
-  require(!blocked_run.ok, "sandbox blocks Python plugin");
-  require(blocked_run.error.find("secure Python isolation is unavailable") !=
+#if defined(__APPLE__)
+  require(blocked_run.ok, "macOS sandbox runs Python plugin");
+  require(blocked_run.command.find("sandboxed-python") != std::string::npos,
+          "Python sandbox command marker");
+  require(blocked_run.output.find("MemDBG Python plugin context") !=
               std::string::npos,
-          "Python block explains missing isolation");
-  require(blocked_run.command.find("blocked-python") != std::string::npos,
-          "Python block command marker");
+          "sandboxed Python receives plugin context");
+#else
+  require(!blocked_run.ok, "Python fails closed without OS isolation");
+  require(blocked_run.error.find("no reviewed OS isolation backend") !=
+              std::string::npos,
+          "Python block explains missing OS isolation");
+  require(blocked_run.command.find("sandboxed-python") != std::string::npos,
+          "Python attempted supervised sandbox path");
+#endif
 
   context.sandbox_enabled = false;
   const plugins::PluginRunResult run = manager.run_plugin(installed->id, context);

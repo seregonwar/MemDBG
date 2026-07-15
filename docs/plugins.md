@@ -79,6 +79,11 @@ Accepted source inputs in the Plugins page:
 When MemDBG runs a plugin it launches the local `python3`/`python`/`py -3` or
 `lua`/`luajit` interpreter and passes one argument: a JSON context file.
 
+With the plugin sandbox enabled, Python runs through the supervised OS sandbox.
+Restrictive Python plugins are currently supported on macOS; Linux and Windows
+fail closed until their native isolation backends are available. Disabling the
+sandbox is reserved for explicitly trusted plugins.
+
 The context includes:
 
 - `console`: host, debug port, UDP port, connection state

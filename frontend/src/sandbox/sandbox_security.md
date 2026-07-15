@@ -106,24 +106,29 @@ sandbox can escape without exploiting a sandbox vulnerability.
 
 ---
 
-## Python Execution — Fail-Closed Policy
+## Python Execution — Supervised OS Sandbox
 
 CPython import hooks and resource limits are not a security boundary. Python
-code can recover dangerous objects through the runtime object graph, and CPU
-limits do not enforce a wall-clock deadline for sleeping or blocked processes.
+code can recover dangerous objects through the runtime object graph, so MemDBG
+does not rely on an import blocklist.
 
 Therefore:
 
-- Python plugins are rejected while the user-facing sandbox is enabled.
-- `PythonSandbox::init()` rejects every restrictive policy.
-- Python execution is available only after the user explicitly disables the
-  sandbox for trusted code.
-- Lua is the supported engine for untrusted plugins.
+- Python always runs in a separately supervised process without shell command
+  construction on POSIX systems.
+- The supervisor enforces source size, wall-clock, CPU, address-space, process,
+  file-descriptor, and captured-output limits and kills the complete child
+  process group on timeout.
+- macOS restrictive execution uses a Seatbelt profile. Plugin files and the
+  generated context are readable, while other user data, subprocess creation,
+  and network access are denied unless the corresponding policy allows them.
+- Platforms without a reviewed OS isolation backend still fail closed for any
+  restrictive policy. Explicit unrestricted execution remains available only
+  for trusted code.
 
-Do not replace this fail-closed behavior with an import blocklist. A future
-Python sandbox must use a separately reviewed OS boundary on every supported
-platform (for example a restricted token/container profile plus wall-clock
-process supervision).
+The next parity step is a reviewed Linux namespace/seccomp backend and a Windows
+restricted-token/AppContainer backend. Until then those platforms must not
+silently downgrade a restrictive Python policy.
 
 ---
 
@@ -144,7 +149,7 @@ process supervision).
 | `test_sandbox_fuzz.cpp` | Random strings (200 runs) | ✓ |
 | `test_sandbox_fuzz.cpp` | Random loops (100 runs) | ✓ |
 | `test_sandbox_limits.cpp` | Limit enforcement (6 tests) | ✓ |
-| `test_sandbox_python.cpp` | Python fail-closed policy (2 tests) | ✓ |
+| `test_sandbox_python.cpp` | Python OS isolation and supervision (12 tests on macOS) | ✓ |
 
 Run all tests:
 ```bash
@@ -165,7 +170,7 @@ frontend/src/sandbox/
 ├── sandbox_result.hpp       # Bounded, validated result types
 ├── sandbox_engine.hpp       # Abstract base class + factory functions
 ├── sandbox_lua.cpp          # Hardened Lua 5.4 sandbox implementation
-├── sandbox_python.cpp       # Fail-closed Python execution gate
+├── sandbox_python.cpp       # OS-isolated, supervised Python subprocess
 ├── sandbox_common.cpp       # Shared method implementations
 └── sandbox_security.md      # This document
 
