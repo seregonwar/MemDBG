@@ -259,6 +259,14 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     ui::draw_scan_progress(state.scan_async_label, icons::kSearch,
                            ImGui::GetTime() - state.scan_async_start_time,
                            ImGui::GetContentRegionAvail().x);
+  if (state.scan_async_pending && state.scan_async_cancellable) {
+    ImGui::BeginDisabled(state.scan_async_cancel_requested.load());
+    if (ui::danger_button(locale::tr("scanner.stop"), ui::full_button(36))) {
+      state.scan_async_cancel_requested.store(true);
+      set_status(state, locale::tr("scanner.stopping"));
+    }
+    ImGui::EndDisabled();
+  }
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   const char *session_label = state.scan_is_unknown_session ? locale::tr("scanner.unknown_session") : locale::tr("scanner.next_scan");
@@ -274,6 +282,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                     !state.scan_snapshot.empty() && !client_async_busy(state);
   const float half_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
   ImGui::BeginDisabled(!can_refine);
+  if (ui::soft_button(locale::tr("scanner.exact_value"), ui::full_button(38))) refine_scan(state, RefineMode::ExactValue);
   if (ui::soft_button(locale::tr("scanner.changed"), ImVec2(half_w, 38))) refine_scan(state, RefineMode::Changed);
   ImGui::SameLine();
   if (ui::soft_button(locale::tr("scanner.unchanged"), ImVec2(0, 38))) refine_scan(state, RefineMode::Unchanged);

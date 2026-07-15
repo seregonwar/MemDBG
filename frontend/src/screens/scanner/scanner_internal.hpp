@@ -10,6 +10,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "confirm_modal.hpp"
+#include "refine_match.hpp"
 #include "scanner/heuristics/auto_search.hpp"
 #include "scanner/structure_compare.hpp"
 
@@ -27,7 +28,6 @@ namespace memdbg::frontend {
 
 /* ---- Scan helpers ---- */
 uint32_t current_scan_value_len(const AppState &state);
-bool scan_refine_match(int type, RefineMode mode, const std::vector<uint8_t> &old_bytes, const std::vector<uint8_t> &new_bytes);
 const char *refine_mode_name(RefineMode mode);
 bool has_batch_read(const AppState &state);
 

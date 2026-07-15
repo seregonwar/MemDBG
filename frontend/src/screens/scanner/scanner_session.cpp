@@ -102,6 +102,17 @@ void refine_scan(AppState &state, RefineMode mode) {
   }
 
   const uint32_t val_len = state.scan_snapshot_value_len;
+  std::vector<uint8_t> target_bytes;
+  if (mode == RefineMode::ExactValue) {
+    std::array<uint8_t, 16> target{};
+    uint32_t target_len = 0U;
+    if (!build_scan_value(state.scan_snapshot_type, state.scan_value,
+                          target, target_len) || target_len != val_len) {
+      set_status(state, locale::tr("scanner.invalid_value"));
+      return;
+    }
+    target_bytes.assign(target.begin(), target.begin() + target_len);
+  }
   std::vector<ScanSnapshotEntry> next_snapshot;
   next_snapshot.reserve(state.scan_snapshot.size());
   std::vector<uint64_t> next_addresses;
@@ -150,7 +161,8 @@ void refine_scan(AppState &state, RefineMode mode) {
         bytes_read += entry.length;
         data_offset += entry.length;
 
-        if (!scan_refine_match(state.scan_snapshot_type, mode, old_entry.bytes, current))
+        if (!scan_refine_match(state.scan_snapshot_type, mode, old_entry.bytes,
+                               current, target_bytes))
           continue;
 
         ScanSnapshotEntry next;
@@ -171,7 +183,8 @@ void refine_scan(AppState &state, RefineMode mode) {
       }
       bytes_read += (uint64_t)current.size();
 
-      if (!scan_refine_match(state.scan_snapshot_type, mode, old_snap[i].bytes, current))
+      if (!scan_refine_match(state.scan_snapshot_type, mode,
+                             old_snap[i].bytes, current, target_bytes))
         continue;
 
       ScanSnapshotEntry next;

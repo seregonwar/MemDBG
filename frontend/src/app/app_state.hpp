@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -121,7 +122,7 @@ struct ScanSnapshotEntry {
   std::vector<uint8_t> bytes;
 };
 
-enum class RefineMode { Changed, Unchanged, Increased, Decreased };
+enum class RefineMode { ExactValue, Changed, Unchanged, Increased, Decreased };
 
 struct Notification {
   std::string message;
@@ -438,6 +439,8 @@ struct AppState {
   /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
   std::mutex scan_async_mtx;
   bool scan_async_pending = false;
+  bool scan_async_cancellable = false;
+  std::atomic<bool> scan_async_cancel_requested{false};
   std::shared_future<bool> scan_async_future;
   std::string scan_async_label;
   double scan_async_start_time = 0.0;
