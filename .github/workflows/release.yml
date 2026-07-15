@@ -541,8 +541,13 @@ jobs:
           ./gradlew --no-daemon assembleRelease
           cd ../..
           mkdir -p dist
-          find mobile/android -type f -path '*/build/outputs/apk/release/*.apk' \
-            -exec cp {} dist/ \;
+          apk_file=$(find mobile/android -type f \
+            -path '*/build/outputs/apk/release/*.apk' -print -quit)
+          if [ -z "${apk_file}" ]; then
+            echo "Android release APK not found" >&2
+            exit 1
+          fi
+          cp "${apk_file}" dist/MemDBG-mobile-android.apk
 
       - name: Upload Android artifact
         if: steps.detect.outputs.enabled == '1'
