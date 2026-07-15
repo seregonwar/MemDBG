@@ -100,6 +100,8 @@ struct ConsoleTarget {
   std::string host = "192.168.1.100";
   int debug_port = 9020;
   int udp_port = 9023;
+  int payload_port = 9021;
+  int payload_platform = 0;  /* 0 = Auto, 1 = PS4, 2 = PS5 */
 };
 
 struct CheatEntry {
@@ -256,7 +258,17 @@ struct AppState {
   GitHubProfile github_profile;
   PayloadFetcher payload_fetcher;
   bool payload_auto_fetch = false;
+  bool payload_auto_inject = false;
+  bool payload_auto_shutdown = false;
+  int payload_port = 9021;
   int payload_platform = 0;  /* 0 = Auto, 1 = PS4, 2 = PS5 */
+  bool payload_inject_pending = false;
+  bool payload_auto_inject_probe = false;
+  bool payload_auto_inject_waiting = false;
+  bool payload_connect_after_inject = false;
+  bool payload_post_inject_connect = false;
+  double payload_connect_retry_at = 0.0;
+  double payload_connect_retry_deadline = 0.0;
   bool payload_outdated = false;          /* true when hello.version < remote tag */
   std::string payload_outdated_remote_tag; /* latest GitHub tag for status bar warning */
   ReleaseCheck release_check;
@@ -964,7 +976,8 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 }
 
 inline bool client_async_busy(const AppState &state) {
-  return state.connect_pending || state.telemetry_pending ||
+  return state.connect_pending || state.payload_inject_pending ||
+         state.telemetry_pending ||
          state.scan_async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
          state.debugger_attach_pending || state.debugger_threads_pending ||
@@ -988,6 +1001,7 @@ void add_console_target(AppState &state);
 void remove_selected_console_target(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
 void connect_console(AppState &state);
+void request_payload_inject(AppState &state, bool connect_after = true);
 void disconnect_console(AppState &state, const char *reason = nullptr);
 void reset_debugger_state(AppState &state);
 void request_telemetry_async(AppState &state);

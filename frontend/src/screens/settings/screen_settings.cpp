@@ -29,6 +29,7 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::InputText(locale::tr("settings.console_ipv4"), state.host, sizeof(state.host));
   ImGui::InputInt(locale::tr("settings.debug_tcp"), &state.debug_port);
   ImGui::InputInt(locale::tr("settings.udp_logs"), &state.udp_port);
+  ImGui::InputInt(locale::tr("settings.payload_port"), &state.payload_port);
   normalize_ports(state);
 
   ImGui::Spacing();
@@ -79,6 +80,24 @@ void draw_settings(AppState &state, ImVec2 avail) {
   }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", locale::tr("settings.payload_auto_fetch_hint"));
+
+  if (ImGui::Checkbox(locale::tr("settings.payload_auto_inject"),
+                      &state.payload_auto_inject)) {
+    set_status(state, state.payload_auto_inject
+        ? locale::tr("settings.payload_auto_inject_on")
+        : locale::tr("settings.payload_auto_inject_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.payload_auto_inject_hint"));
+
+  if (ImGui::Checkbox(locale::tr("settings.payload_auto_shutdown"),
+                      &state.payload_auto_shutdown)) {
+    set_status(state, state.payload_auto_shutdown
+        ? locale::tr("settings.payload_auto_shutdown_on")
+        : locale::tr("settings.payload_auto_shutdown_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.payload_auto_shutdown_hint"));
 
   const char *platform_opts[] = {
     locale::tr("settings.payload_platform_auto"),
@@ -329,6 +348,10 @@ void draw_settings(AppState &state, ImVec2 avail) {
     std::snprintf(state.host, sizeof(state.host), "%s", "192.168.1.100");
     state.debug_port = 9020;
     state.udp_port = 9023;
+    state.payload_port = 9021;
+    state.payload_platform = 0;
+    state.payload_auto_inject = false;
+    state.payload_auto_shutdown = false;
     std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", "dumps");
     state.console_targets.clear();
     state.selected_target_index = 0;

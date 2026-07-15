@@ -14,6 +14,8 @@ namespace memdbg::frontend {
 void normalize_ports(AppState &state) {
   state.debug_port = std::clamp(state.debug_port, 1, 65535);
   state.udp_port    = std::clamp(state.udp_port, 1, 65535);
+  state.payload_port = std::clamp(state.payload_port, 1, 65535);
+  state.payload_platform = std::clamp(state.payload_platform, 0, 2);
 }
 
 void normalize_console_target(ConsoleTarget &target) {
@@ -23,6 +25,8 @@ void normalize_console_target(ConsoleTarget &target) {
   if (target.host.empty()) target.host = "192.168.1.100";
   target.debug_port = target.debug_port <= 0 ? 9020 : std::clamp(target.debug_port, 1, 65535);
   target.udp_port = target.udp_port <= 0 ? 9023 : std::clamp(target.udp_port, 1, 65535);
+  target.payload_port = target.payload_port <= 0 ? 9021 : std::clamp(target.payload_port, 1, 65535);
+  target.payload_platform = std::clamp(target.payload_platform, 0, 2);
 }
 
 ConsoleTarget current_console_target_from_fields(const AppState &state) {
@@ -31,6 +35,8 @@ ConsoleTarget current_console_target_from_fields(const AppState &state) {
   target.host = state.host;
   target.debug_port = state.debug_port;
   target.udp_port = state.udp_port;
+  target.payload_port = state.payload_port;
+  target.payload_platform = state.payload_platform;
   normalize_console_target(target);
   return target;
 }
@@ -42,6 +48,9 @@ static void apply_console_target(AppState &state, const ConsoleTarget &target) {
   std::snprintf(state.host, sizeof(state.host), "%s", normalized.host.c_str());
   state.debug_port = normalized.debug_port;
   state.udp_port = normalized.udp_port;
+  state.payload_port = normalized.payload_port;
+  state.payload_platform = normalized.payload_platform;
+  state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
 }
 
 static bool console_target_name_exists(const AppState &state, const std::string &name, int ignore_index) {
@@ -154,6 +163,8 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       state.debug_port = std::atoi(value.c_str());
     } else if (key == "udp_port") {
       state.udp_port = std::atoi(value.c_str());
+    } else if (key == "payload_port") {
+      state.payload_port = std::atoi(value.c_str());
     } else if (key == "dump_path" && !value.empty()) {
       std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", value.c_str());
     } else if (key == "language") {
@@ -165,6 +176,12 @@ bool load_frontend_settings(AppState &state, std::string *error) {
           value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "payload_auto_fetch") {
       state.payload_auto_fetch =
+          value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "payload_auto_inject") {
+      state.payload_auto_inject =
+          value == "1" || value == "true" || value == "on" || value == "yes";
+    } else if (key == "payload_auto_shutdown") {
+      state.payload_auto_shutdown =
           value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "payload_platform") {
       state.payload_platform = std::atoi(value.c_str());
@@ -193,8 +210,10 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       if (end == index_text.c_str() || *end != '\0' || index < 0 || index >= 64) continue;
 
       const size_t target_index = static_cast<size_t>(index);
-      if (state.console_targets.size() <= target_index)
-        state.console_targets.resize(target_index + 1U);
+      if (state.console_targets.size() <= target_index) {
+        const ConsoleTarget defaults = current_console_target_from_fields(state);
+        state.console_targets.resize(target_index + 1U, defaults);
+      }
 
       const std::string field = rest.substr(dot + 1);
       ConsoleTarget &target = state.console_targets[target_index];
@@ -206,6 +225,10 @@ bool load_frontend_settings(AppState &state, std::string *error) {
         target.debug_port = std::atoi(value.c_str());
       } else if (field == "udp_port") {
         target.udp_port = std::atoi(value.c_str());
+      } else if (field == "payload_port") {
+        target.payload_port = std::atoi(value.c_str());
+      } else if (field == "payload_platform") {
+        target.payload_platform = std::atoi(value.c_str());
       }
     }
   }
@@ -249,11 +272,14 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "host=" << state.host << "\n";
   out << "debug_port=" << state.debug_port << "\n";
   out << "udp_port=" << state.udp_port << "\n";
+  out << "payload_port=" << state.payload_port << "\n";
   out << "dump_path=" << state.dump_path << "\n";
   out << "last_debugger_pid=" << state.last_debugger_pid << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr_prefetch_on_connect ? 1 : 0) << "\n";
   out << "payload_auto_fetch=" << (state.payload_auto_fetch ? 1 : 0) << "\n";
+  out << "payload_auto_inject=" << (state.payload_auto_inject ? 1 : 0) << "\n";
+  out << "payload_auto_shutdown=" << (state.payload_auto_shutdown ? 1 : 0) << "\n";
   out << "payload_platform=" << state.payload_platform << "\n";
   out << "selected_target=" << selected_target << "\n";
   for (int i = 0; i < 4; ++i)
@@ -267,6 +293,8 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
     out << "target." << i << ".host=" << target.host << "\n";
     out << "target." << i << ".debug_port=" << target.debug_port << "\n";
     out << "target." << i << ".udp_port=" << target.udp_port << "\n";
+    out << "target." << i << ".payload_port=" << target.payload_port << "\n";
+    out << "target." << i << ".payload_platform=" << target.payload_platform << "\n";
   }
   if (!out) {
     if (error != nullptr) *error = "Failed while writing " + path.string();

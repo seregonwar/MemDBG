@@ -43,7 +43,8 @@ static bool mobile_nav_button(const char *id, const char *icon,
 
 static std::string mobile_target_endpoint(const ConsoleTarget &target) {
   return target.host + ":" + std::to_string(target.debug_port) +
-         " / UDP " + std::to_string(target.udp_port);
+         " / UDP " + std::to_string(target.udp_port) +
+         " / ELF " + std::to_string(target.payload_port);
 }
 
 static void mobile_persist_console_targets(AppState &state,
@@ -320,7 +321,8 @@ static void draw_mobile_network(AppState &state, ImVec2 size) {
   ImGui::BeginChild("MobileNetworkSummary", ImVec2(0, 112.0f * scl), true,
                     ImGuiWindowFlags_NoScrollbar);
   const ConsoleTarget current_target = {
-      state.target_name, state.host, state.debug_port, state.udp_port
+      state.target_name, state.host, state.debug_port, state.udp_port,
+      state.payload_port, state.payload_platform
   };
   mobile_info_row("Target", state.target_name, palette.text);
   mobile_info_row("Endpoint", mobile_target_endpoint(current_target),
@@ -381,7 +383,29 @@ static void draw_mobile_network(AppState &state, ImVec2 size) {
   ImGui::InputInt("Debug TCP##MobileDebugPort", &state.debug_port);
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputInt("UDP logs##MobileUdpPort", &state.udp_port);
+  ImGui::SetNextItemWidth(-1.0f);
+  ImGui::InputInt("Payload ELF##MobilePayloadPort", &state.payload_port);
+  const char *platform_options[] = {"Auto", "PS4", "PS5"};
+  ImGui::SetNextItemWidth(-1.0f);
+  if (ImGui::Combo("Platform##MobilePayloadPlatform", &state.payload_platform,
+                   platform_options, 3)) {
+    state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+  }
   normalize_ports(state);
+
+  ImGui::Checkbox("Auto inject on startup##MobileAutoInject",
+                  &state.payload_auto_inject);
+  ImGui::Checkbox("Auto shutdown on exit##MobileAutoShutdown",
+                  &state.payload_auto_shutdown);
+
+  ImGui::BeginDisabled(connected || state.connect_pending ||
+                       state.payload_inject_pending);
+  if (mobile_action_button(std::string(icons::kConnect) +
+                           "  Inject & connect", true)) {
+    save_current_console_target(state);
+    request_payload_inject(state, true);
+  }
+  ImGui::EndDisabled();
 
   const float gap = 6.0f * scl;
   const float button_w = (ImGui::GetContentRegionAvail().x - gap * 2.0f) / 3.0f;
