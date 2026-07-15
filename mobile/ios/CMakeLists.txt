@@ -200,6 +200,7 @@ set(MOBILE_SOURCES
 
   ${FRONTEND_ROOT}/src/sandbox/sandbox_common.cpp
   ${FRONTEND_ROOT}/src/sandbox/sandbox_lua.cpp
+  ${FRONTEND_ROOT}/src/sandbox/sandbox_python_mobile.cpp
 
   ${FRONTEND_ROOT}/src/cheats/cheat_repository.cpp
 
