@@ -934,9 +934,12 @@ static uint32_t mobile_scan_value_len(const AppState &state) {
 
 static bool mobile_scan_refine_match(int type, RefineMode mode,
                                      const std::vector<uint8_t> &old_bytes,
-                                     const std::vector<uint8_t> &new_bytes) {
+                                     const std::vector<uint8_t> &new_bytes,
+                                     const std::vector<uint8_t> &target_bytes) {
   const bool same = old_bytes == new_bytes;
   switch (mode) {
+  case RefineMode::ExactValue:
+    return new_bytes == target_bytes;
   case RefineMode::Changed:
     return !same;
   case RefineMode::Unchanged:
@@ -958,6 +961,7 @@ static bool mobile_scan_refine_match(int type, RefineMode mode,
 
 static const char *mobile_refine_name(RefineMode mode) {
   switch (mode) {
+  case RefineMode::ExactValue: return "Exact value";
   case RefineMode::Changed: return "Changed";
   case RefineMode::Unchanged: return "Unchanged";
   case RefineMode::Increased: return "Increased";
@@ -1380,6 +1384,17 @@ static void mobile_refine_scan(AppState &state, RefineMode mode) {
   }
 
   const uint32_t value_len = state.scan_snapshot_value_len;
+  std::vector<uint8_t> target_bytes;
+  if (mode == RefineMode::ExactValue) {
+    std::array<uint8_t, 16> target{};
+    uint32_t target_len = 0U;
+    if (!build_scan_value(state.scan_snapshot_type, state.scan_value,
+                          target, target_len) || target_len != value_len) {
+      set_status(state, "Invalid scan value");
+      return;
+    }
+    target_bytes.assign(target.begin(), target.begin() + target_len);
+  }
   const auto old_snapshot = state.scan_snapshot;
   std::vector<uint64_t> addrs;
   addrs.reserve(old_snapshot.size());
@@ -1407,7 +1422,7 @@ static void mobile_refine_scan(AppState &state, RefineMode mode) {
     if (it == old_by_address.end()) continue;
     bytes_read += entry.bytes.size();
     if (!mobile_scan_refine_match(state.scan_snapshot_type, mode, it->second,
-                                  entry.bytes)) {
+                                  entry.bytes, target_bytes)) {
       continue;
     }
     next_addresses.push_back(entry.address);
@@ -1590,6 +1605,8 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
       payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
       !state.scan_snapshot.empty();
   ImGui::BeginDisabled(!can_refine);
+  if (mobile_action_button("Exact value", false))
+    mobile_refine_scan(state, RefineMode::ExactValue);
   if (mobile_action_button("Changed", false))
     mobile_refine_scan(state, RefineMode::Changed);
   if (mobile_action_button("Unchanged", false))

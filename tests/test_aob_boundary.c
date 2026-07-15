@@ -326,6 +326,46 @@ static int test_exact_range_scan_skip_fault(
   return failures;
 }
 
+static int test_exact_result_cap_scans_full_range(
+    const unsigned char *buf, size_t buf_size, const char *test_name) {
+  g_mock_buffer = buf;
+  g_mock_size = buf_size;
+
+  memdbg_scan_exact_request_t request;
+  memset(&request, 0, sizeof(request));
+  request.pid = 1;
+  request.start = 0U;
+  request.length = buf_size;
+  request.value_type = MEMDBG_VALUE_U8;
+  request.value_length = 1U;
+  request.alignment = 1U;
+  request.max_results = 1U;
+  request.value[0] = 0U;
+
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_exact(&request, &result);
+  if (status != MEMDBG_OK) {
+    printf("FAIL [%s]: scan returned status %d\n", test_name, (int)status);
+    return 1;
+  }
+
+  int failures = 0;
+  if (result.count != 1U || !result.truncated) {
+    printf("FAIL [%s]: expected one retained result and truncation\n",
+           test_name);
+    failures++;
+  }
+  if (result.bytes_scanned != buf_size) {
+    printf("FAIL [%s]: scanned %llu of %llu bytes after reaching cap\n",
+           test_name, (unsigned long long)result.bytes_scanned,
+           (unsigned long long)buf_size);
+    failures++;
+  }
+
+  memdbg_scan_result_free(&result);
+  return failures;
+}
+
 static int test_process_exact_large_map_is_segmented(
     const unsigned char *buf, size_t buf_size, const char *test_name) {
   g_mock_buffer = buf;
@@ -812,14 +852,24 @@ int main(void) {
                                   "pointer: skip non-readable maps");
   }
 
+  /* Test 22 — Reaching max_results caps retained addresses without ending
+     the scan early. This keeps progress and timing honest on large maps. */
+  {
+    mock_maps_reset();
+    mock_read_fail_reset();
+    memset(buf, 0x00, buf_size);
+    failures += test_exact_result_cap_scans_full_range(
+        buf, buf_size, "range exact: result cap scans full range");
+  }
+
   /* ---- Summary ---- */
   mock_maps_reset();
   mock_read_fail_reset();
 
   if (failures == 0) {
-    printf("\nAll AOB boundary tests PASSED (21/21).\n");
+    printf("\nAll AOB boundary tests PASSED (22/22).\n");
   } else {
-    printf("\n%d test(s) FAILED out of 21.\n", failures);
+    printf("\n%d test(s) FAILED out of 22.\n", failures);
   }
 
   free(buf);

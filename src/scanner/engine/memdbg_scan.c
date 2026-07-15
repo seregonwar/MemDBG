@@ -408,7 +408,7 @@ static memdbg_status_t scan_window(scan_context_t *ctx, scan_builder_t *builder,
   /* Fast path: u8 aligned=1 -> memchr */
   if (value_len == 1U && ctx->alignment == 1U && base_addr >= range_start) {
     size_t pos = 0U;
-    while (pos < searchable && !builder->result->truncated) {
+    while (pos < searchable) {
       void *hit = memchr(ctx->buffer + pos, ctx->needle[0], searchable - pos);
       if (hit == NULL) break;
       size_t i = (size_t)((unsigned char *)hit - ctx->buffer);
@@ -422,7 +422,7 @@ static memdbg_status_t scan_window(scan_context_t *ctx, scan_builder_t *builder,
   size_t first = first_aligned_offset(base_addr, alignment_base, range_start, ctx->alignment);
   if (first == SIZE_MAX || first >= searchable) return MEMDBG_OK;
 
-  for (size_t i = first; i < searchable && !builder->result->truncated; i += ctx->alignment) {
+  for (size_t i = first; i < searchable; i += ctx->alignment) {
     uint64_t absolute = base_addr + i;
     if (absolute > range_end || (uint64_t)value_len > range_end - absolute) break;
     if (ctx->match(ctx->buffer + i, ctx->needle, value_len))
@@ -444,7 +444,7 @@ static memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
   if (!scan_bounds_valid(range_start, range_len, ctx->value_len, &range_end))
     return MEMDBG_ERR_PARAM;
 
-  while (scanned < range_len && !builder->result->truncated) {
+  while (scanned < range_len) {
     uint64_t remaining = range_len - scanned;
     size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
@@ -570,7 +570,7 @@ static void *parallel_worker_thread(void *arg) {
   builder.max_results  = w->max_results;
   builder.capacity     = 0U;  /* first append allocates MEMDBG_SCAN_INITIAL_CAPACITY */
 
-  for (size_t i = w->map_start; i < w->map_end && !w->result.truncated; ++i) {
+  for (size_t i = w->map_start; i < w->map_end; ++i) {
     const memdbg_map_entry_t *map = &w->maps[i];
     if ((map->protection & w->prot_mask) != w->prot_mask ||
         map->end <= map->start)
@@ -588,7 +588,7 @@ static void *parallel_worker_thread(void *arg) {
 
     uint64_t cursor = scan_start;
     uint64_t remaining = map_len;
-    while (remaining != 0U && !w->result.truncated) {
+    while (remaining != 0U) {
       uint64_t segment_len = remaining > MEMDBG_SCAN_MAX_LENGTH
           ? MEMDBG_SCAN_MAX_LENGTH
           : remaining;
@@ -896,7 +896,7 @@ static memdbg_status_t scan_aob_range(const bm_table_t *bm,
   uint64_t scanned = 0U;
   size_t carry = 0U;
 
-  while (scanned < range_len && !builder->result->truncated) {
+  while (scanned < range_len) {
     uint64_t remaining = range_len - scanned;
     size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
@@ -918,7 +918,7 @@ static memdbg_status_t scan_aob_range(const bm_table_t *bm,
     /* BMH + good-suffix search loop. */
     size_t i = pat_len - 1U;
     const unsigned char *hay = buffer;
-    while (i < window && !builder->result->truncated) {
+    while (i < window) {
       size_t j = pat_len - 1U;
       const unsigned char *h = hay + i;
       bool match = true;
@@ -1087,7 +1087,7 @@ static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
   if (!scan_bounds_valid(start, len, uc->value_len, &range_end))
     return MEMDBG_ERR_PARAM;
 
-  while (scanned < len && !builder->result->truncated) {
+  while (scanned < len) {
     uint64_t remaining = len - scanned;
     size_t to_read = scan_read_size(remaining);
     size_t read_len = 0U;
@@ -1118,7 +1118,7 @@ static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
     }
 
     for (size_t pos = first;
-         pos + uc->value_len <= window && !builder->result->truncated;
+         pos + uc->value_len <= window;
          pos += uc->alignment) {
       uint64_t addr = base_addr + (uint64_t)pos;
       if (addr > range_end || (uint64_t)uc->value_len > range_end - addr) break;
@@ -1243,7 +1243,7 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
   uint32_t alignment = request->alignment == 0U ? 8U : request->alignment;
   uint64_t start_ns = monotonic_ns();
 
-  for (size_t mi = 0U; mi < maps.count && !out->truncated; ++mi) {
+  for (size_t mi = 0U; mi < maps.count; ++mi) {
     const memdbg_map_entry_t *map = &maps.entries[mi];
     if (map->end <= map->start) continue;
     if ((map->protection & MEMDBG_MAP_PROT_READ) != MEMDBG_MAP_PROT_READ)
@@ -1259,7 +1259,7 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
     uint64_t scanned = 0U;
     uint64_t map_len = mend - mstart;
 
-    while (scanned < map_len && !out->truncated) {
+    while (scanned < map_len) {
       uint64_t remaining = map_len - scanned;
       size_t to_read = scan_read_size(remaining);
       size_t read_len = 0U;
@@ -1280,7 +1280,7 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
       size_t first = first_aligned_offset(base_addr, mstart, mstart, alignment);
       if (first < window) {
         for (size_t i = first;
-             i + sizeof(uint64_t) <= window && !out->truncated;
+             i + sizeof(uint64_t) <= window;
              i += alignment) {
           uint64_t addr = base_addr + (uint64_t)i;
           if (addr > mend || sizeof(uint64_t) > mend - addr) break;

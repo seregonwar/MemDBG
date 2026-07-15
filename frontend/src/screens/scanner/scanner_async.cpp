@@ -5,6 +5,7 @@
  */
 
 #include "scanner_internal.hpp"
+#include "screens/processes/map_selection.hpp"
 
 #include <chrono>
 #include <exception>
@@ -21,6 +22,8 @@ void poll_scanner_async(AppState &state) {
   if (status != std::future_status::ready) return;
 
   state.scan_async_pending = false;
+  state.scan_async_cancellable = false;
+  const bool was_cancelled = state.scan_async_cancel_requested.exchange(false);
   bool ok = false;
   try {
     ok = state.scan_async_future.get();
@@ -76,8 +79,10 @@ void poll_scanner_async(AppState &state) {
   /* Post-scan: capture snapshot on the UI thread */
   // snapshot was already captured by the async worker via temp storage
   set_status(state, status_local);
-  push_notification(state, std::string(state.scan_async_label) + " complete: " +
-                    std::to_string(state.scan_result.count) + " results");  /* If auto-search is enabled and this was a scan, track pass progression.
+  push_notification(state, was_cancelled
+      ? std::string(locale::tr("scanner.scan_stopped"))
+      : std::string(state.scan_async_label) + " complete: " +
+            std::to_string(state.scan_result.count) + " results");  /* If auto-search is enabled and this was a scan, track pass progression.
    * Only the auto-search Next Scan lambda populates temp_candidates;
    * regular scans don't, so we gate on the temp vector being non-empty. */
   if (state.auto_search_enabled && !state.scan_snapshot.empty()) {
@@ -264,6 +269,10 @@ void scan_selected_maps(AppState &state) {
     push_notification(state, locale::tr("scanner.no_selected_maps"), 4.0);
     return;
   }
+  std::sort(selected_maps.begin(), selected_maps.end(),
+            [](const MapEntry &a, const MapEntry &b) {
+              return a.start < b.start;
+            });
 
   state.scan_alignment = std::max(state.scan_alignment, 1);
   state.scan_max_results = std::max(state.scan_max_results, 1);
@@ -272,10 +281,18 @@ void scan_selected_maps(AppState &state) {
   const uint32_t max_results = static_cast<uint32_t>(state.scan_max_results);
   const int scan_type_snap = state.scan_type;
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
+  std::unordered_set<uint64_t> effective_selection;
+  effective_selection.reserve(selected_maps.size());
+  for (const MapEntry &map : selected_maps)
+    effective_selection.insert(map.start);
+  const uint32_t parallel_protection_mask =
+      detail::complete_protection_mask(state.maps, effective_selection);
 
   state.scan_async_label = locale::tr("scanner.selected_maps_scan");
   state.scan_async_start_time = ImGui::GetTime();
   state.scan_async_pending = true;
+  state.scan_async_cancellable = true;
+  state.scan_async_cancel_requested.store(false);
   state.scan_async_owner = Screen::Scanner;
 
   auto &client = state.client;
@@ -290,9 +307,11 @@ void scan_selected_maps(AppState &state) {
   state.scan_async_future = std::async(std::launch::async,
       [&client, selected_maps = std::move(selected_maps), pid, value,
        value_len, alignment, max_results, scan_type_snap, has_batch,
+       parallel_protection_mask,
        &temp_result, &temp_snapshot, &temp_snap_val_len, &temp_snap_type,
        &temp_is_unknown, &temp_status, &error_out,
-       &mtx = state.scan_async_mtx]() -> bool {
+       &mtx = state.scan_async_mtx,
+       &cancel_requested = state.scan_async_cancel_requested]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult aggregate;
         aggregate.addresses.reserve(max_results);
@@ -307,38 +326,85 @@ void scan_selected_maps(AppState &state) {
         };
 
         size_t scanned_maps = 0U;
-        for (const MapEntry &map : selected_maps) {
-          if (aggregate.addresses.size() >= max_results) {
-            aggregate.truncated = true;
-            break;
-          }
-
-          memdbg_scan_exact_request_t request{};
-          request.pid = pid;
-          request.start = map.start;
-          request.length = map.end - map.start;
-          request.value_type = static_cast<uint32_t>(scan_type_snap);
-          request.value_length = value_len;
-          request.alignment = alignment;
-          request.max_results = max_results -
-              static_cast<uint32_t>(aggregate.addresses.size());
-          std::copy(value.begin(), value.end(), request.value);
-
-          ScanResult part;
-          if (!client.scan_exact(request, part)) {
-            error_out = "Selected map " + hex_u64(map.start) + ": " +
-                        client.last_error();
-            return false;
-          }
-          scanned_maps++;
+        auto merge_part = [&](ScanResult &part, size_t maps_in_part) {
+          const size_t remaining_results =
+              aggregate.addresses.size() < max_results
+                  ? max_results - aggregate.addresses.size()
+                  : 0U;
+          const size_t retained = std::min(remaining_results,
+                                           part.addresses.size());
           aggregate.addresses.insert(aggregate.addresses.end(),
-                                     part.addresses.begin(), part.addresses.end());
-          aggregate.truncated = aggregate.truncated || part.truncated;
+                                     part.addresses.begin(),
+                                     part.addresses.begin() + retained);
+          aggregate.truncated = aggregate.truncated || part.truncated ||
+                                part.addresses.size() > retained;
           add_u64(aggregate.bytes_scanned, part.bytes_scanned);
           add_u64(aggregate.elapsed_ns, part.elapsed_ns);
           add_u32(aggregate.read_calls, part.read_calls);
           add_u32(aggregate.regions_scanned, part.regions_scanned);
           add_u32(aggregate.read_errors, part.read_errors);
+          scanned_maps += maps_in_part;
+        };
+
+        if (parallel_protection_mask != 0U) {
+          constexpr size_t kMapsPerParallelBatch = 1024U;
+          for (size_t base = 0U; base < selected_maps.size();
+               base += kMapsPerParallelBatch) {
+            if (cancel_requested.load()) break;
+            const size_t end = std::min(base + kMapsPerParallelBatch,
+                                        selected_maps.size());
+            const size_t remaining_results =
+                aggregate.addresses.size() < max_results
+                    ? max_results - aggregate.addresses.size()
+                    : 0U;
+            memdbg_scan_process_exact_request_t request{};
+            request.pid = pid;
+            request.value_type = static_cast<uint32_t>(scan_type_snap);
+            request.value_length = value_len;
+            request.alignment = alignment;
+            request.max_results = static_cast<uint32_t>(
+                remaining_results == 0U ? 1U : remaining_results);
+            request.protection_mask = parallel_protection_mask;
+            request.start = selected_maps[base].start;
+            request.end = end < selected_maps.size()
+                ? selected_maps[end].start
+                : selected_maps.back().end;
+            std::copy(value.begin(), value.end(), request.value);
+
+            ScanResult part;
+            if (!client.scan_process_exact(request, part)) {
+              error_out = "Selected map batch " + hex_u64(request.start) +
+                          ": " + client.last_error();
+              return false;
+            }
+            merge_part(part, end - base);
+          }
+        } else {
+          for (const MapEntry &map : selected_maps) {
+            if (cancel_requested.load()) break;
+            const size_t remaining_results =
+                aggregate.addresses.size() < max_results
+                    ? max_results - aggregate.addresses.size()
+                    : 0U;
+            memdbg_scan_exact_request_t request{};
+            request.pid = pid;
+            request.start = map.start;
+            request.length = map.end - map.start;
+            request.value_type = static_cast<uint32_t>(scan_type_snap);
+            request.value_length = value_len;
+            request.alignment = alignment;
+            request.max_results = static_cast<uint32_t>(
+                remaining_results == 0U ? 1U : remaining_results);
+            std::copy(value.begin(), value.end(), request.value);
+
+            ScanResult part;
+            if (!client.scan_exact(request, part)) {
+              error_out = "Selected map " + hex_u64(map.start) + ": " +
+                          client.last_error();
+              return false;
+            }
+            merge_part(part, 1U);
+          }
         }
         aggregate.count = static_cast<uint32_t>(aggregate.addresses.size());
         temp_result = std::move(aggregate);
@@ -413,7 +479,8 @@ void scan_selected_maps(AppState &state) {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 snapshot_end - snapshot_start).count()));
         std::snprintf(temp_status, sizeof(temp_status),
-                      "Selected maps: %zu/%zu scanned, %u hits, %u snapshot errors",
+                      "%s: %zu/%zu maps scanned, %u hits, %u snapshot errors",
+                      cancel_requested.load() ? "Stopped" : "Complete",
                       scanned_maps, selected_maps.size(), temp_result.count,
                       snapshot_errors);
         error_out.clear();

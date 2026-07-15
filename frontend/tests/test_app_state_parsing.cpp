@@ -6,6 +6,8 @@
 
 #include "app_state.hpp"
 #include "core/client/process_list_parser.hpp"
+#include "screens/processes/map_selection.hpp"
+#include "screens/scanner/refine_match.hpp"
 
 #include <array>
 #include <cstdint>
@@ -93,6 +95,21 @@ static void test_build_scan_value() {
                          value, len));
 }
 
+static void test_exact_value_refine() {
+  std::printf("\n--- exact value refine ---\n");
+  const std::vector<uint8_t> old_bytes{0x10, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> current{0x2a, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> target{0x2a, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> other{0x2b, 0x00, 0x00, 0x00};
+
+  TEST("exact value keeps matching current value",
+       scan_refine_match(MEMDBG_VALUE_U32, RefineMode::ExactValue,
+                         old_bytes, current, target));
+  TEST("exact value rejects a different current value",
+       !scan_refine_match(MEMDBG_VALUE_U32, RefineMode::ExactValue,
+                          old_bytes, current, other));
+}
+
 static void test_text_helpers() {
   std::printf("\n--- text helpers ---\n");
   std::vector<uint8_t> bytes;
@@ -107,6 +124,39 @@ static void test_text_helpers() {
            0x20U, 0xC3U, 0xA8U};
   TEST("readable text conversion",
        bytes_to_readable_text(bytes) == "Hello.. \xC3\xA8");
+}
+
+static void test_filtered_map_selection() {
+  std::printf("\n--- filtered map selection ---\n");
+
+  std::vector<MapEntry> maps(3U);
+  maps[0].start = 0x1000U;
+  maps[0].end = 0x2000U;
+  maps[0].protection = MEMDBG_MAP_PROT_READ;
+  maps[1].start = 0x2000U;
+  maps[1].end = 0x3000U;
+  maps[1].protection = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE;
+  maps[2].start = 0x3000U;
+  maps[2].end = 0x4000U;
+  maps[2].protection = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_EXEC;
+
+  std::unordered_set<uint64_t> selected = {
+      maps[0].start, maps[1].start, maps[2].start};
+  detail::replace_map_selection_with_filtered(
+      maps, selected, [](const MapEntry &map) {
+        return (map.protection & MEMDBG_MAP_PROT_WRITE) != 0U;
+      });
+
+  TEST_EQ("Select All replaces old selection with visible maps",
+          selected.size(), 1U);
+  TEST("Select All keeps writable filtered map",
+       selected.count(maps[1].start) == 1U);
+  TEST("Select All removes hidden non-writable maps",
+       selected.count(maps[0].start) == 0U &&
+           selected.count(maps[2].start) == 0U);
+  TEST("complete RW selection enables parallel process scan",
+       detail::complete_protection_mask(maps, selected) ==
+           (MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE));
 }
 
 template <typename T>
@@ -220,7 +270,9 @@ int main() {
   std::printf("=== Frontend Parsing Tests ===\n");
   test_parse_u64();
   test_build_scan_value();
+  test_exact_value_refine();
   test_text_helpers();
+  test_filtered_map_selection();
   test_process_list_compatibility();
 
   std::printf("\n=== Results ======================================\n");

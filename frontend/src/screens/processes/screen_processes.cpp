@@ -10,6 +10,7 @@
 #include "ui_icons.hpp"
 #include "file_picker.hpp"
 #include "confirm_modal.hpp"
+#include "map_selection.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -994,8 +995,9 @@ void draw_processes(AppState &state, ImVec2 avail) {
     state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
     ImGui::TextColored(ui::colors().dim, locale::tr("processes.maps_shown"), filtered_map_count(state), state.maps.size());
     if (ui::soft_button(locale::tr("processes.select_all_maps"), ImVec2(120, 32))) {
-      for (const auto &map : state.maps)
-        if (map_passes_filters(state, map)) state.selected_map_starts.insert(map.start);
+      detail::replace_map_selection_with_filtered(
+          state.maps, state.selected_map_starts,
+          [&state](const MapEntry &map) { return map_passes_filters(state, map); });
     }
     ImGui::SameLine();
     if (ui::soft_button(locale::tr("processes.select_no_maps"), ImVec2(120, 32)))
