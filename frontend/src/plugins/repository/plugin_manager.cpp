@@ -350,6 +350,41 @@ PluginRunResult run_embedded_lua_script(const std::filesystem::path &entry,
   result.exit_code = sr.ok ? 0 : 1;
   return result;
 }
+
+PluginRunResult run_sandboxed_python_script(
+    const std::filesystem::path &entry,
+    const std::filesystem::path &context_path,
+    const std::filesystem::path &root,
+    const std::string &context_json,
+    const PluginRunContext &context) {
+  PluginRunResult result;
+  result.command = "sandboxed-python " + shell_quote(entry.string()) + " " +
+                   shell_quote(context_path.string());
+  result.exit_code = 1;
+
+  auto engine = memdbg::sandbox::create_python_sandbox();
+  auto policy = memdbg::sandbox::SandboxPolicy::create();
+  policy.allow_filesystem = context.sandbox_filesystem;
+  policy.allow_subprocess = context.sandbox_subprocess;
+  policy.allow_network = context.sandbox_network;
+  policy.allow_native_modules = context.sandbox_native_modules;
+  auto limits = memdbg::sandbox::SandboxLimits::python_defaults();
+  limits.max_time_ms = 30000;
+  limits.max_output_bytes = 512U * 1024U;
+  limits.max_code_bytes = 512U * 1024U;
+
+  std::string error;
+  if (!engine->init(policy, limits, &error)) {
+    result.error = error;
+    return result;
+  }
+  const auto sandbox_result = engine->exec_file(entry, root, context_json);
+  result.ok = sandbox_result.ok;
+  result.exit_code = sandbox_result.exit_code;
+  result.output = sandbox_result.output;
+  result.error = sandbox_result.error;
+  return result;
+}
 #endif
 
 std::vector<std::string> json_string_array(const nlohmann::json &doc,
@@ -1212,15 +1247,17 @@ PluginRunResult PluginManager::run_plugin(const std::string &package_id,
     return result;
   }
 
-  // Python has no in-process sandbox that can enforce these capability
-  // switches safely.  Never silently fall through to unrestricted host
-  // execution while the user-facing sandbox switch is enabled.
   if (record.language == PluginLanguage::Python && context.sandbox_enabled) {
-    result.error =
-        "Python plugin blocked: secure Python isolation is unavailable. "
-        "Use a Lua plugin, or explicitly disable the sandbox for trusted code.";
+#if defined(MEMDBG_ENABLE_EMBEDDED_LUA)
+    result = run_sandboxed_python_script(rel_entry, context_path, root,
+                                         doc.dump(2), context);
+    result.plugin_id = package_id;
+    return result;
+#else
+    result.error = "Python plugin blocked: sandbox support is unavailable";
     result.command = "blocked-python " + shell_quote(entry.string());
     return result;
+#endif
   }
 
   const std::string command =
