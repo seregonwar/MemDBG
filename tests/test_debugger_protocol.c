@@ -111,7 +111,8 @@ static memdbg_status_t g_mock_process_list_st = MEMDBG_ERR_UNSUPPORTED;
 static memdbg_status_t g_mock_process_maps_st = MEMDBG_ERR_UNSUPPORTED;
 static memdbg_process_entry_t g_mock_process_entries[4];
 static uint32_t g_mock_process_count = 0U;
-static memdbg_map_entry_t g_mock_map_entries[4];
+enum { MOCK_LARGE_MAP_COUNT = 11000 };
+static memdbg_map_entry_t g_mock_map_entries[MOCK_LARGE_MAP_COUNT];
 static uint32_t g_mock_map_count = 0U;
 
 /* Register mock */
@@ -575,6 +576,14 @@ static void test_proto_process_wire_format(void) {
     TEST_EQ_LL("process_maps end", entries[0].end, 0x2000ULL);
     TEST("process_maps name", strcmp(entries[0].name, "text") == 0);
   }
+
+  mock_send_reset();
+  g_mock_map_count = MOCK_LARGE_MAP_COUNT;
+  st = handle_process_maps(g_mock_socket, &g_req, &maps_req, sizeof(maps_req));
+  TEST_OK("process_maps accepts 11000-map title", st);
+  TEST_EQ_U("process_maps 11000-map payload length", g_last_payload_len,
+            (uint32_t)(sizeof(uint32_t) +
+                       MOCK_LARGE_MAP_COUNT * sizeof(memdbg_map_entry_t)));
 }
 
 /* ---- 1. handle_debug_attach ---- */

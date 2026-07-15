@@ -46,6 +46,7 @@ typedef struct pal_map_entry {
 typedef struct pal_map_list {
   pal_map_entry_t *entries;
   size_t           count;
+  size_t           capacity;
 } pal_map_list_t;
 
 memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out);
