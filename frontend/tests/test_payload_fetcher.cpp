@@ -36,15 +36,34 @@ static void test_payload_platform_filter() {
   TEST_STR("index 0 (Auto)",  payload_platform_filter(0), "");
   TEST_STR("index 1 (PS4)",   payload_platform_filter(1), "ps4");
   TEST_STR("index 2 (PS5)",   payload_platform_filter(2), "ps5");
-  TEST_STR("index 3 (PS6)",   payload_platform_filter(3), "ps6");
 
   /* Bounds clamping — negative */
   TEST_STR("index -1  clamps to 0", payload_platform_filter(-1), "");
   TEST_STR("index -10 clamps to 0", payload_platform_filter(-10), "");
 
   /* Bounds clamping — above max */
-  TEST_STR("index 4  clamps to 3",  payload_platform_filter(4),  "ps6");
-  TEST_STR("index 99 clamps to 3",  payload_platform_filter(99), "ps6");
+  TEST_STR("index 3  clamps to 2",  payload_platform_filter(3),  "ps5");
+  TEST_STR("index 99 clamps to 2",  payload_platform_filter(99), "ps5");
+}
+
+static void test_payload_asset_score() {
+  std::printf("\n--- payload_asset_score ---\n");
+
+  TEST("PS4 exact ELF",
+       payload_asset_score("MemDBG-ps4.elf", "ps4", "MemDBG-") == 100);
+  TEST("PS5 exact ELF",
+       payload_asset_score("MemDBG-ps5.elf", "ps5", "MemDBG-") == 100);
+  TEST("platform mismatch rejected",
+       payload_asset_score("MemDBG-ps4.elf", "ps5", "MemDBG-") == 0);
+  TEST("library rejected",
+       payload_asset_score("libmemdbg-ps5.a", "ps5", "MemDBG-") == 0);
+  TEST("frontend archive rejected",
+       payload_asset_score("MemDBG-frontend-windows.zip", "", "MemDBG-") == 0);
+  TEST("legacy filter mismatch rejected",
+       payload_asset_score("MemDBG-ps5.elf", "", "memdbg_payload") == 0);
+  TEST("Auto prefers PS5",
+       payload_asset_score("MemDBG-ps5.elf", "", "MemDBG-") >
+           payload_asset_score("MemDBG-ps4.elf", "", "MemDBG-"));
 }
 
 } // namespace
@@ -55,6 +74,7 @@ int main() {
 
   std::printf("=== PayloadFetcher Platform Filter Tests ===\n");
   test_payload_platform_filter();
+  test_payload_asset_score();
 
   std::printf("\n=== Results ======================================\n");
   int total = g_passed + g_failed;

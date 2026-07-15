@@ -272,10 +272,10 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     const char *platform_opts[] = {
       locale::tr("settings.payload_platform_auto"),
       locale::tr("settings.payload_platform_ps4"),
-      locale::tr("settings.payload_platform_ps5"),
-      locale::tr("settings.payload_platform_ps6")
+      locale::tr("settings.payload_platform_ps5")
     };
-    if (ImGui::Combo(locale::tr("settings.payload_platform"), &state.payload_platform, platform_opts, 4)) {
+    state.payload_platform = std::clamp(state.payload_platform, 0, 2);
+    if (ImGui::Combo(locale::tr("settings.payload_platform"), &state.payload_platform, platform_opts, 3)) {
       state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
     }
     if (ImGui::IsItemHovered())

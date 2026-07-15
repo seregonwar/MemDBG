@@ -53,8 +53,25 @@ bool write_text_file(const std::filesystem::path &path, const std::string &conte
     std::ofstream out(tmp, std::ios::trunc);
     if (!out) return false;
     out << content;
+    if (!out) return false;
   }
+#if defined(_WIN32)
+  /* std::filesystem::rename does not replace an existing file on Windows. */
+  std::filesystem::remove(path, ec);
+  ec.clear();
+#endif
   std::filesystem::rename(tmp, path, ec);
+  return !ec;
+}
+
+bool replace_file(const std::filesystem::path &source,
+  const std::filesystem::path &destination) {
+  std::error_code ec;
+#if defined(_WIN32)
+  std::filesystem::remove(destination, ec);
+  ec.clear();
+#endif
+  std::filesystem::rename(source, destination, ec);
   return !ec;
 }
 
@@ -157,11 +174,19 @@ void PayloadFetcher::worker_loop() {
       /* If we found a new version and auto-fetch is on, download it. */
       if (auto_fetch_.load() && result.available && !result.up_to_date &&
           !result.download_url.empty()) {
-        std::filesystem::path dest = cache_dir() / result.asset_name;
+        const std::filesystem::path dest = cache_dir() / result.asset_name;
+        std::filesystem::path partial = dest;
+        partial += ".download";
         std::error_code ec;
         std::filesystem::create_directories(cache_dir(), ec);
+        std::filesystem::remove(partial, ec);
 
-        if (platform::download_file(result.download_url, dest)) {
+        const bool fetched =
+            platform::download_file(result.download_url, partial);
+        const int64_t downloaded_size = local_file_size(partial);
+        if (fetched && downloaded_size > 0 &&
+            downloaded_size == result.asset_size &&
+            replace_file(partial, dest)) {
           result.local_path = dest.string();
           result.local_size = local_file_size(dest);
           result.downloaded = true;
@@ -175,7 +200,16 @@ void PayloadFetcher::worker_loop() {
           meta["size"] = result.asset_size;
           write_text_file(cache_dir() / "payload_meta.json", meta.dump(2));
         } else {
-          result.error = "Download failed";
+          std::filesystem::remove(partial, ec);
+          if (!fetched) {
+            result.error = "Payload download failed";
+          } else if (downloaded_size != result.asset_size) {
+            result.error = "Payload download was incomplete (expected " +
+                std::to_string(result.asset_size) + " bytes, received " +
+                std::to_string(downloaded_size) + ")";
+          } else {
+            result.error = "Could not install the downloaded payload";
+          }
           result.downloaded = false;
         }
 
@@ -225,43 +259,31 @@ PayloadInfo PayloadFetcher::check_now() {
     return result;
   }
 
+  std::string selected_platform;
+  {
+    std::lock_guard<std::mutex> lock(platform_mutex_);
+    selected_platform = platform_;
+  }
+  int best_score = 0;
   for (const auto &asset : json["assets"]) {
     if (!asset.contains("name") || !asset["name"].is_string()) continue;
-    std::string name = asset["name"].get<std::string>();
-
-    /* Match against the filter (substring, case-insensitive). */
-    std::string lower_name = name;
-    std::string lower_filter = asset_filter_;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    std::transform(lower_filter.begin(), lower_filter.end(), lower_filter.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-
-    if (lower_name.find(lower_filter) == std::string::npos) continue;
-
-    /* Apply platform filter if set. */
-    {
-      std::lock_guard<std::mutex> lock(platform_mutex_);
-      if (!platform_.empty()) {
-        std::string lower_platform = platform_;
-        std::transform(lower_platform.begin(), lower_platform.end(),
-                       lower_platform.begin(),
-                       [](unsigned char c) { return (char)std::tolower(c); });
-        if (lower_name.find(lower_platform) == std::string::npos) continue;
-      }
-    }
+    const std::string name = asset["name"].get<std::string>();
+    const int score = payload_asset_score(name, selected_platform, asset_filter_);
+    if (score <= best_score) continue;
+    if (!asset.contains("browser_download_url") ||
+        !asset["browser_download_url"].is_string() ||
+        !asset.contains("size") || !asset["size"].is_number_integer())
+      continue;
 
     result.asset_name = name;
-    if (asset.contains("browser_download_url") && asset["browser_download_url"].is_string())
-      result.download_url = asset["browser_download_url"].get<std::string>();
-    if (asset.contains("size") && asset["size"].is_number())
-      result.asset_size = asset["size"].get<int64_t>();
+    result.download_url = asset["browser_download_url"].get<std::string>();
+    result.asset_size = asset["size"].get<int64_t>();
     result.available = true;
-    break;
+    best_score = score;
   }
 
   if (!result.available) {
-    result.error = "No matching payload asset found in release " + result.tag_name;
+    result.error = "No PS4/PS5 payload ELF found in release " + result.tag_name;
     return result;
   }
 

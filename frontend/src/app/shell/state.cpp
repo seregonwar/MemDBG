@@ -168,7 +168,7 @@ bool load_frontend_settings(AppState &state, std::string *error) {
           value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "payload_platform") {
       state.payload_platform = std::atoi(value.c_str());
-      if (state.payload_platform < 0 || state.payload_platform > 3)
+      if (state.payload_platform < 0 || state.payload_platform > 2)
         state.payload_platform = 0;
     } else if (key == "selected_target") {
       saved_selected_target = std::atoi(value.c_str());

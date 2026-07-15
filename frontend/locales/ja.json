@@ -130,7 +130,6 @@
   "settings.payload_platform_auto": "Auto (detect)",
   "settings.payload_platform_ps4": "PS4",
   "settings.payload_platform_ps5": "PS5",
-  "settings.payload_platform_ps6": "PS6",
   "settings.payload_platform_changed": "Payload platform changed",
   "settings.payload_platform_hint": "Filter GitHub release assets by target console. Use Auto to match any available payload.",
   "payload.new_version": "New payload available: %s",

@@ -390,13 +390,15 @@ bool download_file(const std::string &url, const std::filesystem::path &out) {
   std::string command;
 #if defined(_WIN32)
   command =
-      "curl.exe -LfsS --max-time 8 -H " +
-      shell_quote_windows("Accept: application/vnd.github+json") + " " +
+      "curl.exe -LfsS --connect-timeout 10 --max-time 30 -H " +
+      shell_quote_windows("Accept: application/vnd.github+json") + " -H " +
+      shell_quote_windows("User-Agent: MemDBG") + " " +
       shell_quote_windows(url) + " -o " + shell_quote_windows(out.string());
 #else
   command =
-      "curl -LfsS --max-time 8 -H " +
-      shell_quote_posix("Accept: application/vnd.github+json") + " " +
+      "curl -LfsS --connect-timeout 10 --max-time 30 -H " +
+      shell_quote_posix("Accept: application/vnd.github+json") + " -H " +
+      shell_quote_posix("User-Agent: MemDBG") + " " +
       shell_quote_posix(url) + " -o " + shell_quote_posix(out.string());
 #endif
   return std::system(command.c_str()) == 0;

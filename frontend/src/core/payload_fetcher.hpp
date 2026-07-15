@@ -25,7 +25,7 @@ struct PayloadInfo {
   bool downloaded = false;      /* true if a fresh download just completed */
 
   std::string tag_name;         /* e.g. "v1.5.0" */
-  std::string asset_name;       /* e.g. "memdbg_payload.bin" */
+  std::string asset_name;       /* e.g. "MemDBG-ps5.elf" */
   std::string download_url;     /* direct download URL */
   std::string local_path;       /* cached file on disk */
   int64_t asset_size = 0;       /* bytes (remote fingerprint for comparison) */
@@ -46,7 +46,7 @@ public:
 
   /* Start the background worker.  Safe to call multiple times (no-op
    * after the first call).  Pass the current payload binary name to
-   * search for in the release assets (e.g. "memdbg_payload.bin"). */
+   * search for in the release assets (e.g. "MemDBG-"). */
   void start(const std::string &asset_filter);
 
   /* Stop the background worker and join its thread. */
@@ -77,7 +77,7 @@ public:
     return notify_tag_;
   }
 
-  /* Platform filter: "" = all/auto, "ps4", "ps5", "ps6". */
+  /* Platform filter: "" = auto, "ps4", or "ps5". */
   std::string platform() const {
     std::lock_guard<std::mutex> lock(platform_mutex_);
     return platform_;
@@ -101,7 +101,7 @@ private:
   std::string notify_tag_;       /* protected by mutex_ */
 
   std::string asset_filter_;
-  std::string platform_;        /* "", "ps4", "ps5", or "ps6" */
+  std::string platform_;        /* "", "ps4", or "ps5" */
   mutable std::mutex platform_mutex_;
   PayloadInfo info_;
   mutable std::mutex mutex_;

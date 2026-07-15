@@ -615,7 +615,7 @@ void init_app_shared(AppState &state, float dpi_scale) {
   (void)locale_repo.start_startup_sync(requested_lang);
   github_profile_start(state.github_profile);
   release_check_start(state.release_check, MEMDBG_VERSION_STRING);
-  state.payload_fetcher.start("memdbg_payload");
+  state.payload_fetcher.start("MemDBG-");
   state.payload_fetcher.set_auto_fetch(state.payload_auto_fetch);
   {
     state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
