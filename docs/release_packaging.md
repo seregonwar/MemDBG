@@ -17,6 +17,17 @@ MemDBG release artifacts are produced by `.github/workflows/release.yml`.
 The desktop frontend bundles `assets/` and `plugin-repository/` so a downloaded
 app has icons and a local plugin catalog even without a network refresh.
 
+## Nightly candidates
+
+The release workflow runs every day at 03:17 UTC and updates the rolling
+`nightly` prerelease from the current `main` commit. Each artifact embeds a
+version in the form `0.2.0-nightly.<run>.g<commit>`, and the release notes link
+to the exact commit and successful workflow run.
+
+The nightly release is never marked as Latest and never replaces a published
+beta. Once a nightly has been validated, its exact commit can be promoted to the
+next beta; the official build is then stamped consistently with the beta tag.
+
 Linux currently ships a `.tar.gz` bundle with a `.desktop` file and hicolor icon
 data. AppImage can be added later once the runtime dependency bundle is stable
 enough to avoid surprising users on older distributions.
