@@ -36,10 +36,11 @@
 #endif
 
 /* KERN_PROC_VMMAP records are much larger than the compact wire entries.
- * Games with several thousand mappings can legitimately exceed 4 MiB of raw
- * sysctl data while producing a sub-megabyte response. Keep allocation
- * bounded, but leave enough headroom for current PS5 titles. */
-#define MEMDBG_SYSCTL_MAX_BYTES (32U * 1024U * 1024U)
+ * Keep process enumeration bounded separately from VM maps: titles with about
+ * 11,000 mappings can exceed 32 MiB of raw PS5 sysctl data while still fitting
+ * in the compact protocol response. */
+#define MEMDBG_PROCESS_SYSCTL_MAX_BYTES (32U * 1024U * 1024U)
+#define MEMDBG_VMMAP_SYSCTL_MAX_BYTES   (64U * 1024U * 1024U)
 
 /* ---- Helpers shared across platforms ---- */
 
@@ -62,10 +63,18 @@ static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, int p
 #if defined(__linux__) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 static pal_map_entry_t *map_append(pal_map_list_t *list, uint64_t start, uint64_t end,
                                    uint32_t prot, uint32_t flags, const char *name) {
-  size_t nc = list->count + 1U;
-  pal_map_entry_t *next = (pal_map_entry_t *)realloc(list->entries, nc * sizeof(*list->entries));
-  if (next == NULL) return NULL;
-  list->entries = next;
+  if (list->count == list->capacity) {
+    size_t next_capacity = list->capacity == 0U ? 64U : list->capacity * 2U;
+    if (next_capacity <= list->capacity ||
+        next_capacity > SIZE_MAX / sizeof(*list->entries)) {
+      return NULL;
+    }
+    pal_map_entry_t *next = (pal_map_entry_t *)realloc(
+        list->entries, next_capacity * sizeof(*list->entries));
+    if (next == NULL) return NULL;
+    list->entries = next;
+    list->capacity = next_capacity;
+  }
   memset(&list->entries[list->count], 0, sizeof(list->entries[list->count]));
   list->entries[list->count].start      = start;
   list->entries[list->count].end        = end;
@@ -73,7 +82,7 @@ static pal_map_entry_t *map_append(pal_map_list_t *list, uint64_t start, uint64_
   list->entries[list->count].flags      = flags;
   if (name) (void)snprintf(list->entries[list->count].name,
                            sizeof(list->entries[list->count].name), "%s", name);
-  list->count = nc;
+  list->count++;
   return &list->entries[list->count - 1U];
 }
 #endif
@@ -262,11 +271,11 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return MEMDBG_ERR_IO;
   if (len == 0U) return MEMDBG_OK;
-  if (len > MEMDBG_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
+  if (len > MEMDBG_PROCESS_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
   unsigned char *buf = (unsigned char *)malloc(len);
   if (!buf) return MEMDBG_ERR_NOMEM;
   if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return MEMDBG_ERR_IO; }
-  if (len > MEMDBG_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
+  if (len > MEMDBG_PROCESS_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
 
   for (size_t off = 0U; off + sizeof(int) <= len;) {
     struct kinfo_proc *proc = (struct kinfo_proc *)(void *)(buf + off);
@@ -298,11 +307,11 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return MEMDBG_ERR_IO;
   if (len == 0U) return MEMDBG_OK;
-  if (len > MEMDBG_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
+  if (len > MEMDBG_VMMAP_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
   unsigned char *buf = (unsigned char *)malloc(len);
   if (!buf) return MEMDBG_ERR_NOMEM;
   if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return MEMDBG_ERR_IO; }
-  if (len > MEMDBG_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
+  if (len > MEMDBG_VMMAP_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
 
   for (size_t off = 0U; off + sizeof(int) <= len;) {
     struct kinfo_vmentry *entry = (struct kinfo_vmentry *)(void *)(buf + off);
