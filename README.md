@@ -322,6 +322,7 @@ contract, supported legacy commands, and extension plan.
 | Limit | Value |
 |---|---|
 | Maximum packet size | 1 MiB |
+| Maximum process-map response | 8 MiB |
 | Maximum `MEMORY_READ` size | 1 MiB |
 | `BATCH_READ` / `BATCH_WRITE` items | 64 per request |
 | Maximum scan value payload | 16 bytes |

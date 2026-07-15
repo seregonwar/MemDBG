@@ -357,11 +357,14 @@ memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
   if (out == NULL) return MEMDBG_ERR_PARAM;
   out->count = g_mock_map_count;
   if (out->count != 0U) {
-    out->entries = (memdbg_map_entry_t *)malloc(
-        out->count * sizeof(memdbg_map_entry_t));
+    out->entries = (memdbg_map_entry_t *)calloc(
+        out->count, sizeof(memdbg_map_entry_t));
     if (out->entries == NULL) return MEMDBG_ERR_NOMEM;
+    size_t copy_count = out->count < MOCK_LARGE_MAP_COUNT
+                            ? out->count
+                            : MOCK_LARGE_MAP_COUNT;
     memcpy(out->entries, g_mock_map_entries,
-           out->count * sizeof(memdbg_map_entry_t));
+           copy_count * sizeof(memdbg_map_entry_t));
   }
   return MEMDBG_OK;
 }
@@ -584,6 +587,16 @@ static void test_proto_process_wire_format(void) {
   TEST_EQ_U("process_maps 11000-map payload length", g_last_payload_len,
             (uint32_t)(sizeof(uint32_t) +
                        MOCK_LARGE_MAP_COUNT * sizeof(memdbg_map_entry_t)));
+
+  mock_send_reset();
+  g_mock_map_count =
+      (MEMDBG_PROTOCOL_MAX_MAP_RESPONSE - sizeof(uint32_t)) /
+          sizeof(memdbg_map_entry_t) +
+      1U;
+  st = handle_process_maps(g_mock_socket, &g_req, &maps_req, sizeof(maps_req));
+  TEST_EQ_I("process_maps rejects response above dedicated cap", st,
+            MEMDBG_ERR_OVERFLOW);
+  TEST_EQ_U("oversized map response is not sent", g_last_payload_len, 0U);
 }
 
 /* ---- 1. handle_debug_attach ---- */

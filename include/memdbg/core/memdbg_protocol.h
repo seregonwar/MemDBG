@@ -28,6 +28,7 @@ extern "C" {
 #define MEMDBG_PACKET_MAGIC 0x4742444dU /* "MDBG", little-endian */
 #define MEMDBG_PROTOCOL_VERSION 1U
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
+#define MEMDBG_PROTOCOL_MAX_MAP_RESPONSE (8U * 1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
 #define MEMDBG_BATCH_READ_MAX_ITEMS 64U
 /* Per-item byte cap for batch reads. Kept well below 1 GiB so the running

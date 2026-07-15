@@ -62,7 +62,7 @@ namespace memdbg::frontend {
 namespace {
 
 constexpr uint32_t kMaxMapEntries =
-    (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(uint32_t)) /
+    (MEMDBG_PROTOCOL_MAX_MAP_RESPONSE - sizeof(uint32_t)) /
     sizeof(memdbg_map_entry_t);
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
@@ -1676,10 +1676,18 @@ bool Client::request(uint16_t command, const void *payload,
       response_header.command != command ||
       response_header.request_id != header.request_id) {
     set_error("invalid response header");
+    close_after_connection_loss();
     return false;
   }
-  if (response_header.length > MEMDBG_PROTOCOL_MAX_PACKET + 1024U * 1024U) {
+  const uint32_t max_response =
+      command == MEMDBG_CMD_PROCESS_MAPS
+          ? MEMDBG_PROTOCOL_MAX_MAP_RESPONSE
+          : MEMDBG_PROTOCOL_MAX_PACKET + 1024U * 1024U;
+  if (response_header.length > max_response) {
     set_error("response too large");
+    /* The announced body is still pending on the stream. Closing is required:
+       otherwise the next request interprets body bytes as a response header. */
+    close_after_connection_loss();
     return false;
   }
 

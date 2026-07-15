@@ -199,6 +199,7 @@ documented as returning framed payloads use this sub-frame.
 | Limit | Value | Notes |
 |---|---:|---|
 | `MEMDBG_PROTOCOL_MAX_PACKET` | `1 MiB` | Default maximum request body and many response bodies. |
+| `MEMDBG_PROTOCOL_MAX_MAP_RESPONSE` | `8 MiB` | Dedicated `PROCESS_MAPS` response cap for titles with very large map tables. |
 | `MEMDBG_PROTOCOL_MAX_READ` | `1 MiB` | Default single memory read/write byte cap. |
 | `MEMDBG_BATCH_READ_MAX_ITEMS` | `64` | Maximum batch read items. |
 | `MEMDBG_BATCH_WRITE_MAX_ITEMS` | `64` | Maximum batch write items. |

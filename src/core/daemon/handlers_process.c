@@ -73,7 +73,8 @@ memdbg_status_t handle_process_maps(int fd,
   size_t payload_len = sizeof(uint32_t) + entries_size;
   if (list.count > UINT32_MAX ||
       entries_size / sizeof(memdbg_map_entry_t) != list.count ||
-      payload_len > UINT32_MAX) {
+      payload_len > UINT32_MAX ||
+      payload_len > MEMDBG_PROTOCOL_MAX_MAP_RESPONSE) {
     memdbg_process_maps_free(&list);
     return MEMDBG_ERR_OVERFLOW;
   }
