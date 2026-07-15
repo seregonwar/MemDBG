@@ -35,7 +35,11 @@
 #include <sys/user.h>
 #endif
 
-#define MEMDBG_SYSCTL_MAX_BYTES (4U * 1024U * 1024U)
+/* KERN_PROC_VMMAP records are much larger than the compact wire entries.
+ * Games with several thousand mappings can legitimately exceed 4 MiB of raw
+ * sysctl data while producing a sub-megabyte response. Keep allocation
+ * bounded, but leave enough headroom for current PS5 titles. */
+#define MEMDBG_SYSCTL_MAX_BYTES (32U * 1024U * 1024U)
 
 /* ---- Helpers shared across platforms ---- */
 

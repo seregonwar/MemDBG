@@ -46,6 +46,7 @@ void refine_scan(AppState &state, RefineMode mode);
 /* ---- Async scan poll + launchers ---- */
 void poll_scanner_async(AppState &state);
 void scan_range(AppState &state);
+void scan_selected_maps(AppState &state);
 void scan_process(AppState &state);
 void scan_unknown_process(AppState &state);
 

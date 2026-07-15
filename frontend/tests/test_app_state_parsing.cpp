@@ -175,6 +175,40 @@ static void test_process_list_compatibility() {
          !detail::parse_process_list_response(payload, decoded, error) &&
              error == "truncated process list response");
   }
+
+  {
+    /* Reproduce issue #13: the response header reports the legacy byte count,
+       but the buffer contains current records. A fixed 52-byte stride reads
+       chunks such as "elf\0" and "SceV" as enormous PIDs. */
+    std::vector<uint8_t> payload;
+    const uint32_t count = 8;
+    append_wire(payload, count);
+    const std::array<const char *, 8> names = {
+        "SceShellCore", "SceSystemService", "eboot.bin", "kstuff.elf",
+        "payload.elf", "SceVideoCore2K", "webrtc_daemon.self", "SceSysCore"};
+    for (uint32_t i = 0; i < count; ++i) {
+      memdbg_process_entry_t wire{};
+      wire.pid = static_cast<int32_t>(100 + i);
+      wire.ppid = i == 0 ? 1 : 100;
+      std::memcpy(wire.name, names[i], std::strlen(names[i]));
+      append_wire(payload, wire);
+    }
+    payload.resize(sizeof(count) +
+                   static_cast<size_t>(count) *
+                       detail::kLegacyProcessEntrySize);
+
+    std::vector<ProcessEntry> decoded;
+    std::string error;
+    TEST("hybrid PS5 process records parse",
+         detail::parse_process_list_response(payload, decoded, error));
+    TEST("hybrid records prefer current stride", decoded.size() == 7U &&
+        decoded[0].pid == 100 && decoded[0].name == "SceShellCore" &&
+        decoded[6].pid == 106 && decoded[6].name == "webrtc_daemon.self");
+    TEST("hybrid records reject filename PIDs",
+         std::none_of(decoded.begin(), decoded.end(), [](const ProcessEntry &p) {
+           return p.pid > 0x00ffffff;
+         }));
+  }
 }
 
 } // namespace

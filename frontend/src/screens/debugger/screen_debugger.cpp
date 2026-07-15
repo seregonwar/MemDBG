@@ -63,6 +63,7 @@ void select_debugger_process(AppState &state, DebuggerState &ds, int row) {
   state.selected_pid = proc.pid;
   state.maps.clear();
   state.selected_map_row = -1;
+  state.selected_map_starts.clear();
   state.memory.clear();
   state.has_process_info = false;
   set_status(state, "Selected PID " + std::to_string(proc.pid) + " (" + proc.name + ")");

@@ -223,6 +223,17 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("scanner.scan_range")).c_str(), ui::full_button(40))) scan_range(state);
   ImGui::EndDisabled();
 
+  const bool can_launch_selected = can_launch_range &&
+      !state.selected_map_starts.empty();
+  ImGui::BeginDisabled(!can_launch_selected);
+  if (ui::soft_button((std::string(icons::kTarget) + "  " +
+                       locale::tr("scanner.scan_selected_maps")).c_str(),
+                      ui::full_button(40)))
+    scan_selected_maps(state);
+  ImGui::EndDisabled();
+  ImGui::TextColored(ui::colors().dim, locale::tr("scanner.selected_maps_count"),
+                     state.selected_map_starts.size());
+
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::InputText(locale::tr("scanner.end_filter"), state.scan_end, sizeof(state.scan_end));
   ImGui::Checkbox(locale::tr("scanner.readable_only"), &state.scan_readable_only);

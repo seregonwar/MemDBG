@@ -25,7 +25,7 @@ void connect_console(AppState &state) {
   state.has_hello = false;
   state.klog_connected = false;
   state.klog_paused = false;
-  state.processes.clear(); state.maps.clear(); state.memory.clear();
+  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
   state.scan_is_unknown_session = false;
@@ -194,6 +194,7 @@ void poll_map_refresh(AppState &state) {
 
   state.maps = std::move(state.map_refresh_temp_maps);
   state.selected_map_row = -1;
+  state.selected_map_starts.clear();
   std::string message =
       std::string(locale::tr("processes.maps_refreshed")) +
       " (" + std::to_string(state.maps.size()) + " maps)";
@@ -721,7 +722,7 @@ void disconnect_console(AppState &state, const char *reason) {
   state.has_hello = false;
   state.klog_connected = false;
   state.klog_paused = false;
-  state.processes.clear(); state.maps.clear(); state.memory.clear();
+  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "No scan session");

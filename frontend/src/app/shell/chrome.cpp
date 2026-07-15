@@ -476,6 +476,7 @@ void topbar_select_process(AppState &state, int row) {
   state.selected_pid = state.processes[row].pid;
   state.maps.clear();
   state.selected_map_row = -1;
+  state.selected_map_starts.clear();
   state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear();
@@ -518,6 +519,7 @@ void topbar_refresh_processes(AppState &state) {
     state.has_process_info = false;
     state.maps.clear();
     state.selected_map_row = -1;
+    state.selected_map_starts.clear();
   }
   state.taskmgr_resources.clear();
   state.taskmgr_selected_row = -1;

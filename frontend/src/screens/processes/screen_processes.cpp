@@ -346,6 +346,7 @@ static void select_process(AppState &state, int row) {
   state.selected_pid = state.processes[row].pid;
   state.maps.clear();
   state.selected_map_row = -1;
+  state.selected_map_starts.clear();
   state.memory.clear();
   state.scan_result = ScanResult{};
   state.scan_snapshot.clear();
@@ -409,6 +410,7 @@ static void refresh_processes(AppState &state) {
     state.selected_process_row = -1;
     state.has_process_info = false;
     state.maps.clear();
+    state.selected_map_starts.clear();
   }
   set_status(state, locale::tr("processes.process_refreshed"));
 }
@@ -825,9 +827,10 @@ static void draw_maps_table(AppState &state) {
     ui::draw_empty_state(locale::tr("processes.no_process_selected"), locale::tr("processes.no_process_desc"));
     return;
   }
-  if (ImGui::BeginTable("MapsTable", 5,
+  if (ImGui::BeginTable("MapsTable", 6,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,
         ImVec2(0,0))) {
+    ImGui::TableSetupColumn("##selected", ImGuiTableColumnFlags_WidthFixed, 30);
     ImGui::TableSetupColumn(locale::tr("processes.start_col"));
     ImGui::TableSetupColumn(locale::tr("processes.end_col"));
     ImGui::TableSetupColumn(locale::tr("processes.size_col"), ImGuiTableColumnFlags_WidthFixed, 90);
@@ -839,17 +842,25 @@ static void draw_maps_table(AppState &state) {
       if (!map_passes_filters(state, map)) continue;
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
+      bool checked = state.selected_map_starts.count(map.start) != 0U;
+      if (ImGui::Checkbox(("##mapcheck" + std::to_string(i)).c_str(), &checked)) {
+        if (checked)
+          state.selected_map_starts.insert(map.start);
+        else
+          state.selected_map_starts.erase(map.start);
+      }
+      ImGui::TableSetColumnIndex(1);
       bool selected = state.selected_map_row == i;
       std::string start = hex_u64(map.start);
       if (ImGui::Selectable((start + "##map" + std::to_string(i)).c_str(), selected, ImGuiSelectableFlags_SpanAllColumns))
         select_map(state, i);
-      ImGui::TableSetColumnIndex(1);
-      ImGui::TextUnformatted(hex_u64(map.end).c_str());
       ImGui::TableSetColumnIndex(2);
-      ImGui::Text("%llu KB", static_cast<unsigned long long>((map.end - map.start) / 1024U));
+      ImGui::TextUnformatted(hex_u64(map.end).c_str());
       ImGui::TableSetColumnIndex(3);
-      ImGui::TextUnformatted(prot_text(map.protection).c_str());
+      ImGui::Text("%llu KB", static_cast<unsigned long long>((map.end - map.start) / 1024U));
       ImGui::TableSetColumnIndex(4);
+      ImGui::TextUnformatted(prot_text(map.protection).c_str());
+      ImGui::TableSetColumnIndex(5);
       ImGui::TextUnformatted(map.name.c_str());
       if (ImGui::IsItemHovered() && !map.name.empty()) ImGui::SetTooltip("%s", map.name.c_str());
     }
@@ -982,6 +993,16 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ImGui::InputInt(locale::tr("processes.dump_cap_mb"), &state.process_dump_max_mb);
     state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
     ImGui::TextColored(ui::colors().dim, locale::tr("processes.maps_shown"), filtered_map_count(state), state.maps.size());
+    if (ui::soft_button(locale::tr("processes.select_all_maps"), ImVec2(120, 32))) {
+      for (const auto &map : state.maps)
+        if (map_passes_filters(state, map)) state.selected_map_starts.insert(map.start);
+    }
+    ImGui::SameLine();
+    if (ui::soft_button(locale::tr("processes.select_no_maps"), ImVec2(120, 32)))
+      state.selected_map_starts.clear();
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().primary2, locale::tr("processes.maps_selected"),
+                       state.selected_map_starts.size());
     if (!state.process_analysis_report.empty()) {
       ImGui::Spacing();
       if (ImGui::BeginChild("ProcessAnalysisReport", ImVec2(0, 118), true,

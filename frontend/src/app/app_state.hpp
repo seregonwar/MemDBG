@@ -40,6 +40,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace memdbg::frontend {
@@ -289,6 +290,7 @@ struct AppState {
   int32_t selected_pid = 0;
   int selected_process_row = -1;
   int selected_map_row = -1;
+  std::unordered_set<uint64_t> selected_map_starts;
 
   char read_address[32] = "0x0";
   int read_length = 256;
