@@ -58,7 +58,9 @@ memdbg_status_t handle_hello(const memdbg_config_t *cfg,
   out->capabilities     = memdbg_capabilities(cfg);
   out->debug_port       = cfg->debug_port;
   out->udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
-  (void)snprintf(out->version, sizeof(out->version), "%s", MEMDBG_VERSION_STRING);
+  size_t version_len = sizeof(MEMDBG_VERSION_STRING) - 1U;
+  if (version_len >= sizeof(out->version)) version_len = sizeof(out->version) - 1U;
+  memcpy(out->version, MEMDBG_VERSION_STRING, version_len);
   (void)snprintf(out->name, sizeof(out->name), "MemDBG");
   return MEMDBG_OK;
 }

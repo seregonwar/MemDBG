@@ -59,8 +59,9 @@ static void *discovery_thread_main(void *arg) {
   resp.capabilities     = memdbg_capabilities(cfg);
   resp.debug_port       = cfg->debug_port;
   resp.udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
-  (void)snprintf(resp.version, sizeof(resp.version), "%s",
-                 MEMDBG_VERSION_STRING);
+  size_t version_len = sizeof(MEMDBG_VERSION_STRING) - 1U;
+  if (version_len >= sizeof(resp.version)) version_len = sizeof(resp.version) - 1U;
+  memcpy(resp.version, MEMDBG_VERSION_STRING, version_len);
   (void)snprintf(resp.name, sizeof(resp.name), "MemDBG");
 
   memdbg_log_write(MEMDBG_LOG_INFO,
