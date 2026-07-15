@@ -231,6 +231,7 @@ jobs:
           run_frontend_test memdbg_auto_search_test
           run_frontend_test memdbg_structure_compare_test
           run_frontend_test memdbg_app_state_parsing_test
+          run_frontend_test memdbg_payload_sender_test
           run_frontend_test memdbg_trainer_formats_test
           run_frontend_test memdbg_locale_manager_test
           run_frontend_test memdbg_plugin_manager_test

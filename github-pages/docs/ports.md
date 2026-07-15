@@ -1,6 +1,7 @@
 | Port | Protocol | Purpose |
 |---|---|---|
 | 9020 | TCP | Frontend command channel (default). |
+| 9021 | TCP | PS4/PS5 ELF payload-loader injection (default). |
 | 9022 | UDP | Console discovery broadcasts. |
 | 9023 | UDP | Live log delivery from payload (default). |
 

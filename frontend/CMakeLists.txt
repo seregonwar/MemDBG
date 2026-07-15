@@ -199,6 +199,7 @@ add_executable(memdbg_frontend
   src/core/client/memdbg_client.cpp
   src/core/platform.cpp
   src/core/payload_fetcher.cpp
+  src/core/payload_sender.cpp
   src/core/release_check.cpp
   src/core/udp_log_listener.cpp
 
@@ -495,6 +496,18 @@ add_executable(memdbg_payload_fetcher_test
   tests/test_payload_fetcher.cpp
 )
 
+# ---- memdbg_payload_sender_test ----
+
+add_executable(memdbg_payload_sender_test
+  tests/test_payload_sender.cpp
+  src/core/payload_sender.cpp
+  src/core/platform.cpp
+)
+target_include_directories(memdbg_payload_sender_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+)
+target_link_libraries(memdbg_payload_sender_test PRIVATE Threads::Threads)
+
 target_include_directories(memdbg_payload_fetcher_test PRIVATE
   ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -715,6 +728,7 @@ endif()
 if(WIN32)
   target_compile_definitions(memdbg_frontend PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_payload_sender_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_trainer_formats_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_plugin_manager_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_lua_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -723,6 +737,7 @@ if(WIN32)
   target_compile_definitions(memdbg_sandbox_python_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32 comdlg32 ole32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_payload_sender_test PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_trainer_formats_test PRIVATE ws2_32)
   target_link_libraries(memdbg_plugin_manager_test PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_sandbox_lua_test PRIVATE ws2_32)
@@ -738,6 +753,7 @@ if(MSVC)
   target_compile_options(memdbg_structure_compare_test PRIVATE /W4)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE /W4)
+  target_compile_options(memdbg_payload_sender_test PRIVATE /W4)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
   target_compile_options(memdbg_plugin_manager_test PRIVATE /W4)
@@ -752,6 +768,7 @@ else()
   target_compile_options(memdbg_structure_compare_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_payload_sender_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_plugin_manager_test PRIVATE -Wall -Wextra -Wpedantic)

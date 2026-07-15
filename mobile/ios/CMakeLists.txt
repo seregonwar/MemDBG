@@ -191,6 +191,7 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/platform.cpp
   ${FRONTEND_ROOT}/src/core/payload_fetcher.cpp
+  ${FRONTEND_ROOT}/src/core/payload_sender.cpp
   ${FRONTEND_ROOT}/src/core/release_check.cpp
   ${FRONTEND_ROOT}/src/core/udp_log_listener.cpp
 

@@ -263,6 +263,7 @@ void draw_topbar_logo(float logo_h) {
 void draw_app(AppState &state) {
   poll_locale_repository(state);
   poll_connect(state);
+  poll_payload_lifecycle(state);
   poll_taskmgr_prefetch(state);
   poll_telemetry(state);
   poll_map_refresh(state);
@@ -615,11 +616,9 @@ void init_app_shared(AppState &state, float dpi_scale) {
   (void)locale_repo.start_startup_sync(requested_lang);
   github_profile_start(state.github_profile);
   release_check_start(state.release_check, MEMDBG_VERSION_STRING);
-  state.payload_fetcher.start("MemDBG-");
   state.payload_fetcher.set_auto_fetch(state.payload_auto_fetch);
-  {
-    state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
-  }
+  state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+  state.payload_fetcher.start("MemDBG-");
   {
     std::string udp_error;
     if (!ensure_udp_listener(state, udp_error))
@@ -628,6 +627,11 @@ void init_app_shared(AppState &state, float dpi_scale) {
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("startup", "MemDBG frontend started");
+
+  if (state.payload_auto_inject) {
+    state.payload_auto_inject_probe = true;
+    connect_console(state);
+  }
 
 }
 
@@ -644,6 +648,14 @@ void shutdown_app_shared(AppState &state) {
   state.plugin_run_pending = false;
   if (state.plugin_gui_bridge && state.plugin_gui_bridge->running())
     state.plugin_gui_bridge->stop();
+  if (state.payload_auto_shutdown && state.client.connected()) {
+    const bool shutdown_sent = state.client.shutdown_payload();
+    if (state.crash_logging_enabled) {
+      state.crash_logger.log(shutdown_sent ? "shutdown" : "error",
+          shutdown_sent ? "Automatic payload shutdown sent"
+                        : state.client.last_error().c_str());
+    }
+  }
   state.udp_listener.stop(); state.client.disconnect();
   state.payload_fetcher.stop();
   release_check_shutdown(state.release_check);

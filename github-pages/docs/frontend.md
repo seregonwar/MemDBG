@@ -4,7 +4,18 @@ Enter the console or host IP address, confirm the TCP port, and press **Connect*
 
 ## Saved IP
 
-In **Settings** you can save the IP address you use most often. Useful when the console has a static address or a DHCP reservation.
+In **Settings** you can save complete console targets. Each target stores its IP address, command and log ports, payload injection port, and PS4/PS5 platform selection.
+
+## Payload lifecycle
+
+**Inject & Connect** sends the cached platform-specific ELF directly to the saved payload-loader port, then retries the MemDBG connection while the payload starts. The sender validates the ELF before opening the connection.
+
+Two optional settings automate the same lifecycle:
+
+- **Auto inject payload on startup** first connects to an already-running payload; if none is running, it injects the ELF selected by the target profile and connects.
+- **Auto shutdown payload on exit** sends the shutdown command before closing the frontend connection.
+
+Existing target profiles default to loader port `9021` and platform `Auto`.
 
 ## Console log
 

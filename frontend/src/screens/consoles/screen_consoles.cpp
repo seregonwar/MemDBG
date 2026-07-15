@@ -18,7 +18,8 @@ namespace {
 
 static std::string target_endpoint(const ConsoleTarget &target) {
   return target.host + ":" + std::to_string(target.debug_port) +
-         " / UDP " + std::to_string(target.udp_port);
+         " / UDP " + std::to_string(target.udp_port) +
+         " / ELF " + std::to_string(target.payload_port);
 }
 
 static void persist_console_targets(AppState &state, const std::string &ok_message) {
@@ -94,7 +95,8 @@ void draw_consoles(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
 
   const ConsoleTarget current_target = {
-      state.target_name, state.host, state.debug_port, state.udp_port
+      state.target_name, state.host, state.debug_port, state.udp_port,
+      state.payload_port, state.payload_platform
   };
   const std::string preview = current_target.name + "  " + target_endpoint(current_target);
   ImGui::BeginDisabled(locked);
@@ -113,6 +115,16 @@ void draw_consoles(AppState &state, ImVec2 avail) {
   ImGui::InputText(locale::tr("consoles.console_ipv4"), state.host, sizeof(state.host));
   ImGui::InputInt(locale::tr("consoles.debug_tcp"), &state.debug_port);
   ImGui::InputInt(locale::tr("consoles.udp_logs"), &state.udp_port);
+  ImGui::InputInt(locale::tr("settings.payload_port"), &state.payload_port);
+  const char *target_platform_opts[] = {
+    locale::tr("settings.payload_platform_auto"),
+    locale::tr("settings.payload_platform_ps4"),
+    locale::tr("settings.payload_platform_ps5")
+  };
+  if (ImGui::Combo(locale::tr("settings.payload_platform"),
+                   &state.payload_platform, target_platform_opts, 3)) {
+    state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+  }
   normalize_ports(state);
   ImGui::Spacing();
 
@@ -304,15 +316,15 @@ void draw_consoles(AppState &state, ImVec2 avail) {
       state.payload_fetcher.refresh();
     }
 
-    if (!connected && info.available && info.up_to_date && !info.local_path.empty()) {
+    if (!connected) {
       ImGui::SameLine();
       if (ui::primary_button("Inject & Connect", ImVec2(150.0f, 28.0f))) {
-        /* Attempt connection; if it fails, we already have the payload cached. */
         save_current_console_target(state);
-        connect_console(state);
+        request_payload_inject(state, true);
       }
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Payload cached at %s. Ready to connect.", info.local_path.c_str());
+        ImGui::SetTooltip("Send the selected platform ELF to %s:%d, then connect.",
+                          state.host, state.payload_port);
     }
   }
 

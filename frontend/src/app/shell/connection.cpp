@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "internal.hpp"
+#include "payload_sender.hpp"
 #include <future>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <unordered_map>
 
 namespace memdbg::frontend {
@@ -15,6 +17,106 @@ static std::future<bool> s_connect_future;
 static Client s_temp_client;
 static HelloInfo s_temp_hello;
 static std::string s_temp_error;
+static std::future<bool> s_payload_inject_future;
+static std::string s_payload_inject_error;
+
+static std::filesystem::path selected_cached_payload(const AppState &state) {
+  const auto cache = PayloadFetcher::cache_dir();
+  const auto ps4 = cache / "MemDBG-ps4.elf";
+  const auto ps5 = cache / "MemDBG-ps5.elf";
+  std::error_code ec;
+  if (state.payload_platform == 1)
+    return std::filesystem::is_regular_file(ps4, ec) ? ps4 : std::filesystem::path{};
+  if (state.payload_platform == 2)
+    return std::filesystem::is_regular_file(ps5, ec) ? ps5 : std::filesystem::path{};
+
+  const PayloadInfo info = state.payload_fetcher.info();
+  if (!info.local_path.empty()) {
+    const std::filesystem::path reported = info.local_path;
+    if (std::filesystem::is_regular_file(reported, ec)) return reported;
+  }
+  ec.clear();
+  if (std::filesystem::is_regular_file(ps5, ec)) return ps5;
+  ec.clear();
+  return std::filesystem::is_regular_file(ps4, ec) ? ps4 : std::filesystem::path{};
+}
+
+void request_payload_inject(AppState &state, bool connect_after) {
+  if (state.payload_inject_pending || state.connect_pending) return;
+  normalize_ports(state);
+  state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
+  const std::filesystem::path payload_path = selected_cached_payload(state);
+  if (payload_path.empty()) {
+    const std::string platform = state.payload_platform == 1 ? "PS4" :
+                                 state.payload_platform == 2 ? "PS5" : "selected";
+    const std::string message = "No cached " + platform +
+        " payload is available; enable payload auto-fetch first";
+    set_status(state, message);
+    push_notification(state, message, 6.0);
+    return;
+  }
+  if (s_payload_inject_future.valid()) s_payload_inject_future.wait();
+
+  const std::string host = state.host;
+  const uint16_t port = static_cast<uint16_t>(state.payload_port);
+  state.payload_inject_pending = true;
+  state.payload_connect_after_inject = connect_after;
+  set_status(state, "Injecting " + payload_path.filename().string() + " to " +
+                    host + ":" + std::to_string(port) + "...");
+  s_payload_inject_future = std::async(std::launch::async,
+      [host, port, payload_path]() -> bool {
+        return send_payload_elf(host, port, payload_path,
+                                s_payload_inject_error);
+      });
+}
+
+void poll_payload_lifecycle(AppState &state) {
+  if (state.payload_auto_inject_waiting &&
+      state.payload_fetcher.checked() && !state.payload_fetcher.busy()) {
+    state.payload_auto_inject_waiting = false;
+    request_payload_inject(state, true);
+  }
+
+  if (state.payload_inject_pending && s_payload_inject_future.valid() &&
+      s_payload_inject_future.wait_for(std::chrono::milliseconds(0)) ==
+          std::future_status::ready) {
+    state.payload_inject_pending = false;
+    bool ok = false;
+    try {
+      ok = s_payload_inject_future.get();
+    } catch (const std::exception &ex) {
+      s_payload_inject_error = ex.what();
+    } catch (...) {
+      s_payload_inject_error = "Unknown payload injection error";
+    }
+    if (ok) {
+      const std::string message = "Payload injected on " +
+          std::string(state.host) + ":" + std::to_string(state.payload_port);
+      set_status(state, message);
+      push_notification(state, message, 5.0);
+      if (state.payload_connect_after_inject) {
+        state.payload_post_inject_connect = true;
+        state.payload_connect_retry_at = ImGui::GetTime() + 1.0;
+        state.payload_connect_retry_deadline = ImGui::GetTime() + 12.0;
+      }
+    } else {
+      const std::string message = "Payload injection failed: " +
+          (s_payload_inject_error.empty() ? std::string("unknown error")
+                                          : s_payload_inject_error);
+      set_status(state, message);
+      push_notification(state, message, 7.0);
+    }
+    state.payload_connect_after_inject = false;
+  }
+
+  if (state.payload_connect_retry_at > 0.0 &&
+      ImGui::GetTime() >= state.payload_connect_retry_at &&
+      !state.connect_pending && !state.client.connected()) {
+    state.payload_connect_retry_at = 0.0;
+    connect_console(state);
+  }
+}
+
 void connect_console(AppState &state) {
   if (state.connect_pending) return;  /* already connecting */
   if (s_connect_future.valid()) s_connect_future.wait();  /* drain previous async */
@@ -598,6 +700,21 @@ void poll_connect(AppState &state) {
   }
 
   if (!ok) {
+    if (state.payload_auto_inject_probe) {
+      state.payload_auto_inject_probe = false;
+      state.payload_auto_inject_waiting = true;
+      set_status(state, "Payload is offline; waiting for the selected ELF...");
+      return;
+    }
+    if (state.payload_post_inject_connect &&
+        ImGui::GetTime() < state.payload_connect_retry_deadline) {
+      state.payload_connect_retry_at = ImGui::GetTime() + 1.0;
+      set_status(state, "Payload is starting; retrying connection...");
+      return;
+    }
+    state.payload_post_inject_connect = false;
+    state.payload_connect_retry_at = 0.0;
+    state.payload_connect_retry_deadline = 0.0;
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Connection failed: " + s_temp_error).c_str());
     set_status(state, s_temp_error);
@@ -607,6 +724,11 @@ void poll_connect(AppState &state) {
 
   /* Success: transfer connected fd from temp client to main client */
   state.client.take_fd(s_temp_client.release_fd());
+  state.payload_auto_inject_probe = false;
+  state.payload_auto_inject_waiting = false;
+  state.payload_post_inject_connect = false;
+  state.payload_connect_retry_at = 0.0;
+  state.payload_connect_retry_deadline = 0.0;
   state.hello = s_temp_hello;
   state.has_hello = true;
   update_payload_version_check(state);
