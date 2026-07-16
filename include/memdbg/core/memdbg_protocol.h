@@ -1165,7 +1165,7 @@ static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U,
               "unknown scan request wire size changed");
 static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U,
               "unknown scan request wire offsets changed");
-#else
+#elif !defined(_MSC_VER)
 _Static_assert(sizeof(memdbg_packet_header_t) == 16U,
                "memdbg packet header wire size changed");
 _Static_assert(sizeof(memdbg_scan_exact_request_t) == 52U,
