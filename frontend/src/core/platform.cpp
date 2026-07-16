@@ -18,6 +18,7 @@
 #include <windows.h>
 #else
 #include <cerrno>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -191,6 +192,42 @@ bool socket_set_send_timeout(socket_handle_t fd, uint32_t timeout_ms) {
 #endif
 }
 
+bool socket_set_blocking(socket_handle_t fd, bool blocking) {
+#if defined(_WIN32)
+  u_long mode = blocking ? 0UL : 1UL;
+  return ioctlsocket(fd, FIONBIO, &mode) == 0;
+#else
+  const int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) return false;
+  const int updated = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+  return fcntl(fd, F_SETFL, updated) == 0;
+#endif
+}
+
+int socket_wait_writable(socket_handle_t fd, uint32_t timeout_ms) {
+  fd_set write_set;
+  FD_ZERO(&write_set);
+  FD_SET(fd, &write_set);
+  timeval timeout{};
+  timeout.tv_sec = static_cast<long>(timeout_ms / 1000U);
+  timeout.tv_usec = static_cast<long>((timeout_ms % 1000U) * 1000U);
+#if defined(_WIN32)
+  return select(0, nullptr, &write_set, nullptr, &timeout);
+#else
+  return select(fd + 1, nullptr, &write_set, nullptr, &timeout);
+#endif
+}
+
+int socket_connect_error(socket_handle_t fd) {
+  int error = 0;
+  socklen_type length = static_cast<socklen_type>(sizeof(error));
+  if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                 reinterpret_cast<char *>(&error), &length) != 0) {
+    return socket_last_error_code();
+  }
+  return error;
+}
+
 bool socket_set_reuse_addr(socket_handle_t fd) {
   int one = 1;
   return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
@@ -268,6 +305,16 @@ bool socket_error_would_block(int code) {
   return code == WSAEWOULDBLOCK || code == WSAETIMEDOUT;
 #else
   return code == EAGAIN || code == EWOULDBLOCK;
+#endif
+}
+
+bool socket_error_connect_in_progress(int code) {
+#if defined(_WIN32)
+  return code == WSAEWOULDBLOCK || code == WSAEINPROGRESS ||
+         code == WSAEALREADY;
+#else
+  return code == EINPROGRESS || code == EALREADY ||
+         code == EAGAIN || code == EWOULDBLOCK;
 #endif
 }
 

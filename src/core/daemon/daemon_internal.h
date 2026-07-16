@@ -123,6 +123,9 @@ memdbg_status_t handle_scan_process_aob(int fd,
 
 memdbg_status_t handle_scan_unknown(int fd, const memdbg_packet_header_t *req,
     const memdbg_config_t *cfg, const void *body, uint32_t body_len);
+memdbg_status_t handle_scan_unknown_v2(int fd,
+    const memdbg_packet_header_t *req, const memdbg_config_t *cfg,
+    const void *body, uint32_t body_len);
 
 memdbg_status_t handle_scan_pointer(int fd, const memdbg_packet_header_t *req,
     const memdbg_config_t *cfg, const void *body, uint32_t body_len);

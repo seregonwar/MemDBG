@@ -559,6 +559,8 @@ static void test_proto_process_wire_format(void) {
   g_mock_map_entries[0].end = 0x2000U;
   g_mock_map_entries[0].protection = MEMDBG_MAP_PROT_READ |
                                      MEMDBG_MAP_PROT_EXEC;
+  g_mock_map_entries[0].flags =
+      (uint32_t)MEMDBG_MAP_TYPE_VNODE << MEMDBG_MAP_FLAG_TYPE_SHIFT;
   snprintf(g_mock_map_entries[0].name,
            sizeof(g_mock_map_entries[0].name), "text");
 
@@ -578,6 +580,10 @@ static void test_proto_process_wire_format(void) {
     TEST_EQ_LL("process_maps start", entries[0].start, 0x1000ULL);
     TEST_EQ_LL("process_maps end", entries[0].end, 0x2000ULL);
     TEST("process_maps name", strcmp(entries[0].name, "text") == 0);
+    TEST_EQ_U("process_maps type metadata",
+              (entries[0].flags & MEMDBG_MAP_FLAG_TYPE_MASK) >>
+                  MEMDBG_MAP_FLAG_TYPE_SHIFT,
+              MEMDBG_MAP_TYPE_VNODE);
   }
 
   mock_send_reset();

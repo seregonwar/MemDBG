@@ -6,10 +6,12 @@
 
 #include "memdbg_client.hpp"
 #include "process_list_parser.hpp"
+#include "process_maps_parser.hpp"
 
 #include "memdbg/core/memdbg.h"
 
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -61,9 +63,6 @@ namespace memdbg::frontend {
 
 namespace {
 
-constexpr uint32_t kMaxMapEntries =
-    (MEMDBG_PROTOCOL_MAX_MAP_RESPONSE - sizeof(uint32_t)) /
-    sizeof(memdbg_map_entry_t);
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
 constexpr uint32_t kMainSocketTimeoutMs = 60000U;
@@ -134,6 +133,7 @@ const char *payload_status_hint(uint16_t command, int32_t status) {
       command == MEMDBG_CMD_SCAN_AOB ||
       command == MEMDBG_CMD_SCAN_PROCESS_AOB ||
       command == MEMDBG_CMD_SCAN_UNKNOWN ||
+      command == MEMDBG_CMD_SCAN_UNKNOWN_V2 ||
       command == MEMDBG_CMD_SCAN_POINTER) {
     switch (static_cast<memdbg_status_t>(status)) {
     case MEMDBG_ERR_STATE:
@@ -141,7 +141,15 @@ const char *payload_status_hint(uint16_t command, int32_t status) {
     case MEMDBG_ERR_NOT_FOUND:
       return "the target process no longer exists; refresh PIDs";
     case MEMDBG_ERR_PROTOCOL:
-      return "scan request size mismatch; the frontend and payload protocol versions may be out of sync";
+      return (command == MEMDBG_CMD_SCAN_UNKNOWN ||
+              command == MEMDBG_CMD_SCAN_UNKNOWN_V2)
+          ? "unknown-scan request ABI mismatch; update the payload and frontend together"
+          : "scan request size mismatch; the frontend and payload protocol versions may be out of sync";
+    case MEMDBG_ERR_UNSUPPORTED:
+      return (command == MEMDBG_CMD_SCAN_UNKNOWN ||
+              command == MEMDBG_CMD_SCAN_UNKNOWN_V2)
+          ? "the payload does not support this unknown-scan request ABI version"
+          : "this scan request is not supported by the payload";
     default:
       break;
     }
@@ -167,9 +175,11 @@ Client::Client() = default;
 
 Client::~Client() { disconnect(); }
 
-bool Client::connect_to(const std::string &host, uint16_t port) {
+bool Client::connect_to(const std::string &host, uint16_t port,
+                        uint32_t timeout_ms) {
   std::lock_guard<std::mutex> lock(io_mutex_);
   disconnect_unlocked();
+  cancel_requested_.store(false);
 
   std::string startup_error;
   if (!platform::socket_startup(&startup_error)) {
@@ -178,15 +188,13 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
   }
   socket_runtime_active_ = true;
 
-  fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (!platform::socket_valid(fd_)) {
+  const platform::socket_handle_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  fd_.store(fd);
+  if (!platform::socket_valid(fd)) {
     set_error_from_errno("socket");
     disconnect_unlocked();
     return false;
   }
-
-  (void)platform::socket_set_recv_timeout(fd_, kMainSocketTimeoutMs);
-  (void)platform::socket_set_send_timeout(fd_, kMainSocketTimeoutMs);
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
@@ -197,29 +205,112 @@ bool Client::connect_to(const std::string &host, uint16_t port) {
     return false;
   }
 
-  if (::connect(fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-    set_error_from_errno("connect");
+  if (!platform::socket_set_blocking(fd, false)) {
+    set_error_from_errno("connect: non-blocking mode");
     disconnect_unlocked();
     return false;
   }
 
-  (void)platform::socket_set_nosigpipe(fd_);
+  if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+    const int connect_error = platform::socket_last_error_code();
+    if (!platform::socket_error_connect_in_progress(connect_error)) {
+      set_error("connect: " + platform::socket_error_text(connect_error));
+      disconnect_unlocked();
+      return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(timeout_ms);
+    bool connected = false;
+    while (!connected) {
+      if (cancel_requested_.load()) {
+        set_error("connect cancelled");
+        disconnect_unlocked();
+        return false;
+      }
+
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        set_error("connect: timed out");
+        disconnect_unlocked();
+        return false;
+      }
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - now);
+      const uint32_t wait_ms = static_cast<uint32_t>(
+          std::min<int64_t>(remaining.count(), 50));
+      const int wait_result = platform::socket_wait_writable(fd, wait_ms);
+      if (wait_result < 0) {
+        const int wait_error = platform::socket_last_error_code();
+        if (platform::socket_error_interrupted(wait_error)) continue;
+        if (cancel_requested_.load()) {
+          set_error("connect cancelled");
+        } else {
+          set_error("connect: " + platform::socket_error_text(wait_error));
+        }
+        disconnect_unlocked();
+        return false;
+      }
+      if (wait_result == 0) continue;
+
+      const int socket_error = platform::socket_connect_error(fd);
+      if (socket_error != 0) {
+        set_error("connect: " + platform::socket_error_text(socket_error));
+        disconnect_unlocked();
+        return false;
+      }
+      connected = true;
+    }
+  }
+
+  if (cancel_requested_.load()) {
+    set_error("connect cancelled");
+    disconnect_unlocked();
+    return false;
+  }
+  if (!platform::socket_set_blocking(fd, true)) {
+    set_error_from_errno("connect: blocking mode");
+    disconnect_unlocked();
+    return false;
+  }
+
+  (void)platform::socket_set_recv_timeout(fd, kMainSocketTimeoutMs);
+  (void)platform::socket_set_send_timeout(fd, kMainSocketTimeoutMs);
+  (void)platform::socket_set_nosigpipe(fd);
 
   last_error_.clear();
   return true;
 }
 
+void Client::cancel_pending_io() {
+  cancel_requested_.store(true);
+  const platform::socket_handle_t fd =
+      fd_.exchange(platform::invalid_socket());
+  if (platform::socket_valid(fd)) {
+    platform::socket_shutdown_both(fd);
+    platform::socket_close(fd);
+  }
+}
+
 void Client::disconnect() {
+  cancel_pending_io();
   std::lock_guard<std::mutex> lock(io_mutex_);
   disconnect_unlocked();
 }
 
+void Client::cancel_pending_io() {
+  platform::socket_handle_t fd = fd_.load();
+  if (platform::socket_valid(fd))
+    platform::socket_shutdown_both(fd);
+}
+
 void Client::disconnect_unlocked() {
   klog_disconnect();
-  if (platform::socket_valid(fd_)) {
-    platform::socket_shutdown_both(fd_);
-    platform::socket_close(fd_);
-    fd_ = platform::invalid_socket();
+  const platform::socket_handle_t fd =
+      fd_.exchange(platform::invalid_socket());
+  if (platform::socket_valid(fd)) {
+    platform::socket_shutdown_both(fd);
+    platform::socket_close(fd);
   }
   if (socket_runtime_active_) {
     platform::socket_cleanup();
@@ -233,15 +324,14 @@ void Client::close_after_connection_loss() {
 
 platform::socket_handle_t Client::release_fd() {
   std::lock_guard<std::mutex> lock(io_mutex_);
-  platform::socket_handle_t fd = fd_;
-  fd_ = platform::invalid_socket();
+  platform::socket_handle_t fd = fd_.exchange(platform::invalid_socket());
   last_error_.clear();
   return fd;
 }
 
 void Client::take_fd(platform::socket_handle_t fd) {
   std::lock_guard<std::mutex> lock(io_mutex_);
-  if (platform::socket_valid(fd_)) disconnect_unlocked();
+  if (platform::socket_valid(fd_.load())) disconnect_unlocked();
   if (platform::socket_valid(fd) && !socket_runtime_active_) {
     std::string startup_error;
     if (!platform::socket_startup(&startup_error)) {
@@ -251,11 +341,14 @@ void Client::take_fd(platform::socket_handle_t fd) {
     }
     socket_runtime_active_ = true;
   }
-  fd_ = fd;
+  cancel_requested_.store(false);
+  fd_.store(fd);
   last_error_.clear();
 }
 
-bool Client::connected() const { return platform::socket_valid(fd_); }
+bool Client::connected() const {
+  return platform::socket_valid(fd_.load());
+}
 
 const std::string &Client::last_error() const { return last_error_; }
 
@@ -312,39 +405,10 @@ bool Client::process_maps(int32_t pid, std::vector<MapEntry> &out) {
   if (!request(MEMDBG_CMD_PROCESS_MAPS, &body, sizeof(body), response)) {
     return false;
   }
-  if (response.size() < sizeof(uint32_t)) {
-    set_error("short map response");
+  std::string parse_error;
+  if (!detail::parse_process_maps_response(response, out, parse_error)) {
+    set_error(parse_error);
     return false;
-  }
-
-  uint32_t count = 0;
-  std::memcpy(&count, response.data(), sizeof(count));
-  if (count > kMaxMapEntries) {
-    set_error("map response has an invalid item count");
-    return false;
-  }
-  size_t expected =
-      sizeof(count) + static_cast<size_t>(count) * sizeof(memdbg_map_entry_t);
-  if (response.size() < expected) {
-    set_error("truncated map response");
-    return false;
-  }
-
-  out.clear();
-  out.reserve(count);
-  const auto *entries =
-      reinterpret_cast<const memdbg_map_entry_t *>(response.data() + sizeof(count));
-  for (uint32_t i = 0; i < count; ++i) {
-    if (entries[i].end <= entries[i].start) {
-      continue;
-    }
-    MapEntry entry;
-    entry.start = entries[i].start;
-    entry.end = entries[i].end;
-    entry.protection = entries[i].protection & 0x7U;
-    entry.flags = entries[i].flags;
-    entry.name = fixed_string(entries[i].name, sizeof(entries[i].name));
-    out.push_back(std::move(entry));
   }
   return true;
 }
@@ -711,12 +775,29 @@ bool Client::batch_write(int32_t pid,
   return true;
 }
 
-bool Client::scan_unknown(const memdbg_scan_process_exact_request_t &request_body,
+bool Client::scan_unknown(const memdbg_scan_unknown_request_t &request_body,
                           ScanResult &out) {
   std::vector<uint8_t> response;
-  if (!request(MEMDBG_CMD_SCAN_UNKNOWN, &request_body,
-               sizeof(request_body), response)) {
-    return false;
+  int32_t payload_status = MEMDBG_OK;
+  if (!request(MEMDBG_CMD_SCAN_UNKNOWN_V2, &request_body,
+               sizeof(request_body), response, &payload_status)) {
+    if (payload_status != MEMDBG_ERR_UNSUPPORTED) return false;
+    if (request_body.flags != 0U) {
+      set_error("the payload does not support versioned unknown-scan filters");
+      return false;
+    }
+
+    memdbg_scan_process_exact_request_t legacy{};
+    legacy.pid = request_body.pid;
+    legacy.value_type = request_body.value_type;
+    legacy.value_length = request_body.value_length;
+    legacy.alignment = request_body.alignment;
+    legacy.max_results = request_body.max_results;
+    legacy.protection_mask = request_body.protection_mask;
+    legacy.start = request_body.start;
+    legacy.end = request_body.end;
+    if (!request(MEMDBG_CMD_SCAN_UNKNOWN, &legacy, sizeof(legacy), response))
+      return false;
   }
   return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
 }
@@ -1646,8 +1727,10 @@ bool Client::tracer_status(TracerStatus &out) {
 }
 
 bool Client::request(uint16_t command, const void *payload,
-                     uint32_t payload_len, std::vector<uint8_t> &response) {
+                     uint32_t payload_len, std::vector<uint8_t> &response,
+                     int32_t *payload_status) {
   std::lock_guard<std::mutex> lock(io_mutex_);
+  if (payload_status != nullptr) *payload_status = MEMDBG_OK;
   if (!platform::socket_valid(fd_)) {
     set_error("not connected");
     return false;
@@ -1697,6 +1780,7 @@ bool Client::request(uint16_t command, const void *payload,
   }
 
   if (response_header.status != 0) {
+    if (payload_status != nullptr) *payload_status = response_header.status;
     std::ostringstream oss;
     const char *hint = payload_status_hint(command, response_header.status);
     oss << "payload status " << response_header.status << " ("
@@ -1722,6 +1806,11 @@ bool Client::read_exact(void *data, size_t size) {
   while (total < size) {
     int n = platform::socket_recv(fd_, cursor + total, size - total);
     if (n < 0) {
+      if (cancel_requested_.load()) {
+        set_error("operation cancelled");
+        close_after_connection_loss();
+        return false;
+      }
       int err = platform::socket_last_error_code();
       if (platform::socket_error_interrupted(err)) {
         continue;
@@ -1736,7 +1825,8 @@ bool Client::read_exact(void *data, size_t size) {
       return false;
     }
     if (n == 0) {
-      set_error("connection closed by console");
+      set_error(cancel_requested_.load() ? "operation cancelled"
+                                         : "connection closed by console");
       close_after_connection_loss();
       return false;
     }
@@ -1756,6 +1846,11 @@ bool Client::write_all(const void *data, size_t size) {
   while (total < size) {
     int n = platform::socket_send(fd_, cursor + total, size - total);
     if (n < 0) {
+      if (cancel_requested_.load()) {
+        set_error("operation cancelled");
+        close_after_connection_loss();
+        return false;
+      }
       int err = platform::socket_last_error_code();
       if (platform::socket_error_interrupted(err)) {
         continue;

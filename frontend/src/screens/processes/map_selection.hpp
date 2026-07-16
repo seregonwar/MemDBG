@@ -10,10 +10,27 @@
 #include "core/client/memdbg_client.hpp"
 
 #include <cstdint>
+#include <algorithm>
+#include <cctype>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 namespace memdbg::frontend::detail {
+
+inline bool map_matches_name_or_type(const MapEntry &map,
+                                     std::string filter) {
+  std::transform(filter.begin(), filter.end(), filter.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  std::string metadata = map.name + " " + map.type;
+  std::transform(metadata.begin(), metadata.end(), metadata.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return metadata.find(filter) != std::string::npos;
+}
 
 template <typename Predicate>
 void replace_map_selection_with_filtered(

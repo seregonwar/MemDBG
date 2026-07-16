@@ -247,6 +247,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::TextColored(ui::colors().warning, "%s", locale::tr("scanner.unknown_value"));
   ImGui::TextWrapped("%s", locale::tr("scanner.unknown_desc"));
+  ImGui::Checkbox("Exclude zero values (prefilter)",
+                  &state.scan_unknown_nonzero_prefilter);
   bool can_launch_unknown = !client_async_busy(state) && state.client.connected() &&
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_UNKNOWN);
@@ -259,6 +261,12 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     ui::draw_scan_progress(state.scan_async_label, icons::kSearch,
                            ImGui::GetTime() - state.scan_async_start_time,
                            ImGui::GetContentRegionAvail().x);
+  if (state.scan_async_pending &&
+      state.scan_async_units_total.load() != 0U) {
+    ImGui::TextColored(ui::colors().dim, "Progress: %llu / %llu units",
+        static_cast<unsigned long long>(state.scan_async_units_done.load()),
+        static_cast<unsigned long long>(state.scan_async_units_total.load()));
+  }
   if (state.scan_async_pending && state.scan_async_cancellable) {
     ImGui::BeginDisabled(state.scan_async_cancel_requested.load());
     if (ui::danger_button(locale::tr("scanner.stop"), ui::full_button(36))) {
@@ -347,14 +355,22 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                                std::to_string(state.auto_search_pass + 1);
       state.scan_async_start_time = ImGui::GetTime();
       state.scan_async_pending = true;
+      state.scan_async_cancellable = true;
+      state.scan_async_cancel_requested.store(false);
       state.scan_async_owner = Screen::Scanner;
 
       const int32_t pid = state.selected_pid;
       const uint32_t val_len = state.scan_snapshot_value_len;
       const int snap_type = state.scan_snapshot_type;
       auto &client = state.client;
-      auto &snap = state.scan_snapshot;
+      const auto snap = state.scan_snapshot;
+      const ScanResult original_result = state.scan_result;
       const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
+      state.scan_async_units_done.store(0U);
+      state.scan_async_units_total.store(has_batch
+          ? (snap.size() + MEMDBG_BATCH_READ_MAX_ITEMS - 1U) /
+                MEMDBG_BATCH_READ_MAX_ITEMS
+          : snap.size());
       auto &temp_result = state.scan_async_temp_result;
       auto &temp_snapshot = state.scan_async_temp_snapshot;
       auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -365,9 +381,12 @@ void draw_scanner(AppState &state, ImVec2 avail) {
 
       state.scan_async_future = std::async(std::launch::async,
         [&client, pid, val_len, snap_type, tgt, has_batch,
-         &snap, &temp_result, &temp_snapshot, &temp_snap_val_len,
+         snap, &temp_result, &temp_snapshot, &temp_snap_val_len,
          &temp_snap_type, &temp_is_unknown, &temp_status,
-         &temp_candidates, &mtx = state.scan_async_mtx]() -> bool {
+         &temp_candidates, original_result,
+         &cancel_requested = state.scan_async_cancel_requested,
+         &units_done = state.scan_async_units_done,
+         &mtx = state.scan_async_mtx]() -> bool {
           /* Re-read all baseline addresses */
           const auto &old_snap = snap;
           std::vector<ScanSnapshotEntry> current_snap;
@@ -383,6 +402,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
             batch_items.reserve(MEMDBG_BATCH_READ_MAX_ITEMS);
             for (size_t base = 0U; base < old_snap.size();
                  base += MEMDBG_BATCH_READ_MAX_ITEMS) {
+              if (cancel_requested.load()) break;
               batch_items.clear();
               size_t chunk_end = std::min(
                   base + MEMDBG_BATCH_READ_MAX_ITEMS, old_snap.size());
@@ -394,7 +414,9 @@ void draw_scanner(AppState &state, ImVec2 avail) {
               }
               Client::BatchReadResult batch;
               if (!client.batch_read(pid, batch_items, batch)) {
+                if (cancel_requested.load()) break;
                 read_errors += static_cast<uint32_t>(chunk_end - base);
+                units_done.fetch_add(1U);
                 continue;
               }
               uint32_t data_offset = 0U;
@@ -414,13 +436,16 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                 bytes_read += entry.length;
                 data_offset += entry.length;
               }
+              units_done.fetch_add(1U);
             }
           } else {
             for (size_t i = 0U; i < old_snap.size(); ++i) {
+              if (cancel_requested.load()) break;
               std::vector<uint8_t> data;
               if (!client.memory_read(pid, old_snap[i].address, val_len, data) ||
                   data.size() != val_len) {
                 read_errors++;
+                units_done.fetch_add(1U);
                 continue;
               }
               ScanSnapshotEntry cur;
@@ -429,7 +454,21 @@ void draw_scanner(AppState &state, ImVec2 avail) {
               current_snap.push_back(std::move(cur));
               current_addrs.push_back(old_snap[i].address);
               bytes_read += val_len;
+              units_done.fetch_add(1U);
             }
+          }
+
+          if (cancel_requested.load()) {
+            std::lock_guard<std::mutex> lock(mtx);
+            temp_candidates.clear();
+            temp_snapshot = old_snap;
+            temp_result = original_result;
+            temp_snap_val_len = val_len;
+            temp_snap_type = snap_type;
+            temp_is_unknown = true;
+            std::snprintf(temp_status, sizeof(temp_status),
+                          "Stopped: auto-search baseline preserved");
+            return true;
           }
 
           /* Run auto-search engine */
@@ -441,42 +480,41 @@ void draw_scanner(AppState &state, ImVec2 avail) {
           /* Store scored candidates and build new snapshot under lock */
           {
             std::lock_guard<std::mutex> lock(mtx);
-            temp_candidates = std::move(candidates);
-
             /* Build new snapshot from the top candidates (keep them for next pass) */
             temp_snapshot.clear();
-          temp_snapshot.reserve(candidates.size());
-          temp_result.addresses.clear();
-          temp_result.addresses.reserve(candidates.size());
-          for (auto &c : candidates) {
-            /* Map candidate back to current snapshot bytes */
-            for (const auto &cs : current_snap) {
-              if (cs.address == c.address) {
-                ScanSnapshotEntry se;
-                se.address = c.address;
-                se.bytes   = cs.bytes;
-                temp_snapshot.push_back(std::move(se));
-                break;
+            temp_snapshot.reserve(candidates.size());
+            temp_result.addresses.clear();
+            temp_result.addresses.reserve(candidates.size());
+            for (auto &c : candidates) {
+              /* Map candidate back to current snapshot bytes */
+              for (const auto &cs : current_snap) {
+                if (cs.address == c.address) {
+                  ScanSnapshotEntry se;
+                  se.address = c.address;
+                  se.bytes   = cs.bytes;
+                  temp_snapshot.push_back(std::move(se));
+                  break;
+                }
               }
+              temp_result.addresses.push_back(c.address);
             }
-            temp_result.addresses.push_back(c.address);
-          }
-          temp_result.count = static_cast<uint32_t>(temp_result.addresses.size());
-          temp_result.bytes_scanned = bytes_read;
-          temp_result.read_calls = static_cast<uint32_t>(current_snap.size() + read_errors);
-          temp_snap_val_len = val_len;
-          temp_snap_type = snap_type;
-          temp_is_unknown = false;
+            temp_result.count = static_cast<uint32_t>(temp_result.addresses.size());
+            temp_result.bytes_scanned = bytes_read;
+            temp_result.read_calls = static_cast<uint32_t>(current_snap.size() + read_errors);
+            temp_snap_val_len = val_len;
+            temp_snap_type = snap_type;
+            temp_is_unknown = false;
 
-          const auto t_end = std::chrono::steady_clock::now();
-          const uint64_t elapsed_ns = static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count());
-          temp_result.elapsed_ns = elapsed_ns;
-          temp_result.read_errors = read_errors;
-          std::snprintf(temp_status, sizeof(temp_status),
-                        "Auto-search: %u candidates scored (%s)",
-                        temp_result.count,
-                        bytes_per_second(bytes_read, elapsed_ns).c_str());
+            const auto t_end = std::chrono::steady_clock::now();
+            const uint64_t elapsed_ns = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count());
+            temp_result.elapsed_ns = elapsed_ns;
+            temp_result.read_errors = read_errors;
+            std::snprintf(temp_status, sizeof(temp_status),
+                          "Auto-search: %u candidates scored (%s)",
+                          temp_result.count,
+                          bytes_per_second(bytes_read, elapsed_ns).c_str());
+            temp_candidates = std::move(candidates);
           }
           return true;
         });

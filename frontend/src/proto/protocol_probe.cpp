@@ -601,7 +601,10 @@ int main(int argc, char **argv) {
    * 18. SCAN_UNKNOWN
    * ---------------------------------------------------------------- */
   if (!processes.empty()) {
-    memdbg_scan_process_exact_request_t req{};
+    memdbg_scan_unknown_request_t req{};
+    req.abi_magic = MEMDBG_SCAN_UNKNOWN_ABI_MAGIC;
+    req.abi_version = MEMDBG_SCAN_UNKNOWN_ABI_VERSION;
+    req.struct_size = static_cast<uint16_t>(sizeof(req));
     req.pid = processes.front().pid;
     req.value_type = MEMDBG_VALUE_U32;
     req.value_length = 4U;
@@ -610,6 +613,7 @@ int main(int argc, char **argv) {
     req.protection_mask = 0U;
     req.start = 0U;
     req.end = 0U;
+    req.max_bytes = MEMDBG_SCAN_UNKNOWN_MAX_UNIT_BYTES;
     memdbg::frontend::ScanResult sr;
     if (client.scan_unknown(req, sr)) {
       record("SCAN_UNKNOWN", true, false,

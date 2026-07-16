@@ -314,7 +314,14 @@ static void handle_client(socket_t fd, const memdbg_config_t *cfg) {
       if (pal_socket_read_exact(fd, body, req.length) < 0) { free(body); break; }
     }
 
-    memdbg_status_t status = dispatch_packet(fd, cfg, &req, body);
+    memdbg_status_t status;
+    if (memdbg_privilege_operation_begin() != 0) {
+      status = MEMDBG_ERR_STATE;
+    } else {
+      status = dispatch_packet(fd, cfg, &req, body);
+      if (memdbg_privilege_operation_end() != 0 && status == MEMDBG_OK)
+        status = MEMDBG_ERR_STATE;
+    }
     free(body);
     if (status != MEMDBG_OK)
       (void)send_response(fd, &req, status, NULL, 0U);

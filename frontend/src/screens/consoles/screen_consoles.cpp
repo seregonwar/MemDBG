@@ -81,7 +81,7 @@ static void draw_saved_targets_table(AppState &state, bool locked) {
 void draw_consoles(AppState &state, ImVec2 avail) {
   ensure_console_targets(state);
   const bool connected = state.client.connected();
-  const bool locked = connected || state.connect_pending;
+  const bool locked = connected || connect_sequence_pending(state);
   const float gap = 16.0f;
   const bool mobile = avail.x < 500.0f;
   const float col_w = mobile ? avail.x : (avail.x - gap) * 0.5f;

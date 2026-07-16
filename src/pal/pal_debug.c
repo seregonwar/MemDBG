@@ -6,6 +6,8 @@
 
 #include "memdbg/pal/pal_debug.h"
 
+#include "memdbg/privilege/privilege.h"
+
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -13,8 +15,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) ||          \
-    defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+#define MEMDBG_PAL_DEBUG_CONSOLE 1
+#define MEMDBG_PAL_DEBUG_PS5 1
+#elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
 #define MEMDBG_PAL_DEBUG_CONSOLE 1
 #elif defined(__FreeBSD__)
 #define MEMDBG_PAL_DEBUG_FREEBSD 1
@@ -49,11 +53,23 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
    * rejects a denied PT_ATTACH without setting errno, so we synthesize
    * EPERM to give callers an actionable error instead of "No error".
    */
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  memdbg_ucred_backup_t backup;
+  if (memdbg_privilege_begin_ptrace(&backup) != 0) return -1;
+#endif
+
   errno = 0;
   long result = (long)__syscall((quad_t)SYS_ptrace, op, pid, addr, data);
-  if (result == -1 && errno == 0) {
-    errno = EPERM;
+  int operation_errno = errno;
+  if (result == -1 && operation_errno == 0) operation_errno = EPERM;
+
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  if (memdbg_privilege_end_ptrace(&backup) != 0) {
+    if (result != -1) return -1;
   }
+#endif
+
+  errno = operation_errno;
   return result;
 }
 

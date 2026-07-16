@@ -33,6 +33,7 @@ struct MapEntry {
   uint32_t protection = 0;
   uint32_t flags = 0;
   std::string name;
+  std::string type;
 };
 
 struct ProcessInfo {
@@ -72,8 +73,11 @@ public:
   Client(const Client &) = delete;
   Client &operator=(const Client &) = delete;
 
-  bool connect_to(const std::string &host, uint16_t port);
+  bool connect_to(const std::string &host, uint16_t port,
+                  uint32_t timeout_ms = 5000U);
+  void cancel_pending_io();
   void disconnect();
+  void cancel_pending_io();
   platform::socket_handle_t release_fd();      /* Release fd ownership for async transfer */
   void take_fd(platform::socket_handle_t fd);  /* Adopt a connected fd from async transfer */
   bool connected() const;
@@ -102,7 +106,7 @@ public:
                         const std::vector<uint8_t> &mask, ScanResult &out);
   bool scan_pointer(const memdbg_scan_pointer_request_t &request,
                     ScanResult &out);
-  bool scan_unknown(const memdbg_scan_process_exact_request_t &request,
+  bool scan_unknown(const memdbg_scan_unknown_request_t &request,
                     ScanResult &out);
 
   /* Batch read — up to 64 addresses in one request.
@@ -304,7 +308,8 @@ public:
 
 private:
   bool request(uint16_t command, const void *payload, uint32_t payload_len,
-               std::vector<uint8_t> &response);
+               std::vector<uint8_t> &response,
+               int32_t *payload_status = nullptr);
   bool read_exact(void *data, size_t size);
   bool write_all(const void *data, size_t size);
   void disconnect_unlocked();
@@ -312,12 +317,13 @@ private:
   void set_error_from_errno(const std::string &prefix);
   void set_error(const std::string &message);
 
-  platform::socket_handle_t fd_ = platform::invalid_socket();
+  std::atomic<platform::socket_handle_t> fd_{platform::invalid_socket()};
   platform::socket_handle_t klog_fd_ = platform::invalid_socket();
   bool socket_runtime_active_ = false;
   uint32_t next_request_id_ = 1;
   std::string last_error_;
   mutable std::mutex io_mutex_;
+  std::atomic<bool> cancel_requested_{false};
 
   /* Klog background reader */
   std::thread klog_reader_thread_;

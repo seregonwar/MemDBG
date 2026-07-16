@@ -46,6 +46,9 @@ void socket_close(socket_handle_t fd);
 void socket_shutdown_both(socket_handle_t fd);
 bool socket_set_recv_timeout(socket_handle_t fd, uint32_t timeout_ms);
 bool socket_set_send_timeout(socket_handle_t fd, uint32_t timeout_ms);
+bool socket_set_blocking(socket_handle_t fd, bool blocking);
+int socket_wait_writable(socket_handle_t fd, uint32_t timeout_ms);
+int socket_connect_error(socket_handle_t fd);
 bool socket_set_reuse_addr(socket_handle_t fd);
 bool socket_set_broadcast(socket_handle_t fd);
 bool socket_set_recv_buffer(socket_handle_t fd, int bytes);
@@ -57,6 +60,7 @@ int socket_recvfrom(socket_handle_t fd, void *buffer, size_t size,
 int socket_last_error_code();
 bool socket_error_interrupted(int code);
 bool socket_error_would_block(int code);
+bool socket_error_connect_in_progress(int code);
 bool socket_error_permission(int code);
 std::string socket_error_text(int code);
 

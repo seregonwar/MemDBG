@@ -365,16 +365,21 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address, const void *buffer,
 
 #include "memdbg/privilege/privilege.h"
 
+static int g_target_elevate_calls = 0;
+static int g_target_restore_calls = 0;
+
 bool memdbg_privilege_supported(void) { return false; }
 
 int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
   (void)pid; (void)backup;
+  g_target_elevate_calls++;
   errno = ENOTSUP;
   return -1;
 }
 
 void memdbg_privilege_restore_target(pid_t pid, const memdbg_ucred_backup_t *backup) {
   (void)pid; (void)backup;
+  g_target_restore_calls++;
 }
 
 /* ---- Log stub ---- */
@@ -486,6 +491,8 @@ static void test_attach_detach(void) {
   /* Attach */
   memdbg_status_t st = memdbg_debugger_attach(MOCK_PID);
   TEST_OK("attach succeeds", st);
+  TEST_EQ_I("attach does not rewrite target credentials",
+            g_target_elevate_calls, 0);
   TEST("attached after attach", memdbg_debugger_is_attached());
   TEST("stopped after attach", memdbg_debugger_is_stopped());
   TEST_EQ_I("attached pid", memdbg_debugger_attached_pid(), MOCK_PID);
@@ -499,6 +506,8 @@ static void test_attach_detach(void) {
   /* Detach */
   st = memdbg_debugger_detach();
   TEST_OK("detach succeeds", st);
+  TEST_EQ_I("detach does not restore untouched target credentials",
+            g_target_restore_calls, 0);
   TEST("not attached after detach", !memdbg_debugger_is_attached());
   TEST("not stopped after detach", !memdbg_debugger_is_stopped());
 

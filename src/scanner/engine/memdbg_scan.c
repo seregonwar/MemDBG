@@ -1067,18 +1067,35 @@ memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t 
   return st;
 }
 
-/* ---- Unknown scan parallel context ---- */
+/* ---- Unknown initial-value scan ---- */
 
 typedef struct {
   uint32_t value_len;
   uint32_t alignment;
-  bool     need_alignment;
-} unknown_parallel_ctx_t;
+  uint32_t flags;
+} unknown_scan_context_t;
 
-static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
-                                       uint64_t len, unsigned char *buffer,
-                                       scan_builder_t *builder) {
-  unknown_parallel_ctx_t *uc = (unknown_parallel_ctx_t *)ctx;
+static bool unknown_value_is_candidate(const unsigned char *value,
+                                       uint32_t value_len, uint32_t flags) {
+  if ((flags & MEMDBG_SCAN_UNKNOWN_FLAG_NONZERO) == 0U) return true;
+  for (uint32_t i = 0U; i < value_len; ++i)
+    if (value[i] != 0U) return true;
+  return false;
+}
+
+static int compare_map_start(const void *lhs, const void *rhs) {
+  const memdbg_map_entry_t *a = (const memdbg_map_entry_t *)lhs;
+  const memdbg_map_entry_t *b = (const memdbg_map_entry_t *)rhs;
+  if (a->start < b->start) return -1;
+  if (a->start > b->start) return 1;
+  if (a->end < b->end) return -1;
+  if (a->end > b->end) return 1;
+  return 0;
+}
+
+static memdbg_status_t scan_unknown_range(
+    const unknown_scan_context_t *uc, int pid, uint64_t start, uint64_t len,
+    uint64_t alignment_base, unsigned char *buffer, scan_builder_t *builder) {
   size_t overlap = uc->value_len > 1U ? (size_t)uc->value_len - 1U : 0U;
   uint64_t scanned = 0U;
   size_t carry = 0U;
@@ -1106,24 +1123,21 @@ static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
     size_t window = carry + read_len;
     uint64_t base_addr = start + scanned - (uint64_t)carry;
 
-    size_t first = 0U;
-    if (base_addr < start) {
-      uint64_t off = start - base_addr;
-      if (off >= window) { scanned += read_len; continue; }
-      first = (size_t)off;
-    }
-    if (uc->need_alignment) {
-      uint64_t misalign = ((base_addr + first) - start) % uc->alignment;
-      if (misalign != 0U) first += (size_t)((uint64_t)uc->alignment - misalign);
-    }
+    size_t first = first_aligned_offset(
+        base_addr, alignment_base, start, uc->alignment);
+    if (first == SIZE_MAX) return MEMDBG_ERR_OVERFLOW;
 
     for (size_t pos = first;
-         pos + uc->value_len <= window;
+         pos <= window && uc->value_len <= window - pos;
          pos += uc->alignment) {
       uint64_t addr = base_addr + (uint64_t)pos;
       if (addr > range_end || (uint64_t)uc->value_len > range_end - addr) break;
-      memdbg_status_t as = scan_builder_append(builder, addr);
-      if (as != MEMDBG_OK) return as;
+      if (unknown_value_is_candidate(
+              buffer + pos, uc->value_len, uc->flags)) {
+        memdbg_status_t as = scan_builder_append(builder, addr);
+        if (as != MEMDBG_OK) return as;
+      }
+      if (SIZE_MAX - pos < uc->alignment) break;
     }
 
     if (overlap != 0U) {
@@ -1137,46 +1151,114 @@ static memdbg_status_t scan_unknown_cb(void *ctx, int pid, uint64_t start,
   return MEMDBG_OK;
 }
 
-/* ---- Public API: unknown initial value scan (captures every aligned address, parallel) ---- */
-
-memdbg_status_t memdbg_scan_unknown(const memdbg_scan_process_exact_request_t *request,
+memdbg_status_t memdbg_scan_unknown(const memdbg_scan_unknown_request_t *request,
                                     memdbg_scan_result_t *out) {
   if (request == NULL || out == NULL) return MEMDBG_ERR_PARAM;
   memset(out, 0, sizeof(*out));
 
-  uint32_t value_len = expected_value_length(request->value_type, request->value_length);
-  if (value_len == 0U || value_len > MEMDBG_SCAN_VALUE_MAX) return MEMDBG_ERR_PARAM;
+  if (request->abi_magic != MEMDBG_SCAN_UNKNOWN_ABI_MAGIC ||
+      request->abi_version != MEMDBG_SCAN_UNKNOWN_ABI_VERSION ||
+      request->struct_size != sizeof(*request) ||
+      (request->flags & ~MEMDBG_SCAN_UNKNOWN_KNOWN_FLAGS) != 0U ||
+      request->reserved != 0U || request->pid <= 0)
+    return MEMDBG_ERR_PARAM;
+  if (request->end != 0U && request->end <= request->start)
+    return MEMDBG_ERR_PARAM;
+  if (request->max_bytes == 0U ||
+      request->max_bytes > MEMDBG_SCAN_UNKNOWN_MAX_UNIT_BYTES)
+    return MEMDBG_ERR_PARAM;
 
-  unknown_parallel_ctx_t uc;
-  uc.value_len      = value_len;
-  uc.alignment      = request->alignment == 0U ? value_len : request->alignment;
-  uc.need_alignment = uc.alignment > 1U;
+  unknown_scan_context_t uc;
+  uc.value_len = expected_value_length(
+      request->value_type, request->value_length);
+  if (uc.value_len == 0U || uc.value_len > MEMDBG_SCAN_VALUE_MAX)
+    return MEMDBG_ERR_PARAM;
+  uc.alignment = request->alignment == 0U ? uc.value_len
+                                          : request->alignment;
+  uc.flags = request->flags;
+  if (uc.alignment == 0U) return MEMDBG_ERR_PARAM;
 
-  size_t buf_size = MEMDBG_SCAN_CHUNK + (value_len > 1U ? (size_t)value_len - 1U : 0U);
+  size_t result_limit =
+      MEMDBG_SCAN_UNKNOWN_RESULT_BUDGET / sizeof(memdbg_scan_result_entry_t);
+  size_t max_results = request->max_results == 0U
+      ? 1U
+      : (size_t)request->max_results;
+  if (max_results > result_limit) max_results = result_limit;
+  if ((size_t)uc.value_len - 1U > SIZE_MAX - MEMDBG_SCAN_CHUNK)
+    return MEMDBG_ERR_OVERFLOW;
+  size_t buf_size =
+      MEMDBG_SCAN_CHUNK + (size_t)uc.value_len - 1U;
+  unsigned char *buffer = (unsigned char *)malloc(buf_size);
+  if (buffer == NULL) return MEMDBG_ERR_NOMEM;
 
   memdbg_status_t st = process_scan_guard_begin();
-  if (st != MEMDBG_OK) return st;
+  if (st != MEMDBG_OK) {
+    free(buffer);
+    return st;
+  }
 
   memdbg_map_list_t maps;
   st = scan_process_maps_for_scan(request->pid, &maps);
   if (st != MEMDBG_OK) {
     process_scan_guard_end();
+    free(buffer);
     return st;
   }
 
-  size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
-  uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
+  if (maps.count > 1U)
+    qsort(maps.entries, maps.count, sizeof(*maps.entries), compare_map_start);
+
+  scan_builder_t builder;
+  memset(&builder, 0, sizeof(builder));
+  builder.result = out;
+  builder.max_results = max_results;
+
+  uint32_t prot_mask = request->protection_mask | MEMDBG_MAP_PROT_READ;
+  uint64_t budget_remaining = request->max_bytes;
 
   uint64_t start_ns = monotonic_ns();
-  st = scan_maps_parallel(scan_unknown_cb, &uc,
-      request->pid, maps.entries, maps.count,
-      max_results, buf_size, (size_t)value_len,
-      prot_mask, request->start, request->end, out);
+  for (size_t i = 0U; i < maps.count; ++i) {
+    const memdbg_map_entry_t *map = &maps.entries[i];
+    if ((map->protection & prot_mask) != prot_mask ||
+        map->end <= map->start)
+      continue;
+
+    uint64_t scan_start = map->start;
+    uint64_t scan_end = map->end;
+    if (request->start != 0U && scan_start < request->start)
+      scan_start = request->start;
+    if (request->end != 0U && scan_end > request->end)
+      scan_end = request->end;
+    if (scan_end <= scan_start ||
+        scan_end - scan_start < (uint64_t)uc.value_len)
+      continue;
+    if (budget_remaining < (uint64_t)uc.value_len) {
+      out->truncated = true;
+      break;
+    }
+
+    uint64_t map_len = scan_end - scan_start;
+    uint64_t unit_len = map_len < budget_remaining
+        ? map_len
+        : budget_remaining;
+    if (unit_len < map_len) out->truncated = true;
+    scan_metric_inc(&out->regions_scanned);
+    st = scan_unknown_range(&uc, request->pid, scan_start, unit_len,
+                            map->start, buffer, &builder);
+    if (st != MEMDBG_OK) break;
+    budget_remaining -= unit_len;
+    if (budget_remaining == 0U) {
+      if (i + 1U < maps.count || unit_len < map_len)
+        out->truncated = true;
+      break;
+    }
+  }
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
   memdbg_process_maps_free(&maps);
   process_scan_guard_end();
+  free(buffer);
   if (st != MEMDBG_OK) memdbg_scan_result_free(out);
   return st;
 }

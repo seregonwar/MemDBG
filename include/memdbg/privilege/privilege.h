@@ -34,7 +34,11 @@ typedef struct memdbg_ucred_backup {
 } memdbg_ucred_backup_t;
 
 bool memdbg_privilege_supported(void);
+int memdbg_privilege_operation_begin(void);
+int memdbg_privilege_operation_end(void);
 int memdbg_privilege_jailbreak_self(void);
+int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup);
+int memdbg_privilege_end_ptrace(const memdbg_ucred_backup_t *backup);
 int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup);
 void memdbg_privilege_restore_target(pid_t pid,
                                      const memdbg_ucred_backup_t *backup);

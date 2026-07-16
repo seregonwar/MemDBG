@@ -10,12 +10,12 @@ In **Settings** you can save complete console targets. Each target stores its IP
 
 **Inject & Connect** sends the cached platform-specific ELF directly to the saved payload-loader port, then retries the MemDBG connection while the payload starts. The sender validates the ELF before opening the connection.
 
-Two optional settings automate the same lifecycle:
+Two optional per-target settings automate the same lifecycle:
 
-- **Auto inject payload on startup** first connects to an already-running payload; if none is running, it injects the ELF selected by the target profile and connects.
-- **Auto shutdown payload on exit** sends the shutdown command before closing the frontend connection.
+- **Auto inject payload on startup** first connects to an already-running payload; if none is running, it waits for the payload check, injects the ELF selected by the active target profile, and connects.
+- **Auto shutdown payload on exit** sends the shutdown command once before closing the frontend connection.
 
-Existing target profiles default to loader port `9021` and platform `Auto`.
+Each target persists its loader port, platform, auto-inject, and auto-shutdown choices. Existing target profiles default to loader port `9021` and platform `Auto`; legacy global lifecycle choices migrate to each loaded target.
 
 ## Console log
 

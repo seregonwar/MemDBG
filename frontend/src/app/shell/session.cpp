@@ -19,13 +19,19 @@ void update_payload_version_check(AppState &state) {
   PayloadInfo info = state.payload_fetcher.info();
   if (!info.available || info.tag_name.empty()) return;
 
-  /* Strip optional 'v' prefix from tag for comparison. */
-  std::string remote = info.tag_name;
-  if (!remote.empty() && (remote[0] == 'v' || remote[0] == 'V'))
-    remote.erase(0, 1);
-
-  state.payload_outdated = (state.hello.version != remote);
-  state.payload_outdated_remote_tag = info.tag_name;
+  const PayloadVersionCompatibility compatibility =
+      compare_payload_versions(state.hello.version, info.tag_name);
+  state.payload_outdated =
+      compatibility.status == PayloadVersionStatus::Outdated;
+  state.payload_outdated_remote_tag =
+      state.payload_outdated ? info.tag_name : std::string{};
+  if ((compatibility.status == PayloadVersionStatus::Invalid ||
+       compatibility.status == PayloadVersionStatus::ChannelMismatch) &&
+      state.crash_logging_enabled) {
+    state.crash_logger.log(
+        "version",
+        ("Payload version comparison skipped: " + compatibility.error).c_str());
+  }
 }
 
 void poll_release_check(AppState &state) {

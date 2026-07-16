@@ -16,6 +16,18 @@
 
 namespace memdbg::frontend {
 
+enum class PayloadVersionStatus {
+  Compatible,
+  Outdated,
+  ChannelMismatch,
+  Invalid,
+};
+
+struct PayloadVersionCompatibility {
+  PayloadVersionStatus status = PayloadVersionStatus::Invalid;
+  std::string error;
+};
+
 struct ReleaseCheck {
   std::string current_version = MEMDBG_VERSION_STRING;
   std::string latest_tag;
@@ -35,6 +47,8 @@ struct ReleaseCheck {
 
 void release_check_start(ReleaseCheck &check, const char *current_version);
 void release_check_shutdown(ReleaseCheck &check);
+PayloadVersionCompatibility compare_payload_versions(
+    const std::string &local_version, const std::string &remote_tag);
 
 } // namespace memdbg::frontend
 

@@ -590,7 +590,8 @@ static std::string console_target_label(const ConsoleTarget &target) {
   ensure_console_targets(state);
   const ConsoleTarget preview_target = current_console_target_from_fields(state);
   const std::string preview = console_target_label(preview_target);
-  const bool locked = state.client.connected() || state.connect_pending;
+  const bool locked =
+      state.client.connected() || connect_sequence_pending(state);
 
   topbar_align();
   const float frame_pad_y = std::max(0.0f, (topbar_control_h() - ImGui::GetFontSize()) * 0.5f);
@@ -705,10 +706,10 @@ void draw_top_bar(AppState &state, ImVec2 size) {
     if (topbar_button("TopbarSettings", icons::kSettings, locale::tr("topbar.settings"), btn_w))
       state.screen = Screen::Settings;
     ImGui::SameLine();
-    if (state.connect_pending) {
-      ImGui::BeginDisabled();
-      (void)topbar_button("TopbarConnecting", icons::kConnect, locale::tr("topbar.connecting"), btn_w, true);
-      ImGui::EndDisabled();
+    if (connect_sequence_pending(state)) {
+      if (topbar_button("TopbarCancelConnect", icons::kDisconnect,
+                        locale::tr("common.cancel"), btn_w, false, true))
+        cancel_connect(state);
     } else {
       if (topbar_button("TopbarConnect", icons::kConnect, locale::tr("topbar.connect"), btn_w, true))
         connect_console(state);
@@ -729,28 +730,39 @@ void draw_status_bar(AppState &state, ImVec2 size) {
   ui::status_dot(state.client.connected() ? ui::colors().success : ui::colors().muted);
   ImGui::SameLine();
 
-  /* Status text with ellipsis on overflow */
-  const float rhs_width = 580.0f * scl;
-  float avail_for_status = ImGui::GetWindowWidth() - rhs_width - 32.0f * scl;
+  /* Keep fixed right-side slots so warning visibility never shifts telemetry. */
+  const float rhs_width =
+      std::min(580.0f * scl, ImGui::GetWindowWidth() * 0.58f);
+  const float rhs_x = ImGui::GetWindowWidth() - rhs_width;
+  const float warning_width = std::clamp(
+      ImGui::GetWindowWidth() * 0.24f, 30.0f * scl, 380.0f * scl);
+  const float warning_x = rhs_x - warning_width - 8.0f * scl;
+  float avail_for_status = warning_x - ImGui::GetCursorPosX() - 8.0f * scl;
   if (avail_for_status < 80.0f * scl) avail_for_status = 80.0f * scl;
   text_ellipsis(state.status, avail_for_status, ui::colors().text);
 
-  /* Payload outdated warning — shown after the status text */
+  ImGui::SameLine();
+  ImGui::SetCursorPosX(warning_x);
   if (state.payload_outdated && !state.payload_outdated_remote_tag.empty()) {
-    ImGui::SameLine();
     char warn_buf[256];
     std::snprintf(warn_buf, sizeof(warn_buf),
                   locale::tr("payload.outdated_warning"),
                   state.hello.version.c_str(),
                   state.payload_outdated_remote_tag.c_str());
-    ImGui::TextColored(ui::colors().warning, "%s", warn_buf);
+    if (warning_width > 120.0f * scl) {
+      text_ellipsis(warn_buf, warning_width, ui::colors().warning);
+    } else {
+      ImGui::TextColored(ui::colors().warning, "%s", "!");
+    }
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s", locale::tr("payload.outdated_hint"));
+      ImGui::SetTooltip("%s\n%s", warn_buf, locale::tr("payload.outdated_hint"));
+  } else {
+    ImGui::Dummy(ImVec2(warning_width, ImGui::GetTextLineHeight()));
   }
 
   const auto log_stats = state.udp_listener.stats();
   ImGui::SameLine();
-  ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - rhs_width));
+  ImGui::SetCursorPosX(rhs_x);
   ImGui::TextColored(ui::colors().dim, "%s", state.client.connected() ? locale::tr("status.session_open") : locale::tr("status.session_idle"));
   ImGui::SameLine(0, 6); ImGui::TextColored(ui::colors().dim, "|");
   ImGui::SameLine(0, 6);

@@ -6,6 +6,7 @@
 
 #include "app_state.hpp"
 #include "core/client/process_list_parser.hpp"
+#include "core/client/process_maps_parser.hpp"
 #include "screens/processes/map_selection.hpp"
 #include "screens/scanner/refine_match.hpp"
 
@@ -261,6 +262,56 @@ static void test_process_list_compatibility() {
   }
 }
 
+static void test_process_map_metadata() {
+  std::printf("\n--- process-map metadata ---\n");
+
+  std::vector<uint8_t> payload;
+  const uint32_t count = 2U;
+  append_wire(payload, count);
+
+  memdbg_map_entry_t named{};
+  named.start = 0x1000U;
+  named.end = 0x2000U;
+  named.protection = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_EXEC;
+  named.flags =
+      (static_cast<uint32_t>(MEMDBG_MAP_TYPE_VNODE)
+       << MEMDBG_MAP_FLAG_TYPE_SHIFT) |
+      0x1U;
+  std::memcpy(named.name, "/app0/eboot.bin", 16U);
+  append_wire(payload, named);
+
+  memdbg_map_entry_t fallback{};
+  fallback.start = 0x2000U;
+  fallback.end = 0x4000U;
+  fallback.protection = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE;
+  fallback.flags =
+      static_cast<uint32_t>(MEMDBG_MAP_TYPE_DEFAULT)
+      << MEMDBG_MAP_FLAG_TYPE_SHIFT;
+  append_wire(payload, fallback);
+
+  std::vector<MapEntry> maps;
+  std::string error;
+  TEST("named and fallback maps parse",
+       detail::parse_process_maps_response(payload, maps, error));
+  TEST("native path is preserved",
+       maps.size() == 2U && maps[0].name == "/app0/eboot.bin" &&
+           maps[0].type == "file");
+  TEST("unnamed map gets truthful fallback",
+       maps.size() == 2U && maps[1].name == "[default]" &&
+           maps[1].type == "default");
+  TEST("map filter matches displayed name",
+       maps.size() == 2U &&
+           detail::map_matches_name_or_type(maps[0], "EBOOT"));
+  TEST("map filter matches displayed type",
+       maps.size() == 2U &&
+           detail::map_matches_name_or_type(maps[1], "DEFAULT"));
+
+  payload.pop_back();
+  TEST("truncated map metadata is rejected",
+       !detail::parse_process_maps_response(payload, maps, error) &&
+           error == "truncated map response");
+}
+
 } // namespace
 } // namespace memdbg::frontend
 
@@ -274,6 +325,7 @@ int main() {
   test_text_helpers();
   test_filtered_map_selection();
   test_process_list_compatibility();
+  test_process_map_metadata();
 
   std::printf("\n=== Results ======================================\n");
   int total = g_passed + g_failed;

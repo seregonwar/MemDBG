@@ -6,210 +6,251 @@
 
 #include "scanner_internal.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <cstring>
+#include <unordered_map>
 
 namespace memdbg::frontend {
 
-void capture_scan_snapshot(AppState &state) {
-  state.scan_snapshot.clear();
-  state.scan_snapshot_type = state.scan_type;
-  state.scan_snapshot_value_len = current_scan_value_len(state);
-  const uint32_t val_len = state.scan_snapshot_value_len;
+namespace {
 
-  if (!state.client.connected() || state.selected_pid <= 0 ||
-      state.scan_result.addresses.empty() || val_len == 0U) {
-    std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "%s", locale::tr("scanner.no_scan_values"));
+void start_snapshot_worker(AppState &state, bool refine, RefineMode mode,
+                           std::vector<uint8_t> target_bytes) {
+  const int32_t pid = state.selected_pid;
+  const uint32_t value_len = state.scan_snapshot_value_len != 0U
+      ? state.scan_snapshot_value_len
+      : current_scan_value_len(state);
+  const int value_type = state.scan_snapshot_value_len != 0U
+      ? state.scan_snapshot_type
+      : state.scan_type;
+  const bool has_batch = has_batch_read(state);
+  const bool is_unknown = state.scan_is_unknown_session;
+  const ScanResult original_result = state.scan_result;
+  const std::vector<ScanSnapshotEntry> old_snapshot = state.scan_snapshot;
+  std::vector<uint64_t> addresses;
+  addresses.reserve(old_snapshot.empty() ? original_result.addresses.size()
+                                         : old_snapshot.size());
+  if (old_snapshot.empty()) {
+    addresses = original_result.addresses;
+  } else {
+    for (const auto &entry : old_snapshot) addresses.push_back(entry.address);
+  }
+
+  state.scan_async_label = refine
+      ? std::string(refine_mode_name(mode)) + " refinement"
+      : "Refresh scan baseline";
+  state.scan_async_start_time = ImGui::GetTime();
+  state.scan_async_pending = true;
+  state.scan_async_cancellable = true;
+  state.scan_async_cancel_requested.store(false);
+  state.scan_async_units_done.store(0U);
+  const uint64_t unit_count = has_batch
+      ? (addresses.size() + MEMDBG_BATCH_READ_MAX_ITEMS - 1U) /
+            MEMDBG_BATCH_READ_MAX_ITEMS
+      : addresses.size();
+  state.scan_async_units_total.store(unit_count);
+  state.scan_async_owner = Screen::Scanner;
+  state.scan_async_error.clear();
+
+  Client &client = state.client;
+  ScanResult &temp_result = state.scan_async_temp_result;
+  auto &temp_snapshot = state.scan_async_temp_snapshot;
+  auto &temp_value_len = state.scan_async_temp_snapshot_value_len;
+  auto &temp_type = state.scan_async_temp_snapshot_type;
+  auto &temp_unknown = state.scan_async_temp_is_unknown;
+  auto &temp_status = state.scan_async_temp_session_status;
+  std::string &error_out = state.scan_async_error;
+
+  state.scan_async_future = std::async(
+      std::launch::async,
+      [&client, pid, value_len, value_type, has_batch, is_unknown, refine,
+       mode, target_bytes = std::move(target_bytes),
+       addresses = std::move(addresses), old_snapshot, original_result,
+       &temp_result, &temp_snapshot, &temp_value_len, &temp_type,
+       &temp_unknown, &temp_status, &error_out,
+       &cancel_requested = state.scan_async_cancel_requested,
+       &units_done = state.scan_async_units_done,
+       &mtx = state.scan_async_mtx]() mutable -> bool {
+        const auto start = std::chrono::steady_clock::now();
+        std::unordered_map<uint64_t, const ScanSnapshotEntry *> old_by_address;
+        old_by_address.reserve(old_snapshot.size());
+        for (const auto &entry : old_snapshot)
+          old_by_address.emplace(entry.address, &entry);
+
+        std::vector<ScanSnapshotEntry> next_snapshot;
+        std::vector<uint64_t> next_addresses;
+        next_snapshot.reserve(addresses.size());
+        next_addresses.reserve(addresses.size());
+        uint64_t bytes_read = 0U;
+        uint64_t attempted_reads = 0U;
+        uint32_t read_errors = 0U;
+
+        auto accept_value = [&](uint64_t address,
+                                std::vector<uint8_t> current) {
+          if (refine) {
+            auto old_it = old_by_address.find(address);
+            if (old_it == old_by_address.end() ||
+                !scan_refine_match(value_type, mode, old_it->second->bytes,
+                                   current, target_bytes))
+              return;
+          }
+          next_addresses.push_back(address);
+          next_snapshot.push_back({address, std::move(current)});
+        };
+
+        if (has_batch) {
+          std::vector<memdbg_batch_read_item_t> items;
+          items.reserve(MEMDBG_BATCH_READ_MAX_ITEMS);
+          for (size_t base = 0U; base < addresses.size();
+               base += MEMDBG_BATCH_READ_MAX_ITEMS) {
+            if (cancel_requested.load()) break;
+            const size_t end = std::min(
+                base + MEMDBG_BATCH_READ_MAX_ITEMS, addresses.size());
+            items.clear();
+            for (size_t i = base; i < end; ++i) {
+              memdbg_batch_read_item_t item{};
+              item.address = addresses[i];
+              item.length = value_len;
+              items.push_back(item);
+            }
+            attempted_reads += items.size();
+            Client::BatchReadResult batch;
+            if (!client.batch_read(pid, items, batch)) {
+              if (cancel_requested.load()) break;
+              read_errors += static_cast<uint32_t>(items.size());
+              units_done.fetch_add(1U);
+              continue;
+            }
+            size_t data_offset = 0U;
+            for (const auto &entry : batch.entries) {
+              if (entry.status != 0U || entry.length != value_len ||
+                  data_offset > batch.data.size() ||
+                  entry.length > batch.data.size() - data_offset) {
+                read_errors++;
+                if (data_offset <= batch.data.size() &&
+                    entry.length <= batch.data.size() - data_offset)
+                  data_offset += entry.length;
+                continue;
+              }
+              std::vector<uint8_t> current(
+                  batch.data.begin() + static_cast<ptrdiff_t>(data_offset),
+                  batch.data.begin() + static_cast<ptrdiff_t>(
+                      data_offset + entry.length));
+              data_offset += entry.length;
+              bytes_read += entry.length;
+              accept_value(entry.address, std::move(current));
+            }
+            units_done.fetch_add(1U);
+          }
+        } else {
+          for (uint64_t address : addresses) {
+            if (cancel_requested.load()) break;
+            attempted_reads++;
+            std::vector<uint8_t> current;
+            if (!client.memory_read(pid, address, value_len, current) ||
+                current.size() != value_len) {
+              if (cancel_requested.load()) break;
+              read_errors++;
+            } else {
+              bytes_read += current.size();
+              accept_value(address, std::move(current));
+            }
+            units_done.fetch_add(1U);
+          }
+        }
+
+        const bool cancelled = cancel_requested.load();
+        const auto end = std::chrono::steady_clock::now();
+        const uint64_t elapsed_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                end - start).count());
+
+        std::lock_guard<std::mutex> lock(mtx);
+        if (cancelled) {
+          temp_result = original_result;
+          temp_snapshot = old_snapshot;
+          temp_value_len = value_len;
+          temp_type = value_type;
+          temp_unknown = is_unknown;
+          std::snprintf(temp_status, sizeof(temp_status),
+                        "Stopped: previous %zu candidates preserved",
+                        old_snapshot.size());
+          error_out.clear();
+          return true;
+        }
+        if (!addresses.empty() && bytes_read == 0U) {
+          error_out = "Refinement failed: no candidate values could be read";
+          return false;
+        }
+
+        ScanResult result;
+        result.addresses = std::move(next_addresses);
+        result.count = static_cast<uint32_t>(result.addresses.size());
+        result.bytes_scanned = bytes_read;
+        result.elapsed_ns = elapsed_ns;
+        result.read_calls = attempted_reads > UINT32_MAX
+            ? UINT32_MAX
+            : static_cast<uint32_t>(attempted_reads);
+        result.read_errors = read_errors;
+        temp_result = std::move(result);
+        temp_snapshot = std::move(next_snapshot);
+        temp_value_len = value_len;
+        temp_type = value_type;
+        temp_unknown = is_unknown;
+        std::snprintf(temp_status, sizeof(temp_status),
+                      "%s kept %zu values (%u read errors, %s)",
+                      refine ? refine_mode_name(mode) : "Baseline refresh",
+                      temp_snapshot.size(), read_errors,
+                      bytes_per_second(bytes_read, elapsed_ns).c_str());
+        error_out.clear();
+        return true;
+      });
+}
+
+} // namespace
+
+void capture_scan_snapshot(AppState &state) {
+  if (state.scan_async_pending) return;
+  if (!state.client.connected()) {
+    set_status(state, locale::tr("scanner.connect_first"));
     return;
   }
-
-  const auto &addrs = state.scan_result.addresses;
-  state.scan_snapshot.reserve(addrs.size());
-  uint32_t read_errors = 0;
-  const auto start = std::chrono::steady_clock::now();
-
-  if (has_batch_read(state)) {
-    /* Fast path: batch read up to 64 addresses per request. */
-    std::vector<memdbg_batch_read_item_t> batch_items;
-    batch_items.reserve(MEMDBG_BATCH_READ_MAX_ITEMS);
-
-    for (size_t base = 0U; base < addrs.size(); base += MEMDBG_BATCH_READ_MAX_ITEMS) {
-      batch_items.clear();
-      size_t chunk_end = std::min(base + MEMDBG_BATCH_READ_MAX_ITEMS, addrs.size());
-      for (size_t i = base; i < chunk_end; ++i) {
-        memdbg_batch_read_item_t item{};
-        item.address = addrs[i];
-        item.length  = val_len;
-        batch_items.push_back(item);
-      }
-
-      Client::BatchReadResult batch;
-      if (!state.client.batch_read(state.selected_pid, batch_items, batch)) {
-        read_errors += static_cast<uint32_t>(chunk_end - base);
-        continue;
-      }
-
-      uint32_t data_offset = 0U;
-      for (size_t j = 0U; j < batch.entries.size(); ++j) {
-        const auto &entry = batch.entries[j];
-        if (entry.status != 0U || entry.length != val_len) {
-          read_errors++;
-          data_offset += entry.length;
-          continue;
-        }
-        ScanSnapshotEntry snap;
-        snap.address = entry.address;
-        snap.bytes.assign(batch.data.begin() + data_offset,
-                          batch.data.begin() + data_offset + entry.length);
-        state.scan_snapshot.push_back(std::move(snap));
-        data_offset += entry.length;
-      }
-    }
-  } else {
-    /* Fallback: individual memory_read per address (slower, but universal). */
-    for (size_t i = 0U; i < addrs.size(); ++i) {
-      std::vector<uint8_t> data;
-      if (!state.client.memory_read(state.selected_pid, addrs[i], val_len, data) ||
-          data.size() != val_len) {
-        read_errors++;
-        continue;
-      }
-      ScanSnapshotEntry snap;
-      snap.address = addrs[i];
-      snap.bytes   = std::move(data);
-      state.scan_snapshot.push_back(std::move(snap));
-    }
+  if (state.selected_pid <= 0 || state.scan_result.addresses.empty()) {
+    set_status(state, locale::tr("scanner.no_scan_values"));
+    return;
   }
-
-  const auto end = std::chrono::steady_clock::now();
-  const uint64_t elapsed_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count());
-  const uint64_t capture_bytes = (uint64_t)state.scan_snapshot.size() * val_len;
-  const char *mode = has_batch_read(state) ? "BATCH_READ" : "individual reads";
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
-                "%s: %zu values (%u read errors, %s)",
-                mode, state.scan_snapshot.size(), read_errors,
-                bytes_per_second(capture_bytes, elapsed_ns).c_str());
-  if (!has_batch_read(state) && !addrs.empty())      set_status(state, locale::tr("scanner.individual_reads"));
-  state.scan_result.read_calls += static_cast<uint32_t>(addrs.size());
-  state.scan_result.read_errors += read_errors;
-  state.scan_result.elapsed_ns += elapsed_ns;
+  start_snapshot_worker(state, false, RefineMode::Unchanged, {});
 }
 
 void refine_scan(AppState &state, RefineMode mode) {
-  if (!state.client.connected()) { set_status(state, locale::tr("scanner.connect_first")); return; }
-  if (state.selected_pid <= 0) { set_status(state, locale::tr("scanner.select_process_first")); return; }
+  if (state.scan_async_pending) return;
+  if (!state.client.connected()) {
+    set_status(state, locale::tr("scanner.connect_first"));
+    return;
+  }
+  if (state.selected_pid <= 0) {
+    set_status(state, locale::tr("scanner.select_process_first"));
+    return;
+  }
   if (state.scan_snapshot.empty() || state.scan_snapshot_value_len == 0U) {
-    set_status(state, locale::tr("scanner.run_scan_before_refine")); return;
+    set_status(state, locale::tr("scanner.run_scan_before_refine"));
+    return;
   }
 
-  const uint32_t val_len = state.scan_snapshot_value_len;
   std::vector<uint8_t> target_bytes;
   if (mode == RefineMode::ExactValue) {
     std::array<uint8_t, 16> target{};
     uint32_t target_len = 0U;
     if (!build_scan_value(state.scan_snapshot_type, state.scan_value,
-                          target, target_len) || target_len != val_len) {
+                          target, target_len) ||
+        target_len != state.scan_snapshot_value_len) {
       set_status(state, locale::tr("scanner.invalid_value"));
       return;
     }
     target_bytes.assign(target.begin(), target.begin() + target_len);
   }
-  std::vector<ScanSnapshotEntry> next_snapshot;
-  next_snapshot.reserve(state.scan_snapshot.size());
-  std::vector<uint64_t> next_addresses;
-  next_addresses.reserve(state.scan_snapshot.size());
-  uint32_t read_errors = 0;
-  uint64_t bytes_read = 0;
-  const auto start = std::chrono::steady_clock::now();
-
-  const auto &old_snap = state.scan_snapshot;
-  std::vector<memdbg_batch_read_item_t> batch_items;
-
-  if (has_batch_read(state)) {
-    /* Fast path: batch read up to 64 addresses per request. */
-    batch_items.reserve(MEMDBG_BATCH_READ_MAX_ITEMS);
-
-    for (size_t base = 0U; base < old_snap.size(); base += MEMDBG_BATCH_READ_MAX_ITEMS) {
-      batch_items.clear();
-      size_t chunk_end = std::min(base + MEMDBG_BATCH_READ_MAX_ITEMS, old_snap.size());
-      for (size_t i = base; i < chunk_end; ++i) {
-        memdbg_batch_read_item_t item{};
-        item.address = old_snap[i].address;
-        item.length  = val_len;
-        batch_items.push_back(item);
-      }
-
-      Client::BatchReadResult batch;
-      if (!state.client.batch_read(state.selected_pid, batch_items, batch)) {
-        read_errors += static_cast<uint32_t>(chunk_end - base);
-        continue;
-      }
-
-      uint32_t data_offset = 0U;
-      for (size_t j = 0U; j < batch.entries.size(); ++j) {
-        const auto &entry = batch.entries[j];
-        const auto &old_entry = old_snap[base + j];
-
-        if (entry.status != 0U || entry.length != val_len) {
-          read_errors++;
-          data_offset += entry.length;
-          continue;
-        }
-
-        std::vector<uint8_t> current(
-            batch.data.begin() + data_offset,
-            batch.data.begin() + data_offset + entry.length);
-        bytes_read += entry.length;
-        data_offset += entry.length;
-
-        if (!scan_refine_match(state.scan_snapshot_type, mode, old_entry.bytes,
-                               current, target_bytes))
-          continue;
-
-        ScanSnapshotEntry next;
-        next.address = old_entry.address;
-        next.bytes   = std::move(current);
-        next_addresses.push_back(next.address);
-        next_snapshot.push_back(std::move(next));
-      }
-    }
-  } else {
-    /* Fallback: individual memory_read per address. */
-    for (size_t i = 0U; i < old_snap.size(); ++i) {
-      std::vector<uint8_t> current;
-      if (!state.client.memory_read(state.selected_pid, old_snap[i].address,
-                                    val_len, current) || current.size() != val_len) {
-        read_errors++;
-        continue;
-      }
-      bytes_read += (uint64_t)current.size();
-
-      if (!scan_refine_match(state.scan_snapshot_type, mode,
-                             old_snap[i].bytes, current, target_bytes))
-        continue;
-
-      ScanSnapshotEntry next;
-      next.address = old_snap[i].address;
-      next.bytes   = std::move(current);
-      next_addresses.push_back(next.address);
-      next_snapshot.push_back(std::move(next));
-    }
-  }
-
-  const auto end = std::chrono::steady_clock::now();
-  const uint64_t elapsed_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count());
-  state.scan_snapshot = std::move(next_snapshot);
-  state.scan_result.addresses = std::move(next_addresses);
-  state.scan_result.count = static_cast<uint32_t>(state.scan_result.addresses.size());
-  state.scan_result.truncated = false;
-  state.scan_result.bytes_scanned = bytes_read;
-  state.scan_result.elapsed_ns = elapsed_ns;
-  state.scan_result.read_calls = static_cast<uint32_t>(state.scan_snapshot.size() + read_errors);
-  state.scan_result.regions_scanned = 0;
-  state.scan_result.read_errors = read_errors;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
-                "%s refine kept %zu values", refine_mode_name(mode), state.scan_snapshot.size());
-  set_status(state, state.scan_session_status);
-  push_notification(state, std::string(refine_mode_name(mode)) + " refine: " + std::to_string(state.scan_snapshot.size()) + " values kept");
+  start_snapshot_worker(state, true, mode, std::move(target_bytes));
 }
 
 } // namespace memdbg::frontend

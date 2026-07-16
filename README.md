@@ -378,13 +378,18 @@ candidate.
 | `mobile-ios` | `MemDBG-mobile-ios.ipa` |
 | `mobile-android` | `MemDBG-mobile-android.apk` |
 
-The rolling [`nightly`](https://github.com/seregonwar/MemDBG/releases/tag/nightly)
-release follows the latest successfully packaged `main` commit and is always
-marked as GitHub Latest. Nightly artifacts are release candidates: after
-testing, the selected build can be promoted from the same commit to the next
-beta. The official release build then stamps that beta version consistently
-into every artifact. Published beta tags and their assets remain accessible
-historical snapshots, without taking the Latest badge from the nightly.
+At 22:00 Europe/Rome each day, the workflow creates an immutable release tagged
+`nightly-YYYYMMDD-gSHA`, where the date is local to Rome and `SHA` is the
+lowercase seven-character commit ID (automatically lengthened by Git only to
+avoid an abbreviation collision). Its title is
+`nightly [YYYY-MM-DD-gSHA]`. Manual nightlies use the same identity rules, and a
+rerun for an existing date and commit only verifies identical metadata and
+assets; it never overwrites the release.
+
+A newly published nightly becomes GitHub Latest. A newer stable official release
+then takes the Latest badge, while prerelease official builds do not. The next
+successfully published nightly becomes Latest again. All historical nightly and
+official tags and assets remain accessible snapshots.
 
 `VERSION` records the current official repository version for local builds. A
 single resolver derives tagged/manual release versions and independent nightly

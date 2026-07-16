@@ -443,7 +443,7 @@ target_include_directories(memdbg_auto_search_test PRIVATE
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
-# Standalone test — no DLL dependencies.  Static MSVC runtime produces
+# Standalone test â€” no DLL dependencies.  Static MSVC runtime produces
 # a single self-contained .exe that works on any Windows machine.
 if(MSVC)
   set_property(TARGET memdbg_auto_search_test PROPERTY
@@ -451,6 +451,25 @@ if(MSVC)
 endif()
 
 # ---- memdbg_structure_compare_test ----
+
+add_executable(memdbg_scanner_plan_test
+  tests/test_scanner_plan.cpp
+)
+
+target_include_directories(memdbg_scanner_plan_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${imgui_SOURCE_DIR}
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+
+if(MSVC)
+  set_property(TARGET memdbg_scanner_plan_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 add_executable(memdbg_structure_compare_test
   tests/test_structure_compare.cpp
@@ -462,7 +481,7 @@ target_include_directories(memdbg_structure_compare_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
 )
 
-# Standalone test — no DLL dependencies.
+# Standalone test â€” no DLL dependencies.
 if(MSVC)
   set_property(TARGET memdbg_structure_compare_test PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -484,7 +503,7 @@ target_include_directories(memdbg_app_state_parsing_test PRIVATE
   ${nlohmann_json_SOURCE_DIR}/include
 )
 
-# Standalone test — no DLL dependencies.
+# Standalone test â€” no DLL dependencies.
 if(MSVC)
   set_property(TARGET memdbg_app_state_parsing_test PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -508,6 +527,39 @@ target_include_directories(memdbg_payload_sender_test PRIVATE
 )
 target_link_libraries(memdbg_payload_sender_test PRIVATE Threads::Threads)
 
+# ---- memdbg_release_check_test ----
+
+add_executable(memdbg_release_check_test
+  tests/test_release_check.cpp
+  src/core/release_check.cpp
+  src/core/platform.cpp
+)
+target_include_directories(memdbg_release_check_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+target_link_libraries(memdbg_release_check_test PRIVATE Threads::Threads)
+
+# ---- memdbg_client_test ----
+
+add_executable(memdbg_client_test
+  tests/test_memdbg_client.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+)
+target_include_directories(memdbg_client_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
+)
+target_link_libraries(memdbg_client_test PRIVATE Threads::Threads)
+
 target_include_directories(memdbg_payload_fetcher_test PRIVATE
   ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -515,7 +567,7 @@ target_include_directories(memdbg_payload_fetcher_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
 )
 
-# Standalone test — no DLL dependencies.
+# Standalone test â€” no DLL dependencies.
 if(MSVC)
   set_property(TARGET memdbg_payload_fetcher_test PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -729,6 +781,8 @@ if(WIN32)
   target_compile_definitions(memdbg_frontend PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_payload_sender_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_release_check_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_client_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_trainer_formats_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_plugin_manager_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_lua_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -738,6 +792,8 @@ if(WIN32)
   target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32 comdlg32 ole32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_payload_sender_test PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_release_check_test PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_client_test PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_trainer_formats_test PRIVATE ws2_32)
   target_link_libraries(memdbg_plugin_manager_test PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_sandbox_lua_test PRIVATE ws2_32)
@@ -754,6 +810,8 @@ if(MSVC)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE /W4)
   target_compile_options(memdbg_payload_sender_test PRIVATE /W4)
+  target_compile_options(memdbg_release_check_test PRIVATE /W4)
+  target_compile_options(memdbg_client_test PRIVATE /W4)
   target_compile_options(memdbg_trainer_formats_test PRIVATE /W4)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4)
   target_compile_options(memdbg_plugin_manager_test PRIVATE /W4)
@@ -769,6 +827,8 @@ else()
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_sender_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_release_check_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_client_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_trainer_formats_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_locale_manager_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_plugin_manager_test PRIVATE -Wall -Wextra -Wpedantic)

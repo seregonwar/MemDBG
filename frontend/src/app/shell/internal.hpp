@@ -35,6 +35,7 @@ bool save_frontend_settings(const AppState &state, std::string *error);
 
 // connection.cpp
 void connect_console(AppState &state);
+void cancel_connect(AppState &state);
 void request_payload_inject(AppState &state, bool connect_after);
 void poll_payload_lifecycle(AppState &state);
 void disconnect_console(AppState &state, const char *reason);

@@ -315,7 +315,7 @@ void draw_app(AppState &state) {
   ImGui::SetCursorPos(ImVec2(0, top_h));
   draw_sidebar(state, ImVec2(sidebar_w, content_h));
 
-  /* ── Resize handle ── */
+  /* â”€â”€ Resize handle â”€â”€ */
   const float handle_w = 5.0f * scl;
   ImGui::SetCursorPos(ImVec2(sidebar_w, top_h));
   ImGui::InvisibleButton("##SidebarResize", ImVec2(handle_w, content_h));
@@ -636,8 +636,16 @@ void init_app_shared(AppState &state, float dpi_scale) {
 }
 
 void shutdown_app_shared(AppState &state) {
+  if (state.shutdown_started) return;
+  state.shutdown_started = true;
   save_frontend_settings(state);
 
+  if (state.scan_async_future.valid()) {
+    state.scan_async_cancel_requested.store(true);
+    state.client.cancel_pending_io();
+    state.scan_async_future.wait();
+    state.scan_async_pending = false;
+  }
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   state.taskmgr_resource_pending = false;
   if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
@@ -656,7 +664,8 @@ void shutdown_app_shared(AppState &state) {
                         : state.client.last_error().c_str());
     }
   }
-  state.udp_listener.stop(); state.client.disconnect();
+  disconnect_console(state, "Application shutdown");
+  state.udp_listener.stop();
   state.payload_fetcher.stop();
   release_check_shutdown(state.release_check);
   github_profile_shutdown(state.github_profile);
@@ -724,7 +733,7 @@ int run_frontend(int, char **argv) {
 
   /* Render a single frame. Callable from the main loop and from the window-refresh
    * callback (which fires during live resize on macOS).  The re-entrancy guard
-   * wraps only glfwPollEvents() so the callback CAN produce a real frame — if the
+   * wraps only glfwPollEvents() so the callback CAN produce a real frame â€” if the
    * callback fires while the main loop is inside PollEvents, it skips PollEvents
    * but still draws, matching the reference pattern for smooth live resize. */
   static const auto render_frame = []() {

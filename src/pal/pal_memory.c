@@ -15,6 +15,7 @@
 #include "memdbg/pal/pal_memory.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_fileio.h"
+#include "memdbg/pal/pal_process.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -410,6 +411,86 @@ static memdbg_status_t mdbg_errno_status(void) {
   }
 }
 
+#if defined(MEMDBG_PAL_PS5)
+static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
+                                           const void *buffer, size_t length) {
+  pal_map_list_t maps;
+  uint64_t cursor = (uint64_t)(uintptr_t)address;
+  uint64_t end;
+  size_t buffer_offset = 0U;
+  int failure_errno = 0;
+
+  if (length > UINT64_MAX - cursor) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  end = cursor + length;
+  if (pal_process_maps((int)pid, &maps) != MEMDBG_OK) {
+    if (errno == 0) errno = EIO;
+    return -1;
+  }
+
+  while (cursor < end) {
+    const pal_map_entry_t *map = NULL;
+    for (size_t i = 0U; i < maps.count; ++i) {
+      if (maps.entries[i].start <= cursor && cursor < maps.entries[i].end) {
+        map = &maps.entries[i];
+        break;
+      }
+    }
+    if (map == NULL) {
+      failure_errno = EFAULT;
+      break;
+    }
+
+    const uint64_t segment_end = map->end < end ? map->end : end;
+    const size_t segment_length = (size_t)(segment_end - cursor);
+    const int original_prot = kernel_get_vmem_protection(
+        pid, (intptr_t)cursor, segment_length);
+    if (original_prot < 0) {
+      failure_errno = errno != 0 ? errno : EIO;
+      break;
+    }
+
+    bool changed_protection = (original_prot & PROT_WRITE) == 0;
+    if (changed_protection &&
+        kernel_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
+                                   original_prot | PROT_READ | PROT_WRITE) != 0) {
+      failure_errno = errno != 0 ? errno : EACCES;
+      break;
+    }
+
+    errno = 0;
+    const int copy_rc = mdbg_copyin(
+        pid, (const uint8_t *)buffer + buffer_offset, (intptr_t)cursor,
+        segment_length);
+    const int copy_errno = errno;
+    if (changed_protection) {
+      errno = 0;
+      if (kernel_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
+                                     original_prot) != 0) {
+        failure_errno = errno != 0 ? errno : EIO;
+        break;
+      }
+    }
+    if (copy_rc != 0) {
+      failure_errno = copy_errno != 0 ? copy_errno : EIO;
+      break;
+    }
+
+    buffer_offset += segment_length;
+    cursor = segment_end;
+  }
+
+  pal_process_maps_free(&maps);
+  if (failure_errno != 0) {
+    errno = failure_errno;
+    return -1;
+  }
+  return 0;
+}
+#endif
+
 static int console_mdbg_copyin(pid_t pid, intptr_t address, const void *buffer,
                                size_t length) {
   errno = 0;
@@ -421,21 +502,9 @@ static int console_mdbg_copyin(pid_t pid, intptr_t address, const void *buffer,
 
 #if defined(MEMDBG_PAL_PS5)
   if ((first_errno == EACCES || first_errno == EPERM) && length != 0U) {
-    const int original_prot = kernel_get_vmem_protection(pid, address, length);
-    if (original_prot >= 0 && (original_prot & PROT_WRITE) == 0) {
-      const int writable_prot = original_prot | PROT_READ | PROT_WRITE;
-      if (kernel_set_vmem_protection(pid, address, length, writable_prot) == 0) {
-        errno = 0;
-        const int rc = mdbg_copyin(pid, buffer, address, length);
-        const int retry_errno = errno;
-        (void)kernel_set_vmem_protection(pid, address, length, original_prot);
-        if (rc == 0) {
-          return 0;
-        }
-        errno = retry_errno != 0 ? retry_errno : first_errno;
-        return -1;
-      }
-    }
+    if (console_mdbg_copyin_ps5_regions(pid, address, buffer, length) == 0)
+      return 0;
+    return -1;
   }
 #endif
 

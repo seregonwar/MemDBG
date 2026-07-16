@@ -102,6 +102,8 @@ struct ConsoleTarget {
   int udp_port = 9023;
   int payload_port = 9021;
   int payload_platform = 0;  /* 0 = Auto, 1 = PS4, 2 = PS5 */
+  bool payload_auto_inject = false;
+  bool payload_auto_shutdown = false;
 };
 
 struct CheatEntry {
@@ -364,6 +366,7 @@ struct AppState {
   int scan_alignment = 4;
   int scan_max_results = 4096;
   bool scan_readable_only = true;
+  bool scan_unknown_nonzero_prefilter = false;
   ScanResult scan_result;
   std::vector<ScanSnapshotEntry> scan_snapshot;
   uint32_t scan_snapshot_value_len = 0;
@@ -440,6 +443,8 @@ struct AppState {
 
   /* ---- Async connect ---- */
   bool connect_pending = false;
+  bool connect_cancel_requested = false;
+  uint64_t connect_generation = 0;
   bool heartbeat_pending = false;
   /* Debugger workers own the shared client socket off the UI thread. */
   bool debugger_attach_pending = false;
@@ -447,12 +452,15 @@ struct AppState {
   std::future<bool> heartbeat_future;
   std::string heartbeat_error;
   double next_heartbeat = 0.0;
+  bool shutdown_started = false;
 
   /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
   std::mutex scan_async_mtx;
   bool scan_async_pending = false;
   bool scan_async_cancellable = false;
   std::atomic<bool> scan_async_cancel_requested{false};
+  std::atomic<uint64_t> scan_async_units_done{0U};
+  std::atomic<uint64_t> scan_async_units_total{0U};
   std::shared_future<bool> scan_async_future;
   std::string scan_async_label;
   double scan_async_start_time = 0.0;
@@ -491,7 +499,7 @@ struct AppState {
   TaskProcessResource taskmgr_resource_temp;
   std::string taskmgr_resource_error;
   double taskmgr_next_resource_fetch = 0.0;
-  /* Batch process_info temporary storage — filled by async worker, merged
+  /* Batch process_info temporary storage â€” filled by async worker, merged
    * into taskmgr_resources by poll_resource_fetch on the UI thread. */
   std::vector<ProcessInfo> taskmgr_batch_temp_infos;
   std::vector<int32_t> taskmgr_batch_temp_failed_pids;
@@ -730,7 +738,7 @@ inline bool parse_u64(const char *text, uint64_t &out) {
   return true;
 }
 
-/* trim_copy now provided by repo_utils.hpp — included above. */
+/* trim_copy now provided by repo_utils.hpp â€” included above. */
 
 inline bool is_hex_digit_string(const std::string &value) {
   return std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
@@ -891,7 +899,7 @@ inline const char *value_type_name(int type) {
 
 inline std::string prot_text(uint32_t prot) { std::string t; t+=(prot&1U)?'r':'-'; t+=(prot&2U)?'w':'-'; t+=(prot&4U)?'x':'-'; return t; }
 
-/* lower_copy now provided by repo_utils.hpp — included above. */
+/* lower_copy now provided by repo_utils.hpp â€” included above. */
 
 inline bool map_is_system_like(const MapEntry &map) {
   const std::string name = lower_copy(map.name);
@@ -989,6 +997,13 @@ inline bool client_async_busy(const AppState &state) {
          state.plugin_gui_starting;
 }
 
+inline bool connect_sequence_pending(const AppState &state) {
+  return state.connect_pending || state.payload_auto_inject_waiting ||
+         (state.payload_inject_pending && state.payload_connect_after_inject) ||
+         state.payload_post_inject_connect ||
+         state.payload_connect_retry_at > 0.0;
+}
+
 /* ---- shared state helpers ---- */
 inline void set_status(AppState &state, const std::string &message) {
   std::snprintf(state.status, sizeof(state.status), "%s", message.c_str());
@@ -1015,6 +1030,9 @@ void draw_consoles(AppState &state, struct ImVec2 avail);
 void draw_processes(AppState &state, struct ImVec2 avail);
 void draw_memory(AppState &state, struct ImVec2 avail);
 void draw_scanner(AppState &state, struct ImVec2 avail);
+void capture_scan_snapshot(AppState &state);
+void refine_scan(AppState &state, RefineMode mode);
+void scan_unknown_process(AppState &state);
 void draw_pointer_scanner(AppState &state, struct ImVec2 avail);
 void draw_aob_scanner(AppState &state, struct ImVec2 avail);
 void draw_trainer(AppState &state, struct ImVec2 avail);
