@@ -9,9 +9,11 @@
 #include "platform.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <vector>
@@ -41,6 +43,94 @@ std::string normalize_tag(std::string value) {
     value.erase(value.begin());
   }
   return value;
+}
+
+enum class VersionChannel {
+  Stable,
+  Nightly,
+};
+
+struct ParsedVersion {
+  VersionChannel channel = VersionChannel::Stable;
+  bool has_core = false;
+  std::array<uint32_t, 3> core{};
+  bool has_nightly_sequence = false;
+  uint32_t nightly_sequence = 0;
+};
+
+bool parse_number(const std::string &text, size_t &offset, uint32_t &out) {
+  if (offset >= text.size() ||
+      !std::isdigit(static_cast<unsigned char>(text[offset]))) {
+    return false;
+  }
+  uint64_t value = 0;
+  while (offset < text.size() &&
+         std::isdigit(static_cast<unsigned char>(text[offset]))) {
+    value = value * 10U + static_cast<uint32_t>(text[offset] - '0');
+    if (value > std::numeric_limits<uint32_t>::max()) return false;
+    ++offset;
+  }
+  out = static_cast<uint32_t>(value);
+  return true;
+}
+
+bool parse_payload_version(const std::string &input, ParsedVersion &out,
+                           std::string &error) {
+  const std::string normalized = normalize_tag(input);
+  std::string lowered = normalized;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  if (lowered == "nightly") {
+    out.channel = VersionChannel::Nightly;
+    return true;
+  }
+
+  size_t offset = 0;
+  for (size_t i = 0; i < out.core.size(); ++i) {
+    if (!parse_number(lowered, offset, out.core[i])) {
+      error = "expected semantic version major.minor.patch";
+      return false;
+    }
+    if (i + 1U < out.core.size()) {
+      if (offset >= lowered.size() || lowered[offset] != '.') {
+        error = "expected semantic version major.minor.patch";
+        return false;
+      }
+      ++offset;
+    }
+  }
+  out.has_core = true;
+  if (offset == lowered.size()) {
+    out.channel = VersionChannel::Stable;
+    return true;
+  }
+
+  constexpr const char *kNightlySuffix = "-nightly";
+  constexpr size_t kNightlySuffixLength = 8U;
+  if (lowered.compare(offset, kNightlySuffixLength, kNightlySuffix) != 0) {
+    error = "unsupported release channel";
+    return false;
+  }
+  offset += kNightlySuffixLength;
+  out.channel = VersionChannel::Nightly;
+  if (offset == lowered.size()) return true;
+  if (lowered[offset] != '.') {
+    error = "invalid nightly suffix";
+    return false;
+  }
+  ++offset;
+  if (!parse_number(lowered, offset, out.nightly_sequence)) {
+    error = "invalid nightly build sequence";
+    return false;
+  }
+  out.has_nightly_sequence = true;
+  if (offset < lowered.size() && lowered[offset] != '.') {
+    error = "invalid nightly build metadata";
+    return false;
+  }
+  return true;
 }
 
 std::vector<int> version_parts(const std::string &version) {
@@ -125,6 +215,57 @@ void worker_main(ReleaseCheck *check) {
 }
 
 } // namespace
+
+PayloadVersionCompatibility compare_payload_versions(
+    const std::string &local_version, const std::string &remote_tag) {
+  ParsedVersion local;
+  ParsedVersion remote;
+  std::string error;
+  if (!parse_payload_version(local_version, local, error)) {
+    return {PayloadVersionStatus::Invalid,
+            "invalid local payload version '" + local_version + "': " + error};
+  }
+  if (!parse_payload_version(remote_tag, remote, error)) {
+    return {PayloadVersionStatus::Invalid,
+            "invalid remote payload tag '" + remote_tag + "': " + error};
+  }
+
+  if (!remote.has_core) {
+    if (remote.channel == VersionChannel::Nightly &&
+        local.channel == VersionChannel::Nightly) {
+      return {PayloadVersionStatus::Compatible, {}};
+    }
+    return {PayloadVersionStatus::ChannelMismatch,
+            "local payload and remote release use different channels"};
+  }
+  if (!local.has_core) {
+    return {PayloadVersionStatus::Invalid,
+            "local payload version does not contain a semantic version"};
+  }
+
+  if (remote.core > local.core) {
+    return {PayloadVersionStatus::Outdated, {}};
+  }
+  if (remote.core < local.core) {
+    return {PayloadVersionStatus::Compatible, {}};
+  }
+
+  if (remote.channel == VersionChannel::Stable) {
+    return {local.channel == VersionChannel::Nightly
+                ? PayloadVersionStatus::Outdated
+                : PayloadVersionStatus::Compatible,
+            {}};
+  }
+  if (local.channel == VersionChannel::Stable) {
+    return {PayloadVersionStatus::Compatible, {}};
+  }
+  if (remote.has_nightly_sequence &&
+      (!local.has_nightly_sequence ||
+       remote.nightly_sequence > local.nightly_sequence)) {
+    return {PayloadVersionStatus::Outdated, {}};
+  }
+  return {PayloadVersionStatus::Compatible, {}};
+}
 
 void release_check_start(ReleaseCheck &check, const char *current_version) {
   {

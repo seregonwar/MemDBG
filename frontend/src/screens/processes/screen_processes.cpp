@@ -35,7 +35,8 @@ static bool map_passes_filters(const AppState &state, const MapEntry &map) {
   if (state.map_filter_min_kb > 0 && ((map.end - map.start)/1024U) < static_cast<uint64_t>(state.map_filter_min_kb))
     return false;
   std::string filter = lower_copy(trim_copy(state.map_filter));
-  if (!filter.empty() && lower_copy(map.name).find(filter) == std::string::npos) return false;
+  if (!filter.empty() && !detail::map_matches_name_or_type(map, filter))
+    return false;
   return true;
 }
 
@@ -828,7 +829,7 @@ static void draw_maps_table(AppState &state) {
     ui::draw_empty_state(locale::tr("processes.no_process_selected"), locale::tr("processes.no_process_desc"));
     return;
   }
-  if (ImGui::BeginTable("MapsTable", 6,
+  if (ImGui::BeginTable("MapsTable", 7,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,
         ImVec2(0,0))) {
     ImGui::TableSetupColumn("##selected", ImGuiTableColumnFlags_WidthFixed, 30);
@@ -836,6 +837,8 @@ static void draw_maps_table(AppState &state) {
     ImGui::TableSetupColumn(locale::tr("processes.end_col"));
     ImGui::TableSetupColumn(locale::tr("processes.size_col"), ImGuiTableColumnFlags_WidthFixed, 90);
     ImGui::TableSetupColumn(locale::tr("processes.prot_col"), ImGuiTableColumnFlags_WidthFixed, 58);
+    ImGui::TableSetupColumn(locale::tr("processes.elf_segments_type_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 105);
     ImGui::TableSetupColumn(locale::tr("processes.name_col"));
     ImGui::TableHeadersRow();
     for (int i = 0; i < static_cast<int>(state.maps.size()); ++i) {
@@ -862,6 +865,8 @@ static void draw_maps_table(AppState &state) {
       ImGui::TableSetColumnIndex(4);
       ImGui::TextUnformatted(prot_text(map.protection).c_str());
       ImGui::TableSetColumnIndex(5);
+      ImGui::TextUnformatted(map.type.c_str());
+      ImGui::TableSetColumnIndex(6);
       ImGui::TextUnformatted(map.name.c_str());
       if (ImGui::IsItemHovered() && !map.name.empty()) ImGui::SetTooltip("%s", map.name.c_str());
     }

@@ -13,13 +13,17 @@
 #ifndef MEMDBG_CORE_MEMDBG_PROTOCOL_H
 #define MEMDBG_CORE_MEMDBG_PROTOCOL_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(_MSC_VER)
+#pragma pack(push, 1)
+#define MEMDBG_PACKED
+#elif defined(__GNUC__) || defined(__clang__)
 #define MEMDBG_PACKED __attribute__((packed))
 #else
 #define MEMDBG_PACKED
@@ -37,6 +41,12 @@ extern "C" {
 #define MEMDBG_BATCH_READ_MAX_ITEM_BYTES (64U * 1024U * 1024U)
 #define MEMDBG_BATCH_WRITE_MAX_ITEMS 64U
 #define MEMDBG_SCAN_VALUE_MAX 16U
+#define MEMDBG_SCAN_UNKNOWN_ABI_MAGIC 0x314e4b55U /* "UKN1", little-endian */
+#define MEMDBG_SCAN_UNKNOWN_ABI_VERSION 1U
+#define MEMDBG_SCAN_UNKNOWN_FLAG_NONZERO 0x00000001U
+#define MEMDBG_SCAN_UNKNOWN_KNOWN_FLAGS MEMDBG_SCAN_UNKNOWN_FLAG_NONZERO
+#define MEMDBG_SCAN_UNKNOWN_MAX_UNIT_BYTES (8ULL * 1024ULL * 1024ULL)
+#define MEMDBG_SCAN_UNKNOWN_RESULT_BUDGET (1024U * 1024U)
 #define MEMDBG_MAP_PROT_READ 1U
 #define MEMDBG_MAP_PROT_WRITE 2U
 #define MEMDBG_MAP_PROT_EXEC 4U
@@ -61,6 +71,7 @@ typedef enum memdbg_command {
   MEMDBG_CMD_SCAN_POINTER = 0x0303U,
   MEMDBG_CMD_SCAN_UNKNOWN = 0x0304U,
   MEMDBG_CMD_SCAN_PROCESS_AOB = 0x0305U,
+  MEMDBG_CMD_SCAN_UNKNOWN_V2 = 0x0306U,
   MEMDBG_CMD_FOREGROUND_APP = 0x0103U,
   MEMDBG_CMD_PROCESS_STOP = 0x0104U,
   MEMDBG_CMD_PROCESS_CONTINUE = 0x0105U,
@@ -277,9 +288,28 @@ typedef struct MEMDBG_PACKED memdbg_map_entry {
   uint64_t start;
   uint64_t end;
   uint32_t protection;
+  /* Native VM flags occupy the low 24 bits; memdbg_map_type_t is packed in
+     the high byte so map metadata remains wire-compatible with v0.2 clients. */
   uint32_t flags;
   char name[64];
 } memdbg_map_entry_t;
+
+typedef enum memdbg_map_type {
+  MEMDBG_MAP_TYPE_NONE = 0,
+  MEMDBG_MAP_TYPE_DEFAULT = 1,
+  MEMDBG_MAP_TYPE_VNODE = 2,
+  MEMDBG_MAP_TYPE_SWAP = 3,
+  MEMDBG_MAP_TYPE_DEVICE = 4,
+  MEMDBG_MAP_TYPE_PHYSICAL = 5,
+  MEMDBG_MAP_TYPE_DEAD = 6,
+  MEMDBG_MAP_TYPE_SCATTER_GATHER = 7,
+  MEMDBG_MAP_TYPE_MANAGED_DEVICE = 8,
+  MEMDBG_MAP_TYPE_UNKNOWN = 255
+} memdbg_map_type_t;
+
+#define MEMDBG_MAP_FLAG_NATIVE_MASK 0x00ffffffU
+#define MEMDBG_MAP_FLAG_TYPE_SHIFT 24U
+#define MEMDBG_MAP_FLAG_TYPE_MASK 0xff000000U
 
 typedef struct MEMDBG_PACKED memdbg_memory_request {
   int32_t pid;
@@ -309,6 +339,28 @@ typedef struct MEMDBG_PACKED memdbg_scan_process_exact_request {
   uint64_t end;
   uint8_t value[MEMDBG_SCAN_VALUE_MAX];
 } memdbg_scan_process_exact_request_t;
+
+/*
+ * Versioned unknown-scan request for MEMDBG_CMD_SCAN_UNKNOWN_V2. The historical
+ * command keeps using memdbg_scan_process_exact_request_t for protocol-v1
+ * compatibility.
+ */
+typedef struct MEMDBG_PACKED memdbg_scan_unknown_request {
+  uint32_t abi_magic;
+  uint16_t abi_version;
+  uint16_t struct_size;
+  uint32_t flags;
+  int32_t pid;
+  uint32_t value_type;
+  uint32_t value_length;
+  uint32_t alignment;
+  uint32_t max_results;
+  uint32_t protection_mask;
+  uint32_t reserved;
+  uint64_t start;
+  uint64_t end;
+  uint64_t max_bytes;
+} memdbg_scan_unknown_request_t;
 
 typedef struct MEMDBG_PACKED memdbg_scan_response_prefix {
   uint32_t count;
@@ -1101,6 +1153,34 @@ typedef struct MEMDBG_PACKED memdbg_process_dump_request {
                     "stack": [{ "fp": hex, "ret": hex, "code": hex ... }] }]
    }
  */
+
+#if defined(__cplusplus)
+static_assert(sizeof(memdbg_packet_header_t) == 16U,
+              "memdbg packet header wire size changed");
+static_assert(sizeof(memdbg_scan_exact_request_t) == 52U,
+              "exact scan request wire size changed");
+static_assert(sizeof(memdbg_scan_process_exact_request_t) == 56U,
+              "legacy process scan request wire size changed");
+static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U,
+              "unknown scan request wire size changed");
+static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U,
+              "unknown scan request wire offsets changed");
+#else
+_Static_assert(sizeof(memdbg_packet_header_t) == 16U,
+               "memdbg packet header wire size changed");
+_Static_assert(sizeof(memdbg_scan_exact_request_t) == 52U,
+               "exact scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_process_exact_request_t) == 56U,
+               "legacy process scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U,
+               "unknown scan request wire size changed");
+_Static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U,
+               "unknown scan request wire offsets changed");
+#endif
+
+#if defined(_MSC_VER)
+#pragma pack(pop)
+#endif
 
 #undef MEMDBG_PACKED
 

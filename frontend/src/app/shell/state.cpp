@@ -37,6 +37,8 @@ ConsoleTarget current_console_target_from_fields(const AppState &state) {
   target.udp_port = state.udp_port;
   target.payload_port = state.payload_port;
   target.payload_platform = state.payload_platform;
+  target.payload_auto_inject = state.payload_auto_inject;
+  target.payload_auto_shutdown = state.payload_auto_shutdown;
   normalize_console_target(target);
   return target;
 }
@@ -50,6 +52,8 @@ static void apply_console_target(AppState &state, const ConsoleTarget &target) {
   state.udp_port = normalized.udp_port;
   state.payload_port = normalized.payload_port;
   state.payload_platform = normalized.payload_platform;
+  state.payload_auto_inject = normalized.payload_auto_inject;
+  state.payload_auto_shutdown = normalized.payload_auto_shutdown;
   state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
 }
 
@@ -89,6 +93,8 @@ void select_console_target(AppState &state, int index) {
   ensure_console_targets(state);
   if (state.console_targets.empty()) return;
   index = std::clamp(index, 0, static_cast<int>(state.console_targets.size()) - 1);
+  if (index != state.selected_target_index)
+    save_current_console_target(state);
   state.selected_target_index = index;
   apply_console_target(state, state.console_targets[static_cast<size_t>(index)]);
 }
@@ -229,6 +235,12 @@ bool load_frontend_settings(AppState &state, std::string *error) {
         target.payload_port = std::atoi(value.c_str());
       } else if (field == "payload_platform") {
         target.payload_platform = std::atoi(value.c_str());
+      } else if (field == "payload_auto_inject") {
+        target.payload_auto_inject =
+            value == "1" || value == "true" || value == "on" || value == "yes";
+      } else if (field == "payload_auto_shutdown") {
+        target.payload_auto_shutdown =
+            value == "1" || value == "true" || value == "on" || value == "yes";
       }
     }
   }
@@ -295,6 +307,10 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
     out << "target." << i << ".udp_port=" << target.udp_port << "\n";
     out << "target." << i << ".payload_port=" << target.payload_port << "\n";
     out << "target." << i << ".payload_platform=" << target.payload_platform << "\n";
+    out << "target." << i << ".payload_auto_inject="
+        << (target.payload_auto_inject ? 1 : 0) << "\n";
+    out << "target." << i << ".payload_auto_shutdown="
+        << (target.payload_auto_shutdown ? 1 : 0) << "\n";
   }
   if (!out) {
     if (error != nullptr) *error = "Failed while writing " + path.string();

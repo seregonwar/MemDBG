@@ -19,16 +19,32 @@ app has icons and a local plugin catalog even without a network refresh.
 
 ## Nightly candidates
 
-The release workflow runs every day at 03:17 UTC and updates the rolling
-`nightly` release from the current `main` commit. Each artifact embeds a
-version in the form `0.2.0-nightly.<run>.g<commit>`, and the release notes link
-to the exact commit and successful workflow run.
+The release workflow runs every day at 22:00 in the `Europe/Rome` timezone.
+GitHub Actions schedules both 20:00 and 21:00 UTC; a preflight converts each
+nominal schedule to Rome time and permits exactly one matrix build through, so
+CET and CEST transitions do not duplicate or skip a nightly.
 
-The nightly release is always marked as Latest. Published betas remain
-accessible as immutable versioned snapshots but do not replace the rolling
-nightly as Latest. Once a nightly has been validated, its exact commit can be
-promoted to the next beta; the official build is then stamped consistently with
-the beta tag.
+Each successful nightly is an immutable historical release tagged
+`nightly-YYYYMMDD-gSHA` and titled `nightly [YYYY-MM-DD-gSHA]`. The date is the
+Rome calendar date and `SHA` is the lowercase seven-character commit ID. The
+SHA is automatically lengthened only if Git detects an abbreviation collision.
+The artifact payload version remains independent in the form
+`0.2.0-nightly.<run>.g<commit>`, and release notes link to the exact commit and
+workflow run. Manual nightlies use the same identity format; official tag and
+manual releases retain their `v<version>` identity.
+
+The first publication creates the tag without force and uploads assets without
+`--clobber`. A rerun for the same date and commit verifies the existing title,
+tag target, asset names, and the checksums of the already-published assets, then
+exits without mutation. It does not compare freshly rebuilt archives, whose
+container metadata may differ. A tag collision or inconsistent release state
+fails clearly.
+
+A newly published nightly is marked Latest. A subsequently published stable
+official release becomes Latest, while official prereleases do not; the next new
+nightly becomes Latest again. Rerunning an older nightly never changes this
+ordering. Historical nightlies and official releases remain accessible
+snapshots.
 
 Linux currently ships a `.tar.gz` bundle with a `.desktop` file and hicolor icon
 data. AppImage can be added later once the runtime dependency bundle is stable

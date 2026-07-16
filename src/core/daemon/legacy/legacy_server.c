@@ -109,7 +109,15 @@ static void legacy_handle_client(socket_t fd, const memdbg_config_t *cfg) {
       if (body == NULL) { (void)legacy_send_status(fd, LEGACY_CMD_DATA_NULL); break; }
       if (pal_socket_read_exact(fd, body, header.data_len) < 0) { free(body); break; }
     }
-    if (legacy_dispatch(fd, cfg, &header, body) == MEMDBG_ERR_NET) { free(body); break; }
+    memdbg_status_t status;
+    if (memdbg_privilege_operation_begin() != 0) {
+      status = MEMDBG_ERR_STATE;
+    } else {
+      status = legacy_dispatch(fd, cfg, &header, body);
+      if (memdbg_privilege_operation_end() != 0 && status == MEMDBG_OK)
+        status = MEMDBG_ERR_STATE;
+    }
+    if (status == MEMDBG_ERR_NET) { free(body); break; }
     free(body);
   }
 

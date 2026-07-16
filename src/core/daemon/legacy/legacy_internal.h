@@ -17,6 +17,7 @@
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_memory.h"
 #include "memdbg/pal/pal_network.h"
+#include "memdbg/privilege/privilege.h"
 #include "memdbg/scanner/memdbg_scan.h"
 
 #include <arpa/inet.h>

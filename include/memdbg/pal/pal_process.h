@@ -49,6 +49,10 @@ typedef struct pal_map_list {
   size_t           capacity;
 } pal_map_list_t;
 
+const char *pal_map_type_name(uint32_t type);
+uint32_t pal_map_pack_flags(uint32_t native_flags, uint32_t type);
+void pal_map_format_name(char *out, size_t out_size, const char *native_name,
+                         uint32_t type);
 memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out);
 void            pal_process_maps_free(pal_map_list_t *list);
 

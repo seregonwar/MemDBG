@@ -61,7 +61,7 @@ PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
 
 all: host
 
@@ -90,6 +90,18 @@ test-debugger: $(BUILD_DIR)/host/debug/session/memdbg_debugger.o tests/test_debu
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $< $(HOST_LDFLAGS) -lpthread -o $(BUILD_DIR)/test_debugger
 	@echo "--- Running Debugger test ---"
 	$(BUILD_DIR)/test_debugger
+
+test-memory: $(BUILD_DIR)/host/debug/memory/memdbg_memory.o tests/test_memory.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_memory.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_memory
+	@echo "--- Running Memory primitive test ---"
+	$(BUILD_DIR)/test_memory
+
+test-process-map-metadata: $(BUILD_DIR)/host/pal/pal_process.o tests/test_process_map_metadata.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_map_metadata.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_process_map_metadata
+	@echo "--- Running process map metadata test ---"
+	$(BUILD_DIR)/test_process_map_metadata
 
 test-debugger-e2e: host tests/test_debugger_e2e.c tests/e2e_utils.c tests/e2e_utils.h
 	@mkdir -p $(BUILD_DIR)
@@ -128,6 +140,13 @@ test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_
 	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_partition
 	@echo "--- Running Scan Partition test ---"
 	$(BUILD_DIR)/test_scan_partition
+
+test-scan-protocol: tests/test_scan_protocol.c src/scanner/scan_request.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_scan_protocol.c \
+		src/scanner/scan_request.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_protocol
+	@echo "--- Running Scan Protocol test ---"
+	$(BUILD_DIR)/test_scan_protocol
 
 test-tracer-daemon: src/tracer/memdbg_tracer_daemon.c tests/test_tracer_daemon.c
 	@mkdir -p $(BUILD_DIR)
@@ -171,7 +190,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)

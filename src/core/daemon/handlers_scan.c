@@ -10,6 +10,7 @@
 
 #include "memdbg/core/memdbg.h"
 #include "memdbg/scanner/memdbg_scan.h"
+#include "memdbg/scanner/scan_request.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,10 +79,55 @@ static memdbg_status_t send_scan_result(int fd, const memdbg_packet_header_t *re
     return status;                                                             \
   }
 
-/* Exact / process-exact / unknown / pointer — simple body validation. */
+/* Exact / process-exact / pointer — simple body validation. */
 SCAN_HANDLER(handle_scan_exact_v2,     memdbg_scan_exact,         memdbg_scan_exact_request_t)
 SCAN_HANDLER(handle_scan_process_exact,memdbg_scan_process_exact, memdbg_scan_process_exact_request_t)
-SCAN_HANDLER(handle_scan_unknown,      memdbg_scan_unknown,       memdbg_scan_process_exact_request_t)
+
+static memdbg_status_t handle_scan_unknown_body(
+    int fd, const memdbg_packet_header_t *req, const memdbg_config_t *cfg,
+    const void *body, uint32_t body_len) {
+  memdbg_scan_unknown_request_t scan_req;
+  memdbg_status_t status = memdbg_scan_unknown_request_decode(
+      body, body_len, &scan_req);
+  if (status != MEMDBG_OK) return status;
+
+  size_t packet_limit =
+      (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(memdbg_scan_response_prefix_t)) /
+      sizeof(memdbg_scan_result_entry_t);
+  size_t memory_limit =
+      MEMDBG_SCAN_UNKNOWN_RESULT_BUDGET / sizeof(memdbg_scan_result_entry_t);
+  size_t result_limit = packet_limit < memory_limit ? packet_limit
+                                                    : memory_limit;
+  if (result_limit > cfg->max_scan_results)
+    result_limit = cfg->max_scan_results;
+  if (scan_req.max_results == 0U ||
+      (size_t)scan_req.max_results > result_limit)
+    scan_req.max_results = (uint32_t)result_limit;
+
+  memdbg_scan_result_t result;
+  status = memdbg_scan_unknown(&scan_req, &result);
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
+  memdbg_scan_result_free(&result);
+  return status;
+}
+
+memdbg_status_t handle_scan_unknown(int fd,
+                                    const memdbg_packet_header_t *req,
+                                    const memdbg_config_t *cfg,
+                                    const void *body, uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_process_exact_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  return handle_scan_unknown_body(fd, req, cfg, body, body_len);
+}
+
+memdbg_status_t handle_scan_unknown_v2(int fd,
+                                       const memdbg_packet_header_t *req,
+                                       const memdbg_config_t *cfg,
+                                       const void *body, uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_unknown_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  return handle_scan_unknown_body(fd, req, cfg, body, body_len);
+}
 
 memdbg_status_t handle_scan_pointer(int fd, const memdbg_packet_header_t *req,
                                     const memdbg_config_t *cfg, const void *body,

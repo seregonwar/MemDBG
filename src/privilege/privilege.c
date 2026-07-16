@@ -8,6 +8,7 @@
 
 #include "memdbg/core/memdbg_log.h"
 
+#include <errno.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -18,7 +19,8 @@
 #define MEMDBG_PRIVILEGE_HAS_PS5 0
 #endif
 
-#define MEMDBG_PRIVILEGE_AUTHID 0x4801000000000013ULL
+#define MEMDBG_PRIVILEGE_SYSTEM_AUTHID 0x4801000000000013ULL
+#define MEMDBG_PRIVILEGE_PTRACE_AUTHID 0x4800000000010003ULL
 
 bool memdbg_privilege_supported(void) {
 #if MEMDBG_PRIVILEGE_HAS_PS5
@@ -30,12 +32,54 @@ bool memdbg_privilege_supported(void) {
 
 #if MEMDBG_PRIVILEGE_HAS_PS5
 
+#include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 static const uint8_t k_full_caps[16] = {
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 };
+
+static pthread_once_t g_credential_lock_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t g_credential_lock;
+static atomic_bool g_credential_state_poisoned = ATOMIC_VAR_INIT(false);
+
+static void credential_lock_init(void) {
+  pthread_mutexattr_t attr;
+  (void)pthread_mutexattr_init(&attr);
+  (void)pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+  (void)pthread_mutex_init(&g_credential_lock, &attr);
+  (void)pthread_mutexattr_destroy(&attr);
+}
+
+int memdbg_privilege_operation_begin(void) {
+  if (atomic_load_explicit(&g_credential_state_poisoned,
+                           memory_order_acquire)) {
+    errno = EPERM;
+    return -1;
+  }
+  if (pthread_once(&g_credential_lock_once, credential_lock_init) != 0 ||
+      pthread_mutex_lock(&g_credential_lock) != 0) {
+    errno = EBUSY;
+    return -1;
+  }
+  if (atomic_load_explicit(&g_credential_state_poisoned,
+                           memory_order_acquire)) {
+    (void)pthread_mutex_unlock(&g_credential_lock);
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int memdbg_privilege_operation_end(void) {
+  if (pthread_mutex_unlock(&g_credential_lock) != 0) {
+    errno = EBUSY;
+    return -1;
+  }
+  return 0;
+}
 
 static bool pid_alive(pid_t pid) { return kill(pid, 0) == 0; }
 
@@ -67,7 +111,8 @@ int memdbg_privilege_jailbreak_self(void) {
   failures += kernel_set_ucred_svuid(pid, 0) != 0;
   failures += kernel_set_ucred_rgid(pid, 0) != 0;
   failures += kernel_set_ucred_svgid(pid, 0) != 0;
-  failures += kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_AUTHID) != 0;
+  failures +=
+      kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_SYSTEM_AUTHID) != 0;
   failures += kernel_set_ucred_caps(pid, caps) != 0;
 
   rootv = kernel_get_root_vnode();
@@ -99,6 +144,71 @@ int memdbg_privilege_jailbreak_self(void) {
   memdbg_log_write(MEMDBG_LOG_INFO,
                    "privilege: payload escaped sandbox pid=%d root=0x%lx",
                    (int)pid, (unsigned long)rootv);
+  return 0;
+}
+
+int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
+  const pid_t pid = getpid();
+
+  if (backup == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(backup, 0, sizeof(*backup));
+
+  if (memdbg_privilege_operation_begin() != 0) return -1;
+
+  backup->authid = kernel_get_ucred_authid(pid);
+  if (backup->authid == 0U ||
+      kernel_get_ucred_caps(pid, backup->caps) != 0) {
+    (void)memdbg_privilege_operation_end();
+    errno = EPERM;
+    return -1;
+  }
+
+  if (kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_PTRACE_AUTHID) != 0) {
+    (void)memdbg_privilege_operation_end();
+    errno = EPERM;
+    return -1;
+  }
+  if (kernel_set_ucred_caps(pid, k_full_caps) != 0) {
+    int restore_failures = 0;
+    restore_failures += kernel_set_ucred_authid(pid, backup->authid) != 0;
+    restore_failures += kernel_set_ucred_caps(pid, backup->caps) != 0;
+    const bool restore_failed = restore_failures != 0;
+    if (restore_failed)
+      atomic_store_explicit(&g_credential_state_poisoned, true,
+                            memory_order_release);
+    (void)memdbg_privilege_operation_end();
+    errno = restore_failed ? EIO : EPERM;
+    return -1;
+  }
+
+  return 0;
+}
+
+int memdbg_privilege_end_ptrace(const memdbg_ucred_backup_t *backup) {
+  const pid_t pid = getpid();
+  int failures = 0;
+
+  if (backup == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  failures += kernel_set_ucred_authid(pid, backup->authid) != 0;
+  failures += kernel_set_ucred_caps(pid, backup->caps) != 0;
+  if (failures != 0)
+    atomic_store_explicit(&g_credential_state_poisoned, true,
+                          memory_order_release);
+  failures += memdbg_privilege_operation_end() != 0;
+  if (failures != 0) {
+    memdbg_log_write(MEMDBG_LOG_ERROR,
+                     "privilege: failed to restore ptrace credentials pid=%d failures=%d",
+                     (int)pid, failures);
+    errno = EIO;
+    return -1;
+  }
   return 0;
 }
 
@@ -143,7 +253,8 @@ int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
     failures += kernel_copyin(&zero, ucred + 0x10, sizeof(zero)) != 0;
   }
 
-  failures += kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_AUTHID) != 0;
+  failures +=
+      kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_SYSTEM_AUTHID) != 0;
   failures += kernel_set_ucred_caps(pid, k_full_caps) != 0;
   failures += kernel_set_ucred_attrs(pid, 0x80) != 0;
 
@@ -216,7 +327,27 @@ void memdbg_privilege_restore_target(pid_t pid,
 
 #else
 
+int memdbg_privilege_operation_begin(void) { return 0; }
+int memdbg_privilege_operation_end(void) { return 0; }
+
 int memdbg_privilege_jailbreak_self(void) { return 0; }
+
+int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
+  if (backup == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(backup, 0, sizeof(*backup));
+  return 0;
+}
+
+int memdbg_privilege_end_ptrace(const memdbg_ucred_backup_t *backup) {
+  if (backup == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  return 0;
+}
 
 int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
   (void)pid;

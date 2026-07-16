@@ -17,6 +17,7 @@ static std::future<bool> s_connect_future;
 static Client s_temp_client;
 static HelloInfo s_temp_hello;
 static std::string s_temp_error;
+static uint64_t s_connect_generation = 0;
 static std::future<bool> s_payload_inject_future;
 static std::string s_payload_inject_error;
 
@@ -119,7 +120,10 @@ void poll_payload_lifecycle(AppState &state) {
 
 void connect_console(AppState &state) {
   if (state.connect_pending) return;  /* already connecting */
-  if (s_connect_future.valid()) s_connect_future.wait();  /* drain previous async */
+  if (s_connect_future.valid()) {
+    set_status(state, "Previous connection attempt is still completing");
+    return;
+  }
   ensure_console_targets(state);
   save_current_console_target(state);
   normalize_ports(state);
@@ -135,7 +139,11 @@ void connect_console(AppState &state) {
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
   s_temp_client.disconnect();
+  s_temp_hello = {};
+  s_temp_error.clear();
   state.connect_pending = true;
+  state.connect_cancel_requested = false;
+  s_connect_generation = ++state.connect_generation;
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", ("Connecting to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
@@ -157,6 +165,25 @@ void connect_console(AppState &state) {
     s_temp_error.clear();
     return true;
   });
+}
+
+void cancel_connect(AppState &state) {
+  if (!connect_sequence_pending(state)) return;
+  if (state.connect_pending && !state.connect_cancel_requested) {
+    state.connect_cancel_requested = true;
+    ++state.connect_generation;
+    s_temp_client.cancel_pending_io();
+  }
+  state.payload_auto_inject_probe = false;
+  state.payload_auto_inject_waiting = false;
+  state.payload_post_inject_connect = false;
+  state.payload_connect_after_inject = false;
+  state.payload_connect_retry_at = 0.0;
+  state.payload_connect_retry_deadline = 0.0;
+  set_status(state, state.connect_pending ? "Cancelling connection..."
+                                          : "Automatic connection cancelled");
+  if (state.crash_logging_enabled)
+    state.crash_logger.log("connect", "Connection cancellation requested");
 }
 
 /* ---- Async telemetry ---- */
@@ -699,6 +726,18 @@ void poll_connect(AppState &state) {
     s_temp_error = "Unknown connection error";
   }
 
+  const bool cancelled = state.connect_cancel_requested ||
+                         s_connect_generation != state.connect_generation;
+  state.connect_pending = false;
+  state.connect_cancel_requested = false;
+  if (cancelled) {
+    s_temp_client.disconnect();
+    set_status(state, "Connection cancelled");
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("connect", "Connection cancelled");
+    return;
+  }
+
   if (!ok) {
     if (state.payload_auto_inject_probe) {
       state.payload_auto_inject_probe = false;
@@ -770,7 +809,9 @@ void draw_connect_spinner(AppState &state) {
                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize);
 
-  ImGui::TextColored(ui::colors().primary2, "%s  %s", icons::kConnect, locale::tr("connect.spinner"));
+  ImGui::TextColored(
+      ui::colors().primary2, "%s  %s", icons::kConnect,
+      state.connect_cancel_requested ? "Cancelling..." : locale::tr("connect.spinner"));
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "%s:%d", state.host, state.debug_port);
 
@@ -800,9 +841,16 @@ void draw_connect_spinner(AppState &state) {
 }
 
 void disconnect_console(AppState &state, const char *reason) {
-  state.connect_pending = false;  /* cancel any in-flight async connect */
+  if (state.connect_pending) cancel_connect(state);
 
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
+  state.connect_pending = false;  /* cancel any in-flight async connect */
+
+  /* Interrupt scanner I/O before draining its future. */
+  if (state.scan_async_future.valid()) {
+    state.scan_async_cancel_requested.store(true);
+    state.client.cancel_pending_io();
+  }
   if (state.scan_async_future.valid()) state.scan_async_future.wait();
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
@@ -812,8 +860,21 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.tracer_future.valid()) state.tracer_future.wait();
   if (state.tracer_status_future.valid()) state.tracer_status_future.wait();
   if (state.tracer_events_future.valid()) state.tracer_events_future.wait();
-  if (s_connect_future.valid()) s_connect_future.wait();
+  if (s_connect_future.valid()) {
+    s_connect_future.wait();
+    try {
+      (void)s_connect_future.get();
+    } catch (const std::exception &ex) {
+      if (state.crash_logging_enabled)
+        state.crash_logger.log(
+            "error", ("Connection worker shutdown failed: " +
+                      std::string(ex.what())).c_str());
+    }
+    s_temp_client.disconnect();
+  }
 
+  state.connect_pending = false;
+  state.connect_cancel_requested = false;
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */

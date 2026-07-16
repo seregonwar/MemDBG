@@ -9,7 +9,6 @@
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/pal/pal_debug.h"
 #include "memdbg/pal/pal_memory.h"
-#include "memdbg/privilege/privilege.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -32,8 +31,6 @@ typedef struct memdbg_debugger_state {
   bool attached;
   bool stopped;
   int32_t stop_lwp;
-  memdbg_ucred_backup_t ucred_backup;
-  bool elevated;
   memdbg_breakpoint_t breakpoints[MEMDBG_DEBUGGER_MAX_BREAKPOINTS];
   memdbg_watchpoint_t watchpoints[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
   memdbg_debug_dbregs_t dbregs;
@@ -53,10 +50,8 @@ static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
 bool memdbg_debugger_supported(void) { return pal_debug_supported(); }
 
 bool memdbg_debugger_is_elevated(int32_t pid) {
-  debugger_lock();
-  bool r = g_dbg.attached && g_dbg.pid == pid && g_dbg.elevated;
-  debugger_unlock();
-  return r;
+  (void)pid;
+  return false;
 }
 
 // Internal helpers
@@ -161,36 +156,12 @@ static void debugger_init_mutex(void) {
   pthread_mutexattr_destroy(&attr);
 }
 
-static void elevate_target(void) {
-  if (g_dbg.elevated) return;
-  if (!memdbg_privilege_supported()) return;
-  if (memdbg_privilege_elevate_target((pid_t)g_dbg.pid,
-                                      &g_dbg.ucred_backup) == 0) {
-    g_dbg.elevated = true;
-    memdbg_log_write(MEMDBG_LOG_INFO,
-                     "debugger: elevated target pid=%d", (int)g_dbg.pid);
-  } else {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "debugger: failed to elevate target pid=%d",
-                     (int)g_dbg.pid);
-  }
-}
-
 static void debugger_sleep_ms(unsigned int ms) {
   struct timespec ts;
   ts.tv_sec = (time_t)(ms / 1000U);
   ts.tv_nsec = (long)((ms % 1000U) * 1000000U);
   while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
   }
-}
-
-static void restore_target(void) {
-  if (!g_dbg.elevated) return;
-  if (!memdbg_privilege_supported()) return;
-  memdbg_privilege_restore_target((pid_t)g_dbg.pid, &g_dbg.ucred_backup);
-  g_dbg.elevated = false;
-  memdbg_log_write(MEMDBG_LOG_INFO, "debugger: restored target pid=%d",
-                   (int)g_dbg.pid);
 }
 
 static int find_breakpoint_slot(uint64_t address) {
@@ -477,15 +448,12 @@ memdbg_status_t memdbg_debugger_attach(int32_t pid) {
   memset(&g_dbg, 0, sizeof(g_dbg));
   g_dbg.pid = pid;
 
-  elevate_target();
-
   if (pal_debug_attach((int)pid) != 0) {
     int attach_errno = errno;
     memdbg_status_t st = pal_status_from_errno_code(attach_errno);
     memdbg_log_write(MEMDBG_LOG_WARN,
                      "debugger: attach failed pid=%d errno=%d (%s) status=%d",
                      (int)pid, attach_errno, strerror(attach_errno), (int)st);
-    restore_target();
     memset(&g_dbg, 0, sizeof(g_dbg));
     debugger_unlock();
     return st;
@@ -546,7 +514,6 @@ memdbg_status_t memdbg_debugger_detach(void) {
     st = pal_status_from_errno();
   }
 
-  restore_target();
   memdbg_log_write(MEMDBG_LOG_INFO, "debugger: detached pid=%d",
                    (int)g_dbg.pid);
   memset(&g_dbg, 0, sizeof(g_dbg));
@@ -1203,7 +1170,6 @@ memdbg_status_t memdbg_debugger_poll_events(void) {
     } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
       g_dbg.attached = false;
       g_dbg.stopped = false;
-      restore_target();
       memset(&g_dbg, 0, sizeof(g_dbg));
       debugger_unlock();
       return MEMDBG_ERR_NOT_FOUND;

@@ -44,6 +44,36 @@
 
 /* ---- Helpers shared across platforms ---- */
 
+const char *pal_map_type_name(uint32_t type) {
+  switch (type) {
+  case MEMDBG_MAP_TYPE_NONE: return "untyped";
+  case MEMDBG_MAP_TYPE_DEFAULT: return "default";
+  case MEMDBG_MAP_TYPE_VNODE: return "file";
+  case MEMDBG_MAP_TYPE_SWAP: return "swap";
+  case MEMDBG_MAP_TYPE_DEVICE: return "device";
+  case MEMDBG_MAP_TYPE_PHYSICAL: return "physical";
+  case MEMDBG_MAP_TYPE_DEAD: return "dead";
+  case MEMDBG_MAP_TYPE_SCATTER_GATHER: return "scatter/gather";
+  case MEMDBG_MAP_TYPE_MANAGED_DEVICE: return "managed device";
+  default: return "unknown";
+  }
+}
+
+uint32_t pal_map_pack_flags(uint32_t native_flags, uint32_t type) {
+  return (native_flags & MEMDBG_MAP_FLAG_NATIVE_MASK) |
+         ((type & 0xffU) << MEMDBG_MAP_FLAG_TYPE_SHIFT);
+}
+
+void pal_map_format_name(char *out, size_t out_size, const char *native_name,
+                         uint32_t type) {
+  if (out == NULL || out_size == 0U) return;
+  if (native_name != NULL && native_name[0] != '\0') {
+    (void)snprintf(out, out_size, "%s", native_name);
+    return;
+  }
+  (void)snprintf(out, out_size, "[%s]", pal_map_type_name(type));
+}
+
 #if defined(MEMDBG_PROCESS_HOST_ENUMERATION) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, int ppid, const char *name) {
   size_t nc = list->count + 1U;
@@ -62,7 +92,8 @@ static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, int p
 
 #if defined(__linux__) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 static pal_map_entry_t *map_append(pal_map_list_t *list, uint64_t start, uint64_t end,
-                                   uint32_t prot, uint32_t flags, const char *name) {
+                                   uint32_t prot, uint32_t flags, uint32_t type,
+                                   const char *name) {
   if (list->count == list->capacity) {
     size_t next_capacity = list->capacity == 0U ? 64U : list->capacity * 2U;
     if (next_capacity <= list->capacity ||
@@ -79,9 +110,9 @@ static pal_map_entry_t *map_append(pal_map_list_t *list, uint64_t start, uint64_
   list->entries[list->count].start      = start;
   list->entries[list->count].end        = end;
   list->entries[list->count].protection = prot;
-  list->entries[list->count].flags      = flags;
-  if (name) (void)snprintf(list->entries[list->count].name,
-                           sizeof(list->entries[list->count].name), "%s", name);
+  list->entries[list->count].flags = pal_map_pack_flags(flags, type);
+  pal_map_format_name(list->entries[list->count].name,
+                      sizeof(list->entries[list->count].name), name, type);
   list->count++;
   return &list->entries[list->count - 1U];
 }
@@ -158,7 +189,11 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
     if (perms[0] == 'r') prot |= 1U;
     if (perms[1] == 'w') prot |= 2U;
     if (perms[2] == 'x') prot |= 4U;
-    if (!map_append(out, (uint64_t)s, (uint64_t)e, prot, 0U, nf == 4 ? name : ""))
+    const char *native_name = nf == 4 ? name : "";
+    const uint32_t type =
+        native_name[0] == '/' ? MEMDBG_MAP_TYPE_VNODE
+                              : MEMDBG_MAP_TYPE_DEFAULT;
+    if (!map_append(out, (uint64_t)s, (uint64_t)e, prot, 0U, type, native_name))
       { fclose(fp); pal_process_maps_free(out); return MEMDBG_ERR_NOMEM; }
   }
   fclose(fp);
@@ -336,6 +371,12 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
                              sizeof(entry->kve_protection))
             ? entry->kve_protection
             : 0;
+    uint32_t type =
+        bsd_record_has_field(record_size,
+                            offsetof(struct kinfo_vmentry, kve_type),
+                            sizeof(entry->kve_type))
+            ? (uint32_t)entry->kve_type
+            : (uint32_t)MEMDBG_MAP_TYPE_UNKNOWN;
 #  ifdef KVME_PROT_READ
     if (protection & KVME_PROT_READ)  prot |= 1U;
     if (protection & KVME_PROT_WRITE) prot |= 2U;
@@ -351,7 +392,7 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
                        path_bytes != 0U ? entry->kve_path : NULL, path_bytes);
     if (entry->kve_end > entry->kve_start &&
         !map_append(out, (uint64_t)entry->kve_start, (uint64_t)entry->kve_end,
-                    prot, flags, path))
+                    prot, flags, type, path))
       { free(buf); pal_process_maps_free(out); return MEMDBG_ERR_NOMEM; }
     off += record_size;
   }

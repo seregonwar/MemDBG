@@ -115,6 +115,7 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     return handle_scan_process_aob(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_POINTER:       return handle_scan_pointer(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_UNKNOWN:       return handle_scan_unknown(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_UNKNOWN_V2:    return handle_scan_unknown_v2(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_FOREGROUND_APP:     return handle_foreground_app(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_STOP:       return handle_process_control(fd, req, body, req->length, 1U);
   case MEMDBG_CMD_PROCESS_CONTINUE:   return handle_process_control(fd, req, body, req->length, 2U);
