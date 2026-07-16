@@ -796,7 +796,7 @@ void draw_connect_spinner(AppState &state) {
   const float scl = ui::dpi_scale();
   const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
   ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSize(ImVec2(320.0f * scl, 120.0f * scl));
+  ImGui::SetNextWindowSize(ImVec2(320.0f * scl, 155.0f * scl));
 
   ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(18, 24, 32, 245));
   ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(60, 120, 130, 100));
@@ -827,6 +827,13 @@ void draw_connect_spinner(AppState &state) {
     ImVec2 p(sp.x + radius * cosf(a), sp.y + radius * sinf(a));
     dl->AddCircleFilled(p, 2.5f * scl, IM_COL32(118, 232, 224, (int)(200 * alpha)));
   }
+
+  ImGui::Spacing();
+  ImGui::SetCursorPosX(24.0f * scl);
+  ImGui::BeginDisabled(state.connect_cancel_requested);
+  if (ui::soft_button(locale::tr("common.cancel"), ImVec2(272.0f * scl, 32.0f * scl)))
+    cancel_connect(state);
+  ImGui::EndDisabled();
 
   ImGui::End();
   ImGui::PopStyleVar(3);

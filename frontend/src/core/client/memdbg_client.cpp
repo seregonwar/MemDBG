@@ -298,12 +298,6 @@ void Client::disconnect() {
   disconnect_unlocked();
 }
 
-void Client::cancel_pending_io() {
-  platform::socket_handle_t fd = fd_.load();
-  if (platform::socket_valid(fd))
-    platform::socket_shutdown_both(fd);
-}
-
 void Client::disconnect_unlocked() {
   klog_disconnect();
   const platform::socket_handle_t fd =

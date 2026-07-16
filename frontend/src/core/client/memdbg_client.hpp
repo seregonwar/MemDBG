@@ -77,7 +77,6 @@ public:
                   uint32_t timeout_ms = 5000U);
   void cancel_pending_io();
   void disconnect();
-  void cancel_pending_io();
   platform::socket_handle_t release_fd();      /* Release fd ownership for async transfer */
   void take_fd(platform::socket_handle_t fd);  /* Adopt a connected fd from async transfer */
   bool connected() const;

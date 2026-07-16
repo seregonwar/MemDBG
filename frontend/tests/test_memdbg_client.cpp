@@ -6,6 +6,7 @@
 
 #include "memdbg_client.hpp"
 
+#include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 
 #include <chrono>
