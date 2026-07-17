@@ -48,10 +48,81 @@ Each accepted TCP connection is a sequential request stream:
 4. Daemon writes exactly `response.length` body bytes.
 5. The same connection may be reused for the next request.
 
-The daemon dispatch path is synchronous per connection. Clients should not
-pipeline multiple outstanding requests on the same socket unless a future
-protocol version explicitly defines multiplexing. `request_id` exists to detect
-mismatched replies and to leave room for future multiplexed transports.
+The daemon dispatch path is synchronous per connection but supports
+request pipelining: after processing each request, the daemon performs a
+non-blocking poll for more data. If additional requests are already queued in
+the TCP buffer, they are processed in a tight loop without returning to the
+accept poll. This allows clients to batch-send N requests in a single TCP write
+and receive N responses back-to-back, eliminating N-1 round-trip delays.
+
+### Connection Pooling
+
+Clients MAY open multiple TCP connections to the same daemon for parallel
+operation. The daemon's thread pool handles each connection independently,
+enabling true concurrency:
+
+| Role | Connection | Typical commands |
+|---|---|---|
+| Control | 1 (required) | HELLO, process control, debugger, tracer |
+| Memory | 2 (optional) | MEMORY_READ, MEMORY_WRITE, BATCH_READ, BATCH_WRITE |
+| Scan | 3 (optional) | SCAN_*, AOB, Pointer, QuickScan |
+| Poll | 4 (optional) | PING, TELEMETRY |
+
+Each connection runs its own HELLO handshake. The client must validate that
+capabilities are consistent across connections. Operations that require
+exclusive daemon state (debugger attach, tracer attach) must always use the
+Control connection.
+
+When a dedicated role connection is not available, the client falls back to
+the Control connection transparently.
+
+### Request Pipelining
+
+Clients MAY send multiple requests on a single connection without waiting for
+individual responses, then read all responses in one batch. This pipelining
+eliminates round-trip latency for independent operations.
+
+**Protocol-level contract:**
+
+1. Client serializes N requests into a single TCP write: headers and bodies
+   concatenated back-to-back.
+2. Daemon processes requests sequentially in the order received.
+3. Daemon writes N responses back-to-back on the same connection.
+4. Client reads N response headers and bodies in order, validating each
+   `request_id` for correlation.
+
+**Constraints:**
+
+- Pipelining does NOT change the per-request semantics; each request is
+  processed independently as if it were sent alone.
+- Requests must be independent — a pipelined `DEBUG_ATTACH` followed by
+  `DEBUG_GET_REGS` is safe because the daemon processes them in order, but a
+  pipelined `MEMORY_WRITE` followed by `MEMORY_READ` at the same address may
+  see the write result if they are processed in order.
+- The daemon does NOT reorder responses; they always match the request order.
+- Client-side buffer limits (1 MB default) prevent TCP deadlock from
+  oversized pipelined writes.
+- The `request_id` field in each response echoes the corresponding request's
+  `request_id` and must be validated by the client.
+
+**Client API (C++ frontend):**
+
+```cpp
+// Queue requests without I/O
+uint32_t r1 = client.pipeline_send(MEMDBG_CMD_MEMORY_READ, &req1, sizeof(req1));
+uint32_t r2 = client.pipeline_send(MEMDBG_CMD_MEMORY_READ, &req2, sizeof(req2));
+
+// Send all queued requests and read all responses
+if (!client.pipeline_flush()) { /* handle error */ }
+
+// Retrieve individual response bodies
+std::vector<uint8_t> body1, body2;
+client.read_pipeline_response(r1, body1);
+client.read_pipeline_response(r2, body2);
+
+// Or discard without sending:
+client.pipeline_reset();
+```
 
 Discovery and log streaming are separate transports:
 
@@ -114,8 +185,23 @@ Every control response starts with `memdbg_response_header_t`.
 | 4 | 2 | `version` | `uint16_t` | Protocol version used by the daemon. |
 | 6 | 2 | `command` | `uint16_t` | Echo of the request command. |
 | 8 | 4 | `request_id` | `uint32_t` | Echo of the request id. |
-| 12 | 4 | `status` | `int32_t` | `memdbg_status_t`. `0` means success. |
-| 16 | 4 | `length` | `uint32_t` | Response body size in bytes. |
+| 12 | 4 | `status` | `int32_t` | `memdbg_status_t`. When bit 31 (`MEMDBG_RESP_STATUS_STREAMING`) is set, the body is a chunked stream. Valid status codes range from 0 to -10, so bit 31 is never set for a normal response. Clients must strip the streaming bit before interpreting the status value. |
+| 16 | 4 | `length` | `uint32_t` | Response body size in bytes. For streamed responses, this reflects the total remaining bytes across all chunks. |
+
+### Streaming Responses
+
+When the daemon sets `MEMDBG_RESP_STATUS_STREAMING` (bit 31 of the status
+field), the response body is a sequence of typed chunks rather than a single
+opaque payload. Each chunk has a 2-byte type prefix:
+
+| Prefix | Type | Body |
+|---:|---|---|
+| `0x0000` | Data | `uint32_t chunk_length` + `chunk_length` bytes |
+| `0x0001` | Progress | `uint64_t slot_index` (current scan progress) |
+| `0xFFFF` | End-of-stream | None (the stream is complete) |
+
+QuickScan commands use this format to interleave progress updates with result
+data without blocking the scan loop on socket writes.
 
 When `status != MEMDBG_OK`, the response body is usually empty. Some commands
 may return partial per-entry status arrays with a success header status; command
@@ -318,6 +404,7 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_QUICKSCAN_END` | `0x0B04` | empty | empty |
 | `MEMDBG_CMD_QUICKSCAN_CONFIG` | `0x0B05` | `memdbg_quickscan_config_request_t` + path bytes | empty |
 | `MEMDBG_CMD_QUICKSCAN_REGIONS` | `0x0B06` | `memdbg_quickscan_regions_request_t` | region info entries |
+| `MEMDBG_CMD_QUICKSCAN_CANCEL` | `0x0B07` | empty | empty |
 | `MEMDBG_CMD_PTWALK_DISCOVER` | `0x0C00` | empty | `memdbg_ptwalk_discover_response_t` |
 | `MEMDBG_CMD_PTWALK_AUGMENT` | `0x0C01` | `memdbg_ptwalk_augment_request_t` | map entries with ptwalk augmentation |
 | `MEMDBG_CMD_PTWALK_READ` | `0x0C02` | `memdbg_ptwalk_io_request_t` | raw bytes |
@@ -326,6 +413,7 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_AUTH_KEY` | `0x0D00` | `memdbg_auth_key_request_t` | command-defined |
 | `MEMDBG_CMD_ARENA_CONFIG` | `0x0D01` | `memdbg_arena_config_request_t` | command-defined |
 | `MEMDBG_CMD_KLOG_CONNECT` | `0x0D02` | `memdbg_klog_connect_request_t` | `uint32_t klog_port` |
+| `MEMDBG_CMD_GET_EXTENDED_CAPS` | `0x0D03` | empty | `uint32_t count` + `uint32_t caps[count]` |
 | `MEMDBG_CMD_SHUTDOWN` | `0x7F00` | empty | empty |
 
 ## Capabilities
@@ -374,12 +462,12 @@ Extended feature macros such as `MEMDBG_EXT_CAP_QUICKSCAN`,
 `MEMDBG_EXT_CAP_PTWALK`, `MEMDBG_EXT_CAP_ALIAS`, `MEMDBG_EXT_CAP_SIMD`,
 `MEMDBG_EXT_CAP_KLOG_SERVER`, `MEMDBG_EXT_CAP_AUTH`,
 `MEMDBG_EXT_CAP_ARENA`, `MEMDBG_EXT_CAP_BATCH_WRITE_ADV`, and
-`MEMDBG_EXT_CAP_HIJACK` describe extension subsystems. Because protocol version
-1 only exposes one 32-bit `HELLO.capabilities` word, extension-specific commands
-may also expose their own capability response, such as `QUICKSCAN_CAPS`.
-
-Future protocol versions should add an explicit extended capability array rather
-than overloading existing bits.
+`MEMDBG_EXT_CAP_HIJACK` describe extension subsystems. Since the `HELLO.capabilities`
+word has 32 bits with many already assigned, these extended capabilities are
+exposed through `MEMDBG_CMD_GET_EXTENDED_CAPS`. The response body is a single
+`uint32_t count` followed by `count` little-endian `uint32_t` capability words.
+Clients should call this once after HELLO and cache the mask of supported
+extensions.
 
 ## Platform IDs
 
@@ -483,8 +571,10 @@ memdbg_memory_request_t
 uint8_t data[length]
 ```
 
-The success response body is a little-endian `uint32_t` containing bytes
-written.
+The success response body is optional. When present it contains a
+little-endian `uint32_t` with the bytes actually written. A `MEMDBG_OK`
+status with an empty body means all bytes were written successfully. A
+partial write returns `MEMDBG_ERR_IO`.
 
 `BATCH_READ` request body is:
 
@@ -674,7 +764,9 @@ prefix. Between comparisons append two values. AOB-style values additionally
 append a mask of `value_length` bytes.
 
 `QUICKSCAN_FETCH` pages resident results with `start_index` and `count`.
-`QUICKSCAN_END` releases server-side state. `QUICKSCAN_CONFIG` may append a
+`QUICKSCAN_END` releases server-side state. `QUICKSCAN_CANCEL` immediately
+aborts any in-progress scan and frees its resources without waiting for
+completion. `QUICKSCAN_CONFIG` may append a
 spill-directory path. `QUICKSCAN_REGIONS` probes candidate regions and returns
 `memdbg_quickscan_region_info` records.
 
@@ -728,7 +820,7 @@ A compliant client should:
 3. Validate response header fields and `HELLO.protocol_version`.
 4. Store capability bits and platform id.
 5. Gate optional command families from capabilities.
-6. Send one request at a time per socket.
+6. Send requests sequentially per socket, optionally pipelining N requests in a single TCP write for reduced latency.
 7. Check `status` before parsing response bodies.
 8. Apply command-local decompression only for framed payload commands.
 9. Validate every response count and length before indexing arrays.

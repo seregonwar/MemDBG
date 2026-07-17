@@ -10,6 +10,7 @@
 
 #include "memdbg/core/memdbg.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -1789,6 +1790,130 @@ bool Client::request(uint16_t command, const void *payload,
     return false;
   }
   last_error_.clear();
+  return true;
+}
+
+/* ---- Protocol pipelining ---- */
+
+uint32_t Client::pipeline_send(uint16_t command, const void *payload,
+                               uint32_t payload_len) {
+  /* Serialize header + payload into the pipeline buffer without I/O.
+   * Returns the request_id for later correlation with pipeline_flush().
+   * If the buffer would exceed the safety limit, returns 0 (request_ids
+   * start at 1) to signal that the caller must flush before sending more. */
+  if (!payload && payload_len != 0U) return 0U;
+
+  const size_t frame_size = sizeof(memdbg_packet_header_t) + payload_len;
+  if (pipeline_buffer_.size() + frame_size > kPipelineMaxBuffer)
+    return 0U; /* caller must flush first */
+
+  uint32_t rid = next_request_id_++;
+
+  memdbg_packet_header_t header{};
+  header.magic      = MEMDBG_PACKET_MAGIC;
+  header.version    = MEMDBG_PROTOCOL_VERSION;
+  header.command    = command;
+  header.request_id = rid;
+  header.length     = payload_len;
+
+  const size_t off = pipeline_buffer_.size();
+  pipeline_buffer_.resize(off + frame_size);
+  std::memcpy(pipeline_buffer_.data() + off, &header, sizeof(header));
+  if (payload_len != 0U && payload != nullptr)
+    std::memcpy(pipeline_buffer_.data() + off + sizeof(header),
+                payload, payload_len);
+
+  pipeline_ids_.push_back(rid);
+  return rid;
+}
+
+void Client::pipeline_reset() {
+  pipeline_buffer_.clear();
+  pipeline_ids_.clear();
+  pipeline_responses_.clear();
+  pipeline_statuses_.clear();
+}
+
+bool Client::pipeline_flush() {
+  if (pipeline_ids_.empty()) return true;
+
+  std::lock_guard<std::mutex> lock(io_mutex_);
+
+  if (!platform::socket_valid(fd_)) {
+    set_error("not connected");
+    pipeline_reset();
+    return false;
+  }
+
+  /* Write the entire batch in one syscall. */
+  if (!pipeline_buffer_.empty()) {
+    if (!write_all(pipeline_buffer_.data(), pipeline_buffer_.size())) {
+      pipeline_reset();
+      return false;
+    }
+    pipeline_buffer_.clear();
+  }
+
+  /* Read N responses in order. The daemon processes requests
+   * sequentially on the same connection; responses arrive in
+   * the order they were sent. */
+  const size_t count = pipeline_ids_.size();
+  for (size_t i = 0; i < count; ++i) {
+    uint32_t expected_rid = pipeline_ids_[i];
+
+    memdbg_response_header_t rhdr{};
+    if (!read_exact(&rhdr, sizeof(rhdr))) {
+      pipeline_reset();
+      return false;
+    }
+
+    if (rhdr.magic != MEMDBG_PACKET_MAGIC ||
+        rhdr.version != MEMDBG_PROTOCOL_VERSION ||
+        rhdr.request_id != expected_rid) {
+      set_error("invalid pipeline response header");
+      close_after_connection_loss();
+      pipeline_reset();
+      return false;
+    }
+
+    pipeline_statuses_[expected_rid] = rhdr.status;
+
+    if (rhdr.length > 0U) {
+      std::vector<uint8_t> body(rhdr.length);
+      if (!read_exact(body.data(), body.size())) {
+        pipeline_reset();
+        return false;
+      }
+      pipeline_responses_[expected_rid] = std::move(body);
+    } else {
+      pipeline_responses_[expected_rid].clear();
+    }
+  }
+
+  return true;
+}
+
+bool Client::read_pipeline_response(uint32_t request_id,
+                                    std::vector<uint8_t> &response_body,
+                                    int32_t *out_status) {
+  auto it = pipeline_responses_.find(request_id);
+  if (it == pipeline_responses_.end()) {
+    set_error("pipeline response not found for request_id");
+    return false;
+  }
+
+  response_body = std::move(it->second);
+  if (out_status != nullptr)
+    *out_status = pipeline_statuses_[request_id];
+
+  pipeline_responses_.erase(it);
+  pipeline_statuses_.erase(request_id);
+
+  /* Clean up consumed id from the ordered list. */
+  auto id_it = std::find(pipeline_ids_.begin(), pipeline_ids_.end(), request_id);
+  if (id_it != pipeline_ids_.end())
+    pipeline_ids_.erase(id_it);
+
   return true;
 }
 

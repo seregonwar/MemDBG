@@ -15,7 +15,7 @@
 
 #include "memdbg/core/memdbg_protocol.h"
 
-#include "scanner/scan_partition.h"
+#include "memdbg/scanner/scan_partition.h"
 
 #include <stdbool.h>
 #include <stddef.h>

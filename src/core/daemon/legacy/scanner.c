@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 #include "memdbg/scanner/memdbg_scan.h"
 
 legacy_scan_session_t g_scan_session;

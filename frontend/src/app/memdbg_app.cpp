@@ -498,7 +498,8 @@ void connect_console(AppState &state) {
   ensure_console_targets(state);
   save_current_console_target(state);
   normalize_ports(state);
-  state.client.disconnect();
+  state.pool.disconnect();
+  state.pool_active = false;
   state.has_hello = false;
   state.klog_connected = false;
   state.klog_paused = false;
@@ -982,7 +983,8 @@ void disconnect_console(AppState &state, const char *reason) {
   state.tracer_status_text[0] = '\0';
   state.tracer_error.clear();
   state.tracer_temp_events.clear();
-  state.client.disconnect();
+  state.pool.disconnect();
+  state.pool_active = false;
   state.has_hello = false;
   state.klog_connected = false;
   state.klog_paused = false;

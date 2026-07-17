@@ -320,7 +320,7 @@ static void test_metadata(void) {
     }
   }
 
-  /* CMD_BRANDING: should return "MemDBG ps5debug-compat\0MDBG-1" */
+  /* CMD_BRANDING: should return "MemDBG legacy-compat\0MDBG-1" */
   {
     if (send_legacy_command(LEGACY_CMD_BRANDING, NULL, 0) != 0) return;
     uint32_t len = 0;

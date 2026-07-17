@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 int pal_network_init(void) { return 0; }
@@ -85,6 +86,8 @@ int pal_socket_configure(socket_t fd) {
   (void)setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
   (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
   (void)pal_socket_set_timeouts(fd, 30000U, 30000U);
+  /* Default send buffer: 256KB for bulk transfer throughput (matches zftpd). */
+  (void)pal_socket_set_sndbuf(fd, 262144);
   return 0;
 }
 
@@ -290,3 +293,94 @@ ssize_t pal_socket_write_all(socket_t fd, const void *buffer, size_t count) {
 }
 
 const char *pal_socket_last_error(void) { return strerror(errno); }
+
+/* ---- Zero-copy scatter-gather write using writev() ---- */
+
+ssize_t pal_socket_writev_all(socket_t fd,
+                              const void *iov0, size_t iov0_len,
+                              const void *iov1, size_t iov1_len) {
+  struct iovec iov[2];
+  size_t total = iov0_len + iov1_len;
+  size_t written = 0U;
+
+  if (fd < 0 || ((iov0 == NULL || iov0_len == 0U) &&
+                 (iov1 == NULL || iov1_len == 0U))) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  iov[0].iov_base = (void *)iov0;
+  iov[0].iov_len  = iov0_len;
+  iov[1].iov_base = (void *)iov1;
+  iov[1].iov_len  = iov1_len;
+
+  while (written < total) {
+    /* Adjust iovecs for partial writes (writev advances nothing on short write). */
+    struct iovec cur[2];
+    int iovcnt = 0;
+
+    if (iov[0].iov_len > 0U) {
+      cur[iovcnt] = iov[0];
+      iovcnt++;
+    }
+    if (iov[1].iov_len > 0U) {
+      cur[iovcnt] = iov[1];
+      iovcnt++;
+    }
+
+    if (iovcnt == 0) break;
+
+    ssize_t n = writev(fd, cur, iovcnt);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return -1;
+    }
+    if (n == 0) {
+      errno = EPIPE;
+      return -1;
+    }
+
+    written += (size_t)n;
+
+    /* Consume written bytes from iovec buffers */
+    size_t remain = (size_t)n;
+    if (iov[0].iov_len <= remain) {
+      remain -= iov[0].iov_len;
+      iov[0].iov_len = 0U;
+      if (remain > 0U) {
+        iov[1].iov_base = (uint8_t *)iov[1].iov_base + remain;
+        iov[1].iov_len -= remain;
+      }
+    } else {
+      iov[0].iov_base = (uint8_t *)iov[0].iov_base + remain;
+      iov[0].iov_len -= remain;
+    }
+  }
+
+  return (ssize_t)total;
+}
+
+/* ---- TCP_CORK / TCP_NOPUSH for batch-write efficiency ---- */
+
+int pal_socket_set_cork(socket_t fd, bool enabled) {
+  if (fd < 0) { errno = EBADF; return -1; }
+
+#if defined(__linux__)
+  int val = enabled ? 1 : 0;
+  return setsockopt(fd, IPPROTO_TCP, TCP_CORK, &val, sizeof(val));
+#elif defined(TCP_NOPUSH)
+  /* FreeBSD / PS4 / PS5 / macOS */
+  int val = enabled ? 1 : 0;
+  return setsockopt(fd, IPPROTO_TCP, TCP_NOPUSH, &val, sizeof(val));
+#else
+  (void)enabled;
+  return 0; /* unsupported — no-op */
+#endif
+}
+
+/* ---- SO_SNDBUF tuning for bulk transfers ---- */
+
+int pal_socket_set_sndbuf(socket_t fd, int bytes) {
+  if (fd < 0) { errno = EBADF; return -1; }
+  return setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes));
+}

@@ -159,19 +159,27 @@ int memdbg_arena_config_handle(int fd, const memdbg_arena_config_request_t *req)
 }
 
 int memdbg_arena_alloc_hinted(uint32_t pid, uint64_t *addr, uint64_t length, uint64_t hint) {
+  int rc;
   if (g_arena_on && hint == 0x4000) {
     struct arena_pool *ap = arena_for(pid, 1);
-    if (ap && arena_try_alloc(ap, length, addr) == 0) return 0;
+    if (ap && arena_try_alloc(ap, length, addr) == 0) { rc = 0; goto done; }
   }
-  return pal_memory_alloc((int)pid, hint, length, 7, 0, addr);
+  rc = pal_memory_alloc((int)pid, hint, length, 7, 0, addr);
+done:
+  if (rc == 0) memdbg_process_maps_cache_flush((int)pid);
+  return rc;
 }
 
 int memdbg_arena_free_hinted(uint32_t pid, uint64_t addr, uint64_t length) {
+  int rc;
   if (g_arena_on) {
     struct arena_pool *ap = arena_for(pid, 0);
-    if (ap && arena_try_free(ap, addr, length) == 0) return 0;
+    if (ap && arena_try_free(ap, addr, length) == 0) { rc = 0; goto done; }
   }
-  return pal_memory_free((int)pid, addr, length);
+  rc = pal_memory_free((int)pid, addr, length);
+done:
+  if (rc == 0) memdbg_process_maps_cache_flush((int)pid);
+  return rc;
 }
 
 // Bulk write advanced
@@ -443,6 +451,7 @@ int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
 
   if (entry_out) *entry_out = base + e_entry;
   if (base_out)  *base_out  = base;
+  memdbg_process_maps_cache_flush(pid);
   return 0;
 }
 

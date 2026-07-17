@@ -50,8 +50,14 @@ static memdbg_status_t get_threads_locked(int32_t *lwps, char (*names)[24],
 bool memdbg_debugger_supported(void) { return pal_debug_supported(); }
 
 bool memdbg_debugger_is_elevated(int32_t pid) {
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+  extern int memdbg_is_privileged(void);
+  (void)pid;
+  return memdbg_is_privileged();
+#else
   (void)pid;
   return false;
+#endif
 }
 
 // Internal helpers

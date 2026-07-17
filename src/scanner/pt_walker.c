@@ -10,7 +10,7 @@
  * memory access and kernel_get_proc for the process structure.
  */
 
-#include "pt_walker.h"
+#include "memdbg/scanner/pt_walker.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +56,50 @@ static volatile uint64_t g_ptw_known_value = 0x5E7C0DE5E7C0DE71ULL;
 static int      g_ptw_state     = 0;
 static uint64_t g_ptw_dmap      = 0;
 static uint64_t g_ptw_pmap_off  = 0;
+
+// Per-PID vmspace+cr3 cache (avoids 2 kernel reads per ptw_read/write/probe call)
+#define PTW_VMCACHE_N 4
+static struct { int32_t pid; uint64_t kproc; uint64_t vmspace; uint64_t pml4; uint64_t cr3; } g_vmcache[PTW_VMCACHE_N];
+static int g_vmcache_next = 0;
+
+static int ptw_resolve_pid(uint32_t pid, uint64_t *out_cr3) {
+  for (int i = 0; i < PTW_VMCACHE_N; i++) {
+    if (g_vmcache[i].pid == (int32_t)pid && g_vmcache[i].cr3 != 0) {
+      *out_cr3 = g_vmcache[i].cr3;
+      return 0;
+    }
+  }
+
+  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
+  if (!kproc) return 1;
+
+  uint64_t vmspace = 0;
+  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
+    return 1;
+
+  uint64_t pair[2];
+  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
+    return 1;
+
+  uint64_t cr3 = pair[1];
+  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
+  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+
+  int s = g_vmcache_next;
+  g_vmcache[s].pid     = (int32_t)pid;
+  g_vmcache[s].kproc   = (uint64_t)kproc;
+  g_vmcache[s].vmspace = vmspace;
+  g_vmcache[s].pml4    = pair[0];
+  g_vmcache[s].cr3     = cr3;
+  g_vmcache_next = (g_vmcache_next + 1) % PTW_VMCACHE_N;
+  *out_cr3 = cr3;
+  return 0;
+}
+
+static void ptw_flush_pid(uint32_t pid) {
+  for (int i = 0; i < PTW_VMCACHE_N; i++)
+    if (g_vmcache[i].pid == (int32_t)pid) { g_vmcache[i].pid = 0; g_vmcache[i].cr3 = 0; }
+}
 
 // Minimal kernel copy wrappers
 
@@ -199,20 +243,8 @@ int ptw_probe(uint32_t pid, uint64_t va,
   if ((int32_t)pid <= 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
-
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
-
-  uint64_t pair[2];
-  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
-
-  uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  uint64_t cr3;
+  if (ptw_resolve_pid(pid, &cr3) != 0) return 1;
 
   uint64_t e  = 0;
   int      lv = -1;
@@ -238,20 +270,8 @@ int ptw_span_resolve(uint32_t pid, uint64_t span_2m, int *is_huge,
   if ((int32_t)pid <= 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
-
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
-
-  uint64_t pair[2];
-  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
-
-  uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  uint64_t cr3;
+  if (ptw_resolve_pid(pid, &cr3) != 0) return 1;
 
   uint64_t table = cr3 & PTW_PHYS_MASK;
   for (int level = 0; level < 3; level++) {
@@ -287,20 +307,8 @@ int ptw_leaf_addr(uint32_t pid, uint64_t va,
   if ((int32_t)pid <= 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
-
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
-
-  uint64_t pair[2];
-  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
-
-  uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  uint64_t cr3;
+  if (ptw_resolve_pid(pid, &cr3) != 0) return 1;
 
   uint64_t table = cr3 & PTW_PHYS_MASK;
   for (int level = 0; level < 4; level++) {
@@ -330,23 +338,13 @@ int ptw_read(uint32_t pid, uint64_t va, uint64_t len, void *dst) {
   if ((int32_t)pid <= 0 || !dst || len == 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
-
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
-
-  uint64_t pair[2];
-  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
-
-  uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  uint64_t cr3;
+  if (ptw_resolve_pid(pid, &cr3) != 0) return 1;
 
   uint8_t *out  = (uint8_t *)dst;
   uint64_t done = 0;
+  uint64_t batch_phys = 0, batch_len = 0, batch_va_end = 0;
+
   while (done < len) {
     uint64_t cur_va = va + done;
     uint64_t e  = 0;
@@ -368,9 +366,25 @@ int ptw_read(uint32_t pid, uint64_t va, uint64_t len, void *dst) {
     if (n > avail) n = avail;
 
     if (phys >= PTW_PHYS_BOUND || phys + n > PTW_PHYS_BOUND) return 1;
-    if (kread((intptr_t)(g_ptw_dmap + phys), out + done, n) != 0)
-      return 1;
+
+    if (batch_len > 0 && phys == batch_phys + batch_len &&
+        cur_va == batch_va_end) {
+      batch_len += n;
+      batch_va_end = cur_va + n;
+    } else {
+      if (batch_len > 0) {
+        if (kread((intptr_t)(g_ptw_dmap + batch_phys), out + done - batch_len, batch_len) != 0)
+          return 1;
+      }
+      batch_phys   = phys;
+      batch_len    = n;
+      batch_va_end = cur_va + n;
+    }
     done += n;
+  }
+  if (batch_len > 0) {
+    if (kread((intptr_t)(g_ptw_dmap + batch_phys), out + done - batch_len, batch_len) != 0)
+      return 1;
   }
   return 0;
 }
@@ -379,23 +393,11 @@ int ptw_write(uint32_t pid, uint64_t va, uint64_t len, const void *src) {
   if ((int32_t)pid <= 0 || !src || len == 0) return 1;
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
-
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
-
-  uint64_t pair[2];
-  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
-
-  uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  uint64_t cr3;
+  if (ptw_resolve_pid(pid, &cr3) != 0) return 1;
 
   const uint8_t *in = (const uint8_t *)src;
-  uint64_t done = 0;
+  uint64_t done = 0, batch_phys = 0, batch_len = 0, batch_va_end = 0;
   while (done < len) {
     uint64_t cur_va = va + done;
     uint64_t e  = 0;
@@ -417,9 +419,25 @@ int ptw_write(uint32_t pid, uint64_t va, uint64_t len, const void *src) {
     if (n > avail) n = avail;
 
     if (phys >= PTW_PHYS_BOUND || phys + n > PTW_PHYS_BOUND) return 1;
-    if (kwrite(in + done, (intptr_t)(g_ptw_dmap + phys), n) != 0)
-      return 1;
+
+    if (batch_len > 0 && phys == batch_phys + batch_len &&
+        cur_va == batch_va_end) {
+      batch_len += n;
+      batch_va_end = cur_va + n;
+    } else {
+      if (batch_len > 0) {
+        if (kwrite(in + done - batch_len, (intptr_t)(g_ptw_dmap + batch_phys), batch_len) != 0)
+          return 1;
+      }
+      batch_phys   = phys;
+      batch_len    = n;
+      batch_va_end = cur_va + n;
+    }
     done += n;
+  }
+  if (batch_len > 0) {
+    if (kwrite(in + done - batch_len, (intptr_t)(g_ptw_dmap + batch_phys), batch_len) != 0)
+      return 1;
   }
   return 0;
 }
@@ -618,20 +636,8 @@ int ptw_augment_maps(uint32_t pid,
 
   if (!ptw_is_available()) return 1;
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
-
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
-
-  uint64_t pair[2];
-  if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
-
-  uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  uint64_t cr3;
+  if (ptw_resolve_pid(pid, &cr3) != 0) return 1;
 
   memdbg_map_entry_t *e = NULL;
   int e_count = 0;
@@ -653,6 +659,7 @@ void ptw_flush(void) {
   g_ptw_pmap_off = 0;
   g_aux_cache_n   = 0;
   g_aux_cache_pid = 0;
+  for (int i = 0; i < PTW_VMCACHE_N; i++) { g_vmcache[i].pid = 0; g_vmcache[i].cr3 = 0; }
 }
 
 #else /* !PTW_HAS_DMAP */

@@ -34,6 +34,13 @@ extern "C" {
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_MAP_RESPONSE (8U * 1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
+
+/* Response header streaming flag: bit 31 of status signals the body is a
+ * chunked stream rather than a single payload.  Valid status codes range
+ * from 0 to -10, so bit 31 is never set for a normal status value.
+ * Clients strip MEMDBG_RESP_STATUS_STREAMING before interpreting the
+ * status code. */
+#define MEMDBG_RESP_STATUS_STREAMING 0x80000000U
 #define MEMDBG_BATCH_READ_MAX_ITEMS 64U
 /* Per-item byte cap for batch reads. Kept well below 1 GiB so the running
  * offset + item length arithmetic in memdbg_memory_batch_read() cannot
@@ -143,6 +150,7 @@ typedef enum memdbg_command {
   MEMDBG_CMD_QUICKSCAN_END      = 0x0B04U,
   MEMDBG_CMD_QUICKSCAN_CONFIG   = 0x0B05U,
   MEMDBG_CMD_QUICKSCAN_REGIONS  = 0x0B06U,
+  MEMDBG_CMD_QUICKSCAN_CANCEL   = 0x0B07U,
 
   /* Page-table introspection */
   MEMDBG_CMD_PTWALK_DISCOVER = 0x0C00U,
@@ -162,6 +170,9 @@ typedef enum memdbg_command {
 
   /* Klog streaming */
   MEMDBG_CMD_KLOG_CONNECT = 0x0D02U,
+
+  /* Extended capabilities query */
+  MEMDBG_CMD_GET_EXTENDED_CAPS = 0x0D03U,
 
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
@@ -223,6 +234,12 @@ typedef enum memdbg_capability {
 #define MEMDBG_EXT_CAP_ARENA          0x00000040U
 #define MEMDBG_EXT_CAP_BATCH_WRITE_ADV 0x00000080U
 #define MEMDBG_EXT_CAP_HIJACK           0x00000100U
+
+typedef struct MEMDBG_PACKED memdbg_extended_caps_response {
+  uint32_t count;
+  uint32_t reserved;
+  /* followed by 'count' uint32_t capability words */
+} memdbg_extended_caps_response_t;
 
 typedef enum memdbg_value_type {
   MEMDBG_VALUE_BYTES = 0U,

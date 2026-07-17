@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 
 uint32_t legacy_bitswap32(uint32_t value) {
   return ((value >> 1) & 0x55555555U) | ((value << 1) & 0xAAAAAAAAU);

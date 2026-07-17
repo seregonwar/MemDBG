@@ -10,6 +10,7 @@
 
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_process.h"
+#include "memdbg/scanner/pt_walker.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -89,6 +90,22 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
   pal_map_list_t pmaps;
   memdbg_status_t st = pal_process_maps(pid, &pmaps);
   if (st != MEMDBG_OK) return st;
+
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+  if (ptw_is_available() && pmaps.count > 0) {
+    memdbg_map_entry_t *aug_maps = NULL;
+    int aug_count = 0;
+    if (ptw_augment_maps((uint32_t)pid,
+                         (memdbg_map_entry_t *)pmaps.entries, (int)pmaps.count,
+                         &aug_maps, &aug_count) == 0 &&
+        aug_maps != NULL && aug_count > 0) {
+      free(pmaps.entries);
+      pmaps.entries = (pal_map_entry_t *)aug_maps;
+      pmaps.count = (size_t)aug_count;
+    }
+  }
+#endif
+
   out->count   = pmaps.count;
   out->entries = (memdbg_map_entry_t *)pmaps.entries;
   memset(&pmaps, 0, sizeof(pmaps));
@@ -152,6 +169,21 @@ memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
   pal_map_list_t pmaps;
   memdbg_status_t st = pal_process_maps(pid, &pmaps);
   if (st != MEMDBG_OK) return st;
+
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+  if (ptw_is_available() && pmaps.count > 0) {
+    memdbg_map_entry_t *aug_maps = NULL;
+    int aug_count = 0;
+    if (ptw_augment_maps((uint32_t)pid,
+                         (memdbg_map_entry_t *)pmaps.entries, (int)pmaps.count,
+                         &aug_maps, &aug_count) == 0 &&
+        aug_maps != NULL && aug_count > 0) {
+      free(pmaps.entries);
+      pmaps.entries = (pal_map_entry_t *)aug_maps;
+      pmaps.count = (size_t)aug_count;
+    }
+  }
+#endif
 
   out->count   = pmaps.count;
   out->entries = (memdbg_map_entry_t *)pmaps.entries;

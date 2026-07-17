@@ -13,7 +13,7 @@
 
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/core/region_match.h"
-#include "flashscan.h"
+#include "memdbg/scanner/flashscan.h"
 
 #include <stdint.h>
 #include <stdio.h>

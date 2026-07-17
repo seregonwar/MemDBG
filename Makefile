@@ -37,7 +37,7 @@ PS5_CC ?= $(PS5_PAYLOAD_SDK)/bin/prospero-clang
 PS5_AR ?= $(PS5_PAYLOAD_SDK)/bin/prospero-ar
 PS5_DEPLOY ?= $(PS5_PAYLOAD_SDK)/bin/prospero-deploy
 
-COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude
+COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude -Isrc/core/daemon
 COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
 HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2
@@ -67,9 +67,9 @@ all: host
 
 host: $(HOST_TARGET)
 
-test-aob-boundary: $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
+test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/engine/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 
@@ -118,22 +118,76 @@ test-debugger-e2e: host tests/test_debugger_e2e.c tests/e2e_utils.c tests/e2e_ut
 test-debugger-protocol: tests/test_debugger_protocol.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger_protocol.c \
-		src/core/daemon/handlers_debug.c src/core/daemon/handlers_process.c \
+		src/core/daemon/handlers/debug.c src/core/daemon/handlers/process.c \
 		$(HOST_LDFLAGS) -o $(BUILD_DIR)/test_debugger_protocol
 	@echo "--- Running Debugger Protocol test ---"
 	$(BUILD_DIR)/test_debugger_protocol
 
-test-lz4: src/pal/lz4.c include/memdbg/pal/lz4.h tests/test_lz4.c
+test-lz4: src/util/lz4.c include/memdbg/pal/lz4.h tests/test_lz4.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_lz4.c src/pal/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_lz4
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_lz4.c src/util/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_lz4
 	@echo "--- Running LZ4 test ---"
 	$(BUILD_DIR)/test_lz4
 
-test-benchmarks: src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c tests/test_benchmarks.c
+test-benchmarks: src/scanner/scan_simd.c src/scanner/scan_partition.c src/util/lz4.c tests/test_benchmarks.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan_simd.c src/scanner/scan_partition.c src/pal/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_benchmarks
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan_simd.c src/scanner/scan_partition.c src/util/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_benchmarks
 	@echo "--- Running Benchmarks ---"
 	$(BUILD_DIR)/test_benchmarks
+
+test-zero-copy: src/util/lz4.c tests/test_zero_copy.c tests/bench_utils.h
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_zero_copy.c src/util/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_zero_copy
+	@echo "--- Running Zero-Copy Benchmarks ---"
+	$(BUILD_DIR)/test_zero_copy
+
+test-thread-pool: tests/test_thread_pool.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_thread_pool.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_thread_pool
+	@echo "--- Running Dynamic Thread Pool test ---"
+	$(BUILD_DIR)/test_thread_pool
+
+test-max-connections-e2e: host tests/test_max_connections_e2e.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_max_connections_e2e.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_max_connections_e2e
+	@echo "--- Running E2E max_connections cap test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-maxconn.XXXXXX); \
+	port=19128; \
+	$(HOST_TARGET) --bind=127.0.0.1 --debug-port=$$port --udp-port=19135 --data-root=$$tmpdir --no-udp-log --no-replace-existing --max-connections=4 >$$tmpdir/payload.log 2>&1 & \
+	pid=$$!; \
+	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
+	sleep 0.6; \
+	$(BUILD_DIR)/test_max_connections_e2e 127.0.0.1 $$port 4
+
+test-idle-timeout-unit: tests/test_idle_timeout_unit.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_idle_timeout_unit.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_idle_timeout_unit
+	@echo "--- Running Idle Timeout unit test ---"
+	$(BUILD_DIR)/test_idle_timeout_unit
+
+test-kqueue-timeout: $(BUILD_DIR)/host/pal/pal_wait.o tests/test_kqueue_timeout.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_kqueue_timeout.c $(BUILD_DIR)/host/pal/pal_wait.o $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_kqueue_timeout
+	@echo "--- Running kqueue timeout precision test ---"
+	$(BUILD_DIR)/test_kqueue_timeout
+
+test-connection-throughput: host tests/test_connection_throughput.c tests/bench_utils.h
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_connection_throughput.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_connection_throughput
+	@echo "--- Running Connection Throughput Benchmarks ---"
+	$(BUILD_DIR)/test_connection_throughput
+
+test-idle-timeout-e2e: host tests/test_idle_timeout_e2e.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_idle_timeout_e2e.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_idle_timeout_e2e
+	@echo "--- Running E2E idle timeout test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-idle.XXXXXX); \
+	port=19136; \
+	$(HOST_TARGET) --bind=127.0.0.1 --debug-port=$$port --udp-port=19137 --data-root=$$tmpdir --no-udp-log --no-replace-existing --idle-timeout=3000 >$$tmpdir/payload.log 2>&1 & \
+	pid=$$!; \
+	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
+	sleep 0.6; \
+	$(BUILD_DIR)/test_idle_timeout_e2e 127.0.0.1 $$port 3000
 
 test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)
@@ -190,7 +244,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)

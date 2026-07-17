@@ -51,6 +51,21 @@ int pal_tcp_connect(const char *host, uint16_t port, uint32_t timeout_ms,
                     socket_t *out_fd);
 ssize_t pal_socket_read_exact(socket_t fd, void *buffer, size_t count);
 ssize_t pal_socket_write_all(socket_t fd, const void *buffer, size_t count);
+
+/* Zero-copy scatter-gather write: sends header+payload in one syscall.
+ * Uses writev() under the hood. Returns total bytes written or -1 on error. */
+ssize_t pal_socket_writev_all(socket_t fd,
+                              const void *iov0, size_t iov0_len,
+                              const void *iov1, size_t iov1_len);
+
+/* Enable/disable TCP_CORK (Linux) or TCP_NOPUSH (FreeBSD/PS4/PS5).
+ * When corked, the kernel delays sending until the buffer is full or
+ * cork is disabled — reducing packet count for small writes. */
+int pal_socket_set_cork(socket_t fd, bool enabled);
+
+/* Set send buffer size (SO_SNDBUF). Larger buffers improve throughput
+ * for bulk transfers by reducing TCP stalls. */
+int pal_socket_set_sndbuf(socket_t fd, int bytes);
 const char *pal_socket_last_error(void);
 
 #ifdef __cplusplus

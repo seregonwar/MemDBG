@@ -64,6 +64,8 @@ typedef struct memdbg_config {
   uint32_t max_packet_bytes;
   uint32_t max_read_bytes;
   uint32_t max_scan_results;
+  uint32_t max_connections;
+  uint32_t idle_timeout_ms;
 } memdbg_config_t;
 
 void memdbg_config_defaults(memdbg_config_t *cfg);

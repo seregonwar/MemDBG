@@ -8,7 +8,7 @@
  * to the real client socket.
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 
 #include "memdbg/debug/memdbg_disasm.h"
 #include "memdbg/pal/pal_time.h"

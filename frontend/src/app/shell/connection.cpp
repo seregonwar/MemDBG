@@ -127,7 +127,8 @@ void connect_console(AppState &state) {
   ensure_console_targets(state);
   save_current_console_target(state);
   normalize_ports(state);
-  state.client.disconnect();
+  state.pool.disconnect();
+  state.pool_active = false;
   state.has_hello = false;
   state.klog_connected = false;
   state.klog_paused = false;
@@ -768,7 +769,18 @@ void poll_connect(AppState &state) {
   }
 
   /* Success: transfer connected fd from temp client to main client */
-  state.client.take_fd(s_temp_client.release_fd());
+  /* Transfer control fd to pool, then connect additional roles in background. */
+  {
+    platform::socket_handle_t cfd = s_temp_client.release_fd();
+    state.pool.control().take_fd(cfd);
+  }
+  state.pool_active = true;
+  /* Kick off Memory / Scan / Poll role connections asynchronously.
+   * These are non-blocking — roles that fail to connect fall back to Control. */
+  state.pool.connect_additional_roles_async(
+      std::string(state.host),
+      static_cast<uint16_t>(state.debug_port),
+      static_cast<uint32_t>(state.socket_timeout_ms));
   state.payload_auto_inject_probe = false;
   state.payload_auto_inject_waiting = false;
   state.payload_post_inject_connect = false;
@@ -864,7 +876,7 @@ void disconnect_console(AppState &state, const char *reason) {
   /* Interrupt scanner I/O before draining its future. */
   if (state.scan_async_future.valid()) {
     state.scan_async_cancel_requested.store(true);
-    state.client.cancel_pending_io();
+    state.pool.cancel_all_pending_io();
   }
   if (state.scan_async_future.valid()) state.scan_async_future.wait();
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
@@ -916,7 +928,8 @@ void disconnect_console(AppState &state, const char *reason) {
   state.tracer_status_text[0] = '\0';
   state.tracer_error.clear();
   state.tracer_temp_events.clear();
-  state.client.disconnect();
+  state.pool.disconnect();
+  state.pool_active = false;
   state.has_hello = false;
   state.klog_connected = false;
   state.klog_paused = false;

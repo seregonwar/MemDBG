@@ -18,6 +18,7 @@
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #define MEMDBG_PAL_DEBUG_CONSOLE 1
 #define MEMDBG_PAL_DEBUG_PS5 1
+#include "memdbg/pal/pal_debug_ps5.h"
 #elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
 #define MEMDBG_PAL_DEBUG_CONSOLE 1
 #elif defined(__FreeBSD__)
@@ -35,6 +36,10 @@
 #include <sys/types.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+#include <ps5/kernel.h>
+#endif
 
 #if defined(MEMDBG_PAL_DEBUG_FREEBSD)
 
@@ -167,10 +172,16 @@ int pal_debug_attach(int pid) {
 }
 
 int pal_debug_detach(int pid) {
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  kern_thread_cache_flush();
+#endif
   return (pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0) == -1) ? -1 : 0;
 }
 
 int pal_debug_continue(int pid) {
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  kern_thread_cache_flush();
+#endif
   return (pal_debug_ptrace_raw(PT_CONTINUE, pid, (void *)(uintptr_t)1, 0) ==
           -1)
              ? -1
@@ -211,31 +222,50 @@ int pal_debug_resume_thread(int pid, int32_t lwp) {
 }
 
 int pal_debug_get_thread_count(int pid) {
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  {
+    intptr_t kproc = kernel_get_proc((pid_t)pid);
+    if (!kproc) return -1;
+    uint8_t chain_hdr[0x30];
+    if (kernel_copyout(kproc + 0x10, chain_hdr, 0x30) != 0) return -1;
+    intptr_t kthread = *(intptr_t *)chain_hdr;
+    int count = 0;
+    uint8_t tbuf[0x680];
+    while (kthread) {
+      if (count >= 16384) break;
+      if (kernel_copyout((intptr_t)kthread, tbuf, 0x680) != 0) break;
+      count++;
+      kthread = *(intptr_t *)(tbuf + 0x10);
+    }
+    return count;
+  }
+#else
   long r = pal_debug_ptrace_raw(PT_GETNUMLWPS, pid, NULL, 0);
   return (r == -1) ? -1 : (int)r;
+#endif
 }
 
 int pal_debug_get_thread_list(int pid, int32_t *lwps, int max_count) {
-  if (lwps == NULL || max_count <= 0) {
-    errno = EINVAL;
-    return -1;
-  }
+  if (lwps == NULL || max_count <= 0) { errno = EINVAL; return -1; }
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_get_thread_list(pid, lwps, max_count);
+#else
   int count = pal_debug_get_thread_count(pid);
   if (count <= 0) return count;
   if (count > max_count) count = max_count;
   lwpid_t *buf = (lwpid_t *)calloc((size_t)count, sizeof(lwpid_t));
   if (buf == NULL) return -1;
   long r = pal_debug_ptrace_raw(PT_GETLWPLIST, pid, buf, (long)count);
-  if (r == -1) {
-    free(buf);
-    return -1;
-  }
+  if (r == -1) { free(buf); return -1; }
   for (int i = 0; i < count; ++i) lwps[i] = (int32_t)buf[i];
   free(buf);
   return count;
+#endif
 }
 
 /* ---- Register helpers ---- */
+
+#if !defined(MEMDBG_PAL_DEBUG_PS5)
 
 #include <machine/reg.h>
 
@@ -300,31 +330,40 @@ static void pal_debug_regs_to_native(const memdbg_debug_regs_t *src,
   dst->r_ss = (register_t)src->r_ss;
 }
 
+#endif /* !MEMDBG_PAL_DEBUG_PS5 */
+
 int pal_debug_get_regs(int pid, int32_t lwp, memdbg_debug_regs_t *regs) {
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_get_regs(pid, (int)lwp, regs) == 0 ? 0 : -1;
+#else
   (void)pid;
   struct reg r;
   memset(&r, 0, sizeof(r));
   if (pal_debug_ptrace_raw(PT_GETREGS, (int)lwp, &r, 0) == -1) return -1;
   pal_debug_regs_from_native(&r, regs);
   return 0;
+#endif
 }
 
 int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs) {
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_set_regs(pid, (int)lwp, regs) == 0 ? 0 : -1;
+#else
   (void)pid;
   struct reg r;
   memset(&r, 0, sizeof(r));
   pal_debug_regs_to_native(regs, &r);
   return (pal_debug_ptrace_raw(PT_SETREGS, (int)lwp, &r, 0) == -1) ? -1 : 0;
+#endif
 }
 
 int pal_debug_get_fpregs(int pid, int32_t lwp,
                          memdbg_debug_fpregs_t *fpregs) {
   (void)pid;
-  if (fpregs == NULL) {
-    errno = EINVAL;
-    return -1;
-  }
-#if defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE)
+  if (fpregs == NULL) { errno = EINVAL; return -1; }
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_get_fpregs(pid, (int)lwp, fpregs) == 0 ? 0 : -1;
+#elif defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE)
   {
     struct ptrace_xstate_info info;
     memset(&info, 0, sizeof(info));
@@ -341,21 +380,20 @@ int pal_debug_get_fpregs(int pid, int32_t lwp,
       }
     }
   }
+  /* fall-through to PT_GETFPREGS */
 #endif
 #if defined(PT_GETFPREGS)
-  struct fpreg f;
-  memset(&f, 0, sizeof(f));
-  if (sizeof(f) > MEMDBG_DEBUG_FPREGS_MAX) {
-    errno = EOVERFLOW;
-    return -1;
+  {
+    struct fpreg f;
+    memset(&f, 0, sizeof(f));
+    if (sizeof(f) > MEMDBG_DEBUG_FPREGS_MAX) { errno = EOVERFLOW; return -1; }
+    if (pal_debug_ptrace_raw(PT_GETFPREGS, (int)lwp, &f, 0) == -1) return -1;
+    memset(fpregs, 0, sizeof(*fpregs));
+    fpregs->length = (uint32_t)sizeof(f);
+    memcpy(fpregs->data, &f, sizeof(f));
+    return 0;
   }
-  if (pal_debug_ptrace_raw(PT_GETFPREGS, (int)lwp, &f, 0) == -1)
-    return -1;
-  memset(fpregs, 0, sizeof(*fpregs));
-  fpregs->length = (uint32_t)sizeof(f);
-  memcpy(fpregs->data, &f, sizeof(f));
-  return 0;
-#else
+#elif !defined(MEMDBG_PAL_DEBUG_PS5)
   errno = ENOTSUP;
   return -1;
 #endif
@@ -365,29 +403,26 @@ int pal_debug_set_fpregs(int pid, int32_t lwp,
                          const memdbg_debug_fpregs_t *fpregs) {
   (void)pid;
   if (fpregs == NULL || fpregs->length == 0U ||
-      fpregs->length > MEMDBG_DEBUG_FPREGS_MAX) {
-    errno = EINVAL;
-    return -1;
-  }
-#if defined(PT_SETXSTATE)
+      fpregs->length > MEMDBG_DEBUG_FPREGS_MAX) { errno = EINVAL; return -1; }
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_set_fpregs(pid, (int)lwp, fpregs) == 0 ? 0 : -1;
+#elif defined(PT_SETXSTATE)
   if ((fpregs->flags & MEMDBG_DEBUG_FPREGS_FLAG_XSTATE) != 0U) {
     return (pal_debug_ptrace_raw(PT_SETXSTATE, (int)lwp,
                                  (void *)fpregs->data,
-                                 (long)fpregs->length) == -1)
-               ? -1
-               : 0;
+                                 (long)fpregs->length) == -1) ? -1 : 0;
   }
+  /* fall-through */
 #endif
-#if defined(PT_SETFPREGS)
-  struct fpreg f;
-  if (fpregs->length != sizeof(f)) {
-    errno = EINVAL;
-    return -1;
+#if defined(PT_SETFPREGS) && !defined(MEMDBG_PAL_DEBUG_PS5)
+  {
+    struct fpreg f;
+    if (fpregs->length != sizeof(f)) { errno = EINVAL; return -1; }
+    memset(&f, 0, sizeof(f));
+    memcpy(&f, fpregs->data, sizeof(f));
+    return (pal_debug_ptrace_raw(PT_SETFPREGS, (int)lwp, &f, 0) == -1) ? -1 : 0;
   }
-  memset(&f, 0, sizeof(f));
-  memcpy(&f, fpregs->data, sizeof(f));
-  return (pal_debug_ptrace_raw(PT_SETFPREGS, (int)lwp, &f, 0) == -1) ? -1 : 0;
-#else
+#elif !defined(MEMDBG_PAL_DEBUG_PS5)
   errno = ENOTSUP;
   return -1;
 #endif
@@ -396,21 +431,19 @@ int pal_debug_set_fpregs(int pid, int32_t lwp,
 int pal_debug_get_fsgsbase(int pid, int32_t lwp,
                            memdbg_debug_fsgsbase_t *base) {
   (void)pid;
-  if (base == NULL) {
-    errno = EINVAL;
-    return -1;
-  }
+  if (base == NULL) { errno = EINVAL; return -1; }
   memset(base, 0, sizeof(*base));
-#if defined(PT_GETFSBASE) && defined(PT_GETGSBASE)
-  unsigned long fs_base = 0;
-  unsigned long gs_base = 0;
-  if (pal_debug_ptrace_raw(PT_GETFSBASE, (int)lwp, &fs_base, 0) == -1)
-    return -1;
-  if (pal_debug_ptrace_raw(PT_GETGSBASE, (int)lwp, &gs_base, 0) == -1)
-    return -1;
-  base->fs_base = (uint64_t)fs_base;
-  base->gs_base = (uint64_t)gs_base;
-  return 0;
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_get_fsgsbase(pid, (int)lwp, base) == 0 ? 0 : -1;
+#elif defined(PT_GETFSBASE) && defined(PT_GETGSBASE)
+  {
+    unsigned long fs_base = 0, gs_base = 0;
+    if (pal_debug_ptrace_raw(PT_GETFSBASE, (int)lwp, &fs_base, 0) == -1) return -1;
+    if (pal_debug_ptrace_raw(PT_GETGSBASE, (int)lwp, &gs_base, 0) == -1) return -1;
+    base->fs_base = (uint64_t)fs_base;
+    base->gs_base = (uint64_t)gs_base;
+    return 0;
+  }
 #else
   (void)lwp;
   errno = ENOTSUP;
@@ -421,22 +454,20 @@ int pal_debug_get_fsgsbase(int pid, int32_t lwp,
 int pal_debug_set_fsgsbase(int pid, int32_t lwp,
                            const memdbg_debug_fsgsbase_t *base) {
   (void)pid;
-  if (base == NULL) {
-    errno = EINVAL;
-    return -1;
+  if (base == NULL) { errno = EINVAL; return -1; }
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_set_fsgsbase(pid, (int)lwp, base) == 0 ? 0 : -1;
+#elif defined(PT_SETFSBASE) && defined(PT_SETGSBASE)
+  {
+    unsigned long fs_base = (unsigned long)base->fs_base;
+    unsigned long gs_base = (unsigned long)base->gs_base;
+    if ((uint64_t)fs_base != base->fs_base || (uint64_t)gs_base != base->gs_base) {
+      errno = EOVERFLOW; return -1;
+    }
+    if (pal_debug_ptrace_raw(PT_SETFSBASE, (int)lwp, &fs_base, 0) == -1) return -1;
+    if (pal_debug_ptrace_raw(PT_SETGSBASE, (int)lwp, &gs_base, 0) == -1) return -1;
+    return 0;
   }
-#if defined(PT_SETFSBASE) && defined(PT_SETGSBASE)
-  unsigned long fs_base = (unsigned long)base->fs_base;
-  unsigned long gs_base = (unsigned long)base->gs_base;
-  if ((uint64_t)fs_base != base->fs_base || (uint64_t)gs_base != base->gs_base) {
-    errno = EOVERFLOW;
-    return -1;
-  }
-  if (pal_debug_ptrace_raw(PT_SETFSBASE, (int)lwp, &fs_base, 0) == -1)
-    return -1;
-  if (pal_debug_ptrace_raw(PT_SETGSBASE, (int)lwp, &gs_base, 0) == -1)
-    return -1;
-  return 0;
 #else
   (void)lwp;
   errno = ENOTSUP;
@@ -447,20 +478,28 @@ int pal_debug_set_fsgsbase(int pid, int32_t lwp,
 int pal_debug_get_dbregs(int pid, int32_t lwp,
                          memdbg_debug_dbregs_t *dbregs) {
   (void)pid;
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_get_dbregs(pid, (int)lwp, dbregs) == 0 ? 0 : -1;
+#else
   struct dbreg d;
   memset(&d, 0, sizeof(d));
   if (pal_debug_ptrace_raw(PT_GETDBREGS, (int)lwp, &d, 0) == -1) return -1;
   for (int i = 0; i < 16; ++i) dbregs->dr[i] = (uint64_t)d.dr[i];
   return 0;
+#endif
 }
 
 int pal_debug_set_dbregs(int pid, int32_t lwp,
                          const memdbg_debug_dbregs_t *dbregs) {
   (void)pid;
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  return kern_set_dbregs(pid, (int)lwp, dbregs) == 0 ? 0 : -1;
+#else
   struct dbreg d;
   memset(&d, 0, sizeof(d));
   for (int i = 0; i < 16; ++i) d.dr[i] = (long)dbregs->dr[i];
   return (pal_debug_ptrace_raw(PT_SETDBREGS, (int)lwp, &d, 0) == -1) ? -1 : 0;
+#endif
 }
 
 int pal_debug_get_thread_name(int pid, int32_t lwp, char *name,

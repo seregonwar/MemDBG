@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/pal/pal_time.h"
 

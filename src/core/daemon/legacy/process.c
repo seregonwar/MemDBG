@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 
 memdbg_status_t legacy_handle_version(socket_t fd) {
   static const char version[] = "1.3";

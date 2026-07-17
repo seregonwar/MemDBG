@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace memdbg::frontend {
@@ -306,6 +307,49 @@ public:
   bool tracer_poll(std::vector<TracerEvent> &out);
   bool tracer_status(TracerStatus &out);
 
+  /* ---- Protocol pipelining ----
+   *
+   * Pipeline mode lets the client send N requests back-to-back without
+   * waiting for responses, then read all N responses in one batch.
+   * This eliminates N-1 round-trip delays when issuing multiple
+   * independent operations (e.g. reading several memory regions).
+   *
+   * Usage:
+   *   uint32_t r1 = client.pipeline_send(MEMDBG_CMD_MEMORY_READ, &req1, sizeof(req1));
+   *   uint32_t r2 = client.pipeline_send(MEMDBG_CMD_MEMORY_READ, &req2, sizeof(req2));
+   *   uint32_t r3 = client.pipeline_send(MEMDBG_CMD_TELEMETRY, nullptr, 0);
+   *   if (!client.pipeline_flush()) { ... error ... }
+   *   // Now call read_pipeline_response(r1), read_pipeline_response(r2), etc.
+   *
+   * The daemon processes requests sequentially on the same connection;
+   * responses arrive in the same order they were sent.  request_id is
+   * used to verify correct correlation. */
+
+  /* Send a request without waiting for a response.
+   * Returns the request_id for later correlation with pipeline_flush(). */
+  uint32_t pipeline_send(uint16_t command, const void *payload,
+                         uint32_t payload_len);
+
+  /* Read all pending responses from pipelined requests.
+   * Must be called exactly once for each batch of pipeline_send() calls.
+   * Returns true if all responses were received and validated.
+   * After flush(), use read_pipeline_response() to retrieve each result. */
+  bool pipeline_flush();
+
+  /* After a successful pipeline_flush(), retrieve the response body
+   * for a specific request_id (as returned by pipeline_send()).
+   * The response body includes the full raw bytes after the header.
+   * Returns false if the request_id is not found or the request failed. */
+  bool read_pipeline_response(uint32_t request_id,
+                              std::vector<uint8_t> &response_body,
+                              int32_t *out_status = nullptr);
+
+  /* Number of requests sent via pipeline_send() that haven't been flushed yet. */
+  size_t pipeline_pending() const { return pipeline_ids_.size(); }
+
+  /* Discard all accumulated pipeline state without sending. */
+  void pipeline_reset();
+
 private:
   bool request(uint16_t command, const void *payload, uint32_t payload_len,
                std::vector<uint8_t> &response,
@@ -325,6 +369,13 @@ private:
   std::string last_error_;
   mutable std::mutex io_mutex_;
   std::atomic<bool> cancel_requested_{false};
+
+  /* Pipeline state */
+  static constexpr size_t kPipelineMaxBuffer = 1024U * 1024U; /* 1 MB auto-flush threshold */
+  std::vector<uint8_t> pipeline_buffer_;
+  std::vector<uint32_t> pipeline_ids_;
+  std::unordered_map<uint32_t, std::vector<uint8_t>> pipeline_responses_;
+  std::unordered_map<uint32_t, int32_t> pipeline_statuses_;
 
   /* Klog background reader */
   std::thread klog_reader_thread_;

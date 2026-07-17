@@ -14,7 +14,7 @@
  *   - START snapshot path, COUNT resident/snapshot path → fully supported
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 
 #include "memdbg/scanner/flashscan.h"
 

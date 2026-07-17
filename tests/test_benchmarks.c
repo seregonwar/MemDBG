@@ -11,9 +11,9 @@
  * Run:    build/test_benchmarks [--save-baseline <file>] [--compare <file>]
  */
 
-#include "scan_simd.h"
-#include "scan_partition.h"
-#include "flashscan.h"
+#include "memdbg/scanner/scan_simd.h"
+#include "memdbg/scanner/scan_partition.h"
+#include "memdbg/scanner/flashscan.h"
 #include "memdbg/pal/lz4.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "bench_utils.h"

@@ -9,8 +9,8 @@
  * the mdbg_copyout syscall for large scans.
  */
 
-#include "page_alias.h"
-#include "pt_walker.h"
+#include "memdbg/scanner/page_alias.h"
+#include "memdbg/scanner/pt_walker.h"
 #include "memdbg/pal/pal_memory.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -153,6 +153,7 @@ static int al_next_span(page_alias_ctx_t *c, uint64_t *span_out) {
 // Public API
 
 page_alias_ctx_t *page_alias_begin(uint32_t pid, uint64_t arena_cap) {
+  if (!ptw_is_available()) return NULL;
   uint64_t dmap = ptw_dmap_base();
   if (dmap == 0) return NULL;
 

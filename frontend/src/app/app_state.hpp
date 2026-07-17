@@ -8,6 +8,7 @@
 #define MEMDBG_FRONTEND_APP_STATE_HPP
 
 #include "core/client/memdbg_client.hpp"
+#include "core/client/client_pool.hpp"
 #include "core/repo_utils.hpp"
 #include "action_journal.hpp"
 #include "crash_logger.hpp"
@@ -252,7 +253,12 @@ struct AutoSearchCandidate {
 };
 
 struct AppState {
-  Client client;
+  ClientPool pool;
+  /* Backward-compatible reference: state.client.xxx() routes to pool.control().
+   * All existing code continues to work unchanged while the pool manages
+   * additional parallel connections (Memory, Scan, Poll) transparently. */
+  Client &client = pool.control();
+  bool pool_active = false;  /* true after pool has connected all roles */
   ActionJournal action_journal;
   CrashLogger crash_logger;
   bool crash_logging_enabled = true;

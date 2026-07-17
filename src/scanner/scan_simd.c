@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "scan_simd.h"
+#include "memdbg/scanner/scan_simd.h"
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>

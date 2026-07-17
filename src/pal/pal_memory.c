@@ -16,6 +16,7 @@
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_fileio.h"
 #include "memdbg/pal/pal_process.h"
+#include "memdbg/scanner/pt_walker.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -465,6 +466,13 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
         pid, (const uint8_t *)buffer + buffer_offset, (intptr_t)cursor,
         segment_length);
     const int copy_errno = errno;
+
+    int dmap_ok = 0;
+    if (copy_rc != 0 && ptw_is_available()) {
+      dmap_ok = (ptw_write((uint32_t)pid, cursor, segment_length,
+                           (const uint8_t *)buffer + buffer_offset) == 0);
+    }
+
     if (changed_protection) {
       errno = 0;
       if (kernel_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
@@ -473,7 +481,7 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
         break;
       }
     }
-    if (copy_rc != 0) {
+    if (copy_rc != 0 && !dmap_ok) {
       failure_errno = copy_errno != 0 ? copy_errno : EIO;
       break;
     }
@@ -491,6 +499,16 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
 }
 #endif
 
+#if defined(MEMDBG_PAL_PS5)
+static int s_fw_needs_dmap = -1;
+
+static int console_fw_needs_dmap(void) {
+  if (s_fw_needs_dmap < 0)
+    s_fw_needs_dmap = ((kernel_get_fw_version() & 0xffff0000u) >= 0x08400000u) ? 1 : 0;
+  return s_fw_needs_dmap;
+}
+#endif
+
 static int console_mdbg_copyin(pid_t pid, intptr_t address, const void *buffer,
                                size_t length) {
   errno = 0;
@@ -501,9 +519,15 @@ static int console_mdbg_copyin(pid_t pid, intptr_t address, const void *buffer,
   const int first_errno = errno;
 
 #if defined(MEMDBG_PAL_PS5)
-  if ((first_errno == EACCES || first_errno == EPERM) && length != 0U) {
-    if (console_mdbg_copyin_ps5_regions(pid, address, buffer, length) == 0)
+  if (first_errno == EACCES || first_errno == EPERM) {
+    if (length != 0U && ptw_is_available() &&
+        ptw_write((uint32_t)pid, (uint64_t)address, (uint64_t)length, buffer) == 0)
       return 0;
+
+    if (length != 0U) {
+      if (console_mdbg_copyin_ps5_regions(pid, address, buffer, length) == 0)
+        return 0;
+    }
     return -1;
   }
 #endif
@@ -519,9 +543,25 @@ memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
   if (pid <= 1) return MEMDBG_ERR_PERMISSION;
   if (length == 0U) return MEMDBG_OK;
 
+#if defined(MEMDBG_PAL_PS5)
+  if (ptw_aux_contains((uint32_t)pid, address, (uint64_t)length) &&
+      ptw_read((uint32_t)pid, address, (uint64_t)length, buffer) == 0) {
+    if (read_out != NULL) *read_out = length;
+    return MEMDBG_OK;
+  }
+#endif
+
   errno = 0;
-  if (mdbg_copyout((pid_t)pid, (intptr_t)address, buffer, length) != 0)
+  if (mdbg_copyout((pid_t)pid, (intptr_t)address, buffer, length) != 0) {
+#if defined(MEMDBG_PAL_PS5)
+    if (ptw_is_available() &&
+        ptw_read((uint32_t)pid, address, (uint64_t)length, buffer) == 0) {
+      if (read_out != NULL) *read_out = length;
+      return MEMDBG_OK;
+    }
+#endif
     return mdbg_errno_status();
+  }
 
   if (read_out != NULL) *read_out = length;
   return MEMDBG_OK;
@@ -534,6 +574,15 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
   if (pid <= 0 || (buffer == NULL && length != 0U)) return MEMDBG_ERR_PARAM;
   if (pid <= 1) return MEMDBG_ERR_PERMISSION;
   if (length == 0U) return MEMDBG_OK;
+
+#if defined(MEMDBG_PAL_PS5)
+  if (console_fw_needs_dmap() && ptw_is_available() && length >= 256U) {
+    if (ptw_write((uint32_t)pid, address, (uint64_t)length, buffer) == 0) {
+      if (written_out != NULL) *written_out = length;
+      return MEMDBG_OK;
+    }
+  }
+#endif
 
   errno = 0;
   if (console_mdbg_copyin((pid_t)pid, (intptr_t)address, buffer, length) != 0)
@@ -613,8 +662,21 @@ pal_memory_batch_t *pal_memory_batch_begin(int pid) {
 size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_t len) {
   if (b == NULL || buf == NULL || len == 0U) return 0U;
   if (b->pid <= 1) return 0U;
+#if defined(MEMDBG_PAL_PS5)
+  if (ptw_aux_contains((uint32_t)b->pid, a, (uint64_t)len) &&
+      ptw_read((uint32_t)b->pid, a, (uint64_t)len, buf) == 0)
+    return len;
+#endif
   errno = 0;
-  return mdbg_copyout((pid_t)b->pid, (intptr_t)a, buf, len) == 0 ? len : 0U;
+  if (mdbg_copyout((pid_t)b->pid, (intptr_t)a, buf, len) != 0) {
+#if defined(MEMDBG_PAL_PS5)
+    if (ptw_is_available() &&
+        ptw_read((uint32_t)b->pid, a, (uint64_t)len, buf) == 0)
+      return len;
+#endif
+    return 0U;
+  }
+  return len;
 }
 
 void pal_memory_batch_end(pal_memory_batch_t *b) { free(b); }
@@ -632,6 +694,12 @@ pal_memory_batch_write_t *pal_memory_batch_write_begin(int pid) {
 size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, const void *buf, size_t len) {
   if (b == NULL || buf == NULL || len == 0U) return 0U;
   if (b->pid <= 1) return 0U;
+#if defined(MEMDBG_PAL_PS5)
+  if (console_fw_needs_dmap() && ptw_is_available()) {
+    if (ptw_write((uint32_t)b->pid, a, (uint64_t)len, buf) == 0)
+      return len;
+  }
+#endif
   return console_mdbg_copyin((pid_t)b->pid, (intptr_t)a, buf, len) == 0 ? len : 0U;
 }
 

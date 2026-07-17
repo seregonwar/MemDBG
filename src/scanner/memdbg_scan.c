@@ -15,7 +15,7 @@
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
 
-#include "../scan_partition.h"
+#include "memdbg/scanner/scan_partition.h"
 
 #include <errno.h>
 #include <limits.h>

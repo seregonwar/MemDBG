@@ -59,9 +59,9 @@ static void print_usage(const char *argv0) {
   printf("  --allow=ADDR             Only accept a single IPv4 client address\n");
   printf("  --debug-port=PORT        TCP command port (default %u)\n",
          MEMDBG_DEFAULT_DEBUG_PORT);
-  printf("  --legacy-compat          Enable ps5debug-compatible TCP listener\n");
-  printf("  --no-legacy-compat       Disable ps5debug-compatible TCP listener\n");
-  printf("  --legacy-port=PORT       ps5debug-compatible port (default %u)\n",
+  printf("  --legacy-compat          Enable legacy-compatible TCP listener\n");
+  printf("  --no-legacy-compat       Disable legacy-compatible TCP listener\n");
+  printf("  --legacy-port=PORT       Legacy-compatible port (default %u)\n",
          MEMDBG_DEFAULT_LEGACY_PORT);
   printf("  --udp-host=ADDR          UDP log destination (default %s)\n",
          MEMDBG_DEFAULT_UDP_LOG_HOST);
@@ -72,6 +72,8 @@ static void print_usage(const char *argv0) {
   printf("  --max-read=BYTES         Maximum single read size\n");
   printf("  --max-packet=BYTES       Maximum request packet size\n");
   printf("  --max-scan-results=N     Maximum scanner result count\n");
+  printf("  --max-connections=N      Maximum concurrent TCP clients (default 64)\n");
+  printf("  --idle-timeout=MS        Disconnect idle clients after MS ms (default 30000)\n");
   printf("  --replace-existing       Ask a previous payload on the same port to stop (default)\n");
   printf("  --no-replace-existing    Do not stop a previous payload automatically\n");
   printf("  --no-udp-log             Disable UDP log delivery\n");
@@ -102,6 +104,10 @@ static int apply_arg(memdbg_config_t *cfg, const char *arg) {
     if (!parse_u32(arg + 13, &cfg->max_packet_bytes)) return -1;
   } else if (strncmp(arg, "--max-scan-results=", 19) == 0) {
     if (!parse_u32(arg + 19, &cfg->max_scan_results)) return -1;
+  } else if (strncmp(arg, "--max-connections=", 18) == 0) {
+    if (!parse_u32(arg + 18, &cfg->max_connections)) return -1;
+  } else if (strncmp(arg, "--idle-timeout=", 15) == 0) {
+    if (!parse_u32(arg + 15, &cfg->idle_timeout_ms)) return -1;
   } else if (strcmp(arg, "--replace-existing") == 0) {
     cfg->replace_existing = true;
   } else if (strcmp(arg, "--no-replace-existing") == 0) {

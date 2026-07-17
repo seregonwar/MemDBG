@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "flashscan.h"
-#include "pt_walker.h"
-#include "page_alias.h"
-#include "scan_simd.h"
-#include "scan_partition.h"
+#include "memdbg/scanner/flashscan.h"
+#include "memdbg/scanner/pt_walker.h"
+#include "memdbg/scanner/page_alias.h"
+#include "memdbg/scanner/scan_simd.h"
+#include "memdbg/scanner/scan_partition.h"
 
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
@@ -55,8 +55,8 @@ static inline void munmap_anonymous(void *p, uint64_t n) {
 #define FS_RESCAN_ALIAS_MIN  0x10000ULL
 #define FLASHSCAN_SNAPSHOT_BITMAP_MAX   (448ULL << 20)
 #define FLASHSCAN_WORKERS           4U
-#define FLASHSCAN_PARALLEL_WORKERS       2U
-#define FLASHSCAN_PARALLEL_MAX_WORKERS   2U
+#define FLASHSCAN_PARALLEL_WORKERS       4U
+#define FLASHSCAN_PARALLEL_MAX_WORKERS   4U
 #define FLASHSCAN_PARALLEL_RESULT_CAP    (8ULL << 20)
 #define FLASHSCAN_PARALLEL_ARENA         (16ULL << 20)
 
@@ -108,6 +108,7 @@ static page_alias_ctx_t *g_alias_ctxs[FLASHSCAN_MAX_SESSIONS];
 static uint64_t g_fs_ram_limit     = 512ULL << 20;
 static char     g_fs_spill_dir[64] = "/data";
 static int      g_fs_force_fail    = 0;
+static volatile int g_fs_cancel_requested = 0;
 static uint64_t g_fs_mat_max       = 1ULL << 20;
 
 static int flashscan_pread_all(int fd, void *buf, uint64_t len, uint64_t off) {
@@ -430,7 +431,8 @@ static int snapshot_create(int fd, unsigned slot,
 
       s0   += win_slots;
       done_total += wbytes;
-      socket_send_all(fd, &done_total, 8);
+      if ((done_total & 0x3FFFFFULL) == 0 || s0 >= seg_ns)
+        socket_send_all(fd, &done_total, 8);
     }
   }
 
@@ -509,19 +511,14 @@ static uint64_t snapshot_rescan(int fd, struct flashscan_sess *s,
                                 const uint8_t *between_hi, int includes_prev,
                                 uint8_t *read_buf, uint8_t *bl_buf,
                                 page_alias_ctx_t *actx) {
+  (void)fd;
   (void)val_type;
   if (!s->bitmap || s->slot_count == 0) { s->survivor_count = 0; return 0; }
   uint64_t n = s->slot_count, survivors = 0;
   uint64_t rb = s->snap_bytes;
 
-  uint64_t prog_step = n >> 8; if (prog_step == 0) prog_step = 1;
-  uint64_t next_prog = prog_step;
-
   for (uint64_t i = bitmap_next_set(s->bitmap, 0, n); i < n; ) {
-    if (i >= next_prog) {
-      socket_send_all(fd, &i, 8);
-      next_prog = i + prog_step;
-    }
+    if (g_fs_cancel_requested) break;
     uint64_t win_start = slot_to_addr(s, i);
     uint64_t covered   = win_start + vlen;
     uint64_t last = i;
@@ -613,6 +610,7 @@ static void *rescan_worker_thread(void *arg) {
   uint64_t i = bitmap_next_set(s->bitmap, c->chunk_start, c->chunk_end);
 
   while (i < c->chunk_end) {
+    if (g_fs_cancel_requested) break;
     uint64_t win_start = slot_to_addr(s, i);
     uint64_t covered   = win_start + vlen;
     uint64_t last = i;
@@ -690,7 +688,7 @@ static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
   uint32_t nworkers = FLASHSCAN_PARALLEL_WORKERS;
   if (nworkers > FLASHSCAN_PARALLEL_MAX_WORKERS) nworkers = FLASHSCAN_PARALLEL_MAX_WORKERS;
   if (nworkers == 0) nworkers = 1;
-  if (n < (uint64_t)nworkers * 256) nworkers = 1;  /* not worth parallelising */
+  if (n < (uint64_t)nworkers * 64) nworkers = 1;  /* not worth parallelising */
 
   if (nworkers == 1) {
     uint8_t *rb = (uint8_t *)malloc(FS_RESCAN_WIN_CAP);
@@ -751,13 +749,8 @@ static uint64_t snapshot_rescan_parallel(int fd, struct flashscan_sess *s,
       surv[w] = 0;
       tids[w] = (pthread_t)0;
     }
-  }  // Send approximate progress while workers run
-  for (uint32_t w = 0; w < nworkers; w++) {
-    struct timespec ts = {0, 50000000L};
-    nanosleep(&ts, NULL);
-    uint64_t prog_idx = (w + 1) * (n / nworkers);
-    socket_send_all(fd, &prog_idx, 8);
-  }
+  }  // Workers launched; progress sent as workers finish via the join loop
+  (void)fd;
 
   uint64_t total_survivors = 0;
   for (uint32_t w = 0; w < nworkers; w++) {
@@ -1531,5 +1524,13 @@ int flashscan_handle_fetch(int fd,
 int flashscan_handle_end(int fd, unsigned int slot) {
   flashscan_free_slot(slot);
   socket_send_int32(fd, 0);
+  return 0;
+}
+
+int flashscan_handle_cancel(int fd, unsigned int slot) {
+  g_fs_cancel_requested = 1;
+  flashscan_free_slot(slot);
+  socket_send_int32(fd, 0);
+  g_fs_cancel_requested = 0;
   return 0;
 }

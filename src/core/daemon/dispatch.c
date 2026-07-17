@@ -76,7 +76,8 @@ memdbg_status_t handle_telemetry(int fd, const memdbg_packet_header_t *req) {
   uint64_t now = monotonic_seconds();
   telemetry.uptime_seconds     = now >= g_start_ticks ? now - g_start_ticks : 0U;
   telemetry.active_connections = atomic_load_explicit(&g_active_connections, memory_order_relaxed);
-  telemetry.thread_pool_size   = MEMDBG_THREAD_POOL_SIZE;
+  telemetry.thread_pool_size   = (uint32_t)atomic_load_explicit(
+      &g_active_connections, memory_order_relaxed);
 
   uint32_t hits = 0U, misses = 0U;
   memdbg_process_cache_stats(&hits, &misses);
@@ -242,6 +243,10 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     flashscan_handle_end(fd, 0);
     return MEMDBG_OK;
 
+  case MEMDBG_CMD_QUICKSCAN_CANCEL:
+    flashscan_handle_cancel(fd, 0);
+    return MEMDBG_OK;
+
   case MEMDBG_CMD_QUICKSCAN_CONFIG: {
     if (req->length < sizeof(memdbg_quickscan_config_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_config_request_t *qc = (const memdbg_quickscan_config_request_t *)body;
@@ -312,6 +317,33 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     resp.pte_value = pte_value;
     if (rc == 0) resp.cached = (resp.pte_value >> 4) & 1;
     return send_response(fd, req, (rc == 0) ? MEMDBG_OK : MEMDBG_ERR_IO, &resp, sizeof(resp)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+
+  /* ---- Extended capabilities ---- */
+  case MEMDBG_CMD_GET_EXTENDED_CAPS: {
+    uint32_t ext_caps[] = {
+      MEMDBG_EXT_CAP_QUICKSCAN,
+      MEMDBG_EXT_CAP_PTWALK,
+      MEMDBG_EXT_CAP_ALIAS,
+      MEMDBG_EXT_CAP_SIMD,
+      MEMDBG_EXT_CAP_KLOG_SERVER,
+      MEMDBG_EXT_CAP_AUTH,
+      MEMDBG_EXT_CAP_ARENA,
+      MEMDBG_EXT_CAP_BATCH_WRITE_ADV,
+      MEMDBG_EXT_CAP_HIJACK
+    };
+    uint32_t n = (uint32_t)(sizeof(ext_caps) / sizeof(ext_caps[0]));
+    memdbg_extended_caps_response_t prefix;
+    memset(&prefix, 0, sizeof(prefix));
+    prefix.count = n;
+    uint32_t plen = (uint32_t)sizeof(prefix) + n * (uint32_t)sizeof(uint32_t);
+    uint8_t *payload = (uint8_t *)malloc(plen);
+    if (!payload) return MEMDBG_ERR_NOMEM;
+    memcpy(payload, &prefix, sizeof(prefix));
+    memcpy(payload + sizeof(prefix), ext_caps, n * sizeof(uint32_t));
+    int rc = send_response(fd, req, MEMDBG_OK, payload, plen);
+    free(payload);
+    return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 
   /* ---- Auth ---- */

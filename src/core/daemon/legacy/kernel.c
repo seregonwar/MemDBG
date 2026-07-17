@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "legacy_internal.h"
+#include "internal.h"
 #include "memdbg/pal/pal_kernel.h"
 
 memdbg_status_t legacy_handle_kern_base(socket_t fd) {
