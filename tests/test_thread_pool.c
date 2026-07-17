@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -88,7 +89,10 @@ static void *handler_thread(void *arg) {
   free(hargs);
 
   /* Simulate processing (e.g. HELLO, protocol loop, etc.) */
-  usleep(HANDLER_SLEEP_MS * 1000);
+  {
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = (long)HANDLER_SLEEP_MS * 1000000L };
+    nanosleep(&ts, NULL);
+  }
 
   /* Close the fd — handle_client does pal_socket_close() */
   close(fd);
@@ -198,7 +202,10 @@ static void *client_thread(void *arg) {
   atomic_fetch_add_explicit(&g_connected_count, 1, memory_order_relaxed);
 
   /* Sleep briefly so the handler has time to process and close. */
-  usleep(200 * 1000);
+  {
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 200 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
 
   /* Attempt a write — should fail with EPIPE if the handler already
    * closed the fd (expected for accepted clients). */
@@ -263,7 +270,10 @@ int main(void) {
   }
 
   /* Allow the listen backlog to settle. */
-  usleep(50000);
+  {
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 50000000L };
+    nanosleep(&ts, NULL);
+  }
 
   /* Launch all client threads simultaneously. */
   printf("Launching %d concurrent clients...\n", CLIENT_COUNT);
@@ -295,7 +305,10 @@ int main(void) {
          atomic_load_explicit(&g_active_connections, memory_order_relaxed));
   uint64_t drain_start = now_ms();
   while (atomic_load_explicit(&g_active_connections, memory_order_relaxed) > 0U) {
-    usleep(5000); /* 5ms */
+    {
+      struct timespec ts = { .tv_sec = 0, .tv_nsec = 5000000L };
+      nanosleep(&ts, NULL);
+    }
     if (now_ms() - drain_start > 5000) {
       fprintf(stderr, "  TIMEOUT waiting for handlers to drain\n");
       test_passed = 0;

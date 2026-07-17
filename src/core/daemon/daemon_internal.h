@@ -16,6 +16,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <pthread.h>
 
 #ifdef __cplusplus
 extern "C" {

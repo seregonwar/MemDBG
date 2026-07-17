@@ -228,7 +228,7 @@ add_executable(memdbg_frontend
   src/locale/locale_repository.cpp
 
   # pal (LZ4 decompression for client)
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 
   # tracer (syscall name lookup)
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/tracer/syscall_names.c
@@ -412,7 +412,7 @@ add_executable(memdbg_probe
   src/proto/protocol_probe.cpp
   src/core/client/memdbg_client.cpp
   src/core/platform.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
 
 target_include_directories(memdbg_probe PRIVATE
@@ -554,7 +554,7 @@ add_executable(memdbg_client_test
   tests/test_memdbg_client.cpp
   src/core/client/memdbg_client.cpp
   src/core/platform.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
 target_include_directories(memdbg_client_test PRIVATE
   ${MEMDBG_GENERATED_INCLUDE_DIR}
@@ -593,7 +593,7 @@ add_executable(memdbg_trainer_formats_test
   src/core/platform.cpp
   src/locale/locale.cpp
   src/plugins/repository/lua_engine.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/pal/lz4.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 
   # sJson (C99 JSON parser, compiled once)
   ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
