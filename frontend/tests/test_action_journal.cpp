@@ -62,7 +62,7 @@ static void test_open_close() {
   ActionJournal journal;
 
   /* Open with valid path */
-  bool opened = journal.open(path.c_str());
+  bool opened = journal.open(path.string().c_str());
   TEST("open succeeds with valid path", opened);
   TEST("is_open after open", journal.is_open());
   TEST("enabled after open", journal.enabled());
@@ -106,7 +106,7 @@ static void test_record() {
   auto path = temp_journal_path();
   ActionJournal journal;
 
-  journal.open(path.c_str());
+  journal.open(path.string().c_str());
 
   /* Record a simple action */
   journal.record("test_action", "{\"key\":\"value\"}");
@@ -157,7 +157,7 @@ static void test_load_recent() {
   /* Manually write 10 entries to the journal file */
   {
     ActionJournal journal;
-    journal.open(path.c_str());
+    journal.open(path.string().c_str());
     for (int i = 0; i < 10; ++i) {
       std::string detail = "{\"idx\":" + std::to_string(i) + "}";
       journal.record("step", detail.c_str());
@@ -364,7 +364,7 @@ static void test_record_marker() {
   auto path = temp_journal_path();
   ActionJournal journal;
 
-  journal.open(path.c_str());
+  journal.open(path.string().c_str());
   journal.record_marker("custom_marker");
   journal.close();
 
@@ -391,7 +391,7 @@ static void test_set_enabled() {
   /* enabled() should be false before open */
   TEST("enabled false before open", !journal.enabled());
 
-  journal.open(path.c_str());
+  journal.open(path.string().c_str());
   TEST("enabled true after open", journal.enabled());
 
   journal.set_enabled(false);

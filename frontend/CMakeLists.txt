@@ -438,6 +438,7 @@ target_include_directories(memdbg_auto_search_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
   ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner/heuristics
@@ -463,6 +464,7 @@ target_include_directories(memdbg_scanner_plan_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${imgui_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
@@ -500,6 +502,7 @@ target_include_directories(memdbg_app_state_parsing_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${imgui_SOURCE_DIR}
   ${nlohmann_json_SOURCE_DIR}/include
@@ -626,12 +629,14 @@ target_link_libraries(memdbg_trainer_formats_test PRIVATE simdjson)
 add_executable(memdbg_action_journal_test
   tests/test_action_journal.cpp
   src/action_journal/action_journal.cpp
+  src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
 )
 
 target_include_directories(memdbg_action_journal_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson
 )
 
