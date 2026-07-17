@@ -5,6 +5,7 @@
  */
 
 #include "app_state.hpp"
+#include "platform.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "file_picker.hpp"
@@ -13,13 +14,23 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace memdbg::frontend {
 
 namespace {
 
-enum class SettingsSection { Connection = 0, Preferences = 1, Actions = 2, COUNT = 3 };
+/* Local helper: compute the action journal path without depending on
+   ActionJournal::default_path(), keeping the action_journal module
+   free of platform.hpp */
+static std::filesystem::path journal_default_path() {
+  return platform::app_data_dir() / "logs" / "memdbg_actions.log";
+}
+
+enum class SettingsSection { Connection = 0, Preferences = 1, Actions = 2, Diagnostics = 3, COUNT = 4 };
 
 struct SettingsSectionDef {
   SettingsSection id;
@@ -28,9 +39,10 @@ struct SettingsSectionDef {
 };
 
 const SettingsSectionDef kSettingsSections[] = {
-  { SettingsSection::Connection,  icons::kConnect,  "settings.section.connection"  },
-  { SettingsSection::Preferences, icons::kSettings, "settings.section.preferences"  },
-  { SettingsSection::Actions,     icons::kSave,     "settings.section.actions"      },
+  { SettingsSection::Connection,  icons::kConnect,     "settings.section.connection"  },
+  { SettingsSection::Preferences, icons::kSettings,    "settings.section.preferences"  },
+  { SettingsSection::Actions,     icons::kSave,        "settings.section.actions"      },
+  { SettingsSection::Diagnostics, icons::kInfo,        "settings.section.diagnostics"  },
 };
 
 static void draw_settings_sidebar(AppState &state, float sidebar_w, float avail_y) {
@@ -111,6 +123,22 @@ static void draw_preferences_section(AppState &state) {
   }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", locale::tr("settings.crash_logging_hint"));
+
+  if (ImGui::Checkbox(locale::tr("settings.report_telemetry"), &state.report_telemetry_enabled)) {
+    set_status(state, state.report_telemetry_enabled
+        ? locale::tr("settings.report_telemetry_on")
+        : locale::tr("settings.report_telemetry_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.report_telemetry_hint"));
+
+  if (ImGui::Checkbox(locale::tr("settings.report_anonymize"), &state.report_anonymize)) {
+    set_status(state, state.report_anonymize
+        ? locale::tr("settings.report_anonymize_on")
+        : locale::tr("settings.report_anonymize_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.report_anonymize_hint"));
 
   if (ImGui::Checkbox(locale::tr("settings.taskmgr_prefetch_on_connect"),
                       &state.taskmgr_prefetch_on_connect)) {
@@ -426,6 +454,607 @@ static void draw_actions_section(AppState &state) {
 
 } // namespace
 
+/* ========================================================================
+ * Diagnostics section
+ * ======================================================================== */
+
+namespace {
+
+struct ReplayState {
+  std::vector<ActionJournalEntry> entries;
+  int current_step = 0;        /* 0-based index */
+  bool auto_advance = false;
+  float auto_interval = 2.0f;  /* seconds */
+  double next_advance_at = 0.0;
+  std::string file_path;
+  bool show_step_list = true;
+  bool loaded = false;
+};
+
+static ReplayState g_replay;
+
+static void export_diagnostics_bundle(AppState &state) {
+  std::string path = ui::pickSaveFile(
+      locale::tr("settings.diagnostics.export_bundle"),
+      "memdbg_diagnostics.md", "Markdown", "*.md");
+  if (path.empty()) return;
+
+  std::ofstream out(path);
+  if (!out) {
+    set_status(state, locale::tr("settings.diagnostics.export_failed"));
+    return;
+  }
+
+  /* ---- Header ---- */
+  out << "# MemDBG Diagnostics Bundle\n\n";
+  {
+    char time_buf[32];
+    std::time_t now = std::time(nullptr);
+    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+    out << "**Generated:** " << time_buf << "\n\n";
+  }
+
+  /* ---- System Information ---- */
+  out << "## System Information\n\n";
+  out << "- **MemDBG version:** " << MEMDBG_VERSION_STRING << "\n";
+  out << "- **Protocol:** v" << MEMDBG_PROTOCOL_VERSION << "\n";
+#if defined(_WIN32)
+  out << "- **Platform:** Windows";
+#elif defined(__APPLE__)
+  out << "- **Platform:** macOS";
+#elif defined(__linux__)
+  out << "- **Platform:** Linux";
+#else
+  out << "- **Platform:** Unknown";
+#endif
+#ifdef __x86_64__
+  out << " (x86_64)\n";
+#elif defined(__aarch64__)
+  out << " (ARM64)\n";
+#else
+  out << "\n";
+#endif
+  out << "- **Max read:** " << MEMDBG_PROTOCOL_MAX_READ << " bytes\n";
+  out << "- **Max packet:** " << MEMDBG_PROTOCOL_MAX_PACKET << " bytes\n";
+  out << "- **Socket timeout:** " << state.socket_timeout_ms << " ms\n";
+  out << "- **Connected:** " << (state.client.connected() ? "yes" : "no") << "\n";
+  if (state.has_hello) {
+    out << "- **Payload version:** " << state.hello.version << "\n";
+    out << "- **Payload protocol:** v" << state.hello.protocol_version << "\n";
+  }
+  out << "- **Crash logging:** " << (state.crash_logging_enabled ? "enabled" : "disabled") << "\n";
+  out << "- **Telemetry in reports:** " << (state.report_telemetry_enabled ? "enabled" : "disabled");
+  if (state.report_telemetry_enabled)
+    out << " (" << (state.report_anonymize ? "anonymized" : "raw") << ")";
+  out << "\n\n";
+
+  /* ---- Action Journal ---- */
+  out << "## Action Journal\n\n";
+  const auto journal_path = journal_default_path();
+  out << "**Path:** `" << journal_path.string() << "`\n\n";
+
+  std::vector<ActionJournalEntry> entries;
+  bool clean = false;
+  ActionJournal::load_recent(journal_path, entries, 500, &clean);
+
+  out << "**Entries:** " << entries.size() << "\n";
+  out << "**Last shutdown:** " << (clean ? "clean" : "unclean (possible crash)") << "\n\n";
+
+  if (entries.empty()) {
+    out << "_(no entries)_\n\n";
+  } else {
+    out << "| # | Timestamp | Action | Details |\n";
+    out << "|---|-----------|--------|----------|\n";
+    int idx = 1;
+    for (const auto &e : entries) {
+      char time_buf[24];
+      std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&e.timestamp));
+
+      // Anonymize details for export
+      std::string detail = e.detail;
+      if (state.report_anonymize && !detail.empty() && detail != "{}") {
+        // Simple redaction of host/PID/path from the JSON detail string
+        auto redact = [&detail](const std::string &key, const std::string &replacement) {
+          auto pos = detail.find("\"" + key + "\":\"");
+          if (pos != std::string::npos) {
+            auto val_start = pos + key.length() + 4;
+            auto val_end = detail.find("\"", val_start);
+            if (val_end != std::string::npos) {
+              detail.replace(val_start, val_end - val_start, replacement);
+            }
+          }
+        };
+        redact("host", "[HOST]");
+        redact("name", "[PROCESS]");
+        redact("path", "[PATH]");
+        // Redact PID by replacing numeric value
+        auto pid_pos = detail.find("\"pid\":");
+        if (pid_pos != std::string::npos) {
+          auto val_start = pid_pos + 6;
+          auto val_end = detail.find_first_of(",}", val_start);
+          if (val_end != std::string::npos) {
+            detail.replace(val_start, val_end - val_start, "[PID]");
+          }
+        }
+      }
+
+      // Escape pipes in detail for Markdown table formatting
+      std::string escaped = detail;
+      if (!escaped.empty() && escaped != "{}") {
+        for (size_t p = 0; (p = escaped.find('|', p)) != std::string::npos; p += 2)
+          escaped.insert(p, "\\");
+      }
+
+      out << "| " << idx << " | " << time_buf << " | `" << e.action << "` | "
+          << (escaped.empty() || escaped == "{}" ? "—" : escaped) << " |\n";
+      idx++;
+    }
+    out << "\n";
+  }
+
+  /* ---- Crash Log ---- */
+  out << "## Crash Log\n\n";
+  const auto crash_log_path = journal_default_path().parent_path() / "memdbg_crash.log";
+  out << "**Path:** `" << crash_log_path.string() << "`\n\n";
+
+  std::error_code ec;
+  if (std::filesystem::exists(crash_log_path, ec)) {
+    std::ifstream crash_in(crash_log_path);
+    if (crash_in) {
+      out << "```\n";
+      std::string line;
+      int crash_lines = 0;
+      while (std::getline(crash_in, line) && crash_lines < 500) {
+        out << line << "\n";
+        crash_lines++;
+      }
+      if (crash_lines >= 500)
+        out << "... (truncated)\n";
+      out << "```\n";
+    } else {
+      out << "_(could not read crash log)_\n";
+    }
+  } else {
+    out << "_(no crash log found)_\n";
+  }
+
+  char msg_buf[512];
+  std::snprintf(msg_buf, sizeof(msg_buf),
+                locale::tr("settings.diagnostics.export_saved"), path.c_str());
+  set_status(state, msg_buf);
+  push_notification(state, msg_buf, 5.0);
+}
+
+static void draw_diagnostics_section(AppState &state) {
+  const float scl = ui::dpi_scale();
+
+  /* ---- Row 1: System Info + Journal Info side by side ---- */
+  const float panel_w = (ImGui::GetContentRegionAvail().x - 8.0f * scl) * 0.5f;
+
+  /* System Information */
+  ui::begin_panel("DiagSystem", locale::tr("settings.diagnostics.system_info"), ImVec2(panel_w, 0));
+  {
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.version"));
+    ImGui::SameLine();
+    ImGui::Text("%s", MEMDBG_VERSION_STRING);
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.protocol"));
+    ImGui::SameLine();
+    ImGui::Text("v%d", MEMDBG_PROTOCOL_VERSION);
+
+    ImGui::Spacing();
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.platform"));
+    ImGui::SameLine();
+#if defined(_WIN32)
+    ImGui::Text("Windows");
+#elif defined(__APPLE__)
+    ImGui::Text("macOS");
+#elif defined(__linux__)
+    ImGui::Text("Linux");
+#else
+    ImGui::Text("Unknown");
+#endif
+
+#ifdef __x86_64__
+    ImGui::SameLine(); ImGui::Text(" (x86_64)");
+#elif defined(__aarch64__)
+    ImGui::SameLine(); ImGui::Text(" (ARM64)");
+#endif
+
+    ImGui::Spacing();
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.console_status"));
+    ImGui::SameLine();
+    if (state.client.connected()) {
+      ImGui::TextColored(ui::colors().success, "%s", locale::tr("settings.diagnostics.connected"));
+      ImGui::SameLine();
+      ImGui::Text("- %s:%d", state.host, state.debug_port);
+      if (state.has_hello) {
+        ImGui::TextColored(ui::colors().muted, "  Payload:");
+        ImGui::SameLine();
+        ImGui::Text("%s (protocol v%u)", state.hello.version.c_str(), state.hello.protocol_version);
+      }
+    } else {
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.not_connected"));
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.crash_logging_status"));
+    ImGui::SameLine();
+    if (state.crash_logging_enabled) {
+      ImGui::TextColored(ui::colors().success, "%s", locale::tr("settings.diagnostics.enabled"));
+    } else {
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.disabled"));
+    }
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.telemetry"));
+    ImGui::SameLine();
+    if (state.report_telemetry_enabled) {
+      ImGui::TextColored(ui::colors().success, "%s", locale::tr("settings.diagnostics.enabled"));
+      ImGui::SameLine();
+      ImGui::TextColored(ui::colors().muted, " (%s)",
+        state.report_anonymize ? locale::tr("settings.diagnostics.anonymized") : locale::tr("settings.diagnostics.raw"));
+    } else {
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.disabled"));
+    }
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.max_read"));
+    ImGui::SameLine();
+    ImGui::Text("%u bytes", static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_READ));
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.max_packet"));
+    ImGui::SameLine();
+    ImGui::Text("%u bytes", static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_PACKET));
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.socket_timeout"));
+    ImGui::SameLine();
+    ImGui::Text("%d ms", state.socket_timeout_ms);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("settings.diagnostics.copy_sysinfo")).c_str(), ImVec2(-1.0f, 32.0f * scl))) {
+      std::string info;
+      info += "MemDBG " MEMDBG_VERSION_STRING "\n";
+      info += "Protocol v" + std::to_string(MEMDBG_PROTOCOL_VERSION) + "\n";
+#if defined(_WIN32)
+      info += "Platform: Windows\n";
+#elif defined(__APPLE__)
+      info += "Platform: macOS\n";
+#elif defined(__linux__)
+      info += "Platform: Linux\n";
+#endif
+      info += "Connected: " + std::string(state.client.connected() ? "yes" : "no") + "\n";
+      if (state.has_hello) {
+        info += "Payload: " + state.hello.version + " (proto v" + std::to_string(state.hello.protocol_version) + ")\n";
+      }
+      ImGui::SetClipboardText(info.c_str());
+      set_status(state, locale::tr("settings.diagnostics.sysinfo_copied"));
+    }
+
+    ImGui::Spacing();
+    if (ui::primary_button((std::string(icons::kSave) + "  " + locale::tr("settings.diagnostics.export_bundle")).c_str(), ImVec2(-1.0f, 36.0f * scl))) {
+      export_diagnostics_bundle(state);
+    }
+  }
+  ui::end_panel();
+
+  ImGui::SameLine();
+
+  /* Journal Information */
+  ui::begin_panel("DiagJournal", locale::tr("settings.diagnostics.journal_title"), ImVec2(panel_w, 0));
+  {
+    const auto journal_path = journal_default_path();
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.journal_path"));
+    ImGui::SameLine();
+    ImGui::TextWrapped("%s", journal_path.string().c_str());
+
+    /* File size & entry count — throttled reload */
+    static double journal_last_reload = 0.0;
+    static bool journal_loaded = false;
+    static std::vector<ActionJournalEntry> journal_cached_entries;
+    static bool journal_cached_clean = false;
+    static uintmax_t journal_cached_size = 0;
+
+    if (ImGui::GetTime() - journal_last_reload > 2.0 || !journal_loaded) {
+      std::error_code ec;
+      journal_cached_size = 0;
+      if (std::filesystem::exists(journal_path, ec)) {
+        journal_cached_size = std::filesystem::file_size(journal_path, ec);
+      }
+      journal_cached_entries.clear();
+      ActionJournal::load_recent(journal_path, journal_cached_entries, 200, &journal_cached_clean);
+      journal_loaded = true;
+      journal_last_reload = ImGui::GetTime();
+    }
+
+    /* File size */
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.journal_size"));
+    ImGui::SameLine();
+    if (journal_cached_size < 1024)
+      ImGui::Text("%llu B", static_cast<unsigned long long>(journal_cached_size));
+    else if (journal_cached_size < 1024 * 1024)
+      ImGui::Text("%.1f KB", journal_cached_size / 1024.0);
+    else
+      ImGui::Text("%.1f MB", journal_cached_size / (1024.0 * 1024.0));
+
+    /* Entry count & clean shutdown */
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.journal_entries"));
+    ImGui::SameLine();
+    ImGui::Text("%zu", journal_cached_entries.size());
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.last_shutdown"));
+    ImGui::SameLine();
+    if (journal_cached_clean) {
+      ImGui::TextColored(ui::colors().success, "%s", locale::tr("settings.diagnostics.clean"));
+    } else {
+      ImGui::TextColored(ui::colors().warning, "%s", locale::tr("settings.diagnostics.unclean"));
+    }
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.journal_status"));
+    ImGui::SameLine();
+    if (state.action_journal.is_open()) {
+      ImGui::TextColored(ui::colors().success, "%s", locale::tr("settings.diagnostics.active"));
+    } else {
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.inactive"));
+    }
+
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.journal_enabled"));
+    ImGui::SameLine();
+    if (state.action_journal.enabled()) {
+      ImGui::TextColored(ui::colors().success, "%s", locale::tr("settings.diagnostics.enabled"));
+    } else {
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.disabled"));
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    /* Inline journal viewer */
+    ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.recent_actions"));
+    ImGui::Spacing();
+
+    const float list_h = ImGui::GetContentRegionAvail().y - 36.0f * scl;
+    if (ImGui::BeginChild("##DiagJournalList", ImVec2(0, list_h), true)) {
+      if (journal_cached_entries.empty()) {
+        ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.no_entries"));
+      } else {
+        for (const auto &entry : journal_cached_entries) {
+          char time_buf[24];
+          std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&entry.timestamp));
+          ImGui::TextColored(ui::colors().dim, "[%s]", time_buf);
+          ImGui::SameLine();
+          ImGui::TextColored(ui::colors().primary2, "%s", entry.action.c_str());
+          if (!entry.detail.empty() && entry.detail != "{}") {
+            ImGui::SameLine();
+            ImGui::TextColored(ui::colors().muted, "%s", entry.detail.c_str());
+          }
+        }
+      }
+    }
+    ImGui::EndChild();
+
+    if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("settings.diagnostics.copy_journal")).c_str(), ImVec2(-1.0f, 28.0f * scl))) {
+      std::string all;
+      for (const auto &entry : journal_cached_entries) {
+        char time_buf[24];
+        std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&entry.timestamp));
+        all += std::string("[") + time_buf + "] " + entry.action;
+        if (!entry.detail.empty() && entry.detail != "{}")
+          all += " " + entry.detail;
+        all += "\n";
+      }
+      ImGui::SetClipboardText(all.c_str());
+      set_status(state, locale::tr("settings.diagnostics.journal_copied"));
+    }
+  }
+  ui::end_panel();
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  /* ---- Row 2: Action Replay (full width) ---- */
+  ui::begin_panel("DiagReplay", locale::tr("settings.diagnostics.replay_title"), ImVec2(0, 0));
+  {
+    ImGui::TextWrapped("%s", locale::tr("settings.diagnostics.replay_desc"));
+    ImGui::Spacing();
+
+    /* ---- Controls bar ---- */
+    const float btn_w = 150.0f * scl;
+    const float btn_h = 32.0f * scl;
+
+    /* Load button */
+    if (ui::soft_button((std::string(icons::kLoad) + "  " + locale::tr("settings.diagnostics.load_journal")).c_str(), ImVec2(btn_w, btn_h))) {
+      std::string picked = ui::pickFile("Load Action Journal", "Log Files", "*.log");
+      if (!picked.empty()) {
+        g_replay.entries.clear();
+        bool clean = false;
+        ActionJournal::load_recent(std::filesystem::path(picked), g_replay.entries, 500, &clean);
+        g_replay.current_step = 0;
+        g_replay.loaded = true;
+        g_replay.file_path = picked;
+        g_replay.auto_advance = false;
+        set_status(state, std::string(locale::tr("settings.diagnostics.loaded")) + ": " +
+                   std::to_string(g_replay.entries.size()) + " " + locale::tr("settings.diagnostics.entries_loaded"));
+      }
+    }
+
+    /* Also allow loading the current journal */
+    ImGui::SameLine();
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.diagnostics.load_current")).c_str(), ImVec2(btn_w, btn_h))) {
+      const auto jpath = journal_default_path();
+      g_replay.entries.clear();
+      ActionJournal::load_recent(jpath, g_replay.entries, 500);
+      g_replay.current_step = 0;
+      g_replay.loaded = true;
+      g_replay.file_path = jpath.string();
+      g_replay.auto_advance = false;
+      set_status(state, std::string(locale::tr("settings.diagnostics.loaded")) + ": " +
+                 std::to_string(g_replay.entries.size()) + " " + locale::tr("settings.diagnostics.entries_loaded"));
+    }
+
+    ImGui::SameLine();
+    if (!g_replay.file_path.empty()) {
+      ImGui::TextColored(ui::colors().dim, "%s", g_replay.file_path.c_str());
+    }
+
+    if (!g_replay.loaded || g_replay.entries.empty()) {
+      ImGui::Spacing();
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.replay_empty"));
+      ui::end_panel();
+      return;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    /* ---- Progress bar ---- */
+    const int total = static_cast<int>(g_replay.entries.size());
+    const int current = g_replay.current_step;
+    float progress = total > 0 ? static_cast<float>(current + 1) / static_cast<float>(total) : 0.0f;
+    ImGui::ProgressBar(progress, ImVec2(-1.0f, 12.0f * scl), "");
+    ImGui::Spacing();
+
+    /* ---- Two-column: step list + step details ---- */
+    const float left_w = (g_replay.show_step_list && total > 1) ? 220.0f * scl : 0.0f;
+    const float right_w = ImGui::GetContentRegionAvail().x - left_w - 8.0f * scl;
+
+    /* Step list (left column) */
+    if (left_w > 0) {
+      if (ImGui::BeginChild("##ReplayStepList", ImVec2(left_w, 0), true)) {
+        for (int i = 0; i < total; ++i) {
+          const bool is_current = (i == current);
+          const bool is_done = (i < current);
+
+          ImGui::PushStyleColor(ImGuiCol_Text, is_current ? ui::colors().primary2 :
+                                                (is_done ? ui::colors().dim : ui::colors().muted));
+
+          char label[64];
+          std::snprintf(label, sizeof(label), "%d. %s", i + 1, g_replay.entries[i].action.c_str());
+          if (ImGui::Selectable(label, is_current)) {
+            g_replay.current_step = i;
+            g_replay.auto_advance = false;
+          }
+          ImGui::PopStyleColor();
+
+          if (is_current) ImGui::SetItemDefaultFocus();
+        }
+      }
+      ImGui::EndChild();
+      ImGui::SameLine();
+    }
+
+    /* Step details (right column) */
+    if (ImGui::BeginChild("##ReplayDetail", ImVec2(right_w, 0), true)) {
+      const auto &step = g_replay.entries[current];
+
+      /* Step counter */
+      char step_label[64];
+      std::snprintf(step_label, sizeof(step_label), locale::tr("settings.diagnostics.step_of"),
+                    current + 1, total);
+      ImGui::TextColored(ui::colors().primary2, "%s", step_label);
+      ImGui::Spacing();
+
+      /* Action card */
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f * scl, 12.0f * scl));
+      ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f * scl);
+      ImGui::BeginChild("##ReplayActionCard", ImVec2(0, 0), true);
+
+      /* Timestamp */
+      char time_buf[32];
+      std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&step.timestamp));
+      ImGui::TextColored(ui::colors().dim, "%s", time_buf);
+
+      /* Action name */
+      ImGui::TextColored(ui::colors().primary2, "%s: %s",
+                         locale::tr("settings.diagnostics.action"), step.action.c_str());
+
+      /* Detail params */
+      if (!step.detail.empty() && step.detail != "{}") {
+        ImGui::Spacing();
+        ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.params"));
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", step.detail.c_str());
+      }
+
+      /* Instruction */
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+      ImGui::TextWrapped("%s %s", icons::kInfo,
+                         locale::tr("settings.diagnostics.replay_instruction"));
+
+      ImGui::EndChild();
+      ImGui::PopStyleVar(2);
+      ImGui::PopStyleColor();
+    }
+    ImGui::EndChild();
+
+    /* ---- Navigation buttons ---- */
+    ImGui::Spacing();
+
+    ImGui::BeginDisabled(current <= 0);
+    if (ui::soft_button((std::string("\xe2\x86\x90  ") + locale::tr("settings.diagnostics.prev")).c_str(), ImVec2(btn_w, btn_h))) {
+      g_replay.current_step = std::max(0, current - 1);
+      g_replay.auto_advance = false;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(current >= total - 1);
+    if (ui::soft_button((std::string("\xe2\x86\x92  ") + locale::tr("settings.diagnostics.next")).c_str(), ImVec2(btn_w, btn_h))) {
+      g_replay.current_step = std::min(total - 1, current + 1);
+      g_replay.auto_advance = false;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ui::soft_button((std::string(g_replay.auto_advance ? icons::kPause : icons::kPlay) + "  " +
+                         locale::tr(g_replay.auto_advance ? "settings.diagnostics.pause" : "settings.diagnostics.auto")).c_str(), ImVec2(btn_w, btn_h))) {
+      g_replay.auto_advance = !g_replay.auto_advance;
+      if (g_replay.auto_advance) {
+        g_replay.next_advance_at = ImGui::GetTime() + g_replay.auto_interval;
+      }
+    }
+
+    /* Auto-advance interval slider */
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f * scl);
+    ImGui::SliderFloat(locale::tr("settings.diagnostics.interval"), &g_replay.auto_interval, 0.5f, 10.0f, "%.1fs");
+
+    ImGui::SameLine();
+    if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("settings.diagnostics.reset")).c_str(), ImVec2(btn_w, btn_h))) {
+      g_replay.current_step = 0;
+      g_replay.auto_advance = false;
+    }
+
+    /* Step list toggle */
+    ImGui::SameLine();
+    ImGui::Checkbox(locale::tr("settings.diagnostics.show_list"), &g_replay.show_step_list);
+
+    /* Auto-advance logic */
+    if (g_replay.auto_advance && ImGui::GetTime() >= g_replay.next_advance_at) {
+      if (current < total - 1) {
+        g_replay.current_step++;
+        g_replay.next_advance_at = ImGui::GetTime() + g_replay.auto_interval;
+      } else {
+        g_replay.auto_advance = false;
+      }
+    }
+  }
+  ui::end_panel();
+}
+
+} // namespace
+
 void draw_settings(AppState &state, ImVec2 avail) {
   ensure_console_targets(state);
   const float scl = ui::dpi_scale();
@@ -446,6 +1075,7 @@ void draw_settings(AppState &state, ImVec2 avail) {
     case SettingsSection::Connection:  draw_connection_section(state);  break;
     case SettingsSection::Preferences: draw_preferences_section(state); break;
     case SettingsSection::Actions:     draw_actions_section(state);     break;
+    case SettingsSection::Diagnostics: draw_diagnostics_section(state); break;
   }
 
   ImGui::EndChild();

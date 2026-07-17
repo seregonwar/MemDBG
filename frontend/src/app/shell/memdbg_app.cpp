@@ -355,6 +355,93 @@ void draw_app(AppState &state) {
   draw_notifications(state);
   draw_connect_spinner(state);
 
+  // Crash recovery dialog (like Unreal Engine crash reporter)
+  if (state.crash_detected_on_startup) {
+    ImGui::OpenPopup("##CrashRecovery");
+    state.crash_detected_on_startup = false;
+    state.crash_report_dialog_open = true;
+  }
+  static std::vector<ActionJournalEntry> s_crash_actions;
+  static bool s_crash_actions_loaded = false;
+
+  if (state.crash_report_dialog_open) {
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    bool open = true;
+    if (ImGui::BeginPopupModal("##CrashRecovery", &open,
+          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+      ImGui::TextUnformatted(locale::tr("crash.detected_title"));
+      ImGui::Spacing();
+      ImGui::TextWrapped("%s", locale::tr("crash.detected_desc"));
+      ImGui::Spacing();
+      ImGui::TextWrapped("%s", locale::tr("crash.report_prompt"));
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+
+      // Load previous actions for display
+      // (moved to outer scope so the !open cleanup below can reach them)
+      if (!s_crash_actions_loaded) {
+        ActionJournal::load_recent(ActionJournal::default_path(), s_crash_actions, 50);
+        s_crash_actions_loaded = true;
+      }
+
+      if (!s_crash_actions.empty()) {
+        ImGui::TextWrapped("%s", locale::tr("crash.last_actions"));
+        ImGui::Spacing();
+        ImGui::BeginChild("CrashActions", ImVec2(500, 150), true);
+        for (const auto &entry : s_crash_actions) {
+          char time_buf[16];
+          std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S",
+                        std::localtime(&entry.timestamp));
+          ImGui::TextColored(ui::colors().dim, "[%s]", time_buf);
+          ImGui::SameLine();
+          ImGui::TextUnformatted(entry.action.c_str());
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+      }
+
+      bool report_clicked = ui::soft_button(
+          (std::string(icons::kExternalLink) + "  " + locale::tr("crash.report_github")).c_str(),
+          ImVec2(280, 40));
+      ImGui::SameLine();
+      bool dismiss_clicked = ui::soft_button(
+          (std::string(icons::kClose) + "  " + locale::tr("crash.dismiss")).c_str(),
+          ImVec2(140, 40));
+
+      if (report_clicked) {
+        std::string url = ActionJournal::build_crash_report_url(
+            s_crash_actions, MEMDBG_VERSION_STRING,
+#if defined(__APPLE__)
+            "macOS"
+#elif defined(_WIN32)
+            "Windows"
+#else
+            "Linux"
+#endif
+            ,
+            state.report_anonymize,
+            state.report_telemetry_enabled);
+        platform::open_url(url);
+        state.crash_report_dialog_open = false;
+        ImGui::CloseCurrentPopup();
+      }
+      if (dismiss_clicked) {
+        s_crash_actions.clear();
+        s_crash_actions_loaded = false;
+        state.crash_report_dialog_open = false;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+    if (!open) {
+      s_crash_actions.clear();
+      s_crash_actions_loaded = false;
+      state.crash_report_dialog_open = false;
+    }
+  }
+
   // Capture console-side UDP logs into the crash logger
   if (state.crash_logging_enabled && state.udp_listener.running()) {
     state.crash_logger.capture_console_lines(
@@ -551,14 +638,35 @@ void init_app_shared(AppState &state, float dpi_scale) {
   }
   state.theme_manager.apply_active_theme();
 
-  // Open crash logger in the executable directory
+  // Open crash logger and action journal in app data dir (writable on all platforms)
   try {
-    std::filesystem::path log_path = s_executable_dir.empty()
-        ? std::filesystem::path("memdbg_crash.log")
-        : s_executable_dir / "memdbg_crash.log";
-    state.crash_logger.open(log_path.string().c_str());
+    const auto logs_dir = platform::app_data_dir() / "logs";
+    std::filesystem::create_directories(logs_dir);
+    state.crash_logger.open((logs_dir / "memdbg_crash.log").string().c_str());
   } catch (...) {
     // crash logger failure is non-fatal
+  }
+
+  // Detect previous crash: if the action journal exists but lacks clean_shutdown
+  {
+    const auto journal_path = ActionJournal::default_path();
+    std::error_code ec;
+    if (std::filesystem::exists(journal_path, ec) && !ec) {
+      bool had_clean_shutdown = false;
+      std::vector<ActionJournalEntry> prev_actions;
+      ActionJournal::load_recent(journal_path, prev_actions, 200, &had_clean_shutdown);
+      if (!had_clean_shutdown && !prev_actions.empty()) {
+        state.crash_detected_on_startup = true;
+        state.crash_logger.log("crash", "Previous session did not shut down cleanly");
+      }
+    }
+  }
+
+  // Open action journal for this session
+  try {
+    state.action_journal.open(ActionJournal::default_path().string().c_str());
+  } catch (...) {
+    // action journal failure is non-fatal
   }
 
   bool settings_loaded = false;
@@ -625,8 +733,10 @@ void init_app_shared(AppState &state, float dpi_scale) {
       set_status(state, "UDP: " + udp_error);
   }
 
-  if (state.crash_logging_enabled)
+  if (state.crash_logging_enabled) {
     state.crash_logger.log("startup", "MemDBG frontend started");
+    state.action_journal.record("app_start", "{\"version\":\"" MEMDBG_VERSION_STRING "\"}");
+  }
 
   if (state.payload_auto_inject) {
     state.payload_auto_inject_probe = true;
@@ -670,8 +780,9 @@ void shutdown_app_shared(AppState &state) {
   release_check_shutdown(state.release_check);
   github_profile_shutdown(state.github_profile);
   locale::Repository::instance().shutdown();
-  shutdown_texture(s_logo_texture);
+  state.action_journal.close();
   state.crash_logger.close();
+  shutdown_texture(s_logo_texture);
 }
 
 #if !defined(MEMDBG_PLATFORM_IOS)

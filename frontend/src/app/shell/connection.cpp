@@ -146,8 +146,10 @@ void connect_console(AppState &state) {
   state.connect_cancel_requested = false;
   s_connect_generation = ++state.connect_generation;
 
-  if (state.crash_logging_enabled)
+  if (state.crash_logging_enabled) {
     state.crash_logger.log("connect", ("Connecting to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
+  }
+  state.action_journal.record("connect", ("{\"host\":\"" + ActionJournal::json_escape(state.host) + "\",\"port\":" + std::to_string(state.debug_port) + "}").c_str());
 
   set_status(state, "Connecting to " + std::string(state.host) + "...");
 
@@ -332,6 +334,7 @@ void poll_map_refresh(AppState &state) {
   if (state.crash_logging_enabled)
     state.crash_logger.log("refresh",
         ("Memory maps: " + std::to_string(state.maps.size()) + " maps").c_str());
+  state.action_journal.record("maps_refresh", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"maps\":" + std::to_string(state.maps.size()) + "}").c_str());
 }
 
 /* ---- Tracer ---- */
@@ -423,18 +426,20 @@ void poll_tracer(AppState &state) {
                       sizeof(state.tracer_status_text), "%s", "Stopped");
         state.tracer_target_pid = 0;
         state.tracer_next_poll = 0.0;
-        state.tracer_next_event_poll = 0.0;
-        set_status(state, "Tracer detached; target resumed");
+    state.tracer_next_event_poll = 0.0;
+    set_status(state, "Tracer detached; target resumed");
+    state.action_journal.record("tracer_detach", ("{\"pid\":" + std::to_string(state.tracer_target_pid) + "}").c_str());
       } else {
         std::snprintf(state.tracer_status_text,
                       sizeof(state.tracer_status_text), "%s", "Starting...");
         state.tracer_next_poll = 0.0;
         state.tracer_next_event_poll = 0.0;
-      }
+        state.action_journal.record("tracer_attach", ("{\"pid\":" + std::to_string(state.tracer_target_pid) + "}").c_str());
 
       if (!was_detach && state.tracer_detach_requested) {
         state.tracer_detach_requested = false;
         request_tracer_detach_async(state);
+      }
       }
     }
   }
@@ -785,6 +790,8 @@ void poll_connect(AppState &state) {
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", ("Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
 
+  state.action_journal.record("connected", ("{\"host\":\"" + ActionJournal::json_escape(state.host) + "\",\"port\":" + std::to_string(state.debug_port) + ",\"version\":\"" + ActionJournal::json_escape(state.hello.version) + "\"}").c_str());
+
   set_status(state, message);
   push_notification(state, "Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port));
   start_taskmgr_prefetch(state);
@@ -944,11 +951,13 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");
 
-  const std::string message = reason != nullptr && reason[0] != '\0'
+  const std::string disconnect_reason = reason != nullptr && reason[0] != '\0'
                                   ? std::string(reason)
                                   : "Console disconnected";
-  set_status(state, message);
-  push_notification(state, message);
+  state.action_journal.record("disconnect", ("{\"reason\":\"" + ActionJournal::json_escape(disconnect_reason) + "\"}").c_str());
+
+  set_status(state, disconnect_reason);
+  push_notification(state, disconnect_reason);
 }
 
 } // namespace

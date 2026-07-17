@@ -193,6 +193,7 @@ add_executable(memdbg_frontend
   src/app/shell/mobile/mobile.cpp
 
   # core (backend clients)
+  src/action_journal/action_journal.cpp
   src/core/crash_logger.cpp
   src/core/discovery_client.cpp
   src/core/github_profile.cpp
@@ -278,6 +279,7 @@ target_include_directories(memdbg_frontend PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app/shell
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
@@ -580,6 +582,7 @@ add_executable(memdbg_trainer_formats_test
   src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
   src/core/client/memdbg_client.cpp
+  src/action_journal/action_journal.cpp
   src/core/crash_logger.cpp
   src/core/discovery_client.cpp
   src/core/payload_fetcher.cpp
@@ -602,6 +605,7 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
   ${MEMDBG_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core
   ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
@@ -616,6 +620,25 @@ target_include_directories(memdbg_trainer_formats_test PRIVATE
 )
 
 target_link_libraries(memdbg_trainer_formats_test PRIVATE simdjson)
+
+# ---- memdbg_action_journal_test ----
+
+add_executable(memdbg_action_journal_test
+  tests/test_action_journal.cpp
+  src/action_journal/action_journal.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
+)
+
+target_include_directories(memdbg_action_journal_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson
+)
+
+if(MSVC)
+  set_property(TARGET memdbg_action_journal_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # ---- memdbg_locale_manager_test ----
 

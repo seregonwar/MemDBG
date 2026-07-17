@@ -9,6 +9,7 @@
 
 #include "core/client/memdbg_client.hpp"
 #include "core/repo_utils.hpp"
+#include "action_journal.hpp"
 #include "crash_logger.hpp"
 #include "discovery_client.hpp"
 #include "udp_log_listener.hpp"
@@ -252,10 +253,15 @@ struct AutoSearchCandidate {
 
 struct AppState {
   Client client;
+  ActionJournal action_journal;
   CrashLogger crash_logger;
   bool crash_logging_enabled = true;
   bool taskmgr_prefetch_on_connect = false;
   uint64_t crash_udp_last_received = 0;
+  bool crash_detected_on_startup = false;
+  bool crash_report_dialog_open = false;
+  bool report_telemetry_enabled = true;
+  bool report_anonymize = true;
   UdpLogListener udp_listener;
   GitHubProfile github_profile;
   PayloadFetcher payload_fetcher;

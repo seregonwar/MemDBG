@@ -232,6 +232,7 @@ static void dump_selected_map(AppState &state) {
   }
   char dp_buf[512]; std::snprintf(dp_buf, sizeof(dp_buf), locale::tr("processes.dumped_bytes"), written_total, out_path.string().c_str()); set_status(state, dp_buf);
   char md_buf[512]; std::snprintf(md_buf, sizeof(md_buf), locale::tr("processes.map_dumped"), out_path.string().c_str()); push_notification(state, md_buf, 5.0);
+  state.action_journal.record("memory_dump", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"bytes\":" + std::to_string(written_total) + "}").c_str());
 }
 
 static void dump_filtered_maps(AppState &state) {
@@ -339,6 +340,7 @@ static void dump_filtered_maps(AppState &state) {
   set_status(state, "Dumped " + std::to_string(dumped_maps) + " filtered map(s) to " +
                     out_dir.string());
   char pdw_buf[512]; std::snprintf(pdw_buf, sizeof(pdw_buf), locale::tr("processes.dump_written"), out_dir.string().c_str()); push_notification(state, pdw_buf, 5.0);
+  state.action_journal.record("memory_dump_filtered", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"maps\":" + std::to_string(dumped_maps) + ",\"bytes\":" + std::to_string(dumped_total) + "}").c_str());
 }
 
 /* ---- Process selection ---- */
@@ -359,6 +361,7 @@ static void select_process(AppState &state, int row) {
   char pid_buf[128];
   std::snprintf(pid_buf, sizeof(pid_buf), locale::tr("processes.selected_pid"), state.selected_pid);
   set_status(state, pid_buf);
+  state.action_journal.record("process_select", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"name\":\"" + ActionJournal::json_escape(state.processes[row].name) + "\"}").c_str());
 }
 
 static void ensure_process_info(AppState &state) {
@@ -790,6 +793,592 @@ static void draw_json_dump_dialog(AppState &state) {
   ImGui::EndPopup();
 }
 
+/* ---- ELF Load / Hijack ---- */
+
+#pragma pack(push, 1)
+struct Elf64_Ehdr {
+  uint8_t  e_ident[16];
+  uint16_t e_type;
+  uint16_t e_machine;
+  uint32_t e_version;
+  uint64_t e_entry;
+  uint64_t e_phoff;
+  uint64_t e_shoff;
+  uint32_t e_flags;
+  uint16_t e_ehsize;
+  uint16_t e_phentsize;
+  uint16_t e_phnum;
+  uint16_t e_shentsize;
+  uint16_t e_shnum;
+  uint16_t e_shstrndx;
+};
+struct Elf32_Ehdr {
+  uint8_t  e_ident[16];
+  uint16_t e_type;
+  uint16_t e_machine;
+  uint32_t e_version;
+  uint32_t e_entry;
+  uint32_t e_phoff;
+  uint32_t e_shoff;
+  uint32_t e_flags;
+  uint16_t e_ehsize;
+  uint16_t e_phentsize;
+  uint16_t e_phnum;
+  uint16_t e_shentsize;
+  uint16_t e_shnum;
+  uint16_t e_shstrndx;
+};
+struct Elf64_Phdr {
+  uint32_t p_type;
+  uint32_t p_flags;
+  uint64_t p_offset;
+  uint64_t p_vaddr;
+  uint64_t p_paddr;
+  uint64_t p_filesz;
+  uint64_t p_memsz;
+  uint64_t p_align;
+};
+struct Elf32_Phdr {
+  uint32_t p_type;
+  uint32_t p_offset;
+  uint32_t p_vaddr;
+  uint32_t p_paddr;
+  uint32_t p_filesz;
+  uint32_t p_memsz;
+  uint32_t p_flags;
+  uint32_t p_align;
+};
+#pragma pack(pop)
+
+#define PT_NULL    0
+#define PT_LOAD    1
+#define PT_DYNAMIC 2
+#define PT_INTERP  3
+#define PT_NOTE    4
+#define PT_PHDR    6
+#define PT_TLS     7
+#define PT_GNU_EH_FRAME 0x6474e550
+#define PT_GNU_STACK    0x6474e551
+#define PT_GNU_RELRO    0x6474e552
+
+static const char *elf_phdr_type_name(uint32_t p_type) {
+  switch (p_type) {
+  case PT_NULL:    return "NULL";
+  case PT_LOAD:    return "LOAD";
+  case PT_DYNAMIC: return "DYNAMIC";
+  case PT_INTERP:  return "INTERP";
+  case PT_NOTE:    return "NOTE";
+  case PT_PHDR:    return "PHDR";
+  case PT_TLS:     return "TLS";
+  case PT_GNU_EH_FRAME: return "GNU_EH_FRAME";
+  case PT_GNU_STACK:    return "GNU_STACK";
+  case PT_GNU_RELRO:    return "GNU_RELRO";
+  default:         return "???";
+  }
+}
+
+static bool parse_elf_header(const std::vector<uint8_t> &data, AppState::ElfMeta &meta) {
+  meta = {};
+  if (data.size() < 52U) return false;
+
+  /* Check ELF magic */
+  if (data[0] != 0x7fU || data[1] != 'E' || data[2] != 'L' || data[3] != 'F') {
+    meta.elf_class = 0;
+    return false;
+  }
+
+  const uint8_t elf_class = data[4]; /* 1=32-bit, 2=64-bit */
+  meta.elf_class = elf_class;
+
+  if (elf_class == 2) {
+    /* 64-bit ELF */
+    if (data.size() < sizeof(Elf64_Ehdr)) return false;
+    Elf64_Ehdr ehdr;
+    std::memcpy(&ehdr, data.data(), sizeof(ehdr));
+    meta.elf_type    = ehdr.e_type;
+    meta.elf_machine = ehdr.e_machine;
+    meta.entry_point = ehdr.e_entry;
+
+    if (ehdr.e_phoff == 0U || ehdr.e_phnum == 0U) return true;
+    if (ehdr.e_phentsize < sizeof(Elf64_Phdr)) return false;
+
+    for (uint16_t i = 0; i < ehdr.e_phnum; ++i) {
+      uint64_t offset = ehdr.e_phoff + static_cast<uint64_t>(i) * ehdr.e_phentsize;
+      if (offset + sizeof(Elf64_Phdr) > data.size()) break;
+      Elf64_Phdr phdr;
+      std::memcpy(&phdr, data.data() + offset, sizeof(phdr));
+      if (phdr.p_type == PT_NULL) continue;
+      AppState::ElfSegment seg;
+      seg.name    = elf_phdr_type_name(phdr.p_type);
+      seg.vaddr   = phdr.p_vaddr;
+      seg.memsz   = phdr.p_memsz;
+      seg.filesz  = phdr.p_filesz;
+      seg.p_offset = phdr.p_offset;
+      seg.p_type  = phdr.p_type;
+      seg.flags   = phdr.p_flags;
+      meta.segments.push_back(seg);
+    }
+  } else if (elf_class == 1) {
+    /* 32-bit ELF */
+    if (data.size() < sizeof(Elf32_Ehdr)) return false;
+    Elf32_Ehdr ehdr;
+    std::memcpy(&ehdr, data.data(), sizeof(ehdr));
+    meta.elf_type    = ehdr.e_type;
+    meta.elf_machine = ehdr.e_machine;
+    meta.entry_point = static_cast<uint64_t>(ehdr.e_entry);
+
+    if (ehdr.e_phoff == 0U || ehdr.e_phnum == 0U) return true;
+    if (ehdr.e_phentsize < sizeof(Elf32_Phdr)) return false;
+
+    for (uint16_t i = 0; i < ehdr.e_phnum; ++i) {
+      uint64_t offset = static_cast<uint64_t>(ehdr.e_phoff) + static_cast<uint64_t>(i) * ehdr.e_phentsize;
+      if (offset + sizeof(Elf32_Phdr) > data.size()) break;
+      Elf32_Phdr phdr;
+      std::memcpy(&phdr, data.data() + offset, sizeof(phdr));
+      if (phdr.p_type == PT_NULL) continue;
+      AppState::ElfSegment seg;
+      seg.name    = elf_phdr_type_name(phdr.p_type);
+      seg.vaddr   = phdr.p_vaddr;
+      seg.memsz   = phdr.p_memsz;
+      seg.filesz  = phdr.p_filesz;
+      seg.p_offset = phdr.p_offset;
+      seg.p_type  = phdr.p_type;
+      seg.flags   = phdr.p_flags;
+      meta.segments.push_back(seg);
+    }
+  } else {
+    return false;
+  }
+  return true;
+}
+
+static void load_elf_file(AppState &state, const std::string &path) {
+  std::snprintf(state.elf_load_path, sizeof(state.elf_load_path), "%s", path.c_str());
+  state.elf_meta_valid = false;
+  state.elf_meta = {};
+
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) {
+    set_status(state, locale::tr("processes.elf_cannot_open"));
+    return;
+  }
+  std::streamsize sz = file.tellg();
+  if (sz <= 0 || static_cast<uint64_t>(sz) > (64ULL << 20)) {
+    set_status(state, locale::tr("processes.elf_too_large"));
+    return;
+  }
+  file.seekg(0, std::ios::beg);
+  std::vector<uint8_t> data(static_cast<size_t>(sz));
+  if (!file.read(reinterpret_cast<char *>(data.data()), sz)) {
+    set_status(state, locale::tr("processes.elf_cannot_open"));
+    return;
+  }
+
+  if (!parse_elf_header(data, state.elf_meta)) {
+    char magic_buf[64];
+    if (data.size() >= 4U)
+      std::snprintf(magic_buf, sizeof(magic_buf),
+                    locale::tr("processes.elf_invalid_magic"),
+                    data[0], data[1], data[2], data[3]);
+    else
+      std::snprintf(magic_buf, sizeof(magic_buf), "%s", locale::tr("processes.elf_cannot_open"));
+    set_status(state, magic_buf);
+    return;
+  }
+  state.elf_meta_valid = true;
+
+  /* Add to recent files (deduplicate, keep most recent 5) */
+  auto &recent = state.elf_recent_files;
+  recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
+  recent.insert(recent.begin(), path);
+  if (recent.size() > AppState::kMaxRecentElf) recent.resize(AppState::kMaxRecentElf);
+
+  char elf_buf[256];
+  std::snprintf(elf_buf, sizeof(elf_buf), locale::tr("processes.elf_dropped"),
+                std::filesystem::path(path).filename().string().c_str());
+  set_status(state, elf_buf);
+}
+
+static void request_elf_load(AppState &state) {
+  if (!state.client.connected() || state.selected_pid <= 0) return;
+  if (client_async_busy(state)) return;
+
+  const char *fpath = state.elf_load_path;
+  if (fpath[0] == '\0') {
+    set_status(state, locale::tr("processes.elf_select"));
+    return;
+  }
+
+  std::ifstream file(fpath, std::ios::binary | std::ios::ate);
+  if (!file) { set_status(state, locale::tr("processes.elf_cannot_open")); return; }
+  std::streamsize sz = file.tellg();
+  if (sz <= 0 || static_cast<uint64_t>(sz) > (64ULL << 20)) {
+    set_status(state, locale::tr("processes.elf_too_large")); return;
+  }
+  file.seekg(0, std::ios::beg);
+  std::vector<uint8_t> elf_data(static_cast<size_t>(sz));
+  if (!file.read(reinterpret_cast<char *>(elf_data.data()), sz)) {
+    set_status(state, locale::tr("processes.elf_cannot_open")); return;
+  }
+
+  state.elf_load_pending = true;
+  state.elf_load_error.clear();
+  state.elf_load_op = "Load ELF";
+  state.elf_load_start_time = ImGui::GetTime();
+  state.elf_hijack_accepted = false;
+  state.elf_load_result = {};
+
+  const int32_t pid = state.selected_pid;
+  const uint32_t flags = state.elf_jump_entry ? 1U : 0U;
+  const uint32_t match_flags = state.elf_match_flags;
+  const std::string target_region = state.elf_target_region;
+  const std::string host = state.host;
+  const uint16_t port = static_cast<uint16_t>(state.debug_port);
+
+  state.action_journal.record("elf_load", ("{\"pid\":" + std::to_string(pid) + ",\"path\":\"" + ActionJournal::json_escape(fpath) + "\"}").c_str());
+
+  state.elf_load_future = std::async(std::launch::async,
+      [host, port, pid, flags, match_flags, target_region, elf_data = std::move(elf_data)]() -> bool {
+        try {
+          Client local_client;
+          if (!local_client.connect_to(host, port)) return false;
+          Client::ProcessElfLoadResult result;
+          if (!local_client.process_elf_load(pid, elf_data, flags, target_region, match_flags, result))
+            return false;
+          return true;
+        } catch (const std::exception &) {
+          return false;
+        }
+      });
+}
+
+static void request_elf_hijack(AppState &state) {
+  if (!state.client.connected() || state.selected_pid <= 0) return;
+  if (client_async_busy(state)) return;
+
+  const char *fpath = state.elf_load_path;
+  if (fpath[0] == '\0') {
+    set_status(state, locale::tr("processes.elf_select"));
+    return;
+  }
+
+  std::ifstream file(fpath, std::ios::binary | std::ios::ate);
+  if (!file) { set_status(state, locale::tr("processes.elf_cannot_open")); return; }
+  std::streamsize sz = file.tellg();
+  if (sz <= 0 || static_cast<uint64_t>(sz) > (64ULL << 20)) {
+    set_status(state, locale::tr("processes.elf_too_large")); return;
+  }
+  file.seekg(0, std::ios::beg);
+  std::vector<uint8_t> elf_data(static_cast<size_t>(sz));
+  if (!file.read(reinterpret_cast<char *>(elf_data.data()), sz)) {
+    set_status(state, locale::tr("processes.elf_cannot_open")); return;
+  }
+
+  state.elf_load_pending = true;
+  state.elf_load_error.clear();
+  state.elf_load_op = "Hijack";
+  state.elf_load_start_time = ImGui::GetTime();
+  state.elf_hijack_accepted = false;
+  state.elf_load_result = {};
+
+  const int32_t pid = state.selected_pid;
+  const uint32_t flags = 3U; /* spawn thread + resume target */
+  const uint32_t match_flags = state.elf_match_flags;
+  const std::string target_region = state.elf_target_region;
+  const std::string host = state.host;
+  const uint16_t port = static_cast<uint16_t>(state.debug_port);
+
+  state.action_journal.record("elf_hijack", ("{\"pid\":" + std::to_string(pid) + ",\"path\":\"" + ActionJournal::json_escape(fpath) + "\"}").c_str());
+
+  state.elf_load_future = std::async(std::launch::async,
+      [host, port, pid, flags, match_flags, target_region, elf_data = std::move(elf_data)]() -> bool {
+        try {
+          Client local_client;
+          if (!local_client.connect_to(host, port)) return false;
+          bool accepted = false;
+          if (!local_client.process_hijack(pid, elf_data, flags, target_region, match_flags, accepted))
+            return false;
+          return accepted;
+        } catch (const std::exception &) {
+          return false;
+        }
+      });
+}
+
+static void poll_elf_load(AppState &state) {
+  if (!state.elf_load_pending) return;
+  if (!state.elf_load_future.valid()) {
+    state.elf_load_pending = false;
+    return;
+  }
+  auto status = state.elf_load_future.wait_for(std::chrono::milliseconds(0));
+  if (status != std::future_status::ready) {
+    double elapsed = ImGui::GetTime() - state.elf_load_start_time;
+    if (elapsed > 120.0) {
+      state.elf_load_pending = false;
+      state.elf_load_error = "ELF operation timed out after 120s";
+      set_status(state, state.elf_load_error);
+    }
+    return;
+  }
+  state.elf_load_pending = false;
+  bool ok = false;
+  try {
+    ok = state.elf_load_future.get();
+  } catch (const std::exception &ex) {
+    state.elf_load_error = ex.what();
+  } catch (...) {
+    state.elf_load_error = locale::tr("processes.elf_unknown_error");
+  }
+
+  if (!ok && !state.elf_load_error.empty()) {
+    char ef_buf[512];
+    std::snprintf(ef_buf, sizeof(ef_buf), locale::tr("processes.elf_failed"),
+                  state.elf_load_op.c_str(), state.elf_load_error.c_str());
+    set_status(state, ef_buf);
+    return;
+  }
+
+  if (state.elf_load_op == "Hijack") {
+    if (ok) {
+      state.elf_hijack_accepted = true;
+      set_status(state, locale::tr("processes.elf_hijack_started"));
+      push_notification(state, locale::tr("processes.elf_hijack_started"), 4.0);
+    } else {
+      state.elf_hijack_accepted = false;
+      state.elf_load_error = state.elf_load_error.empty()
+          ? locale::tr("processes.elf_hijack_rejected")
+          : state.elf_load_error;
+      set_status(state, state.elf_load_error);
+    }
+  } else {
+    if (ok) {
+      char el_buf[256];
+      std::snprintf(el_buf, sizeof(el_buf), locale::tr("processes.elf_loaded_at"),
+                    hex_u64(state.elf_load_result.load_base).c_str(),
+                    hex_u64(state.elf_load_result.entry_address).c_str());
+      set_status(state, el_buf);
+      push_notification(state, el_buf, 5.0);
+    } else {
+      if (state.elf_load_error.empty())
+        state.elf_load_error = locale::tr("processes.elf_unknown_error");
+      char ef_buf[512];
+      std::snprintf(ef_buf, sizeof(ef_buf), locale::tr("processes.elf_failed"),
+                    state.elf_load_op.c_str(), state.elf_load_error.c_str());
+      set_status(state, ef_buf);
+    }
+  }
+}
+
+static void draw_elf_section(AppState &state) {
+  const float scl = ui::dpi_scale();
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  /* Collapsible header */
+  static bool elf_expanded = false;
+  const char *header_label = locale::tr("processes.elf_header");
+  if (ImGui::TreeNodeEx(header_label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
+    elf_expanded = true;
+
+    /* File selection row */
+    if (!state.elf_recent_files.empty()) {
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_recent"));
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(200.0f * scl);
+      static int recent_sel = -1;
+      if (ImGui::BeginCombo("##ElfRecent", recent_sel >= 0 && recent_sel < static_cast<int>(state.elf_recent_files.size())
+          ? std::filesystem::path(state.elf_recent_files[recent_sel]).filename().string().c_str()
+          : locale::tr("processes.elf_select"))) {
+        for (int i = 0; i < static_cast<int>(state.elf_recent_files.size()); ++i) {
+          bool is_sel = (recent_sel == i);
+          if (ImGui::Selectable(state.elf_recent_files[i].c_str(), is_sel)) {
+            recent_sel = i;
+            load_elf_file(state, state.elf_recent_files[i]);
+          }
+          if (is_sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+      ImGui::SameLine();
+    }
+
+    if (ui::soft_button(locale::tr("processes.elf_select"), ImVec2(120.0f * scl, 28.0f * scl))) {
+      std::string picked = ui::pickFile(locale::tr("processes.elf_select"), "ELF files", "*.elf;*.bin;*.so;*.prx;*.sprx");
+      if (!picked.empty()) load_elf_file(state, picked);
+    }
+
+    if (state.elf_load_path[0] != '\0') {
+      ImGui::SameLine();
+      ImGui::TextColored(ui::colors().primary2, "%s",
+                         std::filesystem::path(state.elf_load_path).filename().string().c_str());
+    } else {
+      ImGui::SameLine();
+      ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_no_file"));
+    }
+
+    /* ELF metadata */
+    if (state.elf_meta_valid) {
+      ImGui::Spacing();
+      const auto &meta = state.elf_meta;
+      const char *elf_type_str = meta.elf_type == 2 ? "ET_EXEC" : meta.elf_type == 3 ? "ET_DYN" : "??";
+      const char *machine_str = "??";
+      switch (meta.elf_machine) {
+      case 3:   machine_str = locale::tr("processes.elf_machine_386"); break;
+      case 62:  machine_str = locale::tr("processes.elf_machine_x86_64"); break;
+      case 183: machine_str = locale::tr("processes.elf_machine_aarch64"); break;
+      case 40:  machine_str = locale::tr("processes.elf_machine_arm"); break;
+      }
+
+      ImGui::TextColored(ui::colors().muted, locale::tr("processes.elf_metadata_line"),
+                         meta.elf_class == 2 ? 64 : 32, elf_type_str, machine_str);
+      ImGui::TextColored(ui::colors().dim, locale::tr("processes.elf_entry"),
+                         hex_u64(meta.entry_point).c_str());
+
+      /* Architecture mismatch warning */
+      if (state.has_hello) {
+        bool mismatch = false;
+        const char *elf_arch = "";
+        const char *payload_arch = "";
+        if (meta.elf_machine == 62) {
+          elf_arch = locale::tr("processes.elf_arch_x86_64");
+          mismatch = (state.hello.platform_id == MEMDBG_PLATFORM_PS5);
+        } else if (meta.elf_machine == 183) {
+          elf_arch = locale::tr("processes.elf_arch_aarch64");
+          mismatch = (state.hello.platform_id == MEMDBG_PLATFORM_PS4);
+        }
+        switch (state.hello.platform_id) {
+        case MEMDBG_PLATFORM_PS4: payload_arch = locale::tr("processes.elf_arch_x86_64"); break;
+        case MEMDBG_PLATFORM_PS5: payload_arch = locale::tr("processes.elf_arch_aarch64"); break;
+        default: payload_arch = locale::tr("processes.elf_unknown"); break;
+        }
+        if (mismatch) {
+          ImGui::TextColored(ui::colors().danger, locale::tr("processes.elf_arch_mismatch"),
+                             elf_arch, payload_arch);
+          ImGui::TextWrapped("%s", locale::tr("processes.elf_arch_mismatch_tip"));
+        }
+      }
+
+      /* Segments table */
+      if (!meta.segments.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ui::colors().primary2, "%s (%zu)", locale::tr("processes.elf_segments"), meta.segments.size());
+        if (ImGui::BeginTable("ElfSegments", 7,
+              ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
+              ImVec2(0, std::min<float>(static_cast<float>(meta.segments.size() + 1) * ImGui::GetTextLineHeightWithSpacing() + 4.0f, 180.0f * scl)))) {
+          ImGui::TableSetupColumn(locale::tr("processes.elf_segments_type_col"), ImGuiTableColumnFlags_WidthFixed, 100);
+          ImGui::TableSetupColumn(locale::tr("processes.elf_segments_offset_col"), ImGuiTableColumnFlags_WidthFixed, 80);
+          ImGui::TableSetupColumn(locale::tr("processes.elf_segments_vaddr_col"), ImGuiTableColumnFlags_WidthFixed, 110);
+          ImGui::TableSetupColumn(locale::tr("processes.elf_segments_memsz_col"), ImGuiTableColumnFlags_WidthFixed, 80);
+          ImGui::TableSetupColumn(locale::tr("processes.elf_segments_filesz_col"), ImGuiTableColumnFlags_WidthFixed, 80);
+          ImGui::TableSetupColumn(locale::tr("processes.elf_segments_flags_col"), ImGuiTableColumnFlags_WidthFixed, 55);
+          ImGui::TableSetupColumn("##SegName");
+          ImGui::TableHeadersRow();
+          for (const auto &seg : meta.segments) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(seg.name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("0x%llX", static_cast<unsigned long long>(seg.p_offset));
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%s", hex_u64(seg.vaddr).c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("0x%llX", static_cast<unsigned long long>(seg.memsz));
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("0x%llX", static_cast<unsigned long long>(seg.filesz));
+            ImGui::TableSetColumnIndex(5);
+            ImGui::Text("%c%c%c",
+                        (seg.flags & 4U) ? 'R' : '-',
+                        (seg.flags & 2U) ? 'W' : '-',
+                        (seg.flags & 1U) ? 'X' : '-');
+            ImGui::TableSetColumnIndex(6);
+            ImGui::TextColored(ui::colors().dim, "%s",
+                               seg.name == "LOAD" ? "Segment" : "");
+          }
+          ImGui::EndTable();
+        }
+      }
+    }
+
+    ImGui::Spacing();
+
+    /* Target region input */
+    ImGui::SetNextItemWidth(300.0f * scl);
+    ImGui::InputTextWithHint("##ElfTargetRegion", locale::tr("processes.elf_target_region_tip"),
+                             state.elf_target_region, sizeof(state.elf_target_region));
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", locale::tr("processes.elf_target_region_tip"));
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_target_region"));
+
+    /* Jump to entry */
+    ImGui::Checkbox(locale::tr("processes.elf_jump_entry"), &state.elf_jump_entry);
+
+    /* Match flags */
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_match_flags"));
+    ImGui::SameLine();
+    bool exact = (state.elf_match_flags & MEMDBG_MATCH_EXACT) != 0U;
+    if (ImGui::Checkbox(locale::tr("processes.elf_match_exact"), &exact)) {
+      if (exact) state.elf_match_flags |= MEMDBG_MATCH_EXACT;
+      else       state.elf_match_flags &= ~MEMDBG_MATCH_EXACT;
+    }
+    ImGui::SameLine();
+    bool case_sens = (state.elf_match_flags & MEMDBG_MATCH_CASE_SENSITIVE) != 0U;
+    if (ImGui::Checkbox(locale::tr("processes.elf_match_case_sensitive"), &case_sens)) {
+      if (case_sens) state.elf_match_flags |= MEMDBG_MATCH_CASE_SENSITIVE;
+      else           state.elf_match_flags &= ~MEMDBG_MATCH_CASE_SENSITIVE;
+    }
+    ImGui::SameLine();
+    bool regex = (state.elf_match_flags & MEMDBG_MATCH_REGEX) != 0U;
+    if (ImGui::Checkbox(locale::tr("processes.elf_match_regex"), &regex)) {
+      if (regex) state.elf_match_flags |= MEMDBG_MATCH_REGEX;
+      else       state.elf_match_flags &= ~MEMDBG_MATCH_REGEX;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("processes.elf_match_regex_tip"));
+    ImGui::SameLine();
+    bool fullpath = (state.elf_match_flags & MEMDBG_MATCH_FULLPATH) != 0U;
+    if (ImGui::Checkbox(locale::tr("processes.elf_match_fullpath"), &fullpath)) {
+      if (fullpath) state.elf_match_flags |= MEMDBG_MATCH_FULLPATH;
+      else          state.elf_match_flags &= ~MEMDBG_MATCH_FULLPATH;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("processes.elf_match_fullpath_tip"));
+
+    /* Action buttons */
+    ImGui::Spacing();
+    const bool connected = state.client.connected();
+    const bool has_pid = state.selected_pid > 0;
+    const bool busy = client_async_busy(state);
+    const bool can_act = connected && has_pid && !busy && state.elf_load_path[0] != '\0';
+
+    ImGui::BeginDisabled(!can_act);
+    if (ui::primary_button(locale::tr("processes.elf_load"), ImVec2(130.0f * scl, 32.0f * scl)))
+      request_elf_load(state);
+    ImGui::SameLine();
+    if (ui::soft_button(locale::tr("processes.elf_hijack"), ImVec2(100.0f * scl, 32.0f * scl)))
+      ImGui::OpenPopup("ConfirmElfHijack");
+    ImGui::EndDisabled();
+
+    if (state.elf_load_pending)
+      ImGui::TextColored(ui::colors().warning, locale::tr("processes.elf_load_progress"),
+                         state.elf_load_op.c_str(), ImGui::GetTime() - state.elf_load_start_time);
+
+    /* Hijack confirmation modal */
+    static bool skip_elf_hijack_confirm = false;
+    if (ui::confirm_modal("ConfirmElfHijack",
+                          locale::tr("processes.elf_hijack_confirm_title"),
+                          locale::tr("processes.elf_hijack_confirm_desc"),
+                          &skip_elf_hijack_confirm, true)) {
+      request_elf_hijack(state);
+    }
+
+    ImGui::TreePop();
+  } else {
+    elf_expanded = false;
+  }
+}
+
 /* ---- Tables ---- */
 static void draw_process_table(AppState &state) {
   if (ImGui::BeginTable("ProcessTable", 4,
@@ -896,6 +1485,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
   }
 
   poll_json_dump(state);
+  poll_elf_load(state);
 
   const float left_w = std::max(360.0f, avail.x * 0.42f);
 
@@ -1020,6 +1610,9 @@ void draw_processes(AppState &state, ImVec2 avail) {
     }
     ImGui::Spacing();
     draw_maps_table(state);
+
+    /* ELF Load / Hijack section */
+    draw_elf_section(state);
   }
   ui::end_panel();
 
