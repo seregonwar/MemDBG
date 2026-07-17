@@ -271,6 +271,7 @@ target_include_directories(MemDBGMobile PRIVATE
   ${FRONTEND_ROOT}/src
   ${FRONTEND_ROOT}/src/app
   ${FRONTEND_ROOT}/src/app/shell
+  ${FRONTEND_ROOT}/src/action_journal
   ${FRONTEND_ROOT}/src/core
   ${FRONTEND_ROOT}/src/core/client
   ${FRONTEND_ROOT}/src/ui
