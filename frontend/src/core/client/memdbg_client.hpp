@@ -75,6 +75,7 @@ public:
 
   bool connect_to(const std::string &host, uint16_t port,
                   uint32_t timeout_ms = 5000U);
+  void set_socket_timeout_ms(uint32_t ms);
   void cancel_pending_io();
   void disconnect();
   platform::socket_handle_t release_fd();      /* Release fd ownership for async transfer */
@@ -320,6 +321,7 @@ private:
   platform::socket_handle_t klog_fd_ = platform::invalid_socket();
   bool socket_runtime_active_ = false;
   uint32_t next_request_id_ = 1;
+  uint32_t socket_timeout_ms_ = 60000U;
   std::string last_error_;
   mutable std::mutex io_mutex_;
   std::atomic<bool> cancel_requested_{false};

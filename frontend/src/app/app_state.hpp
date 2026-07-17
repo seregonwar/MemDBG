@@ -281,6 +281,7 @@ struct AppState {
   char host[64] = "192.168.1.100";
   int debug_port = 9020;
   int udp_port = 9023;
+  int socket_timeout_ms = 60000;
   char target_name[64] = "Default";
   std::vector<ConsoleTarget> console_targets;
   int selected_target_index = 0;
@@ -294,6 +295,7 @@ struct AppState {
 
   /* Sidebar section expand/collapse (MAIN, TOOLS, MONITORING, SYSTEM) */
   bool sidebar_sections_expanded[4] = {true, true, true, true};
+  int settings_active_section = 0;
 
   /* Sidebar width (-1 = auto, otherwise clamped between min and max) */
   float sidebar_width = -1.0f;

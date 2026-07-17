@@ -65,7 +65,6 @@ namespace {
 
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
-constexpr uint32_t kMainSocketTimeoutMs = 60000U;
 
 template <typename T> bool read_object(const std::vector<uint8_t> &data, T &out) {
   if (data.size() < sizeof(T)) {
@@ -274,12 +273,16 @@ bool Client::connect_to(const std::string &host, uint16_t port,
     return false;
   }
 
-  (void)platform::socket_set_recv_timeout(fd, kMainSocketTimeoutMs);
-  (void)platform::socket_set_send_timeout(fd, kMainSocketTimeoutMs);
+  (void)platform::socket_set_recv_timeout(fd, socket_timeout_ms_);
+  (void)platform::socket_set_send_timeout(fd, socket_timeout_ms_);
   (void)platform::socket_set_nosigpipe(fd);
 
   last_error_.clear();
   return true;
+}
+
+void Client::set_socket_timeout_ms(uint32_t ms) {
+  socket_timeout_ms_ = ms;
 }
 
 void Client::cancel_pending_io() {

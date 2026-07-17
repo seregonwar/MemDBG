@@ -509,6 +509,7 @@ void connect_console(AppState &state) {
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "No scan session");
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
+  s_temp_client.set_socket_timeout_ms(static_cast<uint32_t>(std::max(1000, state.socket_timeout_ms)));
   s_temp_client.disconnect();
   state.connect_pending = true;
 

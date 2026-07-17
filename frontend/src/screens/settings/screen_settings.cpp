@@ -17,12 +17,59 @@
 
 namespace memdbg::frontend {
 
-void draw_settings(AppState &state, ImVec2 avail) {
-  ensure_console_targets(state);
-  const float col_w = avail.x / 3.0f;
+namespace {
 
-  /* ---- Column 1: Connection Defaults ---- */
-  ui::begin_panel("SettingsConnection", locale::tr("settings.connection_defaults"), ImVec2(col_w, avail.y));
+enum class SettingsSection { Connection = 0, Preferences = 1, Actions = 2, COUNT = 3 };
+
+struct SettingsSectionDef {
+  SettingsSection id;
+  const char *icon;
+  const char *label_key;
+};
+
+const SettingsSectionDef kSettingsSections[] = {
+  { SettingsSection::Connection,  icons::kConnect,  "settings.section.connection"  },
+  { SettingsSection::Preferences, icons::kSettings, "settings.section.preferences"  },
+  { SettingsSection::Actions,     icons::kSave,     "settings.section.actions"      },
+};
+
+static void draw_settings_sidebar(AppState &state, float sidebar_w, float avail_y) {
+  const float scl = ui::dpi_scale();
+  const float item_h = 36.0f * scl;
+  const float pad = 8.0f * scl;
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
+  ImGui::BeginChild("##SettingsSidebar", ImVec2(sidebar_w, avail_y), true, ImGuiWindowFlags_NoScrollbar);
+
+  for (int i = 0; i < static_cast<int>(SettingsSection::COUNT); ++i) {
+    const auto &def = kSettingsSections[i];
+    const bool active = state.settings_active_section == i;
+
+    ImGui::PushStyleColor(ImGuiCol_Button, active ? ui::colors().bg3 : ui::colors().bg2);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? ui::colors().bg3 : ui::colors().bg1);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ui::colors().bg1);
+    ImGui::PushStyleColor(ImGuiCol_Text, active ? ui::colors().primary2 : ui::colors().muted);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad, 6.0f * scl));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * scl);
+
+    const std::string label = std::string(def.icon) + "  " + locale::tr(def.label_key);
+    if (ImGui::Button(label.c_str(), ImVec2(-1.0f, item_h)))
+      state.settings_active_section = i;
+
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(4);
+  }
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor();
+}
+
+static void draw_connection_section(AppState &state) {
+  ui::begin_panel("SettingsConnection", locale::tr("settings.connection_defaults"), ImVec2(0, 0));
+
   ImGui::TextColored(ui::colors().muted, "Console");
   ImGui::Spacing();
   ImGui::InputText("Target name", state.target_name, sizeof(state.target_name));
@@ -30,6 +77,7 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::InputInt(locale::tr("settings.debug_tcp"), &state.debug_port);
   ImGui::InputInt(locale::tr("settings.udp_logs"), &state.udp_port);
   ImGui::InputInt(locale::tr("settings.payload_port"), &state.payload_port);
+  ImGui::InputInt(locale::tr("settings.socket_timeout"), &state.socket_timeout_ms);
   normalize_ports(state);
 
   ImGui::Spacing();
@@ -45,11 +93,13 @@ void draw_settings(AppState &state, ImVec2 avail) {
     dump_opts.placeholder = "dumps";
     ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts);
   }
-  ui::end_panel();
 
-  /* ---- Column 2: Preferences ---- */
-  ImGui::SameLine();
-  ui::begin_panel("SettingsPreferences", "Preferences", ImVec2(col_w, avail.y));
+  ui::end_panel();
+}
+
+static void draw_preferences_section(AppState &state) {
+  ui::begin_panel("SettingsPreferences", locale::tr("settings.section.preferences"), ImVec2(0, 0));
+
   ImGui::TextColored(ui::colors().muted, "Options");
   ImGui::Spacing();
 
@@ -233,9 +283,8 @@ void draw_settings(AppState &state, ImVec2 avail) {
     static bool skip_sandbox_confirm = false;
     if (ImGui::Checkbox(locale::tr("settings.sandbox_enabled"), &state.sandbox_enabled)) {
       if (!state.sandbox_enabled) {
-        // User is trying to disable sandbox — show confirmation
         ImGui::OpenPopup("ConfirmDisableSandbox");
-        state.sandbox_enabled = true;  // revert until confirmed
+        state.sandbox_enabled = true;
       } else {
         set_status(state, locale::tr("settings.sandbox_on"));
       }
@@ -297,12 +346,11 @@ void draw_settings(AppState &state, ImVec2 avail) {
   }
 
   ui::end_panel();
+}
 
-  /* ---- Column 3: Actions + Runtime Info ---- */
-  ImGui::SameLine();
-  ui::begin_panel("SettingsActions", "Actions", ImVec2(0, avail.y));
+static void draw_actions_section(AppState &state) {
+  ui::begin_panel("SettingsActions", locale::tr("settings.section.actions"), ImVec2(0, 0));
 
-  /* Action buttons in 2x2 grid */
   const float btn_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
   const float btn_h = 36.0f;
 
@@ -364,7 +412,6 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::Separator();
   ImGui::Spacing();
 
-  /* Runtime info section */
   ImGui::TextColored(ui::colors().muted, "Runtime Info");
   ImGui::Spacing();
   ImGui::TextWrapped("%s", locale::tr("settings.runtime_desc"));
@@ -375,6 +422,34 @@ void draw_settings(AppState &state, ImVec2 avail) {
   ImGui::TextWrapped("%s", locale::tr("settings.console_log_path"));
 
   ui::end_panel();
+}
+
+} // namespace
+
+void draw_settings(AppState &state, ImVec2 avail) {
+  ensure_console_targets(state);
+  const float scl = ui::dpi_scale();
+  const float sidebar_w = 190.0f * scl;
+
+  /* Sidebar */
+  draw_settings_sidebar(state, sidebar_w, avail.y);
+
+  /* Content area */
+  ImGui::SameLine();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::BeginChild("##SettingsContent", ImVec2(avail.x - sidebar_w - 8.0f * scl, avail.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+  state.settings_active_section = std::clamp(state.settings_active_section, 0,
+      static_cast<int>(SettingsSection::COUNT) - 1);
+
+  switch (static_cast<SettingsSection>(state.settings_active_section)) {
+    case SettingsSection::Connection:  draw_connection_section(state);  break;
+    case SettingsSection::Preferences: draw_preferences_section(state); break;
+    case SettingsSection::Actions:     draw_actions_section(state);     break;
+  }
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
 }
 
 } // namespace memdbg::frontend

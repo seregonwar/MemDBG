@@ -171,6 +171,9 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       state.udp_port = std::atoi(value.c_str());
     } else if (key == "payload_port") {
       state.payload_port = std::atoi(value.c_str());
+    } else if (key == "socket_timeout_ms") {
+      state.socket_timeout_ms = std::atoi(value.c_str());
+      if (state.socket_timeout_ms < 1000) state.socket_timeout_ms = 60000;
     } else if (key == "dump_path" && !value.empty()) {
       std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", value.c_str());
     } else if (key == "language") {
@@ -285,6 +288,7 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "debug_port=" << state.debug_port << "\n";
   out << "udp_port=" << state.udp_port << "\n";
   out << "payload_port=" << state.payload_port << "\n";
+  out << "socket_timeout_ms=" << state.socket_timeout_ms << "\n";
   out << "dump_path=" << state.dump_path << "\n";
   out << "last_debugger_pid=" << state.last_debugger_pid << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
