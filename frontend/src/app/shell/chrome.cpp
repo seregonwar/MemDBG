@@ -485,6 +485,7 @@ void topbar_select_process(AppState &state, int row) {
   state.has_process_info = false;
   std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
   set_status(state, "Selected PID " + std::to_string(state.selected_pid) + " (" + state.processes[row].name + ")");
+  state.action_journal.record("process_select", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"name\":\"" + ActionJournal::json_escape(state.processes[row].name) + "\"}").c_str());
 }
 
 void topbar_refresh_processes(AppState &state) {

@@ -904,6 +904,7 @@ void poll_plugin_tasks(AppState &state) {
         std::snprintf(comp_buf, sizeof(comp_buf), locale::tr("plugins.completed"), result.plugin_id.c_str());
         set_status(state, comp_buf);
         push_notification(state, comp_buf);
+        state.action_journal.record("plugin_run", ("{\"plugin\":\"" + ActionJournal::json_escape(result.plugin_id) + "\"}").c_str());
       } else {
         const std::string error = result.error.empty()
             ? "Plugin failed: " + result.plugin_id
