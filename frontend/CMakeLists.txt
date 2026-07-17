@@ -643,6 +643,7 @@ target_include_directories(memdbg_action_journal_test PRIVATE
 if(MSVC)
   set_property(TARGET memdbg_action_journal_test PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  target_link_libraries(memdbg_action_journal_test PRIVATE ws2_32)
 endif()
 
 # ---- memdbg_locale_manager_test ----
