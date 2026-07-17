@@ -63,6 +63,9 @@ public:
   // True when the journal file is open and writable.
   bool is_open() const;
 
+  // Default journal path under app data dir.
+  static std::filesystem::path default_path();
+
   // Load recent entries from an existing journal file (for crash review).
   // Returns true if the journal has a clean_shutdown marker.
   static bool load_recent(const std::filesystem::path &path,

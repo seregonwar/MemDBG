@@ -17,6 +17,8 @@
 #include <iomanip>
 #include <sstream>
 
+#include "core/platform.hpp"
+
 /* ── sjson (single-header C99 JSON, already compiled once by CMake) ─── */
 extern "C" {
 #include "sJson.c"
@@ -80,6 +82,10 @@ ActionJournal::~ActionJournal() {
 }
 
 /* ── Public API ────────────────────────────────────────────────────────── */
+
+std::filesystem::path ActionJournal::default_path() {
+  return platform::app_data_dir() / "logs" / "memdbg_actions.log";
+}
 
 bool ActionJournal::open(const char *journal_path) {
   close();
