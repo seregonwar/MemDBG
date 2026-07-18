@@ -104,6 +104,11 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   }
   case MEMDBG_CMD_PING:
     return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  case MEMDBG_CMD_GOODBYE:
+    if (req->length != 0U) return MEMDBG_ERR_PROTOCOL;
+    return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0
+               ? MEMDBG_OK
+               : MEMDBG_ERR_NET;
   case MEMDBG_CMD_PROCESS_LIST:       return handle_process_list(fd, req);
   case MEMDBG_CMD_PROCESS_MAPS:       return handle_process_maps(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_MAPS_V2:    return handle_process_maps_v2(fd, req, body, req->length);
@@ -121,6 +126,12 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_SCAN_POINTER:       return handle_scan_pointer(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_UNKNOWN:       return handle_scan_unknown(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_SCAN_UNKNOWN_V2:    return handle_scan_unknown_v2(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_PROCESS_EXACT_TRACKED:
+    return handle_scan_process_exact_tracked(fd, req, cfg, body, req->length);
+  case MEMDBG_CMD_SCAN_JOB_STATUS:
+    return handle_scan_job_status(fd, req, body, req->length, false);
+  case MEMDBG_CMD_SCAN_JOB_CANCEL:
+    return handle_scan_job_status(fd, req, body, req->length, true);
   case MEMDBG_CMD_FOREGROUND_APP:     return handle_foreground_app(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_STOP:       return handle_process_control(fd, req, body, req->length, 1U);
   case MEMDBG_CMD_PROCESS_CONTINUE:   return handle_process_control(fd, req, body, req->length, 2U);
@@ -381,7 +392,7 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
       MEMDBG_EXT_CAP_ALIAS | MEMDBG_EXT_CAP_SIMD |
       MEMDBG_EXT_CAP_KLOG_SERVER | MEMDBG_EXT_CAP_AUTH |
       MEMDBG_EXT_CAP_ARENA | MEMDBG_EXT_CAP_BATCH_WRITE_ADV |
-      MEMDBG_EXT_CAP_HIJACK
+      MEMDBG_EXT_CAP_HIJACK | MEMDBG_EXT_CAP_SCAN_JOBS
     };
     uint32_t n = (uint32_t)(sizeof(ext_caps) / sizeof(ext_caps[0]));
     memdbg_extended_caps_response_t prefix;

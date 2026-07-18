@@ -13,6 +13,75 @@
 #include "memdbg/scanner/scan_request.h"
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+
+#define MEMDBG_SCAN_JOB_SLOTS 16U
+
+typedef struct scan_job_slot {
+  uint64_t job_id;
+  bool occupied;
+  uint32_t state;
+  memdbg_scan_progress_t progress;
+} scan_job_slot_t;
+
+static pthread_mutex_t g_scan_jobs_mutex = PTHREAD_MUTEX_INITIALIZER;
+static scan_job_slot_t g_scan_jobs[MEMDBG_SCAN_JOB_SLOTS];
+
+static scan_job_slot_t *scan_job_find_locked(uint64_t job_id) {
+  for (size_t i = 0U; i < MEMDBG_SCAN_JOB_SLOTS; ++i)
+    if (g_scan_jobs[i].occupied && g_scan_jobs[i].job_id == job_id)
+      return &g_scan_jobs[i];
+  return NULL;
+}
+
+static scan_job_slot_t *scan_job_begin(uint64_t job_id) {
+  if (job_id == 0U) return NULL;
+  pthread_mutex_lock(&g_scan_jobs_mutex);
+  if (scan_job_find_locked(job_id) != NULL) {
+    pthread_mutex_unlock(&g_scan_jobs_mutex);
+    return NULL;
+  }
+  scan_job_slot_t *slot = NULL;
+  for (size_t i = 0U; i < MEMDBG_SCAN_JOB_SLOTS; ++i) {
+    if (!g_scan_jobs[i].occupied ||
+        g_scan_jobs[i].state == MEMDBG_SCAN_JOB_COMPLETED ||
+        g_scan_jobs[i].state == MEMDBG_SCAN_JOB_CANCELLED ||
+        g_scan_jobs[i].state == MEMDBG_SCAN_JOB_FAILED) {
+      slot = &g_scan_jobs[i];
+      break;
+    }
+  }
+  if (slot != NULL) {
+    memset(slot, 0, sizeof(*slot));
+    slot->job_id = job_id;
+    slot->occupied = true;
+    slot->state = MEMDBG_SCAN_JOB_RUNNING;
+    atomic_init(&slot->progress.bytes_done, 0U);
+    atomic_init(&slot->progress.bytes_total, 0U);
+    atomic_init(&slot->progress.results_found, 0U);
+    atomic_init(&slot->progress.maps_done, 0U);
+    atomic_init(&slot->progress.maps_total, 0U);
+    atomic_init(&slot->progress.workers_active, 0U);
+    atomic_init(&slot->progress.workers_total, 0U);
+    atomic_init(&slot->progress.read_errors, 0U);
+    atomic_init(&slot->progress.cancel_requested, false);
+  }
+  pthread_mutex_unlock(&g_scan_jobs_mutex);
+  return slot;
+}
+
+static void scan_job_finish(scan_job_slot_t *slot, memdbg_status_t status) {
+  pthread_mutex_lock(&g_scan_jobs_mutex);
+  if (slot != NULL && slot->occupied) {
+    if (atomic_load_explicit(&slot->progress.cancel_requested,
+                             memory_order_relaxed))
+      slot->state = MEMDBG_SCAN_JOB_CANCELLED;
+    else
+      slot->state = status == MEMDBG_OK ? MEMDBG_SCAN_JOB_COMPLETED
+                                        : MEMDBG_SCAN_JOB_FAILED;
+  }
+  pthread_mutex_unlock(&g_scan_jobs_mutex);
+}
 
 /* ---- Scan result sender ---- */
 
@@ -47,6 +116,8 @@ static memdbg_status_t send_scan_result(int fd, const memdbg_packet_header_t *re
   prefix.read_calls      = result->read_calls;
   prefix.regions_scanned = result->regions_scanned;
   prefix.read_errors     = result->read_errors;
+  prefix.reserved        = result->cancelled
+      ? MEMDBG_SCAN_RESULT_FLAG_CANCELLED : 0U;
 
   memcpy(payload, &prefix, sizeof(prefix));
   if (send_count != 0U)
@@ -82,6 +153,72 @@ static memdbg_status_t send_scan_result(int fd, const memdbg_packet_header_t *re
 /* Exact / process-exact / pointer — simple body validation. */
 SCAN_HANDLER(handle_scan_exact_v2,     memdbg_scan_exact,         memdbg_scan_exact_request_t)
 SCAN_HANDLER(handle_scan_process_exact,memdbg_scan_process_exact, memdbg_scan_process_exact_request_t)
+
+memdbg_status_t handle_scan_process_exact_tracked(
+    int fd, const memdbg_packet_header_t *req, const memdbg_config_t *cfg,
+    const void *body, uint32_t body_len) {
+  if (body_len != sizeof(memdbg_scan_process_exact_tracked_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  memdbg_scan_process_exact_tracked_request_t tracked;
+  memcpy(&tracked, body, sizeof(tracked));
+  if (tracked.job_id == 0U) return MEMDBG_ERR_PARAM;
+  if (tracked.scan.max_results == 0U ||
+      tracked.scan.max_results > cfg->max_scan_results)
+    tracked.scan.max_results = cfg->max_scan_results;
+
+  scan_job_slot_t *slot = scan_job_begin(tracked.job_id);
+  if (slot == NULL) return MEMDBG_ERR_STATE;
+  memdbg_scan_result_t result;
+  memdbg_status_t status = memdbg_scan_process_exact_tracked(
+      &tracked.scan, &slot->progress, &result);
+  scan_job_finish(slot, status);
+  if (status == MEMDBG_OK) status = send_scan_result(fd, req, &result);
+  memdbg_scan_result_free(&result);
+  return status;
+}
+
+memdbg_status_t handle_scan_job_status(
+    int fd, const memdbg_packet_header_t *req, const void *body,
+    uint32_t body_len, bool cancel) {
+  if (body_len != sizeof(memdbg_scan_job_request_t))
+    return MEMDBG_ERR_PROTOCOL;
+  memdbg_scan_job_request_t query;
+  memcpy(&query, body, sizeof(query));
+  if (query.job_id == 0U) return MEMDBG_ERR_PARAM;
+
+  pthread_mutex_lock(&g_scan_jobs_mutex);
+  scan_job_slot_t *slot = scan_job_find_locked(query.job_id);
+  if (slot == NULL) {
+    pthread_mutex_unlock(&g_scan_jobs_mutex);
+    return MEMDBG_ERR_NOT_FOUND;
+  }
+  if (cancel && slot->state == MEMDBG_SCAN_JOB_RUNNING)
+    atomic_store_explicit(&slot->progress.cancel_requested, true,
+                          memory_order_relaxed);
+  memdbg_scan_job_status_response_t response;
+  memset(&response, 0, sizeof(response));
+  response.job_id = slot->job_id;
+  response.bytes_done = atomic_load_explicit(&slot->progress.bytes_done,
+                                             memory_order_relaxed);
+  response.bytes_total = atomic_load_explicit(&slot->progress.bytes_total,
+                                              memory_order_relaxed);
+  response.results_found = atomic_load_explicit(
+      &slot->progress.results_found, memory_order_relaxed);
+  response.maps_done = atomic_load_explicit(&slot->progress.maps_done,
+                                            memory_order_relaxed);
+  response.maps_total = atomic_load_explicit(&slot->progress.maps_total,
+                                             memory_order_relaxed);
+  response.workers_active = atomic_load_explicit(
+      &slot->progress.workers_active, memory_order_relaxed);
+  response.workers_total = atomic_load_explicit(
+      &slot->progress.workers_total, memory_order_relaxed);
+  response.read_errors = atomic_load_explicit(&slot->progress.read_errors,
+                                              memory_order_relaxed);
+  response.state = slot->state;
+  pthread_mutex_unlock(&g_scan_jobs_mutex);
+  return send_response(fd, req, MEMDBG_OK, &response, sizeof(response)) == 0
+      ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
 
 static memdbg_status_t handle_scan_unknown_body(
     int fd, const memdbg_packet_header_t *req, const memdbg_config_t *cfg,

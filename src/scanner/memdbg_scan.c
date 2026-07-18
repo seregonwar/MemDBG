@@ -32,12 +32,15 @@
 #endif
 
 #if defined(MEMDBG_SCAN_CONSOLE)
-/* mdbg_copyout is much less forgiving than host /proc reads when a range
-   crosses a fragile page. Keep console reads small and serialized. */
-#define MEMDBG_SCAN_CHUNK (64U * 1024U)
-#define MEMDBG_SCAN_PARALLEL_THREADS 1U
+/* Large reads amortize the mdbg syscall cost.  If a range crosses a fragile
+   page, scan_memory_read_resilient() halves the request down to 4 KiB instead
+   of failing the scan. Workers keep independent buffers and merge once. */
+#define MEMDBG_SCAN_CHUNK (4U * 1024U * 1024U)
+#define MEMDBG_SCAN_EXACT_RANGE_CHUNK (8U * 1024U * 1024U)
+#define MEMDBG_SCAN_PARALLEL_THREADS 4U
 #else
 #define MEMDBG_SCAN_CHUNK MEMDBG_PROTOCOL_MAX_READ
+#define MEMDBG_SCAN_EXACT_RANGE_CHUNK MEMDBG_PROTOCOL_MAX_READ
 #define MEMDBG_SCAN_PARALLEL_THREADS 4U
 #endif
 
@@ -177,6 +180,7 @@ typedef struct scan_builder {
   memdbg_scan_result_t *result;
   size_t capacity;
   size_t max_results;
+  memdbg_scan_progress_t *progress;
 } scan_builder_t;
 
 typedef struct scan_context {
@@ -187,6 +191,7 @@ typedef struct scan_context {
   unsigned char needle[MEMDBG_SCAN_VALUE_MAX];
   unsigned char *buffer;
   size_t buffer_size;
+  size_t read_chunk;
   scan_match_fn_t match;
 } scan_context_t;
 
@@ -219,9 +224,9 @@ static void scan_metric_inc(uint32_t *value) {
   if (value != NULL && *value != UINT32_MAX) (*value)++;
 }
 
-static size_t scan_read_size(uint64_t remaining) {
-  return remaining > (uint64_t)MEMDBG_SCAN_CHUNK
-      ? (size_t)MEMDBG_SCAN_CHUNK
+static size_t scan_read_size(uint64_t remaining, size_t chunk_size) {
+  return remaining > (uint64_t)chunk_size
+      ? chunk_size
       : (size_t)remaining;
 }
 
@@ -243,7 +248,8 @@ static bool scan_bounds_valid(uint64_t start, uint64_t length,
 
 static memdbg_status_t scan_memory_read_resilient(
     int pid, uint64_t address, void *buffer, size_t requested,
-    memdbg_scan_result_t *metrics, size_t *read_out) {
+    memdbg_scan_result_t *metrics, memdbg_scan_progress_t *progress,
+    size_t *read_out) {
   if (read_out != NULL) *read_out = 0U;
   if (requested == 0U) return MEMDBG_OK;
 
@@ -259,6 +265,9 @@ static memdbg_status_t scan_memory_read_resilient(
     }
 
     scan_metric_inc(metrics != NULL ? &metrics->read_errors : NULL);
+    if (progress != NULL)
+      atomic_fetch_add_explicit(&progress->read_errors, 1U,
+                                memory_order_relaxed);
     if (attempt <= MEMDBG_SCAN_MIN_READ_CHUNK) return st;
 
     size_t next = attempt / 2U;
@@ -330,6 +339,9 @@ static scan_match_fn_t match_fn_for(uint32_t value_len) {
 
 static memdbg_status_t scan_builder_append(scan_builder_t *builder, uint64_t address) {
   memdbg_scan_result_t *result = builder->result;
+  if (builder->progress != NULL)
+    atomic_fetch_add_explicit(&builder->progress->results_found, 1U,
+                              memory_order_relaxed);
   if (result->count >= builder->max_results) {
     result->truncated = true;
     return MEMDBG_OK;
@@ -426,13 +438,18 @@ static memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
     return MEMDBG_ERR_PARAM;
 
   while (scanned < range_len) {
+    if (builder->progress != NULL && atomic_load_explicit(
+            &builder->progress->cancel_requested, memory_order_relaxed)) {
+      builder->result->truncated = true;
+      break;
+    }
     uint64_t remaining = range_len - scanned;
-    size_t to_read = scan_read_size(remaining);
+    size_t to_read = scan_read_size(remaining, ctx->read_chunk);
     size_t read_len = 0U;
 
     memdbg_status_t st = scan_memory_read_resilient(ctx->pid,
         range_start + scanned, ctx->buffer + carry, to_read,
-        builder->result, &read_len);
+        builder->result, builder->progress, &read_len);
     if (st != MEMDBG_OK) {
       if (!skip_read_errors) return st;
       scanned += scan_fault_skip_size(to_read);
@@ -441,6 +458,9 @@ static memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
     }
     if (read_len == 0U) break;
     builder->result->bytes_scanned += (uint64_t)read_len;
+    if (builder->progress != NULL)
+      atomic_fetch_add_explicit(&builder->progress->bytes_done,
+                                (uint64_t)read_len, memory_order_relaxed);
 
     size_t window = carry + read_len;
     uint64_t base_addr = range_start + scanned - (uint64_t)carry;
@@ -461,19 +481,24 @@ static memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
 
 static memdbg_status_t scan_context_init(scan_context_t *ctx, int pid,
                                          uint32_t value_type, uint32_t requested_value_len,
-                                         uint32_t alignment, const uint8_t *value) {
+                                         uint32_t alignment, const uint8_t *value,
+                                         size_t read_chunk,
+                                         bool allocate_buffer) {
   if (ctx == NULL || pid <= 0 || value == NULL) return MEMDBG_ERR_PARAM;
   memset(ctx, 0, sizeof(*ctx));
   ctx->pid = pid;
   ctx->value_type = value_type;
   ctx->value_len = expected_value_length(value_type, requested_value_len);
   ctx->alignment = alignment == 0U ? 1U : alignment;
+  ctx->read_chunk = read_chunk;
   if (ctx->value_len == 0U || ctx->value_len > MEMDBG_SCAN_VALUE_MAX) return MEMDBG_ERR_PARAM;
   memcpy(ctx->needle, value, ctx->value_len);
   ctx->match = match_fn_for(ctx->value_len);
-  ctx->buffer_size = MEMDBG_SCAN_CHUNK + (size_t)ctx->value_len - 1U;
-  ctx->buffer = (unsigned char *)malloc(ctx->buffer_size);
-  if (ctx->buffer == NULL) return MEMDBG_ERR_NOMEM;
+  ctx->buffer_size = ctx->read_chunk + (size_t)ctx->value_len - 1U;
+  if (allocate_buffer) {
+    ctx->buffer = (unsigned char *)malloc(ctx->buffer_size);
+    if (ctx->buffer == NULL) return MEMDBG_ERR_NOMEM;
+  }
   return MEMDBG_OK;
 }
 
@@ -524,6 +549,7 @@ typedef struct {
   uint32_t              regions_scanned;
   memdbg_status_t       status;
   bool                  threaded;
+  memdbg_scan_progress_t *progress;
 } parallel_worker_t;
 
 static void *parallel_worker_thread(void *arg) {
@@ -536,11 +562,17 @@ static void *parallel_worker_thread(void *arg) {
   w->bytes_scanned   = 0U;
   w->regions_scanned = 0U;
   w->status          = MEMDBG_OK;
+  if (w->progress != NULL)
+    atomic_fetch_add_explicit(&w->progress->workers_active, 1U,
+                              memory_order_relaxed);
 
   /* Allocate per-thread buffer. */
   buffer = (unsigned char *)malloc(w->buf_size);
   if (buffer == NULL) {
     w->status = MEMDBG_ERR_NOMEM;
+    if (w->progress != NULL)
+      atomic_fetch_sub_explicit(&w->progress->workers_active, 1U,
+                                memory_order_relaxed);
     return NULL;
   }
 
@@ -550,8 +582,12 @@ static void *parallel_worker_thread(void *arg) {
   builder.result       = &w->result;
   builder.max_results  = w->max_results;
   builder.capacity     = 0U;  /* first append allocates MEMDBG_SCAN_INITIAL_CAPACITY */
+  builder.progress     = w->progress;
 
   for (size_t i = w->map_start; i < w->map_end; ++i) {
+    if (w->progress != NULL && atomic_load_explicit(
+            &w->progress->cancel_requested, memory_order_relaxed))
+      break;
     const memdbg_map_entry_t *map = &w->maps[i];
     if ((map->protection & w->prot_mask) != w->prot_mask ||
         map->end <= map->start)
@@ -580,10 +616,19 @@ static void *parallel_worker_thread(void *arg) {
                              buffer, &builder);
 
       if (w->status != MEMDBG_OK) break;
+      if (w->progress != NULL && atomic_load_explicit(
+              &w->progress->cancel_requested, memory_order_relaxed))
+        break;
       cursor += segment_len;
       remaining -= segment_len;
     }
     if (w->status != MEMDBG_OK) break;
+    if (w->progress != NULL && atomic_load_explicit(
+            &w->progress->cancel_requested, memory_order_relaxed))
+      break;
+    if (w->progress != NULL)
+      atomic_fetch_add_explicit(&w->progress->maps_done, 1U,
+                                memory_order_relaxed);
   }
 
   /* Snapshot final per-thread metrics from the result struct. */
@@ -592,6 +637,9 @@ static void *parallel_worker_thread(void *arg) {
   w->bytes_scanned = w->result.bytes_scanned;
 
   free(buffer);
+  if (w->progress != NULL)
+    atomic_fetch_sub_explicit(&w->progress->workers_active, 1U,
+                              memory_order_relaxed);
   return NULL;
 }
 
@@ -647,7 +695,7 @@ static memdbg_status_t scan_maps_parallel(
     int pid, const memdbg_map_entry_t *maps, size_t map_count,
     size_t max_results, size_t buf_size, size_t min_map_len,
     uint32_t prot_mask, uint64_t start_filter, uint64_t end_filter,
-    memdbg_scan_result_t *out) {
+    memdbg_scan_progress_t *progress, memdbg_scan_result_t *out) {
 
   const size_t max_threads = MEMDBG_SCAN_PARALLEL_THREADS;
   size_t num_threads = max_threads < 1U ? 1U : max_threads;
@@ -666,6 +714,30 @@ static memdbg_status_t scan_maps_parallel(
   if (part_st != MEMDBG_OK) {
     free(slots);
     return part_st;
+  }
+  if (progress != NULL) {
+    uint64_t total_bytes = 0U;
+    uint32_t total_maps = 0U;
+    for (size_t i = 0U; i < map_count; ++i) {
+      const memdbg_map_entry_t *map = &maps[i];
+      if ((map->protection & prot_mask) != prot_mask || map->end <= map->start)
+        continue;
+      uint64_t map_start = map->start;
+      uint64_t map_end = map->end;
+      if (start_filter != 0U && map_start < start_filter) map_start = start_filter;
+      if (end_filter != 0U && map_end > end_filter) map_end = end_filter;
+      if (map_end <= map_start || map_end - map_start < min_map_len) continue;
+      const uint64_t map_bytes = map_end - map_start;
+      total_bytes = UINT64_MAX - total_bytes < map_bytes
+          ? UINT64_MAX : total_bytes + map_bytes;
+      if (total_maps != UINT32_MAX) total_maps++;
+    }
+    atomic_store_explicit(&progress->bytes_total, total_bytes,
+                          memory_order_relaxed);
+    atomic_store_explicit(&progress->maps_total, total_maps,
+                          memory_order_relaxed);
+    atomic_store_explicit(&progress->workers_total, (unsigned)actual_workers,
+                          memory_order_relaxed);
   }
   /* Allocate worker structs sized to actual used slots only. */
   parallel_worker_t *workers =
@@ -693,7 +765,7 @@ static memdbg_status_t scan_maps_parallel(
   }
   free(slots);
 
-  /* Populate shared fields and spawn threads. */
+  /* Populate shared fields. */
   pthread_t *threads =
       (pthread_t *)malloc(actual_workers * sizeof(pthread_t));
   bool spawn_ok = (threads != NULL);
@@ -709,24 +781,29 @@ static memdbg_status_t scan_maps_parallel(
     workers[t].start_filter = start_filter;
     workers[t].end_filter   = end_filter;
     workers[t].min_map_len  = min_map_len;
+    workers[t].progress     = progress;
 
-    if (spawn_ok && actual_workers > 1U &&
-        workers[t].map_start < workers[t].map_end) {
+  }
+
+  /* Keep partition zero on the caller, so a four-way scan creates only three
+     extra threads.  Thread creation failure degrades inline rather than
+     failing an otherwise valid scan. */
+  for (size_t t = 1U; t < actual_workers; ++t) {
+    if (spawn_ok && workers[t].map_start < workers[t].map_end) {
       if (pthread_create(&threads[t], NULL,
                          parallel_worker_thread, &workers[t]) != 0) {
-        spawn_ok = false;
-        workers[t].status = MEMDBG_ERR_NET;
+        parallel_worker_thread(&workers[t]);
       } else {
         workers[t].threaded = true;
       }
     } else {
-      /* Run inline for single-thread or empty range. */
       parallel_worker_thread(&workers[t]);
     }
   }
+  parallel_worker_thread(&workers[0]);
 
   /* Join all spawned threads. */
-  for (size_t t = 0U; t < actual_workers; ++t) {
+  for (size_t t = 1U; t < actual_workers; ++t) {
     if (workers[t].threaded)
       (void)pthread_join(threads[t], NULL);
   }
@@ -773,7 +850,8 @@ memdbg_status_t memdbg_scan_exact(const memdbg_scan_exact_request_t *request,
 
   scan_context_t ctx;
   memdbg_status_t st = scan_context_init(&ctx, request->pid, request->value_type,
-      request->value_length, request->alignment, request->value);
+      request->value_length, request->alignment, request->value,
+      MEMDBG_SCAN_EXACT_RANGE_CHUNK, true);
   if (st != MEMDBG_OK) return st;
   if (!scan_bounds_valid(request->start, request->length, ctx.value_len, NULL)) {
     scan_context_fini(&ctx);
@@ -821,7 +899,8 @@ memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_reques
 
   scan_context_t ctx;
   memdbg_status_t st = scan_context_init(&ctx, request->pid, request->value_type,
-      request->value_length, request->alignment, request->value);
+      request->value_length, request->alignment, request->value,
+      MEMDBG_SCAN_CHUNK, false);
   if (st != MEMDBG_OK) return st;
 
   st = process_scan_guard_begin();
@@ -840,15 +919,60 @@ memdbg_status_t memdbg_scan_process_exact(const memdbg_scan_process_exact_reques
 
   size_t max_results = request->max_results == 0U ? 1U : (size_t)request->max_results;
   uint32_t prot_mask = request->protection_mask == 0U ? MEMDBG_MAP_PROT_READ : request->protection_mask;
-  size_t buf_size = MEMDBG_SCAN_CHUNK + (size_t)ctx.value_len - 1U;
+  size_t buf_size = ctx.read_chunk + (size_t)ctx.value_len - 1U;
 
   uint64_t start_ns = monotonic_ns();
   st = scan_maps_parallel(scan_range_cb, &ctx,
       request->pid, maps.entries, maps.count,
       max_results, buf_size, (size_t)ctx.value_len,
-      prot_mask, request->start, request->end, out);
+      prot_mask, request->start, request->end, NULL, out);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
+
+  memdbg_process_maps_free(&maps);
+  process_scan_guard_end();
+  scan_context_fini(&ctx);
+  if (st != MEMDBG_OK) memdbg_scan_result_free(out);
+  return st;
+}
+
+memdbg_status_t memdbg_scan_process_exact_tracked(
+    const memdbg_scan_process_exact_request_t *request,
+    memdbg_scan_progress_t *progress, memdbg_scan_result_t *out) {
+  if (request == NULL || progress == NULL || out == NULL)
+    return MEMDBG_ERR_PARAM;
+
+  scan_context_t ctx;
+  memdbg_status_t st = scan_context_init(&ctx, request->pid, request->value_type,
+      request->value_length, request->alignment, request->value,
+      MEMDBG_SCAN_CHUNK, false);
+  if (st != MEMDBG_OK) return st;
+  st = process_scan_guard_begin();
+  if (st != MEMDBG_OK) { scan_context_fini(&ctx); return st; }
+
+  memdbg_map_list_t maps;
+  st = scan_process_maps_for_scan(request->pid, &maps);
+  if (st != MEMDBG_OK) {
+    process_scan_guard_end();
+    scan_context_fini(&ctx);
+    return st;
+  }
+
+  const size_t max_results = request->max_results == 0U
+      ? 1U : (size_t)request->max_results;
+  const uint32_t prot_mask = request->protection_mask == 0U
+      ? MEMDBG_MAP_PROT_READ : request->protection_mask;
+  const size_t buf_size = ctx.read_chunk + (size_t)ctx.value_len - 1U;
+  const uint64_t start_ns = monotonic_ns();
+  st = scan_maps_parallel(scan_range_cb, &ctx, request->pid, maps.entries,
+      maps.count, max_results, buf_size, (size_t)ctx.value_len, prot_mask,
+      request->start, request->end, progress, out);
+  const uint64_t end_ns = monotonic_ns();
+  if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
+  if (atomic_load_explicit(&progress->cancel_requested, memory_order_relaxed)) {
+    out->truncated = true;
+    out->cancelled = true;
+  }
 
   memdbg_process_maps_free(&maps);
   process_scan_guard_end();
@@ -879,12 +1003,12 @@ static memdbg_status_t scan_aob_range(const bm_table_t *bm,
 
   while (scanned < range_len) {
     uint64_t remaining = range_len - scanned;
-    size_t to_read = scan_read_size(remaining);
+    size_t to_read = scan_read_size(remaining, MEMDBG_SCAN_CHUNK);
     size_t read_len = 0U;
 
     memdbg_status_t st = scan_memory_read_resilient(pid,
         range_start + scanned, buffer + carry, to_read,
-        builder->result, &read_len);
+        builder->result, builder->progress, &read_len);
     if (st != MEMDBG_OK) {
       scanned += scan_fault_skip_size(to_read);
       carry = 0U;
@@ -892,6 +1016,9 @@ static memdbg_status_t scan_aob_range(const bm_table_t *bm,
     }
     if (read_len == 0U) break;
     builder->result->bytes_scanned += (uint64_t)read_len;
+    if (builder->progress != NULL)
+      atomic_fetch_add_explicit(&builder->progress->bytes_done,
+                                (uint64_t)read_len, memory_order_relaxed);
 
     size_t window = carry + read_len;
     uint64_t base_addr = range_start + scanned - (uint64_t)carry;
@@ -1037,7 +1164,7 @@ memdbg_status_t memdbg_scan_process_aob(const memdbg_scan_process_aob_request_t 
   st = scan_maps_parallel(scan_aob_cb, &ac,
       request->pid, maps.entries, maps.count,
       max_results, buf_size, pat_len,
-      prot_mask, request->start, request->end, out);
+      prot_mask, request->start, request->end, NULL, out);
   uint64_t end_ns = monotonic_ns();
   if (start_ns != 0U && end_ns >= start_ns) out->elapsed_ns = end_ns - start_ns;
 
@@ -1087,12 +1214,12 @@ static memdbg_status_t scan_unknown_range(
 
   while (scanned < len) {
     uint64_t remaining = len - scanned;
-    size_t to_read = scan_read_size(remaining);
+    size_t to_read = scan_read_size(remaining, MEMDBG_SCAN_CHUNK);
     size_t read_len = 0U;
 
     memdbg_status_t st = scan_memory_read_resilient(pid,
         start + scanned, buffer + carry, to_read,
-        builder->result, &read_len);
+        builder->result, builder->progress, &read_len);
     if (st != MEMDBG_OK) {
       scanned += scan_fault_skip_size(to_read);
       carry = 0U;
@@ -1324,11 +1451,11 @@ memdbg_status_t memdbg_scan_pointer(const memdbg_scan_pointer_request_t *request
 
     while (scanned < map_len) {
       uint64_t remaining = map_len - scanned;
-      size_t to_read = scan_read_size(remaining);
+      size_t to_read = scan_read_size(remaining, MEMDBG_SCAN_CHUNK);
       size_t read_len = 0U;
 
       st = scan_memory_read_resilient(request->pid,
-          mstart + scanned, buffer + carry, to_read, out, &read_len);
+          mstart + scanned, buffer + carry, to_read, out, NULL, &read_len);
       if (st != MEMDBG_OK) {
         scanned += scan_fault_skip_size(to_read);
         carry = 0U;

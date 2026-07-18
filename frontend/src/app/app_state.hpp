@@ -120,6 +120,7 @@ struct CheatEntry {
   bool enabled = true;
   bool locked = false;
   bool active = false;
+  bool active_known = false;
   std::string status;
 };
 
@@ -350,6 +351,17 @@ struct AppState {
 
   int process_dump_max_mb = 128;
   std::string process_analysis_report;
+  bool map_dump_pending = false;
+  std::future<std::tuple<bool, size_t, size_t, uint64_t, std::string,
+                         std::string>> map_dump_future;
+  std::shared_ptr<Client> map_dump_client;
+  std::atomic<bool> map_dump_cancel_requested{false};
+  std::atomic<uint64_t> map_dump_maps_done{0U};
+  std::atomic<uint64_t> map_dump_maps_total{0U};
+  std::atomic<uint64_t> map_dump_bytes_done{0U};
+  std::atomic<uint64_t> map_dump_bytes_total{0U};
+  int32_t map_dump_pid = 0;
+  double map_dump_start_time = 0.0;
 
   /* ---- Process Tree ---- */
   bool process_tree_expand_all = false;
@@ -390,6 +402,14 @@ struct AppState {
   int scan_snapshot_type = MEMDBG_VALUE_U32;
   char scan_session_status[256] = "No scan session";
   bool scan_is_unknown_session = false;
+  bool scanner_value_editor_open = false;
+  bool scanner_value_editor_request_open = false;
+  uint64_t scanner_value_editor_address = 0U;
+  int scanner_value_editor_type = MEMDBG_VALUE_U32;
+  char scanner_value_editor_text[256] = "0";
+  std::vector<uint8_t> scanner_value_editor_original;
+  bool scanner_value_editor_lock = false;
+  bool scanner_value_editor_add_trainer = true;
 
   /* ---- Structure Compare ---- */
   char structure_player_base[32] = "0x0";
@@ -478,6 +498,12 @@ struct AppState {
   std::atomic<bool> scan_async_cancel_requested{false};
   std::atomic<uint64_t> scan_async_units_done{0U};
   std::atomic<uint64_t> scan_async_units_total{0U};
+  std::atomic<bool> scan_async_units_are_maps{false};
+  std::atomic<uint64_t> scan_async_results_found{0U};
+  std::atomic<uint32_t> scan_async_maps_done{0U};
+  std::atomic<uint32_t> scan_async_maps_total{0U};
+  std::atomic<uint32_t> scan_async_workers_active{0U};
+  std::atomic<uint32_t> scan_async_workers_total{0U};
   std::shared_future<bool> scan_async_future;
   std::string scan_async_label;
   double scan_async_start_time = 0.0;
@@ -1017,6 +1043,7 @@ inline bool client_async_busy(const AppState &state) {
          state.tracer_pending || state.tracer_status_pending ||
          state.tracer_events_pending ||
           state.elf_load_pending || state.json_dump_pending ||
+         state.map_dump_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||
          state.plugin_gui_starting;
@@ -1060,6 +1087,7 @@ void refine_scan(AppState &state, RefineMode mode);
 void scan_unknown_process(AppState &state);
 void draw_pointer_scanner(AppState &state, struct ImVec2 avail);
 void draw_aob_scanner(AppState &state, struct ImVec2 avail);
+void apply_locked_cheats(AppState &state);
 void draw_trainer(AppState &state, struct ImVec2 avail);
 void draw_plugins(AppState &state, struct ImVec2 avail);
 void draw_plugin_gui(AppState &state, struct ImVec2 avail);

@@ -1492,11 +1492,34 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
                            ImGui::GetTime() - state.scan_async_start_time,
                            ImGui::GetContentRegionAvail().x);
     const uint64_t total = state.scan_async_units_total.load();
-    if (total != 0U)
-      ImGui::Text("Progress: %llu / %llu units",
-                  static_cast<unsigned long long>(
-                      state.scan_async_units_done.load()),
+    if (total != 0U) {
+      const uint64_t done = state.scan_async_units_done.load();
+      const float fraction = std::min(
+          1.0f, static_cast<float>(done) / static_cast<float>(total));
+      ImGui::ProgressBar(fraction,
+                         ImVec2(ImGui::GetContentRegionAvail().x, 12.0f), "");
+      const char *progress_format = state.scan_async_units_are_maps.load()
+          ? locale::tr("scanner.maps_progress")
+          : locale::tr("scanner.units_progress");
+      ImGui::Text(progress_format,
+                  static_cast<unsigned long long>(done),
                   static_cast<unsigned long long>(total));
+    }
+    const uint32_t maps_total = state.scan_async_maps_total.load();
+    if (maps_total != 0U) {
+      ImGui::Text(locale::tr("scanner.maps_progress"),
+                  static_cast<unsigned long long>(
+                      state.scan_async_maps_done.load()),
+                  static_cast<unsigned long long>(maps_total));
+    }
+    ImGui::Text(locale::tr("scanner.results_found"),
+                static_cast<unsigned long long>(
+                    state.scan_async_results_found.load()));
+    const uint32_t workers_total = state.scan_async_workers_total.load();
+    if (workers_total != 0U) {
+      ImGui::Text(locale::tr("scanner.workers_active"),
+                  state.scan_async_workers_active.load(), workers_total);
+    }
     if (state.scan_async_cancellable &&
         mobile_action_button("Stop active scan", true)) {
       state.scan_async_cancel_requested.store(true);
@@ -1661,6 +1684,7 @@ static bool mobile_apply_cheat(AppState &state, CheatEntry &cheat) {
     return false;
   }
   cheat.active = true;
+  cheat.active_known = true;
   cheat.status = "Wrote " + std::to_string(written) + " bytes";
   return true;
 }
@@ -1695,6 +1719,7 @@ static bool mobile_deactivate_cheat(AppState &state, CheatEntry &cheat) {
     return false;
   }
   cheat.active = false;
+  cheat.active_known = true;
   cheat.status = "Restored " + std::to_string(written) + " bytes";
   return true;
 }
@@ -1904,7 +1929,7 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
     for (size_t i = 0; i < state.cheats.size(); ++i) {
       CheatEntry &cheat = state.cheats[i];
       ImGui::PushID(static_cast<int>(i));
-      ImGui::BeginChild("MobileTrainerCheatCard", ImVec2(0, 152.0f * scl),
+      ImGui::BeginChild("MobileTrainerCheatCard", ImVec2(0, 170.0f * scl),
                         true, ImGuiWindowFlags_NoScrollbar);
       ImGui::Checkbox("##enabled", &cheat.enabled);
       ImGui::SameLine();
@@ -1917,8 +1942,19 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
                     ImGui::GetContentRegionAvail().x, palette.muted);
       ImGui::Checkbox("Lock", &cheat.locked);
       ImGui::SameLine();
-      ImGui::TextColored(cheat.active ? palette.success : palette.dim, "%s",
-                         cheat.active ? "Active" : "Idle");
+      if (!cheat.active_known) {
+        ImGui::TextColored(palette.warning, "%s",
+                           locale::tr("trainer.state_unknown"));
+      } else {
+        ImGui::TextColored(cheat.active ? palette.success : palette.dim, "%s",
+                           cheat.active ? locale::tr("trainer.state_active")
+                                        : locale::tr("trainer.state_idle"));
+      }
+      ImGui::TextColored(
+          cheat.has_off_bytes ? palette.success : palette.warning,
+          "%s: %s", locale::tr("trainer.col_off"),
+          cheat.has_off_bytes ? locale::tr("trainer.off_yes")
+                              : locale::tr("trainer.off_no"));
 
       const float gap = 6.0f * scl;
       const float button_w =
@@ -1929,13 +1965,13 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
       }
       ImGui::SameLine(0, gap);
       ImGui::BeginDisabled(!cheat.has_off_bytes);
-      if (ui::soft_button("OFF", ImVec2(button_w, 34.0f * scl))) {
+      if (ui::soft_button("Restore", ImVec2(button_w, 34.0f * scl))) {
         if (mobile_deactivate_cheat(state, cheat))
           set_status(state, cheat.status);
       }
       ImGui::EndDisabled();
       ImGui::SameLine(0, gap);
-      if (ui::soft_button("CAP", ImVec2(button_w, 34.0f * scl))) {
+      if (ui::soft_button("Capture", ImVec2(button_w, 34.0f * scl))) {
         if (capture_off_value(state, cheat)) set_status(state, cheat.status);
       }
       ImGui::EndDisabled();

@@ -27,6 +27,41 @@ int main(int argc, char **argv) {
       std::strtoul(argv[3], nullptr, 10));
   const std::string payload_path = argv[4];
 
+  /* Do not let the verification loop mistake the old listener for the newly
+     uploaded payload. A cooperative stop also drains pooled handlers before
+     the loader starts the replacement image. */
+  {
+    memdbg::frontend::Client previous;
+    previous.set_socket_timeout_ms(1500U);
+    memdbg::frontend::HelloInfo previous_hello;
+    if (previous.connect_to(host, debug_port, 1000U) &&
+        previous.hello(previous_hello)) {
+      if (!previous.shutdown_payload()) {
+        std::cerr << "PREVIOUS PAYLOAD SHUTDOWN FAILED: "
+                  << previous.last_error() << "\n";
+        return 3;
+      }
+      previous.disconnect();
+      const auto stop_deadline = std::chrono::steady_clock::now() +
+                                 std::chrono::seconds(5);
+      bool stopped = false;
+      while (std::chrono::steady_clock::now() < stop_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        memdbg::frontend::Client probe;
+        if (!probe.connect_to(host, debug_port, 250U)) {
+          stopped = true;
+          break;
+        }
+      }
+      if (!stopped) {
+        std::cerr << "PREVIOUS PAYLOAD DID NOT RELEASE PORT " << debug_port
+                  << "\n";
+        return 3;
+      }
+      std::cout << "PREVIOUS PAYLOAD STOPPED: port released before upload\n";
+    }
+  }
+
   std::string error;
   if (!memdbg::frontend::send_payload_elf(host, loader_port, payload_path,
                                           error)) {

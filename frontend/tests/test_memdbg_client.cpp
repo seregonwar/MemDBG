@@ -129,10 +129,16 @@ private:
 
   bool read_hello_request(platform::socket_handle_t fd,
                           memdbg_packet_header_t &request) {
+    memdbg_hello_request_t hello{};
     return socket_read_exact(fd, &request, sizeof(request)) &&
            request.magic == MEMDBG_PACKET_MAGIC &&
            request.version == MEMDBG_PROTOCOL_VERSION &&
-           request.command == MEMDBG_CMD_HELLO && request.length == 0;
+           request.command == MEMDBG_CMD_HELLO &&
+           request.length == sizeof(hello) &&
+           socket_read_exact(fd, &hello, sizeof(hello)) &&
+           hello.magic == MEMDBG_HELLO_REQUEST_MAGIC &&
+           hello.version == MEMDBG_HELLO_REQUEST_VERSION &&
+           hello.session_id != 0U;
   }
 
   void run() {
@@ -278,6 +284,10 @@ public:
   bool valid() const { return port_ != 0; }
   uint16_t port() const { return port_; }
   uint32_t hello_count() const { return hello_count_.load(); }
+  uint32_t hello_role_mask() const { return hello_role_mask_.load(); }
+  bool hello_sessions_consistent() const {
+    return hello_session_id_.load() != 0U && hello_sessions_consistent_.load();
+  }
 
 private:
   void accept_loop() {
@@ -296,9 +306,11 @@ private:
     while (!stopped_.load()) {
       memdbg_packet_header_t request{};
       if (!socket_read_exact(fd, &request, sizeof(request))) break;
+      std::vector<uint8_t> request_body;
       if (request.length != 0U) {
-        std::vector<uint8_t> discard(request.length);
-        if (!socket_read_exact(fd, discard.data(), discard.size())) break;
+        request_body.resize(request.length);
+        if (!socket_read_exact(fd, request_body.data(), request_body.size()))
+          break;
       }
       memdbg_response_header_t response{};
       response.magic = MEMDBG_PACKET_MAGIC;
@@ -307,6 +319,20 @@ private:
       response.request_id = request.request_id;
       response.status = MEMDBG_OK;
       if (request.command == MEMDBG_CMD_HELLO) {
+        if (request_body.size() != sizeof(memdbg_hello_request_t)) break;
+        memdbg_hello_request_t identity{};
+        std::memcpy(&identity, request_body.data(), sizeof(identity));
+        if (identity.magic != MEMDBG_HELLO_REQUEST_MAGIC ||
+            identity.version != MEMDBG_HELLO_REQUEST_VERSION ||
+            identity.session_id == 0U ||
+            identity.role > MEMDBG_CLIENT_ROLE_TOOL)
+          break;
+        uint64_t expected_id = 0U;
+        if (!hello_session_id_.compare_exchange_strong(expected_id,
+                                                        identity.session_id) &&
+            expected_id != identity.session_id)
+          hello_sessions_consistent_.store(false);
+        hello_role_mask_.fetch_or(1U << identity.role);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         memdbg_hello_response_t hello{};
         hello.protocol_version = MEMDBG_PROTOCOL_VERSION;
@@ -354,6 +380,9 @@ private:
   uint16_t port_ = 0;
   std::atomic<bool> stopped_{false};
   std::atomic<uint32_t> hello_count_{0U};
+  std::atomic<uint32_t> hello_role_mask_{0U};
+  std::atomic<uint64_t> hello_session_id_{0U};
+  std::atomic<bool> hello_sessions_consistent_{true};
   std::thread worker_;
   std::mutex client_mutex_;
   std::vector<std::thread> clients_;
@@ -379,6 +408,11 @@ bool run_pool_parallel_roles_test() {
       std::chrono::steady_clock::now() - start);
   const bool first = pool.memory_client() && pool.scan_client() &&
                      pool.poll_client() && server.hello_count() == 3U &&
+                     server.hello_sessions_consistent() &&
+                     server.hello_role_mask() ==
+                         ((1U << MEMDBG_CLIENT_ROLE_MEMORY) |
+                          (1U << MEMDBG_CLIENT_ROLE_SCAN) |
+                          (1U << MEMDBG_CLIENT_ROLE_POLL)) &&
                      elapsed < std::chrono::milliseconds(500);
 
   pool.connect_additional_roles_async("127.0.0.1", server.port(), 1000U,
@@ -389,7 +423,8 @@ bool run_pool_parallel_roles_test() {
          std::chrono::steady_clock::now() < second_deadline)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   const bool second = pool.memory_client() && pool.scan_client() &&
-                      pool.poll_client() && server.hello_count() == 6U;
+                      pool.poll_client() && server.hello_count() == 6U &&
+                      server.hello_sessions_consistent();
   pool.disconnect();
   std::printf("  %s  parallel role setup (%lld ms) and reconnect\n",
               first && second ? "PASS" : "FAIL",
@@ -473,7 +508,9 @@ bool run_plugin_broker_reuse_test() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
   plugins::ProtocolBroker broker;
-  bool ok = server.hello_count() == 4U && broker.start(pool);
+  bool ok = server.hello_count() == 4U &&
+            server.hello_sessions_consistent() &&
+            server.hello_role_mask() == 0x0FU && broker.start(pool);
   for (uint32_t i = 1U; ok && i <= 16U; ++i)
     ok = broker_ping(broker.port(), i);
   ok = ok && broker_rejects_oversized_frame(broker.port());

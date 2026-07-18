@@ -83,12 +83,13 @@ toolchain.
 ### Frontend Workflows
 
 - Consoles: connect, disconnect, ping, shutdown, and UDP log listener control.
-- Processes: PID/name/title/content metadata, maps, filters, dumps, ELF load,
-  and hijack controls.
+- Processes: PID/name/title/content metadata, maps, filters, asynchronous dumps
+  with map/byte progress and cancellation, ELF load, and hijack controls.
 - Memory: hex read/write, patches, watchpoints, allocations, ROP gadget search,
   and heap-spray entropy analysis.
-- Scanner: exact-value scans, process-wide scans, unknown/refine pipeline, and
-  Smart Auto-Search presets for health, ammo, and resources.
+- Scanner: exact-value scans, process-wide scans, unknown/refine pipeline,
+  live byte/map/worker/result progress, cooperative Stop with partial results,
+  and Smart Auto-Search presets for health, ammo, and resources.
 - Pointer Scan and AOB Scan: dedicated workflows for stable addresses and
   wildcard byte signatures.
 - Trainer: cheat entries, live OFF-value capture, lock intervals, batchcode
@@ -260,6 +261,11 @@ Live console probes are built with the frontend tools:
 
 # Extended session/timeout stability workload
 ./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin --stress
+
+# Focused tracked scan, partial-result cancellation, and reversible write
+./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin --scan-only
+./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin --cancel-scan
+./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin --write-test
 ```
 
 Frontend CMake also builds focused test binaries, including:
@@ -278,28 +284,41 @@ Frontend CMake also builds focused test binaries, including:
 The current payload and protocol feature level were validated on a freshly
 restarted PS5 with a live `eboot.bin` target on **2026-07-18**. The test used
 the production ports (`9020` native protocol, `744` legacy compatibility) and
-four independent native role connections.
+four independent native role connections. Scanner tuning was measured over
+repeated live runs, not a synthetic buffer benchmark.
 
 | Check | Result |
 |---|---:|
 | Functional protocol matrix | **19 passed, 0 failed, 4 intentionally skipped** |
-| Process list latency (10 requests) | **9.54 ms average** |
-| First maps enumeration (328 maps) | **64.91 ms** |
-| Warm maps latency (20 requests) | **9.92 ms average** |
-| Four-socket maps burst | **11.52 ms wall time** |
+| Process list latency (10 requests) | **10.06 ms average** |
+| First maps enumeration (334 maps) | **70.28 ms** |
+| Warm maps latency (20 requests) | **8.50 ms average** |
+| Four-socket maps burst | **12.59 ms wall time** |
 | Memory read, 1 MiB chunks | **7.96 MiB/s** |
 | Four-socket aggregate read | **8.60 MiB/s** |
-| Server-side exact scan | **25.55 MiB/s** |
+| Exact scan, 9.11 MiB contiguous range | **175.79 MiB/s average** |
+| Tracked exact scan, 12.28 MiB / 8 maps | **152.63 MiB/s average, 171.68 MiB/s peak** |
+| Scanner gain over 64 KiB / one-worker baseline | **14.88x (+1,388%)** |
+| Tracked progress | **bytes, maps, results, active/total workers** |
+| Stop scan | **partial batch returned: 5.77 MiB, 5 maps, cancelled=yes** |
+| Reversible game write | **write/read-back/restore verified at `0xd97000`** |
+| Rapid four-connection churn | **no reset; one connection remained during telemetry check** |
 | Sustained read-only stress workload | **232 MiB transferred; no disconnect** |
 | Connection cap | **16 accepted, 4 rejected out of 20** |
 | Idle timeout | **inactive connection closed after 30 seconds** |
 | Repeated payload replacement | **verified by HELLO after every injection** |
 
+The final scanner uses adaptive internal reads: 8 MiB for one contiguous exact
+range and 4 MiB per worker for parallel map scans. Failed reads are
+automatically retried at successively smaller sizes down to 4 KiB. The packet
+and public `MEMORY_READ` limits remain 1 MiB; the larger values are private
+payload buffers and never enlarge a wire frame.
+
 These are end-to-end LAN measurements, including protocol framing, console
 memory primitives, serialization, compression decisions, and client parsing.
-They are not synthetic memory-copy figures. Full methodology, both normal
-runs, stress results, protocol coverage, limitations, and reproduction steps
-are in
+They are not synthetic memory-copy figures. Full methodology, the 256 KiB
+reset diagnosis, chunk sweep, cancellation/write validation, stress results,
+protocol coverage, limitations, and reproduction steps are in
 [`docs/ps5_validation_2026-07-18.md`](docs/ps5_validation_2026-07-18.md).
 
 ## Localization

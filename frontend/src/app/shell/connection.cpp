@@ -929,7 +929,12 @@ void disconnect_console(AppState &state, const char *reason) {
     state.scan_async_cancel_requested.store(true);
     state.pool.cancel_all_pending_io();
   }
+  if (state.map_dump_future.valid()) {
+    state.map_dump_cancel_requested.store(true);
+    state.pool.cancel_all_pending_io();
+  }
   if (state.scan_async_future.valid()) state.scan_async_future.wait();
+  if (state.map_dump_future.valid()) state.map_dump_future.wait();
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
@@ -954,6 +959,8 @@ void disconnect_console(AppState &state, const char *reason) {
   state.connect_pending = false;
   state.connect_cancel_requested = false;
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
+  state.map_dump_pending = false;
+  state.map_dump_client.reset();
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr_resource_pending = false;  /* cancel any in-flight task manager fetch */

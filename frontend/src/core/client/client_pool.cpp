@@ -97,6 +97,11 @@ void ClientPool::connect_additional_roles_async(const std::string &host,
       if (!current()) return;
       auto client = std::make_shared<Client>();
       client->set_socket_timeout_ms(timeout_ms);
+      static constexpr std::array<memdbg_client_role_t, 3> kRoles = {
+          MEMDBG_CLIENT_ROLE_MEMORY,
+          MEMDBG_CLIENT_ROLE_SCAN,
+          MEMDBG_CLIENT_ROLE_POLL};
+      client->set_connection_role(kRoles[index]);
       {
         std::lock_guard<std::mutex> lock(roles_mutex_);
         if (!current()) return;

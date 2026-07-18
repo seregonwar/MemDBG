@@ -235,10 +235,17 @@ static void dump_selected_map(AppState &state) {
   state.action_journal.record("memory_dump", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"bytes\":" + std::to_string(written_total) + "}").c_str());
 }
 
+struct MapDumpPlanEntry {
+  MapEntry map;
+  size_t source_index = 0U;
+  uint64_t target_size = 0U;
+};
+
 static void dump_filtered_maps(AppState &state) {
   if (!state.client.connected()) { set_status(state, "Connect a console first"); return; }
   if (state.selected_pid <= 0) {    set_status(state, locale::tr("processes.select_pid_first")); return; }
   if (state.maps.empty()) { set_status(state, locale::tr("processes.refresh_maps_first")); return; }
+  if (state.map_dump_pending) return;
 
   state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
   std::filesystem::path base_dir = trim_copy(state.dump_path);
@@ -249,98 +256,165 @@ static void dump_filtered_maps(AppState &state) {
   std::string process_name = sanitize_component(selected_process_name(state));
   std::filesystem::path out_dir = base_dir /
       ("pid_" + std::to_string(state.selected_pid) + "_" + process_name + "_maps");
-  std::error_code ec;
-  std::filesystem::create_directories(out_dir, ec);
-  if (ec) { set_status(state, locale::tr("processes.dump_dir_failed")); return; }
-
-  std::ofstream manifest(out_dir / "manifest.txt", std::ios::binary);
-  if (!manifest) { set_status(state, locale::tr("processes.dump_manifest_failed")); return; }
-  manifest << "MemDBG process dump\n";
-  manifest << "pid=" << state.selected_pid << "\n";
-  manifest << "process=" << selected_process_name(state) << "\n";
-  manifest << "filter=" << trim_copy(state.map_filter) << "\n";
-  manifest << "readable=" << state.map_filter_readable
-           << " writable=" << state.map_filter_writable
-           << " executable=" << state.map_filter_executable
-           << " hide_system=" << state.map_filter_hide_system
-           << " min_kb=" << state.map_filter_min_kb << "\n\n";
-  manifest << "file,start,end,prot,dumped_bytes,name\n";
-
   const uint64_t budget =
       static_cast<uint64_t>(state.process_dump_max_mb) * 1024ULL * 1024ULL;
-  uint64_t dumped_total = 0;
-  size_t dumped_maps = 0;
-  size_t skipped_maps = 0;
-
+  uint64_t planned_bytes = 0U;
+  std::vector<MapDumpPlanEntry> plan;
   for (size_t i = 0; i < state.maps.size(); ++i) {
     const auto &map = state.maps[i];
     if (!map_passes_filters(state, map) || (map.protection & 1U) == 0U ||
-        map.end <= map.start) {
+        map.end <= map.start)
       continue;
-    }
-    if (dumped_total >= budget) break;
-
+    if (planned_bytes >= budget) break;
     const uint64_t map_size = map.end - map.start;
-    const uint64_t budget_left = budget - dumped_total;
-    const uint64_t target_size = std::min(map_size, budget_left);
-    std::string file_name = "map_" + std::to_string(i) + "_" +
-        hex_u64(map.start).substr(2) + "_" + hex_u64(map.end).substr(2) +
-        "_" + prot_text(map.protection) + ".bin";
-    file_name = sanitize_component(file_name);
-    std::filesystem::path file_path = out_dir / file_name;
-    std::ofstream out(file_path, std::ios::binary);
-    if (!out) {
-      skipped_maps++;
-      manifest << "# open_failed," << hex_u64(map.start) << ',' << hex_u64(map.end)
-               << ',' << prot_text(map.protection) << ',' << map.name << "\n";
-      continue;
-    }
-
-    uint64_t address = map.start;
-    uint64_t remaining = target_size;
-    uint64_t written = 0;
-    while (remaining != 0U) {
-      uint32_t chunk = remaining > MEMDBG_PROTOCOL_MAX_READ
-                           ? MEMDBG_PROTOCOL_MAX_READ
-                           : static_cast<uint32_t>(remaining);
-      std::vector<uint8_t> bytes;
-      if (!state.client.memory_read(state.selected_pid, address, chunk, bytes)) {
-        manifest << "# read_failed," << file_name << ',' << hex_u64(address)
-                 << ',' << state.client.last_error() << "\n";
-        break;
-      }
-      if (bytes.empty()) break;
-      out.write(reinterpret_cast<const char*>(bytes.data()),
-                static_cast<std::streamsize>(bytes.size()));
-      if (!out) {
-        manifest << "# write_failed," << file_name << ',' << hex_u64(address) << "\n";
-        break;
-      }
-      address += bytes.size();
-      remaining -= bytes.size();
-      written += bytes.size();
-      dumped_total += bytes.size();
-      if (dumped_total >= budget) break;
-    }
-
-    if (written == 0U) {
-      skipped_maps++;
-      std::filesystem::remove(file_path, ec);
-      continue;
-    }
-    dumped_maps++;
-    manifest << file_name << ',' << hex_u64(map.start) << ',' << hex_u64(map.end)
-             << ',' << prot_text(map.protection) << ',' << written << ','
-             << map.name << "\n";
+    const uint64_t target_size = std::min(map_size, budget - planned_bytes);
+    plan.push_back({map, i, target_size});
+    planned_bytes += target_size;
+  }
+  if (plan.empty()) {
+    set_status(state, locale::tr("processes.no_filtered_maps"));
+    return;
   }
 
-  manifest << "\nsummary_maps=" << dumped_maps
-           << "\nskipped_maps=" << skipped_maps
-           << "\ndumped_bytes=" << dumped_total << "\n";
-  set_status(state, "Dumped " + std::to_string(dumped_maps) + " filtered map(s) to " +
-                    out_dir.string());
-  char pdw_buf[512]; std::snprintf(pdw_buf, sizeof(pdw_buf), locale::tr("processes.dump_written"), out_dir.string().c_str()); push_notification(state, pdw_buf, 5.0);
-  state.action_journal.record("memory_dump_filtered", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"maps\":" + std::to_string(dumped_maps) + ",\"bytes\":" + std::to_string(dumped_total) + "}").c_str());
+  const int32_t pid = state.selected_pid;
+  const std::string process = selected_process_name(state);
+  const std::string filter = trim_copy(state.map_filter);
+  const bool readable = state.map_filter_readable;
+  const bool writable = state.map_filter_writable;
+  const bool executable = state.map_filter_executable;
+  const bool hide_system = state.map_filter_hide_system;
+  const int min_kb = state.map_filter_min_kb;
+  state.map_dump_pending = true;
+  state.map_dump_cancel_requested.store(false);
+  state.map_dump_maps_done.store(0U);
+  state.map_dump_maps_total.store(plan.size());
+  state.map_dump_bytes_done.store(0U);
+  state.map_dump_bytes_total.store(planned_bytes);
+  state.map_dump_pid = pid;
+  state.map_dump_start_time = ImGui::GetTime();
+  state.map_dump_client = state.pool.memory_lease();
+  auto client = state.map_dump_client;
+
+  state.map_dump_future = std::async(std::launch::async,
+      [client, plan = std::move(plan), out_dir, pid, process, filter,
+       readable, writable, executable, hide_system, min_kb,
+       &cancel = state.map_dump_cancel_requested,
+       &maps_done = state.map_dump_maps_done,
+       &bytes_done = state.map_dump_bytes_done]()
+          -> std::tuple<bool, size_t, size_t, uint64_t, std::string,
+                        std::string> {
+        std::error_code ec;
+        std::filesystem::create_directories(out_dir, ec);
+        if (ec)
+          return {false, 0U, 0U, 0U, out_dir.string(),
+                  "Could not create dump directory: " + ec.message()};
+        std::ofstream manifest(out_dir / "manifest.txt", std::ios::binary);
+        if (!manifest)
+          return {false, 0U, 0U, 0U, out_dir.string(),
+                  "Could not create dump manifest"};
+        manifest << "MemDBG process dump\n"
+                 << "pid=" << pid << "\nprocess=" << process
+                 << "\nfilter=" << filter << "\nreadable=" << readable
+                 << " writable=" << writable << " executable=" << executable
+                 << " hide_system=" << hide_system << " min_kb=" << min_kb
+                 << "\n\nfile,start,end,prot,dumped_bytes,name\n";
+
+        uint64_t dumped_total = 0U;
+        size_t dumped_maps = 0U;
+        size_t skipped_maps = 0U;
+        for (const MapDumpPlanEntry &item : plan) {
+          if (cancel.load()) break;
+          const MapEntry &map = item.map;
+          std::string file_name = sanitize_component(
+              "map_" + std::to_string(item.source_index) + "_" +
+              hex_u64(map.start).substr(2) + "_" +
+              hex_u64(map.end).substr(2) + "_" +
+              prot_text(map.protection) + ".bin");
+          const std::filesystem::path file_path = out_dir / file_name;
+          std::ofstream out(file_path, std::ios::binary);
+          uint64_t written = 0U;
+          if (!out) {
+            ++skipped_maps;
+            manifest << "# open_failed," << hex_u64(map.start) << ','
+                     << hex_u64(map.end) << ',' << prot_text(map.protection)
+                     << ',' << map.name << "\n";
+          } else {
+            uint64_t address = map.start;
+            uint64_t remaining = item.target_size;
+            while (remaining != 0U && !cancel.load()) {
+              const uint32_t chunk = remaining > MEMDBG_PROTOCOL_MAX_READ
+                  ? MEMDBG_PROTOCOL_MAX_READ
+                  : static_cast<uint32_t>(remaining);
+              std::vector<uint8_t> bytes;
+              if (!client->memory_read(pid, address, chunk, bytes)) {
+                manifest << "# read_failed," << file_name << ','
+                         << hex_u64(address) << ',' << client->last_error()
+                         << "\n";
+                break;
+              }
+              if (bytes.empty()) break;
+              out.write(reinterpret_cast<const char *>(bytes.data()),
+                        static_cast<std::streamsize>(bytes.size()));
+              if (!out) {
+                manifest << "# write_failed," << file_name << ','
+                         << hex_u64(address) << "\n";
+                break;
+              }
+              address += bytes.size();
+              remaining -= bytes.size();
+              written += bytes.size();
+              dumped_total += bytes.size();
+              bytes_done.store(dumped_total);
+            }
+            if (written == 0U) {
+              ++skipped_maps;
+              out.close();
+              std::filesystem::remove(file_path, ec);
+            } else {
+              ++dumped_maps;
+              manifest << file_name << ',' << hex_u64(map.start) << ','
+                       << hex_u64(map.end) << ',' << prot_text(map.protection)
+                       << ',' << written << ',' << map.name << "\n";
+            }
+          }
+          maps_done.fetch_add(1U);
+        }
+        manifest << "\nsummary_maps=" << dumped_maps
+                 << "\nskipped_maps=" << skipped_maps
+                 << "\ndumped_bytes=" << dumped_total
+                 << "\ncancelled=" << (cancel.load() ? 1 : 0) << "\n";
+        return {true, dumped_maps, skipped_maps, dumped_total,
+                out_dir.string(), ""};
+      });
+}
+
+static void poll_filtered_map_dump(AppState &state) {
+  if (!state.map_dump_pending || !state.map_dump_future.valid()) return;
+  if (state.map_dump_future.wait_for(std::chrono::milliseconds(0)) !=
+      std::future_status::ready)
+    return;
+  state.map_dump_pending = false;
+  state.map_dump_client.reset();
+  const bool cancelled = state.map_dump_cancel_requested.exchange(false);
+  auto [ok, dumped_maps, skipped_maps, dumped_total, out_dir, error] =
+      state.map_dump_future.get();
+  if (!ok) {
+    set_status(state, error);
+    push_notification(state, error, 5.0);
+    return;
+  }
+  const std::string summary = (cancelled ? "Stopped after " : "Dumped ") +
+      std::to_string(dumped_maps) + " map(s), " +
+      format_bytes(dumped_total) + " to " + out_dir;
+  set_status(state, summary);
+  push_notification(state, summary, 5.0);
+  state.action_journal.record(
+      "memory_dump_filtered",
+      ("{\"pid\":" + std::to_string(state.map_dump_pid) +
+       ",\"maps\":" + std::to_string(dumped_maps) +
+       ",\"skipped\":" + std::to_string(skipped_maps) +
+       ",\"bytes\":" + std::to_string(dumped_total) +
+       ",\"cancelled\":" + (cancelled ? "true" : "false") + "}").c_str());
 }
 
 /* ---- Process selection ---- */
@@ -1508,6 +1582,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
     return;
   }
 
+  poll_filtered_map_dump(state);
   poll_json_dump(state);
   poll_elf_load(state);
 
@@ -1560,7 +1635,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
     }
     ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0 ||
                          state.connect_pending || state.map_refresh_pending ||
-                         state.json_dump_pending);
+                         state.json_dump_pending || state.map_dump_pending);
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 34))) refresh_maps(state);
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 34))) set_scan_window_from_filtered_maps(state);
@@ -1583,6 +1658,33 @@ void draw_processes(AppState &state, ImVec2 avail) {
                           "This can read a large portion of the process address space. Tighten filters and keep the cap low on unstable consoles.",
                           &skip_dump_filtered_confirm, true)) {
       dump_filtered_maps(state);
+    }
+    if (state.map_dump_pending) {
+      ImGui::Spacing();
+      ui::draw_scan_progress(locale::tr("processes.dump_filtered_maps"),
+                             icons::kDump,
+                             ImGui::GetTime() - state.map_dump_start_time,
+                             ImGui::GetContentRegionAvail().x);
+      const uint64_t maps_done = state.map_dump_maps_done.load();
+      const uint64_t maps_total = state.map_dump_maps_total.load();
+      const float map_fraction = maps_total == 0U ? 0.0f : std::min(
+          1.0f, static_cast<float>(maps_done) /
+                    static_cast<float>(maps_total));
+      ImGui::ProgressBar(map_fraction,
+                         ImVec2(ImGui::GetContentRegionAvail().x, 12.0f), "");
+      ImGui::Text(locale::tr("scanner.maps_progress"),
+                  static_cast<unsigned long long>(maps_done),
+                  static_cast<unsigned long long>(maps_total));
+      ImGui::TextColored(
+          ui::colors().dim, "%s / %s",
+          format_bytes(state.map_dump_bytes_done.load()).c_str(),
+          format_bytes(state.map_dump_bytes_total.load()).c_str());
+      ImGui::BeginDisabled(state.map_dump_cancel_requested.load());
+      if (ui::danger_button(locale::tr("scanner.stop"), ImVec2(140, 34))) {
+        state.map_dump_cancel_requested.store(true);
+        set_status(state, locale::tr("scanner.stopping"));
+      }
+      ImGui::EndDisabled();
     }
     ImGui::Spacing();
     {

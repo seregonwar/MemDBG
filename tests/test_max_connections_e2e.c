@@ -37,6 +37,7 @@
 static const char *g_host = "127.0.0.1";
 static uint16_t    g_port = 9020;
 static uint32_t    g_expected_max = 4;
+static int         g_legacy_hello = 0;
 
 /* ---- Shared atomic counters ---- */
 
@@ -72,16 +73,25 @@ static int try_connect(void) {
   return fd;
 }
 
-static int do_hello(int fd) {
+static int do_hello(int fd, uint16_t role) {
   memdbg_packet_header_t hdr;
+  memdbg_hello_request_t hello;
   memset(&hdr, 0, sizeof(hdr));
+  memset(&hello, 0, sizeof(hello));
   hdr.magic      = MEMDBG_PACKET_MAGIC;
   hdr.version    = MEMDBG_PROTOCOL_VERSION;
   hdr.command    = MEMDBG_CMD_HELLO;
   hdr.request_id = 1;
-  hdr.length     = 0;
+  hdr.length     = g_legacy_hello ? 0U : (uint32_t)sizeof(hello);
+  hello.magic = MEMDBG_HELLO_REQUEST_MAGIC;
+  hello.version = MEMDBG_HELLO_REQUEST_VERSION;
+  hello.role = role;
+  hello.session_id = 0x4d44424754455354ULL; /* "MDBGTEST" */
 
   if (send(fd, &hdr, sizeof(hdr), 0) != (ssize_t)sizeof(hdr)) return -1;
+  if (!g_legacy_hello &&
+      send(fd, &hello, sizeof(hello), 0) != (ssize_t)sizeof(hello))
+    return -1;
 
   memdbg_response_header_t rhdr;
   memset(&rhdr, 0, sizeof(rhdr));
@@ -98,13 +108,23 @@ static int do_hello(int fd) {
   /* If status != 0 the connection was rejected or cap was exceeded */
   if (rhdr.status != 0) return -1;
 
+  /* Drain the HELLO body so close() produces an orderly FIN instead of a
+   * reset with unread response data.  This also makes repeated capacity
+   * waves deterministic on console kernels. */
+  if (rhdr.length > sizeof(memdbg_hello_response_t)) return -1;
+  if (rhdr.length != 0U) {
+    memdbg_hello_response_t response;
+    n = recv(fd, &response, rhdr.length, MSG_WAITALL);
+    if (n != (ssize_t)rhdr.length) return -1;
+  }
+
   return 0;  /* accepted */
 }
 
 /* ---- Client thread ---- */
 
 static void *client_worker(void *arg) {
-  (void)arg;
+  const uintptr_t client_index = (uintptr_t)arg;
 
   int fd = try_connect();
   if (fd < 0) {
@@ -113,7 +133,7 @@ static void *client_worker(void *arg) {
     return NULL;
   }
 
-  int rc = do_hello(fd);
+  int rc = do_hello(fd, (uint16_t)(client_index % 4U));
 
   if (rc == 0) {
     /* Accepted! Now hold the connection open so the daemon's handler
@@ -127,6 +147,7 @@ static void *client_worker(void *arg) {
     atomic_fetch_add(&g_rejected, 1U);
   }
 
+  (void)shutdown(fd, SHUT_RDWR);
   close(fd);
   return NULL;
 }
@@ -137,10 +158,12 @@ int main(int argc, char **argv) {
   if (argc >= 2) g_host = argv[1];
   if (argc >= 3) g_port = (uint16_t)atoi(argv[2]);
   if (argc >= 4) g_expected_max = (uint32_t)atoi(argv[3]);
+  if (argc >= 5 && strcmp(argv[4], "legacy") == 0) g_legacy_hello = 1;
 
   printf("--- E2E max_connections cap test ---\n");
-  printf("Target: %s:%u  expected_max=%u  total_clients=%d\n",
-         g_host, g_port, g_expected_max, CLIENT_COUNT);
+  printf("Target: %s:%u  expected_max=%u  total_clients=%d  hello=%s\n",
+         g_host, g_port, g_expected_max, CLIENT_COUNT,
+         g_legacy_hello ? "legacy-empty" : "session-aware");
 
   /* Reset counters */
   atomic_store(&g_accepted, 0U);
@@ -152,7 +175,8 @@ int main(int argc, char **argv) {
 
   /* Launch all client threads concurrently */
   for (int i = 0; i < CLIENT_COUNT; ++i) {
-    if (pthread_create(&threads[i], NULL, client_worker, NULL) != 0) {
+    if (pthread_create(&threads[i], NULL, client_worker,
+                       (void *)(uintptr_t)i) != 0) {
       printf("FAIL: pthread_create[%d]\n", i);
       failures++;
     }

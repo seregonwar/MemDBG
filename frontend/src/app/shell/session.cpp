@@ -154,6 +154,8 @@ void poll_session_health(AppState &state) {
 /* ---- Screen dispatch ---- */
 
 void draw_screen(AppState &state, ImVec2 avail) {
+  /* Locks are a session-wide behavior, not a Trainer-screen animation. */
+  apply_locked_cheats(state);
   switch (state.screen) {
   case Screen::Home:      draw_home(state, avail); break;
   case Screen::Consoles:  draw_consoles(state, avail); break;
