@@ -192,6 +192,19 @@ static void draw_preferences_section(AppState &state) {
     ImGui::SetTooltip("%s", locale::tr("settings.payload_platform_hint"));
 
   ImGui::Spacing();
+  ImGui::TextColored(ui::colors().muted, "%s", locale::tr("scanner.max_results"));
+  ImGui::Spacing();
+  ImGui::SetNextItemWidth(200.0f * scl);
+  ImGui::InputInt("##SettingsScanMaxResults", &state.scan_max_results, 100, 1000);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "(1 – %u)",
+      static_cast<unsigned>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "Maximum scan results returned per request (1 – 50 000).");
+
+  ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Language");
   ImGui::Spacing();
   {
