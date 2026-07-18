@@ -432,7 +432,10 @@ target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 add_executable(memdbg_auto_search_test
   tests/test_auto_search.cpp
   src/core/client/client_pool.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/platform.cpp
   src/scanner/heuristics/auto_search.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
 
 target_include_directories(memdbg_auto_search_test PRIVATE
@@ -498,6 +501,9 @@ endif()
 add_executable(memdbg_app_state_parsing_test
   tests/test_app_state_parsing.cpp
   src/core/client/client_pool.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
 
 target_include_directories(memdbg_app_state_parsing_test PRIVATE
