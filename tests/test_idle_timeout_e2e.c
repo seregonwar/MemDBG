@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +88,11 @@ static int send_cmd(int fd, uint16_t cmd) {
 /* ---- Main ---- */
 
 int main(int argc, char **argv) {
+  /* Ignore SIGPIPE so that send() on a closed socket returns -1
+   * instead of killing the process. The daemon closes the connection
+   * after the idle timeout, and we must survive the resulting send(). */
+  signal(SIGPIPE, SIG_IGN);
+
   if (argc >= 2) g_host    = argv[1];
   if (argc >= 3) g_port    = (uint16_t)atoi(argv[2]);
   if (argc >= 4) g_idle_ms = (uint32_t)atoi(argv[3]);

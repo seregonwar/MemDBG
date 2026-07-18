@@ -71,6 +71,10 @@ int wait_for_client(socket_t fd, int timeout_ms) {
 
 fallback_select:
   {
+    /* Guard against fd out of range for select().
+     * macOS/FreeBSD assert at runtime if fd >= FD_SETSIZE. */
+    if (fd < 0 || (unsigned int)fd >= FD_SETSIZE) return -1;
+
     fd_set rfds;
     struct timeval tv;
     FD_ZERO(&rfds);

@@ -190,8 +190,10 @@ static int test_zero_timeout(void) {
 static int test_bad_fd(void) {
   printf("  TEST: wait_for_client with invalid fd returns error...\n");
 
-  /* Use an fd that is definitely invalid */
-  int rc = wait_for_client(9999, 100);
+  /* Use fd=-1 which is definitely invalid.
+   * wait_for_client() handles this at the entry gate before any
+   * platform-specific polling (kqueue/epoll/select). */
+  int rc = wait_for_client(-1, 100);
   if (rc >= 0) {
     printf("    ✗ expected error, got %d\n", rc);
     return 1;
