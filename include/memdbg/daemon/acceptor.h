@@ -29,6 +29,13 @@ int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
 void acceptor_shutdown_clients(void);
 void acceptor_unregister_client(socket_t fd);
 
+/* Group native sockets by the optional HELLO session identity.  The first
+ * successfully negotiated socket emits the console notification; Memory,
+ * Scan and Poll sockets only increase the session reference count. */
+void acceptor_register_hello_session(socket_t fd, uint64_t session_id,
+                                     uint32_t *session_cookie);
+void acceptor_unregister_hello_session(uint32_t session_cookie);
+
 #ifdef __cplusplus
 }
 #endif

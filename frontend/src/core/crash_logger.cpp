@@ -6,6 +6,7 @@
 
 #include "crash_logger.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -134,14 +135,18 @@ void CrashLogger::capture_console_lines(const std::vector<std::string> &lines,
   if (lines.empty()) return;
   if (current_received <= last_received) return;
 
-  // Capture ALL current ring entries.  The monotonic `current_received`
-  // counter from UdpLogListener::stats() tells us new data arrived.
-  // We write the full snapshot each time — duplicates may appear in the
-  // file across frames, but no entries are ever lost.
+  /* The listener snapshot contains the complete bounded ring, not just the
+     latest datagrams.  Append only the monotonic delta; replaying the whole
+     ring on every receive caused exponential-looking duplicate log spam and
+     filled the crash journal with stale entries.  When more datagrams arrived
+     than the ring can retain, persist every still-available line once. */
+  const uint64_t delta = current_received - last_received;
+  const size_t new_count = static_cast<size_t>(
+      std::min<uint64_t>(delta, static_cast<uint64_t>(lines.size())));
+  const size_t first_new = lines.size() - new_count;
   std::lock_guard<std::mutex> lock(mutex_);
-  for (const auto &line : lines) {
-    ring_push("console", line.c_str());
-  }
+  for (size_t i = first_new; i < lines.size(); ++i)
+    ring_push("console", lines[i].c_str());
   last_received = current_received;
 
   // Flush immediately so console logs survive a crash.

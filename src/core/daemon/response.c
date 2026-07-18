@@ -147,23 +147,35 @@ int send_framed_response(int fd, const memdbg_packet_header_t *req,
   }
 
   int bound = lz4_compress_bound((int)data_len);
-  unsigned char *compressed = (unsigned char *)malloc((size_t)bound + 5U);
-  if (compressed != NULL) {
+  const size_t header_len = sizeof(memdbg_response_header_t);
+  unsigned char *compressed_frame = (unsigned char *)malloc(
+      header_len + (size_t)bound + 5U);
+  if (compressed_frame != NULL) {
+    unsigned char *compressed = compressed_frame + header_len;
     int csize = lz4_compress_default((const char *)data,
                                      (char *)(compressed + 5),
                                      (int)data_len, bound);
     if (csize > 0 && (uint32_t)csize < data_len - (data_len / 8U)) {
+      memdbg_response_header_t hdr;
       compressed[0] = 0x01U;
       compressed[1] = (unsigned char)(data_len & 0xFFU);
       compressed[2] = (unsigned char)((data_len >> 8U) & 0xFFU);
       compressed[3] = (unsigned char)((data_len >> 16U) & 0xFFU);
       compressed[4] = (unsigned char)((data_len >> 24U) & 0xFFU);
-      int rc = send_response(fd, req, status, compressed,
-                             (uint32_t)csize + 5U);
-      free(compressed);
+      memset(&hdr, 0, sizeof(hdr));
+      hdr.magic = MEMDBG_PACKET_MAGIC;
+      hdr.version = MEMDBG_PROTOCOL_VERSION;
+      hdr.command = req != NULL ? req->command : 0U;
+      hdr.request_id = req != NULL ? req->request_id : 0U;
+      hdr.status = (int32_t)status;
+      hdr.length = (uint32_t)csize + 5U;
+      memcpy(compressed_frame, &hdr, sizeof(hdr));
+      int rc = pal_socket_write_all(fd, compressed_frame,
+                                    header_len + hdr.length) < 0 ? -1 : 0;
+      free(compressed_frame);
       return rc;
     }
-    free(compressed);
+    free(compressed_frame);
   }
 
   /* Compression was not worthwhile: avoid allocating and copying a raw frame. */

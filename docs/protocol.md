@@ -84,6 +84,17 @@ Control connection.
 When a dedicated role connection is not available, the client falls back to
 the Control connection transparently.
 
+All role connections in one frontend process SHOULD send the same non-zero
+HELLO `session_id` and their distinct role. This is logical grouping, not
+authentication. It lets the payload emit one connection notification for the
+pool rather than one per socket.
+
+An orderly disconnect sends `GOODBYE`, waits for its empty success response,
+then closes TCP. The response is important on console stacks where a bare FIN
+may not be reaped promptly. A client MAY close immediately when cancelling a
+blocked operation or after transport failure; the daemon retains idle-timeout
+and peer-close detection for those cases.
+
 ### Request Pipelining
 
 Clients MAY send multiple requests on a single connection without waiting for
@@ -226,7 +237,25 @@ parsing the response body.
 
 A client should always begin a connection with `HELLO`.
 
-`HELLO` has no request body. The response body is `memdbg_hello_response_t`:
+The original `HELLO` request has no body and remains valid. Feature-level 2
+clients should send the optional 16-byte `memdbg_hello_request_t`:
+
+| Field | Description |
+|---|---|
+| `magic` | `MEMDBG_HELLO_REQUEST_MAGIC` (`SES1`). |
+| `version` | HELLO identity ABI version, currently `1`. |
+| `role` | `CONTROL`, `MEMORY`, `SCAN`, `POLL`, or `TOOL`. |
+| `session_id` | Non-zero nonce shared by every socket in one client session. |
+
+The identity does not authenticate the client. It lets the daemon group the
+four native role sockets into one lifecycle, emit one console connection
+notification, and avoid treating port probes as frontend sessions. Separate
+frontend processes use separate nonces. The daemon accepts empty-body legacy
+HELLO requests and groups concurrent legacy sockets by peer address. Older
+payloads ignore the optional body, so the extension is backward compatible in
+both directions.
+
+The response body is `memdbg_hello_response_t`:
 
 | Field | Description |
 |---|---|
@@ -242,6 +271,10 @@ Clients must gate optional UI and commands from `capabilities`, not from
 `platform_id`. Platform id is descriptive; capability bits are authoritative.
 
 `PING` has no request or response body and is the cheapest liveness check.
+
+`GOODBYE` has no request or response body. After sending the success response,
+the daemon closes that connection and immediately releases its pool slot and
+HELLO session reference. It does not stop the payload or other role sockets.
 
 `SHUTDOWN` has no request or response body. A successful response means the
 daemon accepted remote termination and requested its listener to stop.
@@ -269,6 +302,11 @@ The daemon currently frames large memory-read payloads through this format:
 Compression is attempted for payloads at or above 4096 bytes and is used only
 when the compressed size is meaningfully smaller. Otherwise the daemon sends a
 raw sub-frame with prefix `0x00`.
+
+On the payload, a successful compressed response is assembled directly after
+its response header and sent as one contiguous frame. This preserves the wire
+format and 1 MiB read cap while avoiding a second compressed-payload allocation
+and full-buffer copy. The optimization is shared by PS4 and PS5.
 
 Clients must not try to decompress arbitrary response bodies. Only commands
 documented as returning framed payloads use this sub-frame.
@@ -321,8 +359,9 @@ an existing family must be appended and must not reuse retired values.
 
 | Command | Value | Request body | Success response body |
 |---|---:|---|---|
-| `MEMDBG_CMD_HELLO` | `0x0001` | empty | `memdbg_hello_response_t` |
+| `MEMDBG_CMD_HELLO` | `0x0001` | empty or `memdbg_hello_request_t` | `memdbg_hello_response_t` |
 | `MEMDBG_CMD_PING` | `0x0002` | empty | empty |
+| `MEMDBG_CMD_GOODBYE` | `0x0003` | empty | empty, then connection closes |
 | `MEMDBG_CMD_PROCESS_LIST` | `0x0100` | empty | `uint32_t count` + `memdbg_process_entry_t[]` |
 | `MEMDBG_CMD_PROCESS_MAPS` | `0x0101` | `memdbg_process_maps_request_t` | `uint32_t count` + `memdbg_map_entry_t[]` |
 | `MEMDBG_CMD_PROCESS_INFO` | `0x0102` | `memdbg_process_info_request_t` | `memdbg_process_info_response_t` |
@@ -351,6 +390,10 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_SCAN_POINTER` | `0x0303` | `memdbg_scan_pointer_request_t` | scan prefix + pointer chain entries |
 | `MEMDBG_CMD_SCAN_UNKNOWN` | `0x0304` | `memdbg_scan_process_exact_request_t` | scan prefix + result entries |
 | `MEMDBG_CMD_SCAN_PROCESS_AOB` | `0x0305` | prefix + pattern + mask | scan prefix + result entries |
+| `MEMDBG_CMD_SCAN_UNKNOWN_V2` | `0x0306` | `memdbg_scan_unknown_request_t` | scan prefix + result entries |
+| `MEMDBG_CMD_SCAN_PROCESS_EXACT_TRACKED` | `0x0307` | `memdbg_scan_process_exact_tracked_request_t` | scan prefix + one merged result batch |
+| `MEMDBG_CMD_SCAN_JOB_STATUS` | `0x0308` | `memdbg_scan_job_request_t` | `memdbg_scan_job_status_response_t` |
+| `MEMDBG_CMD_SCAN_JOB_CANCEL` | `0x0309` | `memdbg_scan_job_request_t` | `memdbg_scan_job_status_response_t` |
 | `MEMDBG_CMD_TELEMETRY` | `0x0400` | empty | `memdbg_telemetry_response_t` |
 | `MEMDBG_CMD_DISCOVERY` | `0x0500` | not used on TCP | see UDP discovery |
 | `MEMDBG_CMD_DEBUG_ATTACH` | `0x0600` | `memdbg_debug_attach_request_t` | empty |
@@ -456,8 +499,9 @@ should hide the feature or present it as unavailable. A daemon may still return
 Extended feature macros such as `MEMDBG_EXT_CAP_QUICKSCAN`,
 `MEMDBG_EXT_CAP_PTWALK`, `MEMDBG_EXT_CAP_ALIAS`, `MEMDBG_EXT_CAP_SIMD`,
 `MEMDBG_EXT_CAP_KLOG_SERVER`, `MEMDBG_EXT_CAP_AUTH`,
-`MEMDBG_EXT_CAP_ARENA`, `MEMDBG_EXT_CAP_BATCH_WRITE_ADV`, and
-`MEMDBG_EXT_CAP_HIJACK` describe extension subsystems. Since the `HELLO.capabilities`
+`MEMDBG_EXT_CAP_ARENA`, `MEMDBG_EXT_CAP_BATCH_WRITE_ADV`,
+`MEMDBG_EXT_CAP_HIJACK`, and `MEMDBG_EXT_CAP_SCAN_JOBS` describe extension
+subsystems. Since the `HELLO.capabilities`
 word has 32 bits with many already assigned, these extended capabilities are
 exposed through `MEMDBG_CMD_GET_EXTENDED_CAPS`. The response body is a single
 `uint32_t count` followed by `count` little-endian `uint32_t` capability words.
@@ -636,6 +680,40 @@ mask byte is a wildcard.
 
 If `max_results` is zero or greater than the daemon limit, the daemon clamps it
 to the configured default.
+
+### Tracked process scans
+
+Tracked scans are gated by `MEMDBG_EXT_CAP_SCAN_JOBS`. The client chooses a
+non-zero `job_id` and sends:
+
+```text
+memdbg_scan_process_exact_tracked_request_t {
+  uint64_t job_id;
+  memdbg_scan_process_exact_request_t scan;
+}
+```
+
+The Scan role connection remains occupied until the final response. A Poll
+role connection queries or cancels the same job with `memdbg_scan_job_request_t`.
+Status reports:
+
+- `bytes_done / bytes_total`, where total is the sum of filtered partitions;
+- `maps_done / maps_total`;
+- cumulative `results_found` and `read_errors`;
+- `workers_active / workers_total`;
+- `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, or `FAILED` state.
+
+Workers keep results private while scanning. When all workers finish, the
+payload merges results and sends exactly one normal scan response. Cancellation
+is cooperative at read-chunk boundaries and follows the same merge path, so
+addresses found before Stop are retained. A cancelled final response has
+`MEMDBG_SCAN_RESULT_FLAG_CANCELLED` in the scan prefix `reserved` field and
+`truncated != 0`; successful partial completion still uses response status
+`MEMDBG_OK`.
+
+Clients that receive `MEMDBG_ERR_UNSUPPORTED` for the tracked command MAY fall
+back to `MEMDBG_CMD_SCAN_PROCESS_EXACT`. Such a fallback has no live payload
+progress and cannot be remotely cancelled while the legacy request is active.
 
 ## Debugger Commands
 
@@ -835,6 +913,8 @@ A compliant client should:
 9. Validate every response count and length before indexing arrays.
 10. Treat `MEMDBG_ERR_STATE`, `MEMDBG_ERR_UNSUPPORTED`, and
     `MEMDBG_ERR_PERMISSION` as expected runtime outcomes, not transport errors.
+11. On an idle orderly disconnect, send `GOODBYE`, validate its response, then
+    close the socket.
 
 ## Extension Checklist
 

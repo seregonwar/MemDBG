@@ -17,6 +17,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 
 #define MEMDBG_REUSABLE_REQUEST_MAX (256U * 1024U)
@@ -47,6 +48,7 @@ static void *request_buffer_acquire(void **reusable, size_t *capacity,
 void handle_client(socket_t fd, const memdbg_config_t *cfg) {
   void *reusable_body = NULL;
   size_t reusable_capacity = 0U;
+  uint32_t hello_session_cookie = 0U;
   (void)pal_socket_set_nonblocking(fd, false);
   (void)pal_socket_configure(fd);
   /* pal_socket_configure intentionally leaves timeouts unset for accepted
@@ -56,18 +58,28 @@ void handle_client(socket_t fd, const memdbg_config_t *cfg) {
 
   while (!memdbg_daemon_should_stop()) {
     memdbg_packet_header_t req;
-    int timeout_ms = (cfg != NULL && cfg->idle_timeout_ms > 0U)
-                         ? (int)cfg->idle_timeout_ms
-                         : -1;
+    /* Console select() can miss or delay a peer FIN. Wake periodically and
+       probe the socket so rapidly recycled four-role clients do not occupy
+       all connection slots until the full idle timeout expires. */
+    int timeout_ms = 250;
     int ready = wait_for_client(fd, timeout_ms);
     if (ready == 0) {
       const uint64_t now_ms = handler_monotonic_ms();
+      unsigned char probe_byte = 0U;
+      errno = 0;
+      const ssize_t peeked = recv(fd, &probe_byte, 1U,
+                                  MSG_PEEK | MSG_DONTWAIT);
+      if (peeked == 0) break;
+      if (peeked < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+          errno != EINTR)
+        break;
       /* Sony's select may consume a relative timeout cumulatively across
        * repeated calls. Treat it as a wake-up and verify real inactivity. */
       if (cfg != NULL && cfg->idle_timeout_ms != 0U &&
           now_ms >= last_activity_ms &&
           now_ms - last_activity_ms < cfg->idle_timeout_ms)
         continue;
+      if (cfg == NULL || cfg->idle_timeout_ms == 0U) continue;
       memdbg_log_write(MEMDBG_LOG_INFO, "client idle timeout (%u ms)",
                        cfg != NULL ? cfg->idle_timeout_ms : 0U);
       break;
@@ -118,9 +130,26 @@ void handle_client(socket_t fd, const memdbg_config_t *cfg) {
      * reads and telemetry from progressing concurrently.
      */
     memdbg_status_t status = dispatch_packet(fd, cfg, &req, body);
+    if (status == MEMDBG_OK && req.command == MEMDBG_CMD_HELLO &&
+        hello_session_cookie == 0U) {
+      uint64_t session_id = 0U;
+      if (body != NULL && req.length >= sizeof(memdbg_hello_request_t)) {
+        memdbg_hello_request_t hello_request;
+        memcpy(&hello_request, body, sizeof(hello_request));
+        if (hello_request.magic == MEMDBG_HELLO_REQUEST_MAGIC &&
+            hello_request.version == MEMDBG_HELLO_REQUEST_VERSION &&
+            hello_request.session_id != 0U)
+          session_id = hello_request.session_id;
+      }
+      /* session_id=0 groups older empty-body clients by peer while retaining
+         complete compatibility with the original HELLO contract. */
+      acceptor_register_hello_session(fd, session_id,
+                                      &hello_session_cookie);
+    }
     if (body != reusable_body) free(body);
     if (status != MEMDBG_OK)
       (void)send_response(fd, &req, status, NULL, 0U);
+    if (req.command == MEMDBG_CMD_GOODBYE) break;
 
   }
 
@@ -133,6 +162,7 @@ void handle_client(socket_t fd, const memdbg_config_t *cfg) {
 
   free(reusable_body);
   flashscan_release_client(fd);
+  acceptor_unregister_hello_session(hello_session_cookie);
   acceptor_unregister_client(fd);
   (void)pal_socket_close(fd);
   atomic_fetch_sub_explicit(&g_active_connections, 1U, memory_order_relaxed);

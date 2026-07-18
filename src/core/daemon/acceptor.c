@@ -31,9 +31,20 @@
 extern atomic_uint g_active_connections;
 
 #define MEMDBG_TRACKED_CLIENTS 64U
+#define MEMDBG_TRACKED_SESSIONS 64U
 static pthread_mutex_t g_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 static socket_t g_clients[MEMDBG_TRACKED_CLIENTS];
 static pthread_once_t g_clients_once = PTHREAD_ONCE_INIT;
+
+typedef struct tracked_session {
+  uint64_t session_id;
+  uint32_t peer_address;
+  uint32_t connections;
+  bool used;
+} tracked_session_t;
+
+static pthread_mutex_t g_sessions_mutex = PTHREAD_MUTEX_INITIALIZER;
+static tracked_session_t g_sessions[MEMDBG_TRACKED_SESSIONS];
 
 static void clients_init(void) {
   for (size_t i = 0U; i < MEMDBG_TRACKED_CLIENTS; ++i)
@@ -74,6 +85,76 @@ void acceptor_shutdown_clients(void) {
       (void)shutdown(g_clients[i], SHUT_RDWR);
   }
   (void)pthread_mutex_unlock(&g_clients_mutex);
+}
+
+void acceptor_register_hello_session(socket_t fd, uint64_t session_id,
+                                     uint32_t *session_cookie) {
+  struct sockaddr_storage ss;
+  socklen_t slen = (socklen_t)sizeof(ss);
+  uint32_t peer_address;
+  size_t match = MEMDBG_TRACKED_SESSIONS;
+  size_t empty = MEMDBG_TRACKED_SESSIONS;
+  bool notify = false;
+
+  if (session_cookie == NULL || *session_cookie != 0U) return;
+  memset(&ss, 0, sizeof(ss));
+  if (getpeername(fd, (struct sockaddr *)&ss, &slen) != 0 ||
+      ss.ss_family != AF_INET)
+    return;
+  peer_address = ((const struct sockaddr_in *)&ss)->sin_addr.s_addr;
+
+  (void)pthread_mutex_lock(&g_sessions_mutex);
+  for (size_t i = 0U; i < MEMDBG_TRACKED_SESSIONS; ++i) {
+    if (!g_sessions[i].used) {
+      if (empty == MEMDBG_TRACKED_SESSIONS) empty = i;
+      continue;
+    }
+    if (g_sessions[i].session_id == session_id &&
+        g_sessions[i].peer_address == peer_address) {
+      match = i;
+      break;
+    }
+  }
+  if (match == MEMDBG_TRACKED_SESSIONS) {
+    match = empty;
+    if (match != MEMDBG_TRACKED_SESSIONS) {
+      g_sessions[match].session_id = session_id;
+      g_sessions[match].peer_address = peer_address;
+      g_sessions[match].connections = 0U;
+      g_sessions[match].used = true;
+      notify = true;
+    }
+  }
+  if (match != MEMDBG_TRACKED_SESSIONS) {
+    ++g_sessions[match].connections;
+    *session_cookie = (uint32_t)match + 1U;
+  }
+  (void)pthread_mutex_unlock(&g_sessions_mutex);
+
+  if (notify) {
+    char peer_host[INET_ADDRSTRLEN];
+    char notify_msg[INET_ADDRSTRLEN + 32];
+    if (sockaddr_ipv4_host(&ss, peer_host, sizeof(peer_host))) {
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "client session established: peer=%s identity=%s",
+                       peer_host, session_id != 0U ? "native" : "legacy");
+      (void)snprintf(notify_msg, sizeof(notify_msg),
+                     "MemDBG %s connected", peer_host);
+      pal_notification_send(notify_msg);
+    }
+  }
+}
+
+void acceptor_unregister_hello_session(uint32_t session_cookie) {
+  if (session_cookie == 0U || session_cookie > MEMDBG_TRACKED_SESSIONS) return;
+  const size_t index = (size_t)session_cookie - 1U;
+  (void)pthread_mutex_lock(&g_sessions_mutex);
+  if (g_sessions[index].used && g_sessions[index].connections > 0U) {
+    --g_sessions[index].connections;
+    if (g_sessions[index].connections == 0U)
+      memset(&g_sessions[index], 0, sizeof(g_sessions[index]));
+  }
+  (void)pthread_mutex_unlock(&g_sessions_mutex);
 }
 
 /* ---- Acceptor thread ---- */
@@ -143,19 +224,9 @@ static void *acceptor_thread(void *arg) {
     }
 
     update_udp_log_peer_from_client(&cfg, &ss);
-    /* A desktop session deliberately opens Control, Memory, Scan and Poll
-       sockets.  Notify the console only for the first socket in the session;
-       otherwise one user action produces four indistinguishable popups and
-       role reconnections keep interrupting the game. */
-    if (active_after_accept == 1U) {
-      char peer_host[INET_ADDRSTRLEN];
-      if (sockaddr_ipv4_host(&ss, peer_host, sizeof(peer_host))) {
-        char notify_msg[INET_ADDRSTRLEN + 32];
-        (void)snprintf(notify_msg, sizeof(notify_msg),
-                       "MemDBG %s connected", peer_host);
-        pal_notification_send(notify_msg);
-      }
-    }
+    /* Console notifications are emitted after a valid HELLO, not for raw TCP
+       accepts.  This avoids popups from port probes and lets the four native
+       role sockets be grouped by their shared frontend session identity. */
 
     connection_args_t *hargs = (connection_args_t *)malloc(sizeof(*hargs));
     if (hargs == NULL) {

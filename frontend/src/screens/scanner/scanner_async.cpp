@@ -9,12 +9,91 @@
 #include "screens/processes/map_selection.hpp"
 
 #include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <future>
 #include <mutex>
+#include <thread>
 #include <unordered_set>
 
 namespace memdbg::frontend {
+
+namespace {
+
+uint64_t next_scan_job_id() {
+  static std::atomic<uint64_t> sequence{1U};
+  uint64_t id = static_cast<uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  id ^= sequence.fetch_add(1U) * 0x9e3779b97f4a7c15ULL;
+  return id != 0U ? id : sequence.fetch_add(1U);
+}
+
+bool run_tracked_process_scan(
+    const std::shared_ptr<Client> &scan_client,
+    const std::shared_ptr<Client> &poll_client,
+    const memdbg_scan_process_exact_request_t &request,
+    std::atomic<bool> &cancel_requested,
+    std::atomic<uint64_t> &units_done,
+    std::atomic<uint64_t> &units_total,
+    std::atomic<bool> &units_are_maps,
+    std::atomic<uint64_t> &results_found,
+    std::atomic<uint32_t> &maps_done,
+    std::atomic<uint32_t> &maps_total,
+    std::atomic<uint32_t> &workers_active,
+    std::atomic<uint32_t> &workers_total,
+    ScanResult &out) {
+  const uint64_t job_id = next_scan_job_id();
+  std::atomic<bool> finished{false};
+  std::mutex monitor_mutex;
+  std::condition_variable monitor_wakeup;
+  std::thread monitor([&]() {
+    bool cancel_sent = false;
+    while (!finished.load(std::memory_order_acquire)) {
+      Client::ScanJobStatus status;
+      const bool want_cancel = cancel_requested.load(std::memory_order_relaxed);
+      bool ok = false;
+      if (want_cancel && !cancel_sent) {
+        ok = poll_client->scan_job_cancel(job_id, status);
+        cancel_sent = ok;
+      } else {
+        ok = poll_client->scan_job_status(job_id, status);
+      }
+      if (ok) {
+        units_done.store(status.bytes_done, std::memory_order_relaxed);
+        units_total.store(status.bytes_total, std::memory_order_relaxed);
+        units_are_maps.store(false, std::memory_order_relaxed);
+        results_found.store(status.results_found, std::memory_order_relaxed);
+        maps_done.store(status.maps_done, std::memory_order_relaxed);
+        maps_total.store(status.maps_total, std::memory_order_relaxed);
+        workers_active.store(status.workers_active, std::memory_order_relaxed);
+        workers_total.store(status.workers_total, std::memory_order_relaxed);
+      }
+      std::unique_lock<std::mutex> lock(monitor_mutex);
+      monitor_wakeup.wait_for(lock, std::chrono::milliseconds(50), [&]() {
+        return finished.load(std::memory_order_acquire);
+      });
+    }
+  });
+  const bool ok = scan_client->scan_process_exact_tracked(job_id, request, out);
+  finished.store(true, std::memory_order_release);
+  monitor_wakeup.notify_one();
+  monitor.join();
+  if (!ok && !cancel_requested.load(std::memory_order_relaxed) &&
+      scan_client->connected() &&
+      scan_client->last_error().find("unsupported") != std::string::npos) {
+    /* Feature-v1 payloads predate tracked jobs. Preserve scan compatibility;
+       only live progress and remote cancellation are unavailable. */
+    const bool legacy_ok = scan_client->scan_process_exact(request, out);
+    units_done.store(out.bytes_scanned, std::memory_order_relaxed);
+    results_found.store(out.count, std::memory_order_relaxed);
+    return legacy_ok;
+  }
+  units_done.store(out.bytes_scanned, std::memory_order_relaxed);
+  results_found.store(out.count, std::memory_order_relaxed);
+  return ok;
+}
+
+} // namespace
 
 void poll_scanner_async(AppState &state) {
   if (!state.scan_async_pending) return;
@@ -28,6 +107,12 @@ void poll_scanner_async(AppState &state) {
   const bool was_cancelled = state.scan_async_cancel_requested.exchange(false);
   state.scan_async_units_done.store(0U);
   state.scan_async_units_total.store(0U);
+  state.scan_async_units_are_maps.store(false);
+  state.scan_async_results_found.store(0U);
+  state.scan_async_maps_done.store(0U);
+  state.scan_async_maps_total.store(0U);
+  state.scan_async_workers_active.store(0U);
+  state.scan_async_workers_total.store(0U);
   bool ok = false;
   try {
     ok = state.scan_async_future.get();
@@ -297,9 +382,19 @@ void scan_selected_maps(AppState &state) {
   state.scan_async_pending = true;
   state.scan_async_cancellable = true;
   state.scan_async_cancel_requested.store(false);
+  state.scan_async_units_done.store(0U);
+  state.scan_async_units_total.store(selected_maps.size());
+  state.scan_async_units_are_maps.store(true);
+  state.scan_async_results_found.store(0U);
+  state.scan_async_maps_done.store(0U);
+  state.scan_async_maps_total.store(static_cast<uint32_t>(
+      std::min<size_t>(selected_maps.size(), UINT32_MAX)));
+  state.scan_async_workers_active.store(0U);
+  state.scan_async_workers_total.store(0U);
   state.scan_async_owner = Screen::Scanner;
 
   auto client = state.pool.scan_lease();
+  auto poll_client = state.pool.poll_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -309,13 +404,21 @@ void scan_selected_maps(AppState &state) {
   auto &error_out = state.scan_async_error;
 
   state.scan_async_future = std::async(std::launch::async,
-      [client, selected_maps = std::move(selected_maps), pid, value,
+      [client, poll_client, selected_maps = std::move(selected_maps), pid, value,
        value_len, alignment, max_results, scan_type_snap, has_batch,
        parallel_protection_mask,
        &temp_result, &temp_snapshot, &temp_snap_val_len, &temp_snap_type,
        &temp_is_unknown, &temp_status, &error_out,
        &mtx = state.scan_async_mtx,
-       &cancel_requested = state.scan_async_cancel_requested]() -> bool {
+       &cancel_requested = state.scan_async_cancel_requested,
+       &units_done = state.scan_async_units_done,
+       &units_total = state.scan_async_units_total,
+       &units_are_maps = state.scan_async_units_are_maps,
+       &results_found = state.scan_async_results_found,
+       &maps_done = state.scan_async_maps_done,
+       &maps_total = state.scan_async_maps_total,
+       &workers_active = state.scan_async_workers_active,
+       &workers_total = state.scan_async_workers_total]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult aggregate;
         aggregate.addresses.reserve(max_results);
@@ -348,6 +451,7 @@ void scan_selected_maps(AppState &state) {
           add_u32(aggregate.regions_scanned, part.regions_scanned);
           add_u32(aggregate.read_errors, part.read_errors);
           scanned_maps += maps_in_part;
+          units_done.store(scanned_maps);
         };
 
         if (parallel_protection_mask != 0U) {
@@ -376,7 +480,11 @@ void scan_selected_maps(AppState &state) {
             std::copy(value.begin(), value.end(), request.value);
 
             ScanResult part;
-            if (!client->scan_process_exact(request, part)) {
+            if (!run_tracked_process_scan(
+                    client, poll_client, request, cancel_requested,
+                    units_done, units_total, units_are_maps, results_found,
+                    maps_done, maps_total,
+                    workers_active, workers_total, part)) {
               error_out = "Selected map batch " + hex_u64(request.start) +
                           ": " + client->last_error();
               return false;
@@ -515,12 +623,23 @@ void scan_process(AppState &state) {
   state.scan_async_label = "Process scan";
   state.scan_async_start_time = ImGui::GetTime();
   state.scan_async_pending = true;
+  state.scan_async_cancellable = true;
+  state.scan_async_cancel_requested.store(false);
+  state.scan_async_units_done.store(0U);
+  state.scan_async_units_total.store(0U);
+  state.scan_async_units_are_maps.store(false);
+  state.scan_async_results_found.store(0U);
+  state.scan_async_maps_done.store(0U);
+  state.scan_async_maps_total.store(0U);
+  state.scan_async_workers_active.store(0U);
+  state.scan_async_workers_total.store(0U);
   state.scan_async_owner = Screen::Scanner;
 
   const int32_t pid = state.selected_pid;
   const int scan_type_snap = state.scan_type;
   const auto snapshot_val_len = value_len;
   auto client = state.pool.scan_lease();
+  auto poll_client = state.pool.poll_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -531,13 +650,25 @@ void scan_process(AppState &state) {
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
   state.scan_async_future = std::async(std::launch::async,
-    [client, request, pid, scan_type_snap, snapshot_val_len,
+    [client, poll_client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
-     &mtx = state.scan_async_mtx]() -> bool {
+     &mtx = state.scan_async_mtx,
+     &cancel_requested = state.scan_async_cancel_requested,
+     &units_done = state.scan_async_units_done,
+     &units_total = state.scan_async_units_total,
+     &units_are_maps = state.scan_async_units_are_maps,
+     &results_found = state.scan_async_results_found,
+     &maps_done = state.scan_async_maps_done,
+     &maps_total = state.scan_async_maps_total,
+     &workers_active = state.scan_async_workers_active,
+     &workers_total = state.scan_async_workers_total]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
-      if (!client->scan_process_exact(request, scan_res)) {
+      if (!run_tracked_process_scan(
+              client, poll_client, request, cancel_requested, units_done,
+              units_total, units_are_maps, results_found, maps_done,
+              maps_total, workers_active, workers_total, scan_res)) {
         error_out = client->last_error();
         return false;
       }

@@ -59,6 +59,7 @@ struct HelloInfo {
 struct ScanResult {
   uint32_t count = 0;
   bool truncated = false;
+  bool cancelled = false;
   uint64_t bytes_scanned = 0;
   uint64_t elapsed_ns = 0;
   uint32_t read_calls = 0;
@@ -78,6 +79,7 @@ public:
   bool connect_to(const std::string &host, uint16_t port,
                   uint32_t timeout_ms = 5000U);
   void set_socket_timeout_ms(uint32_t ms);
+  void set_connection_role(memdbg_client_role_t role);
   void cancel_pending_io();
   void disconnect();
   platform::socket_handle_t release_fd();      /* Release fd ownership for async transfer */
@@ -108,6 +110,22 @@ public:
   bool scan_exact(const memdbg_scan_exact_request_t &request, ScanResult &out);
   bool scan_process_exact(const memdbg_scan_process_exact_request_t &request,
                           ScanResult &out);
+  bool scan_process_exact_tracked(
+      uint64_t job_id, const memdbg_scan_process_exact_request_t &request,
+      ScanResult &out);
+  struct ScanJobStatus {
+    uint64_t bytes_done = 0;
+    uint64_t bytes_total = 0;
+    uint64_t results_found = 0;
+    uint32_t maps_done = 0;
+    uint32_t maps_total = 0;
+    uint32_t workers_active = 0;
+    uint32_t workers_total = 0;
+    uint32_t read_errors = 0;
+    uint32_t state = MEMDBG_SCAN_JOB_PENDING;
+  };
+  bool scan_job_status(uint64_t job_id, ScanJobStatus &out);
+  bool scan_job_cancel(uint64_t job_id, ScanJobStatus &out);
   bool scan_aob(const memdbg_scan_aob_request_t &request,
                 const std::vector<uint8_t> &pattern,
                 const std::vector<uint8_t> &mask, ScanResult &out);
@@ -366,6 +384,7 @@ private:
   bool read_exact(void *data, size_t size);
   bool write_all(const void *data, size_t size);
   void disconnect_unlocked();
+  void send_goodbye_unlocked();
   void close_after_connection_loss();
   void pipeline_reset_unlocked();
   uint32_t next_request_id_unlocked();
@@ -378,6 +397,7 @@ private:
   bool socket_runtime_active_ = false;
   uint32_t next_request_id_ = 1;
   uint32_t socket_timeout_ms_ = 60000U;
+  uint16_t hello_role_ = MEMDBG_CLIENT_ROLE_CONTROL;
   std::string last_error_;
   mutable std::mutex error_mutex_;
   mutable std::mutex io_mutex_;

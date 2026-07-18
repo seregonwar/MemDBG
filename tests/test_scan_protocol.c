@@ -29,6 +29,20 @@ int main(void) {
         sizeof(memdbg_scan_unknown_request_t) == 64U);
   CHECK("versioned unknown scan has a distinct command",
         MEMDBG_CMD_SCAN_UNKNOWN_V2 != MEMDBG_CMD_SCAN_UNKNOWN);
+  CHECK("goodbye command ABI", MEMDBG_CMD_GOODBYE == 0x0003U);
+  CHECK("tracked scan command ABI",
+        MEMDBG_CMD_SCAN_PROCESS_EXACT_TRACKED == 0x0307U &&
+        MEMDBG_CMD_SCAN_JOB_STATUS == 0x0308U &&
+        MEMDBG_CMD_SCAN_JOB_CANCEL == 0x0309U);
+  CHECK("tracked scan request size",
+        sizeof(memdbg_scan_process_exact_tracked_request_t) == 64U);
+  CHECK("scan job request size", sizeof(memdbg_scan_job_request_t) == 8U);
+  CHECK("scan job status size",
+        sizeof(memdbg_scan_job_status_response_t) == 56U);
+  CHECK("scan jobs extended capability",
+        MEMDBG_EXT_CAP_SCAN_JOBS == 0x00000200U);
+  CHECK("cancelled result flag ABI",
+        MEMDBG_SCAN_RESULT_FLAG_CANCELLED == 0x00000001U);
 
   memdbg_scan_process_exact_request_t legacy;
   memset(&legacy, 0, sizeof(legacy));

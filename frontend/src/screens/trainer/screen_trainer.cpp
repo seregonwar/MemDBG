@@ -89,6 +89,7 @@ static bool apply_cheat(AppState &state, CheatEntry &cheat) {
   uint32_t written=0;
   if (!state.client.memory_write(pid, cheat.address, cheat.bytes, written)) { cheat.status=state.client.last_error(); return false; }
   cheat.active = true;
+  cheat.active_known = true;
   cheat.status = "Wrote "+std::to_string(written)+" bytes";
   return true;
 }
@@ -107,8 +108,33 @@ static bool deactivate_cheat(AppState &state, CheatEntry &cheat) {
   uint32_t written=0;
   if (!state.client.memory_write(pid, cheat.address, cheat.off_bytes, written)) { cheat.status=state.client.last_error(); return false; }
   cheat.active = false;
+  cheat.active_known = true;
   cheat.status = "Restored "+std::to_string(written)+" bytes";
   return true;
+}
+
+static void draw_cheat_runtime_state(const CheatEntry &cheat) {
+  if (!cheat.active_known) {
+    ImGui::TextColored(ui::colors().warning, "%s",
+                       locale::tr("trainer.state_unknown"));
+    return;
+  }
+  ImGui::TextColored(cheat.active ? ui::colors().success : ui::colors().dim,
+                     "%s", cheat.active
+                         ? locale::tr("trainer.state_active")
+                         : locale::tr("trainer.state_idle"));
+}
+
+static void draw_cheat_address(const CheatEntry &cheat, int row_id) {
+  const std::string address = hex_u64(cheat.address);
+  const std::string label = address + "##trainer_address_" +
+                            std::to_string(row_id);
+  if (ImGui::Selectable(label.c_str(), false,
+                        ImGuiSelectableFlags_AllowDoubleClick)) {
+    ImGui::SetClipboardText(address.c_str());
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("trainer.copy_address_tooltip"));
 }
 
 /* ---- Cheat Sources UI ---- */
@@ -602,7 +628,7 @@ static bool has_batch_write(const AppState &state) {
   return (state.hello.capabilities & MEMDBG_CAP_BATCH_WRITE) != 0U;
 }
 
-static void apply_locked_cheats(AppState &state) {
+void apply_locked_cheats(AppState &state) {
   if (!state.client.connected()||state.cheats.empty()) return;
   if (client_async_busy(state)) return;
   const double now = ImGui::GetTime();
@@ -618,28 +644,41 @@ static void apply_locked_cheats(AppState &state) {
 
   if (locked.empty()) return;
 
-  /* Compute effective PID for each locked cheat */
-  int32_t effective_pid = state.selected_pid;
-  if (effective_pid <= 0) return;
-
   if (has_batch_write(state)) {
-    /* Batch write: group into chunks of up to 64 items */
-    for (size_t base = 0U; base < locked.size(); base += MEMDBG_BATCH_WRITE_MAX_ITEMS) {
-      size_t chunk_end = std::min(base + MEMDBG_BATCH_WRITE_MAX_ITEMS, locked.size());
-      std::vector<std::pair<uint64_t, std::vector<uint8_t>>> items;
-      items.reserve(chunk_end - base);
-      for (size_t i = base; i < chunk_end; ++i)
-        items.emplace_back(locked[i]->address, std::vector<uint8_t>(locked[i]->bytes));
+    /* Batch writes are PID-scoped.  Keep entries attached to the process they
+       came from even when the user selects another process later. */
+    std::vector<int32_t> pids;
+    for (const CheatEntry *cheat : locked) {
+      const int32_t pid = cheat->pid > 0 ? cheat->pid : state.selected_pid;
+      if (pid > 0 && std::find(pids.begin(), pids.end(), pid) == pids.end())
+        pids.push_back(pid);
+    }
+    for (int32_t pid : pids) {
+      std::vector<CheatEntry *> group;
+      for (CheatEntry *cheat : locked) {
+        const int32_t entry_pid = cheat->pid > 0 ? cheat->pid : state.selected_pid;
+        if (entry_pid == pid) group.push_back(cheat);
+      }
+      for (size_t base = 0U; base < group.size();
+           base += MEMDBG_BATCH_WRITE_MAX_ITEMS) {
+        const size_t chunk_end =
+            std::min(base + MEMDBG_BATCH_WRITE_MAX_ITEMS, group.size());
+        std::vector<std::pair<uint64_t, std::vector<uint8_t>>> items;
+        items.reserve(chunk_end - base);
+        for (size_t i = base; i < chunk_end; ++i)
+          items.emplace_back(group[i]->address, group[i]->bytes);
 
-      Client::BatchWriteResult result;
-      if (state.client.batch_write(effective_pid, items, result)) {
-        for (size_t j = 0U; j < items.size() && j < (chunk_end - base); ++j) {
-          CheatEntry *cheat = locked[base + j];
-          if (result.entries[j].status == 0U) {
-            cheat->active = true;
-            cheat->status = "Locked (batch)";
-          } else {
-            cheat->status = "Batch write status " + std::to_string(result.entries[j].status);
+        Client::BatchWriteResult result;
+        if (state.client.batch_write(pid, items, result)) {
+          for (size_t j = 0U; j < items.size(); ++j) {
+            CheatEntry *cheat = group[base + j];
+            if (j < result.entries.size() && result.entries[j].status == 0U) {
+              cheat->active = true;
+              cheat->active_known = true;
+              cheat->status = "Locked (batch)";
+            } else {
+              cheat->status = "Batch write failed";
+            }
           }
         }
       }
@@ -721,8 +760,6 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   if (trainer_tab == 1) {
     /* List-only tab */
     ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"), ImVec2(0, content_avail.y));
-    apply_locked_cheats(state);
-
     static bool skip_apply_enabled2 = false;
     static bool skip_clear_disabled2 = false;
     ImGui::BeginDisabled(!state.client.connected() || client_async_busy(state));
@@ -775,16 +812,16 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     } else if (ImGui::BeginTable("TrainerTable2", 10,
           ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|
               ImGuiTableFlags_ScrollX|ImGuiTableFlags_Resizable, ImVec2(0,0))) {
-      ImGui::TableSetupColumn(locale::tr("trainer.col_on"), ImGuiTableColumnFlags_WidthFixed,44);
+      ImGui::TableSetupColumn(locale::tr("trainer.col_on"), ImGuiTableColumnFlags_WidthFixed,76);
       ImGui::TableSetupColumn(locale::tr("trainer.col_lock"), ImGuiTableColumnFlags_WidthFixed,54);
-      ImGui::TableSetupColumn(locale::tr("trainer.col_state"), ImGuiTableColumnFlags_WidthFixed,74);
+      ImGui::TableSetupColumn(locale::tr("trainer.col_state"), ImGuiTableColumnFlags_WidthFixed,92);
       ImGui::TableSetupColumn(locale::tr("trainer.col_name"));
       ImGui::TableSetupColumn(locale::tr("trainer.col_pid"), ImGuiTableColumnFlags_WidthFixed,70);
       ImGui::TableSetupColumn(locale::tr("trainer.col_address"));
       ImGui::TableSetupColumn(locale::tr("trainer.col_type"), ImGuiTableColumnFlags_WidthFixed,70);
       ImGui::TableSetupColumn(locale::tr("trainer.col_value"));
-      ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,54);
-      ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,215);
+      ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,136);
+      ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,350);
       ImGui::TableHeadersRow();
       for (int i=0; i<static_cast<int>(state.cheats.size()); ++i) {
         CheatEntry &cheat = state.cheats[i];
@@ -792,11 +829,10 @@ void draw_trainer(AppState &state, ImVec2 avail) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0); ImGui::Checkbox("##enabled2", &cheat.enabled);
         ImGui::TableSetColumnIndex(1); ImGui::Checkbox("##locked2", &cheat.locked);
-        ImGui::TableSetColumnIndex(2);
-        ImGui::TextColored(cheat.active?ui::colors().success:ui::colors().dim, "%s", cheat.active?locale::tr("trainer.state_active"):locale::tr("trainer.state_idle"));
+        ImGui::TableSetColumnIndex(2); draw_cheat_runtime_state(cheat);
         ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(cheat.description.c_str());
         ImGui::TableSetColumnIndex(4); ImGui::Text("%d", cheat.pid);
-        ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(hex_u64(cheat.address).c_str());
+        ImGui::TableSetColumnIndex(5); draw_cheat_address(cheat, i + 1000);
         ImGui::TableSetColumnIndex(6); ImGui::TextUnformatted(value_type_name(cheat.value_type));
         ImGui::TableSetColumnIndex(7); ImGui::TextUnformatted(cheat.value_text.c_str());
         ImGui::TableSetColumnIndex(8);
@@ -988,9 +1024,6 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   ui::begin_panel("TrainerList", locale::tr("trainer.runtime_cheat_list"),
                   ImVec2(0, list_h));
 
-  /* Apply locked cheats automatically */
-  apply_locked_cheats(state);
-
   static bool skip_apply_enabled = false;
   static bool skip_clear_disabled = false;
   ImGui::BeginDisabled(!state.client.connected() || client_async_busy(state));
@@ -1063,16 +1096,16 @@ void draw_trainer(AppState &state, ImVec2 avail) {
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|
             ImGuiTableFlags_ScrollX|ImGuiTableFlags_Resizable,
         ImVec2(0,0))) {
-    ImGui::TableSetupColumn(locale::tr("trainer.col_on"), ImGuiTableColumnFlags_WidthFixed,44);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_on"), ImGuiTableColumnFlags_WidthFixed,76);
     ImGui::TableSetupColumn(locale::tr("trainer.col_lock"), ImGuiTableColumnFlags_WidthFixed,54);
-    ImGui::TableSetupColumn(locale::tr("trainer.col_state"), ImGuiTableColumnFlags_WidthFixed,74);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_state"), ImGuiTableColumnFlags_WidthFixed,92);
     ImGui::TableSetupColumn(locale::tr("trainer.col_name"));
     ImGui::TableSetupColumn(locale::tr("trainer.col_pid"), ImGuiTableColumnFlags_WidthFixed,70);
     ImGui::TableSetupColumn(locale::tr("trainer.col_address"));
     ImGui::TableSetupColumn(locale::tr("trainer.col_type"), ImGuiTableColumnFlags_WidthFixed,70);
     ImGui::TableSetupColumn(locale::tr("trainer.col_value"));
-    ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,54);
-    ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,215);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,136);
+    ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,350);
     ImGui::TableHeadersRow();
     for (int i=0; i<static_cast<int>(state.cheats.size()); ++i) {
       CheatEntry &cheat = state.cheats[i];
@@ -1080,8 +1113,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0); ImGui::Checkbox("##enabled", &cheat.enabled);
       ImGui::TableSetColumnIndex(1); ImGui::Checkbox("##locked", &cheat.locked);
-      ImGui::TableSetColumnIndex(2);
-      ImGui::TextColored(cheat.active?ui::colors().success:ui::colors().dim, "%s", cheat.active?locale::tr("trainer.state_active"):locale::tr("trainer.state_idle"));
+      ImGui::TableSetColumnIndex(2); draw_cheat_runtime_state(cheat);
       ImGui::TableSetColumnIndex(3);
       ImGui::TextUnformatted(cheat.description.c_str());
       if (ImGui::IsItemHovered()) {
@@ -1091,7 +1123,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
           ImGui::SetTooltip("%s", cheat.description.c_str());
       }
       ImGui::TableSetColumnIndex(4); ImGui::Text("%d", cheat.pid);
-      ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(hex_u64(cheat.address).c_str());
+      ImGui::TableSetColumnIndex(5); draw_cheat_address(cheat, i);
       ImGui::TableSetColumnIndex(6); ImGui::TextUnformatted(value_type_name(cheat.value_type));
       ImGui::TableSetColumnIndex(7); ImGui::TextUnformatted(cheat.value_text.c_str());
       if (ImGui::IsItemHovered() && !cheat.value_text.empty()) ImGui::SetTooltip("%s", cheat.value_text.c_str());

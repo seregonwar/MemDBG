@@ -11,6 +11,7 @@
 #include "memdbg/core/memdbg.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -66,6 +67,27 @@ namespace {
 
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
+
+uint64_t frontend_session_id() {
+  /* One nonce per frontend process.  Every Client instance therefore carries
+     the same logical session identity while separate app processes remain
+     distinguishable.  Mix clocks with an ASLR-dependent address without
+     depending on a potentially blocking random-device implementation. */
+  static int anchor = 0;
+  static const uint64_t value = []() {
+    uint64_t x = static_cast<uint64_t>(
+        std::chrono::system_clock::now().time_since_epoch().count());
+    x ^= static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    x ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&anchor));
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27U)) * 0x94d049bb133111ebULL;
+    x ^= x >> 31U;
+    return x != 0U ? x : 1U;
+  }();
+  return value;
+}
 
 uint32_t max_response_for_command(uint16_t command) {
   return command == MEMDBG_CMD_PROCESS_MAPS ||
@@ -295,6 +317,10 @@ void Client::set_socket_timeout_ms(uint32_t ms) {
   socket_timeout_ms_ = ms;
 }
 
+void Client::set_connection_role(memdbg_client_role_t role) {
+  hello_role_ = static_cast<uint16_t>(role);
+}
+
 void Client::cancel_pending_io() {
   cancel_requested_.store(true);
   const platform::socket_handle_t fd =
@@ -306,9 +332,33 @@ void Client::cancel_pending_io() {
 }
 
 void Client::disconnect() {
+  if (io_mutex_.try_lock()) {
+    send_goodbye_unlocked();
+    disconnect_unlocked();
+    io_mutex_.unlock();
+    return;
+  }
   cancel_pending_io();
   std::lock_guard<std::mutex> lock(io_mutex_);
   disconnect_unlocked();
+}
+
+void Client::send_goodbye_unlocked() {
+  if (!platform::socket_valid(fd_.load()) || cancel_requested_.load()) return;
+  memdbg_packet_header_t header{};
+  header.magic = MEMDBG_PACKET_MAGIC;
+  header.version = MEMDBG_PROTOCOL_VERSION;
+  header.command = MEMDBG_CMD_GOODBYE;
+  header.request_id = next_request_id_unlocked();
+  if (!write_all(&header, sizeof(header))) return;
+  memdbg_response_header_t response{};
+  if (!read_exact(&response, sizeof(response))) return;
+  if (response.magic != MEMDBG_PACKET_MAGIC ||
+      response.version != MEMDBG_PROTOCOL_VERSION ||
+      response.command != MEMDBG_CMD_GOODBYE ||
+      response.request_id != header.request_id || response.status != MEMDBG_OK ||
+      response.length != 0U)
+    return;
 }
 
 void Client::disconnect_unlocked() {
@@ -367,8 +417,14 @@ std::string Client::last_error() const {
 }
 
 bool Client::hello(HelloInfo &out) {
+  memdbg_hello_request_t hello_request{};
+  hello_request.magic = MEMDBG_HELLO_REQUEST_MAGIC;
+  hello_request.version = MEMDBG_HELLO_REQUEST_VERSION;
+  hello_request.role = hello_role_;
+  hello_request.session_id = frontend_session_id();
   std::vector<uint8_t> response;
-  if (!request(MEMDBG_CMD_HELLO, nullptr, 0, response)) {
+  if (!request(MEMDBG_CMD_HELLO, &hello_request, sizeof(hello_request),
+               response)) {
     return false;
   }
 
@@ -607,6 +663,8 @@ static bool parse_scan_response(const std::vector<uint8_t> &response,
   }
   out.count = prefix.count;
   out.truncated = prefix.truncated != 0;
+  out.cancelled =
+      (prefix.reserved & MEMDBG_SCAN_RESULT_FLAG_CANCELLED) != 0U;
   out.bytes_scanned = prefix.bytes_scanned;
   out.elapsed_ns = prefix.elapsed_ns;
   out.read_calls = prefix.read_calls;
@@ -650,6 +708,60 @@ bool Client::scan_process_exact(
   const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(response, out, error);
   if (!ok) set_error(error);
   return ok;
+}
+
+bool Client::scan_process_exact_tracked(
+    uint64_t job_id,
+    const memdbg_scan_process_exact_request_t &request_body,
+    ScanResult &out) {
+  if (job_id == 0U) {
+    set_error("scan job id must be non-zero");
+    return false;
+  }
+  memdbg_scan_process_exact_tracked_request_t tracked{};
+  tracked.job_id = job_id;
+  tracked.scan = request_body;
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_SCAN_PROCESS_EXACT_TRACKED, &tracked,
+               sizeof(tracked), response))
+    return false;
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(
+      response, out, error);
+  if (!ok) set_error(error);
+  return ok;
+}
+
+static bool scan_job_request(Client &client, uint16_t command,
+                             uint64_t job_id, Client::ScanJobStatus &out) {
+  memdbg_scan_job_request_t query{};
+  query.job_id = job_id;
+  std::vector<uint8_t> response;
+  int32_t payload_status = MEMDBG_OK;
+  if (!client.raw_request(command, &query, sizeof(query), response,
+                          payload_status) || payload_status != MEMDBG_OK)
+    return false;
+  memdbg_scan_job_status_response_t wire{};
+  if (!read_object(response, wire) || wire.job_id != job_id)
+    return false;
+  out.bytes_done = wire.bytes_done;
+  out.bytes_total = wire.bytes_total;
+  out.results_found = wire.results_found;
+  out.maps_done = wire.maps_done;
+  out.maps_total = wire.maps_total;
+  out.workers_active = wire.workers_active;
+  out.workers_total = wire.workers_total;
+  out.read_errors = wire.read_errors;
+  out.state = wire.state;
+  return true;
+}
+
+bool Client::scan_job_status(uint64_t job_id, ScanJobStatus &out) {
+  return scan_job_request(*this, MEMDBG_CMD_SCAN_JOB_STATUS, job_id, out);
+}
+
+bool Client::scan_job_cancel(uint64_t job_id, ScanJobStatus &out) {
+  return scan_job_request(*this, MEMDBG_CMD_SCAN_JOB_CANCEL, job_id, out);
 }
 
 bool Client::scan_aob(const memdbg_scan_aob_request_t &request_body,

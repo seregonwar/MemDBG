@@ -756,6 +756,12 @@ void shutdown_app_shared(AppState &state) {
     state.scan_async_future.wait();
     state.scan_async_pending = false;
   }
+  if (state.map_dump_future.valid()) {
+    state.map_dump_cancel_requested.store(true);
+    state.pool.cancel_all_pending_io();
+    state.map_dump_future.wait();
+    state.map_dump_pending = false;
+  }
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   state.taskmgr_resource_pending = false;
   if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();

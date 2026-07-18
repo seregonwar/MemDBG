@@ -135,6 +135,12 @@ memdbg_status_t handle_scan_exact_v2(int fd, const memdbg_packet_header_t *req,
 memdbg_status_t handle_scan_process_exact(int fd,
     const memdbg_packet_header_t *req,
     const memdbg_config_t *cfg, const void *body, uint32_t body_len);
+memdbg_status_t handle_scan_process_exact_tracked(int fd,
+    const memdbg_packet_header_t *req, const memdbg_config_t *cfg,
+    const void *body, uint32_t body_len);
+memdbg_status_t handle_scan_job_status(int fd,
+    const memdbg_packet_header_t *req, const void *body, uint32_t body_len,
+    bool cancel);
 
 memdbg_status_t handle_scan_aob(int fd, const memdbg_packet_header_t *req,
     const memdbg_config_t *cfg, const void *body, uint32_t body_len);

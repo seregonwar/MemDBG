@@ -171,7 +171,11 @@ test-max-connections-e2e: host tests/test_max_connections_e2e.c
 	pid=$$!; \
 	trap 'kill -TERM $$pid 2>/dev/null || true; sleep 0.8; kill -KILL $$pid 2>/dev/null || true; wait $$pid 2>/dev/null || true; rm -rf $$tmpdir' EXIT; \
 	sleep 0.6; \
-	$(BUILD_DIR)/test_max_connections_e2e 127.0.0.1 $$port 4
+	rc=0; $(BUILD_DIR)/test_max_connections_e2e 127.0.0.1 $$port 4 || rc=$$?; \
+	notify_count=$$(grep -c 'notify: MemDBG .* connected' $$tmpdir/payload.log || true); \
+	echo "  session notifications = $$notify_count (expected 1)"; \
+	if [ "$$notify_count" -ne 1 ]; then rc=1; fi; \
+	exit $$rc
 
 test-idle-timeout-unit: tests/test_idle_timeout_unit.c
 	@mkdir -p $(BUILD_DIR)
