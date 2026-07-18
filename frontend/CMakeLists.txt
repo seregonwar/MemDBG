@@ -198,6 +198,7 @@ add_executable(memdbg_frontend
   src/core/discovery_client.cpp
   src/core/github_profile.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_pool.cpp
   src/core/platform.cpp
   src/core/payload_fetcher.cpp
   src/core/payload_sender.cpp
@@ -430,6 +431,7 @@ target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 
 add_executable(memdbg_auto_search_test
   tests/test_auto_search.cpp
+  src/core/client/client_pool.cpp
   src/scanner/heuristics/auto_search.cpp
 )
 
@@ -495,6 +497,7 @@ endif()
 
 add_executable(memdbg_app_state_parsing_test
   tests/test_app_state_parsing.cpp
+  src/core/client/client_pool.cpp
 )
 
 target_include_directories(memdbg_app_state_parsing_test PRIVATE
@@ -585,6 +588,7 @@ add_executable(memdbg_trainer_formats_test
   src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_pool.cpp
   src/action_journal/action_journal.cpp
   src/core/crash_logger.cpp
   src/core/discovery_client.cpp

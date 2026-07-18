@@ -13,6 +13,12 @@
 #include "memdbg/scanner/pt_walker.h"
 #include <stdint.h>
 #include <stdlib.h>
+
+/* Forward declarations for PS5 kernel copy wrappers. */
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+static int kread(intptr_t kaddr, void *dst, size_t n);
+static int kwrite(const void *src, intptr_t kaddr, size_t n);
+#endif
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
