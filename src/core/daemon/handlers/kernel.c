@@ -93,6 +93,11 @@ memdbg_status_t handle_console_reboot(int fd,
 
 /* ---- KERNEL ---- */
 
+/* Maximum window around kernel text / data base addresses in which we
+ * allow reads and writes.  Larger ranges include unmapped gaps that
+ * cause kernel_copyout / kernel_copyin to hang indefinitely on PS5. */
+static const uint64_t kKernelMaxRange = 32ULL * 1024ULL * 1024ULL;
+
 memdbg_status_t handle_kernel_base(int fd,
     const memdbg_packet_header_t *req) {
   memdbg_kernel_base_response_t resp;
@@ -117,10 +122,19 @@ memdbg_status_t handle_kernel_read(int fd,
   if (kr->address == 0U || kr->length > MEMDBG_PROTOCOL_MAX_READ)
     return MEMDBG_ERR_PARAM;
 
-  /* Validate address against known kernel ranges to avoid page faults. */
+  /* Guard against integer overflow: address + length must not wrap. */
+  if (kr->address > UINT64_MAX - (uint64_t)kr->length)
+    return MEMDBG_ERR_PARAM;
+
+  /* Validate address against known kernel ranges to avoid page faults
+   * or indefinite hangs from kernel_copyout on unmapped pages.
+   * This check is mandatory — if the platform does not report kernel
+   * base addresses, reject all kernel reads rather than risking a hang. */
   uint64_t text_base = 0U, data_base = 0U;
-  if (pal_kernel_base(&text_base, &data_base) == MEMDBG_OK) {
-    static const uint64_t kKernelMaxRange = 64ULL * 1024ULL * 1024ULL;
+  if (pal_kernel_base(&text_base, &data_base) != MEMDBG_OK)
+    return MEMDBG_ERR_UNSUPPORTED;
+
+  {
     uint64_t end = kr->address + (uint64_t)kr->length;
     bool in_text = (kr->address >= text_base && end <= text_base + kKernelMaxRange);
     bool in_data = (kr->address >= data_base && end <= data_base + kKernelMaxRange);
@@ -148,10 +162,16 @@ memdbg_status_t handle_kernel_write(int fd,
   if (body_len != sizeof(*kw) + kw->length)
     return MEMDBG_ERR_PROTOCOL;
 
-  /* Same bounds validation as handle_kernel_read. */
+  /* Same mandatory bounds validation as handle_kernel_read:
+   * overflow guard, required kernel base, and range check. */
+  if (kw->address > UINT64_MAX - (uint64_t)kw->length)
+    return MEMDBG_ERR_PARAM;
+
   uint64_t text_base = 0U, data_base = 0U;
-  if (pal_kernel_base(&text_base, &data_base) == MEMDBG_OK) {
-    static const uint64_t kKernelMaxRange = 64ULL * 1024ULL * 1024ULL;
+  if (pal_kernel_base(&text_base, &data_base) != MEMDBG_OK)
+    return MEMDBG_ERR_UNSUPPORTED;
+
+  {
     uint64_t end = kw->address + (uint64_t)kw->length;
     bool in_text = (kw->address >= text_base && end <= text_base + kKernelMaxRange);
     bool in_data = (kw->address >= data_base && end <= data_base + kKernelMaxRange);

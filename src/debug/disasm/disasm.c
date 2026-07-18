@@ -56,87 +56,92 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
   int result = 0;
 
 #if defined(MEMDBG_HAS_ZYDIS)
-  uint32_t max_entries = req->count_max ? req->count_max : 200u;
-  memdbg_disasm_entry_t *entries =
-      (memdbg_disasm_entry_t *)malloc((size_t)max_entries * sizeof(*entries));
-  if (!entries) {
-    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
-    result = 1;
-    goto cleanup;
-  }
+  {
+    uint32_t max_entries = req->count_max ? req->count_max : 200u;
+    memdbg_disasm_entry_t *entries =
+        (memdbg_disasm_entry_t *)malloc((size_t)max_entries * sizeof(*entries));
+    if (entries) {
+      ZydisDecoder decoder;
+      ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64,
+                       ZYDIS_STACK_WIDTH_64);
 
-  ZydisDecoder decoder;
-  ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+      size_t offset = 0;
+      uint32_t count = 0;
 
-  size_t offset = 0;
-  uint32_t count = 0;
+      while (offset < code_len && count < max_entries) {
+        ZydisDecodedInstruction insn;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
 
-  while (offset < code_len && count < max_entries) {
-    ZydisDecodedInstruction insn;
-    ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        ZyanStatus status = ZydisDecoderDecodeFull(
+            &decoder, code + offset, code_len - offset, &insn, operands);
+        if (!ZYAN_SUCCESS(status)) break;
 
-    ZyanStatus status = ZydisDecoderDecodeFull(&decoder, code + offset,
-        code_len - offset, &insn, operands);
-    if (!ZYAN_SUCCESS(status)) break;
+        memdbg_disasm_entry_t *e = &entries[count];
+        memset(e, 0, sizeof(*e));
 
-    memdbg_disasm_entry_t *e = &entries[count];
-    memset(e, 0, sizeof(*e));
+        e->address     = req->address + offset;
+        e->byte_length = insn.length;
+        e->opcode_kind = 0;
 
-    e->address     = req->address + offset;
-    e->byte_length = insn.length;
-    e->opcode_kind = 0;
+        switch (insn.meta.category) {
+        case ZYDIS_CATEGORY_UNCOND_BR:
+          e->opcode_kind = (insn.mnemonic == ZYDIS_MNEMONIC_CALL) ? 2 : 1;
+          break;
+        case ZYDIS_CATEGORY_COND_BR:
+          e->opcode_kind = 4;
+          break;
+        case ZYDIS_CATEGORY_RET:
+          e->opcode_kind = 3;
+          break;
+        }
 
-    switch (insn.meta.category) {
-    case ZYDIS_CATEGORY_UNCOND_BR:
-      e->opcode_kind = (insn.mnemonic == ZYDIS_MNEMONIC_CALL) ? 2 : 1;
-      break;
-    case ZYDIS_CATEGORY_COND_BR: e->opcode_kind = 4; break;
-    case ZYDIS_CATEGORY_RET:         e->opcode_kind = 3; break;
-    }
+        e->mnemonic_id = (uint8_t)(insn.mnemonic & 0xFF);
 
-    e->mnemonic_id = (uint8_t)(insn.mnemonic & 0xFF);
+        for (ZyanU8 i = 0; i < insn.operand_count_visible; i++) {
+          if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY &&
+              operands[i].mem.base == ZYDIS_REGISTER_RIP) {
+            e->rip_rel_target = (uint64_t)(
+                (int64_t)(e->address + insn.length) +
+                operands[i].mem.disp.value);
+          }
+        }
 
-    for (ZyanU8 i = 0; i < insn.operand_count_visible; i++) {
-      if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY &&
-          operands[i].mem.base == ZYDIS_REGISTER_RIP) {
-        e->rip_rel_target = (uint64_t)(
-            (int64_t)(e->address + insn.length) +
-            operands[i].mem.disp.value);
+        for (ZyanU8 i = 0; i < insn.operand_count_visible; i++) {
+          if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY) {
+            if (operands[i].mem.base != ZYDIS_REGISTER_NONE)
+              e->mem_base_reg = (uint8_t)(operands[i].mem.base & 0xFF);
+            if (operands[i].mem.index != ZYDIS_REGISTER_NONE)
+              e->mem_index_reg = (uint8_t)(operands[i].mem.index & 0xFF);
+            if (operands[i].mem.scale > 0)
+              e->mem_scale = (uint8_t)operands[i].mem.scale;
+            if (operands[i].mem.disp.size > 0)
+              e->mem_displacement = operands[i].mem.disp.value;
+            break;
+          }
+        }
+
+        offset += insn.length;
+        count++;
       }
-    }
 
-    for (ZyanU8 i = 0; i < insn.operand_count_visible; i++) {
-      if (operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY) {
-        if (operands[i].mem.base != ZYDIS_REGISTER_NONE)
-          e->mem_base_reg = (uint8_t)(operands[i].mem.base & 0xFF);
-        if (operands[i].mem.index != ZYDIS_REGISTER_NONE)
-          e->mem_index_reg = (uint8_t)(operands[i].mem.index & 0xFF);
-        if (operands[i].mem.scale > 0)
-          e->mem_scale = (uint8_t)operands[i].mem.scale;
-        if (operands[i].mem.disp.size > 0)
-          e->mem_displacement = operands[i].mem.disp.value;
-        break;
-      }
-    }
+      pal_socket_write_all(fd, &(uint32_t){0}, 4);  /* CMD_SUCCESS */
+      pal_socket_write_all(fd, &count, 4);
 
-    offset += insn.length;
-    count++;
+      if (count > 0)
+        pal_socket_write_all(fd, entries, count * sizeof(*entries));
+
+      free(entries);
+    } else {
+      pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+      result = 1;
+    }
   }
-
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);  /* CMD_SUCCESS */
-  pal_socket_write_all(fd, &count, 4);
-
-  if (count > 0)
-    pal_socket_write_all(fd, entries, count * sizeof(*entries));
-
-  free(entries);
 #else
   pal_socket_write_all(fd, &(uint32_t){0}, 4);  /* CMD_SUCCESS */
   uint32_t zero = 0;
   pal_socket_write_all(fd, &zero, 4);
 #endif
 
-cleanup:
   free(code_buf);
   return result;
 }

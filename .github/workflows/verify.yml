@@ -271,6 +271,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Ensure submodules (nested Zydis/Zycore)
+        run: git submodule update --init --recursive
+
       - name: Install payload build dependencies
         run: |
           set -euo pipefail

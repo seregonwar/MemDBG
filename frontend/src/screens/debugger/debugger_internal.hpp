@@ -90,6 +90,20 @@ struct DebuggerState {
   bool patch_restore_protection = true;
   std::vector<PatchEntry> patches;
 
+  /* Code Cave */
+  char cave_shellcode_input[1024] = "B8 EF BE 00 00 90 90 90 CC";
+  char cave_target_input[32] = "0x0";
+  char cave_size_input[16] = "4096";
+  uint64_t cave_addr = 0;
+  uint64_t cave_target_addr = 0;
+  uint64_t cave_size = 0x1000;
+  uint32_t cave_protection = 0;
+  bool cave_allocated = false;
+  bool cave_detour_active = false;
+  std::vector<uint8_t> cave_shellcode;
+  std::vector<uint8_t> cave_original_target_bytes;
+  std::string cave_status;
+
   /* IDE analysis notebook */
   struct NotebookEntry {
     uint64_t id = 0;
@@ -211,6 +225,13 @@ void add_patch_to_trainer(AppState &state, DebuggerState &ds, const DebuggerStat
 void save_patches_to_file(AppState &state, DebuggerState &ds, const char *path);
 void load_patches_from_file(AppState &state, DebuggerState &ds, const char *path);
 void draw_patch_studio(AppState &state, DebuggerState &ds, bool client_busy, float scl);
+
+/* ---- Code Cave ---- */
+void code_cave_alloc(AppState &state, DebuggerState &ds);
+void code_cave_write_and_protect(AppState &state, DebuggerState &ds);
+void code_cave_install_detour(AppState &state, DebuggerState &ds);
+void code_cave_remove_detour(AppState &state, DebuggerState &ds);
+void draw_code_cave(AppState &state, DebuggerState &ds, bool client_busy, float scl);
 
 /* ---- Analysis Notebook ---- */
 const char *notebook_kind_name(int kind);

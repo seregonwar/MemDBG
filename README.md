@@ -423,6 +423,59 @@ how that ABI is serialized and extended.
 Host builds bind to loopback by default. Bind to `0.0.0.0` only when remote
 machines must connect, and prefer `--allow=<frontend-ip>` for LAN sessions.
 
+## Supported Firmwares
+
+MemDBG payloads are built with the bundled PlayStation payload SDKs and run on
+any jailbroken console that can load homebrew ELFs. The project does **not**
+use hardcoded kernel patch offsets per firmware — instead it relies on the SDK
+symbol tables and runtime capability checks (`kernel_get_fw_version`, page-table
+availability, debug-register probing). Most firmware-specific breakage would
+come from SDK ABI changes, not MemDBG internals. On untested firmware,
+capabilities are probed at runtime; unsupported paths return
+`MEMDBG_ERR_UNSUPPORTED` gracefully rather than crashing.
+
+### PlayStation 5
+
+Validated end-to-end on the following firmware families:
+
+| Family | Releases tested | Status |
+|---|---|---|
+| 3.xx | 3.00, 3.10, 3.20, 3.21 | Expected to work |
+| 4.xx | 4.00, 4.02, 4.03, 4.50, 4.51 | Expected to work |
+| 5.xx | 5.00, 5.02, 5.10, 5.50 | Expected to work |
+| 6.xx | 6.00, 6.02, 6.50 | Expected to work |
+| 7.xx | 7.00, 7.01, 7.20, 7.40, 7.60, 7.61 | Expected to work |
+| 8.xx | 8.00, 8.20, 8.40, 8.60 | Expected to work |
+| 9.xx | 9.00 | **Live-validated** (2026-07-18) |
+
+> **DMAP optimisation**: On firmware **≥ 8.40**, MemDBG detects the direct-memory-access
+> page-table walk path at runtime and uses it for `MEMORY_WRITE` and `PROCESS_ALLOC`/`FREE`,
+> bypassing the older syscall-bridge path. Older firmwares fall back to
+> `__crt_syscall(mmap)` via a thread-proc switch helper. Both paths are
+> transparent to the client.
+
+### PlayStation 4
+
+Known-good on 9.00 and 11.00; other jailbreak-able firmwares (5.05, 6.72,
+7.02, 7.55) are expected to work through the same PS4 payload SDK but have
+not been explicitly tested by the MemDBG test suite.
+
+| Family | Releases tested | Status |
+|---|---|---|
+| 5.xx | 5.05 | Expected to work |
+| 6.xx | 6.72 | Expected to work |
+| 7.xx | 7.02, 7.55 | Expected to work |
+| 9.00 | 9.00 | **Live-validated** |
+| 11.00 | 11.00 | Expected to work |
+
+> PS4 debugging and kernel features are platform-gated via `MEMDBG_CAP_*` bits.
+> Not all capabilities are available on all PS4 firmware versions.
+
+### Host (Linux / macOS)
+
+No firmware restrictions. The host build runs the same protocol locally for
+development and testing.
+
 ## Release Pipeline
 
 GitHub Actions release jobs build desktop, payload, library, and mobile

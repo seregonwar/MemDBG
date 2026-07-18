@@ -576,3 +576,279 @@ void draw_patch_studio(AppState &state, DebuggerState &ds,
 }
 
 } // namespace memdbg::frontend
+
+/* ================================================================
+ * Code Cave - simplified remote shellcode workflow
+ * ================================================================ */
+
+namespace memdbg::frontend {
+
+void code_cave_alloc(AppState &state, DebuggerState &ds) {
+  if (ds.pid <= 1) {
+    ds.cave_status = "No target process selected";
+    return;
+  }
+  if (!payload_supports(state, MEMDBG_CAP_MEMORY_ALLOC)) {
+    ds.cave_status = "Payload does not support remote allocation";
+    return;
+  }
+
+  uint64_t req_size = 0x1000;
+  (void)parse_input_u64(ds.cave_size_input, req_size);
+  if (req_size == 0 || req_size > 0x100000) req_size = 0x1000;
+  ds.cave_size = req_size;
+
+  Client::ProcessAllocResult result{};
+  if (!state.client.process_alloc(ds.pid, 0, req_size,
+                                  MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE,
+                                  0, result)) {
+    ds.cave_status = "ALLOC failed: " + state.client.last_error();
+    return;
+  }
+
+  ds.cave_addr = result.address;
+  ds.cave_size = result.length;
+  ds.cave_allocated = true;
+  ds.cave_protection = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE;
+  ds.cave_status = "Cave allocated at " + hex_u64(ds.cave_addr);
+  set_status(state, ds.cave_status);
+  push_notification(state, "Code cave: " + hex_u64(ds.cave_addr));
+}
+
+void code_cave_write_and_protect(AppState &state, DebuggerState &ds) {
+  if (!ds.cave_allocated || ds.cave_addr == 0) {
+    ds.cave_status = "Allocate a cave first";
+    return;
+  }
+
+  std::vector<uint8_t> bytes;
+  if (!parse_hex_bytes(ds.cave_shellcode_input, bytes) || bytes.empty()) {
+    ds.cave_status = "Invalid shellcode bytes (hex)";
+    return;
+  }
+
+  uint32_t written = 0;
+  if (!state.client.memory_write(ds.pid, ds.cave_addr, bytes, written) ||
+      written != bytes.size()) {
+    ds.cave_status = "Write failed: " + state.client.last_error();
+    return;
+  }
+  ds.cave_shellcode = bytes;
+  ds.cave_status = "Wrote " + std::to_string(written) + " bytes";
+
+  /* PROTECT: make it RX */
+  if (payload_supports(state, MEMDBG_CAP_MEMORY_PROTECT)) {
+    Client::ProcessProtectResult prot{};
+    uint32_t rx = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_EXEC;
+    if (state.client.process_protect(ds.pid, ds.cave_addr, ds.cave_size,
+                                     rx, prot)) {
+      ds.cave_protection = rx;
+      ds.cave_status += " | protected RX";
+    } else {
+      ds.cave_status += " | protect failed: " + state.client.last_error();
+    }
+  }
+
+  set_status(state, ds.cave_status);
+}
+
+void code_cave_install_detour(AppState &state, DebuggerState &ds) {
+  if (!ds.cave_allocated || ds.cave_addr == 0) {
+    ds.cave_status = "Allocate and write a cave first";
+    return;
+  }
+  if (ds.cave_shellcode.empty()) {
+    ds.cave_status = "Write shellcode to the cave first";
+    return;
+  }
+
+  uint64_t target = 0;
+  if (!parse_input_u64(ds.cave_target_input, target) || target == 0) {
+    ds.cave_status = "Enter a valid target address";
+    return;
+  }
+  ds.cave_target_addr = target;
+
+  /* Read original bytes at target */
+  std::vector<uint8_t> orig;
+  if (!state.client.memory_read(ds.pid, ds.cave_target_addr, 12, orig) ||
+      orig.size() < 12) {
+    ds.cave_status = "Cannot read target (need 12 bytes): " +
+                     state.client.last_error();
+    return;
+  }
+  ds.cave_original_target_bytes.assign(orig.begin(), orig.begin() + 12);
+
+  /* Build 12-byte absolute JMP: mov rax, cave; jmp rax */
+  std::vector<uint8_t> jmp;
+  jmp.push_back(0x48); jmp.push_back(0xB8);              // mov rax, imm64
+  for (int i = 0; i < 8; ++i)
+    jmp.push_back(static_cast<uint8_t>(ds.cave_addr >> (i * 8)));
+  jmp.push_back(0xFF); jmp.push_back(0xE0);               // jmp rax
+
+  if (!payload_supports(state, MEMDBG_CAP_MEMORY_PROTECT)) {
+    ds.cave_status = "Detour requires mprotect support (W^X safety)";
+    return;
+  }
+
+  /* PROTECT target to RW, write JMP, restore to RX */
+  Client::ProcessProtectResult prot_before{};
+  uint32_t rw = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE;
+  uint32_t rx = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_EXEC;
+
+  if (!state.client.process_protect(ds.pid, ds.cave_target_addr,
+                                    12, rw, prot_before)) {
+    ds.cave_status = "mprotect RW failed: " + state.client.last_error();
+    return;
+  }
+
+  uint32_t w = 0;
+  if (!state.client.memory_write(ds.pid, ds.cave_target_addr, jmp, w) || w != 12) {
+    ds.cave_status = "Write JMP failed: " + state.client.last_error();
+    /* Try to restore protection */
+    Client::ProcessProtectResult ignored{};
+    (void)state.client.process_protect(ds.pid, ds.cave_target_addr, 12,
+                                        prot_before.old_protection, ignored);
+    return;
+  }
+
+  Client::ProcessProtectResult prot_after{};
+  if (!state.client.process_protect(ds.pid, ds.cave_target_addr,
+                                    12, rx, prot_after)) {
+    ds.cave_status = "JMP written but RX restore failed: " +
+                     state.client.last_error();
+    return;
+  }
+
+  ds.cave_detour_active = true;
+  ds.cave_status = "Detour active: 0x" + hex_u64(ds.cave_target_addr) +
+                   " -> 0x" + hex_u64(ds.cave_addr);
+  set_status(state, ds.cave_status);
+  push_notification(state, "Detour installed at " + hex_u64(ds.cave_target_addr));
+}
+
+void code_cave_remove_detour(AppState &state, DebuggerState &ds) {
+  if (!ds.cave_detour_active || ds.cave_original_target_bytes.empty()) {
+    ds.cave_status = "No active detour to remove";
+    return;
+  }
+
+  uint32_t rw = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_WRITE;
+  uint32_t rx = MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_EXEC;
+
+  Client::ProcessProtectResult prot_before{};
+  if (!state.client.process_protect(ds.pid, ds.cave_target_addr,
+                                    12, rw, prot_before)) {
+    ds.cave_status = "mprotect RW failed: " + state.client.last_error();
+    return;
+  }
+
+  uint32_t w = 0;
+  if (!state.client.memory_write(ds.pid, ds.cave_target_addr,
+                                  ds.cave_original_target_bytes, w) ||
+      w != ds.cave_original_target_bytes.size()) {
+    ds.cave_status = "Restore bytes failed: " + state.client.last_error();
+    return;
+  }
+
+  Client::ProcessProtectResult prot_after{};
+  (void)state.client.process_protect(ds.pid, ds.cave_target_addr,
+                                     12, rx, prot_after);
+
+  ds.cave_detour_active = false;
+  ds.cave_status = "Detour removed, original bytes restored";
+  set_status(state, ds.cave_status);
+}
+
+void draw_code_cave(AppState &state, DebuggerState &ds,
+                    bool client_busy, float scl) {
+  ImGui::TextColored(ui::colors().muted, "Code Cave  PID %d", ds.pid);
+  ImGui::SameLine();
+  bool can_alloc = payload_supports(state, MEMDBG_CAP_MEMORY_ALLOC);
+  bool can_protect = payload_supports(state, MEMDBG_CAP_MEMORY_PROTECT);
+  ImGui::TextColored(ui::colors().dim, "%s | %s",
+                     can_alloc ? "remote alloc" : "no alloc",
+                     can_protect ? "mprotect" : "no mprotect");
+
+  ImGui::Spacing();
+  ImGui::SeparatorText("1. Allocate");
+
+  ImGui::BeginDisabled(client_busy || !can_alloc);
+  ImGui::SetNextItemWidth(120.0f * scl);
+  ImGui::InputTextWithHint("##cavesize", "4096", ds.cave_size_input,
+                           sizeof(ds.cave_size_input));
+  ImGui::SameLine();
+  if (ui::primary_button("Allocate Cave", ImVec2(140.0f * scl, 0))) {
+    code_cave_alloc(state, ds);
+  }
+  ImGui::EndDisabled();
+
+  if (ds.cave_allocated) {
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().success, "%s",
+                       ("0x" + hex_u64(ds.cave_addr)).c_str());
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().muted, "%s",
+                       ds.cave_protection == (MEMDBG_MAP_PROT_READ | MEMDBG_MAP_PROT_EXEC)
+                           ? "RX"
+                           : "RW");
+  }
+
+  ImGui::Spacing();
+  ImGui::SeparatorText("2. Shellcode");
+
+  ImGui::BeginDisabled(client_busy || !ds.cave_allocated);
+  ImGui::SetNextItemWidth(-1.0f);
+  ImGui::InputTextWithHint("##caveshellcode",
+                           "Hex bytes e.g. B8 EF BE 00 00 90 90 90 CC",
+                           ds.cave_shellcode_input,
+                           sizeof(ds.cave_shellcode_input));
+
+  if (!ds.cave_shellcode.empty()) {
+    ImGui::TextColored(ui::colors().dim, "Assembled: %zu bytes  %s",
+                       ds.cave_shellcode.size(),
+                       bytes_to_hex(ds.cave_shellcode).c_str());
+  }
+
+  if (ui::soft_button("Write && Protect RX", ImVec2(180.0f * scl, 0))) {
+    code_cave_write_and_protect(state, ds);
+  }
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::SeparatorText("3. Detour (optional)");
+
+  ImGui::BeginDisabled(client_busy || !ds.cave_allocated ||
+                       ds.cave_shellcode.empty());
+  ImGui::SetNextItemWidth(200.0f * scl);
+  ImGui::InputTextWithHint("##cavetarget", "0x8000000000",
+                           ds.cave_target_input,
+                           sizeof(ds.cave_target_input),
+                           ImGuiInputTextFlags_CharsHexadecimal);
+
+  ImGui::SameLine();
+  if (!ds.cave_detour_active) {
+    if (ui::primary_button("Install Detour", ImVec2(140.0f * scl, 0))) {
+      code_cave_install_detour(state, ds);
+    }
+  } else {
+    if (ui::soft_button("Remove Detour", ImVec2(140.0f * scl, 0))) {
+      code_cave_remove_detour(state, ds);
+    }
+  }
+  ImGui::EndDisabled();
+
+  if (ds.cave_detour_active) {
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().warning, "%s",
+                       ("Active: 0x" + hex_u64(ds.cave_target_addr) +
+                        " -> 0x" + hex_u64(ds.cave_addr)).c_str());
+  }
+
+  ImGui::Spacing();
+  if (!ds.cave_status.empty()) {
+    ImGui::TextColored(ui::colors().muted, "%s", ds.cave_status.c_str());
+  }
+}
+
+} // namespace memdbg::frontend
