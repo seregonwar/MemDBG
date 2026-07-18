@@ -38,27 +38,36 @@ extern int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_si
 
 // Auth ceremony
 
+static pthread_mutex_t g_auth_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_auth_privileged = 0;
 
-int memdbg_auth_handle(int fd, const memdbg_auth_key_request_t *req) {
+memdbg_status_t memdbg_auth_handle(const memdbg_auth_key_request_t *req) {
   if (!req || req->magic != MEMDBG_AUTH_KEY_MAGIC) {
-    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
-    return 1;
+    return MEMDBG_ERR_PERMISSION;
   }
 
-  // Elevate payload privileges for debug operations
+  (void)pthread_mutex_lock(&g_auth_mutex);
+  if (g_auth_privileged) {
+    (void)pthread_mutex_unlock(&g_auth_mutex);
+    return MEMDBG_OK;
+  }
+  if (memdbg_privilege_operation_begin() != 0) {
+    (void)pthread_mutex_unlock(&g_auth_mutex);
+    return MEMDBG_ERR_STATE;
+  }
   int rc = memdbg_privilege_jailbreak_self();
-  if (rc != 0) {
-    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
-    return 1;
-  }
-
-  g_auth_privileged = 1;
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);
-  return 0;
+  int end_rc = memdbg_privilege_operation_end();
+  if (rc == 0 && end_rc == 0) g_auth_privileged = 1;
+  (void)pthread_mutex_unlock(&g_auth_mutex);
+  return rc == 0 && end_rc == 0 ? MEMDBG_OK : MEMDBG_ERR_PERMISSION;
 }
 
-int memdbg_is_privileged(void) { return g_auth_privileged; }
+int memdbg_is_privileged(void) {
+  (void)pthread_mutex_lock(&g_auth_mutex);
+  int privileged = g_auth_privileged;
+  (void)pthread_mutex_unlock(&g_auth_mutex);
+  return privileged;
+}
 
 // Arena memory sub-allocator
 
@@ -78,6 +87,7 @@ struct arena_pool {
 
 static struct arena_pool g_arenas[ARENA_MAX_PIDS];
 static int g_arena_on = 1;
+static pthread_mutex_t g_arena_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static uint64_t arena_align(uint64_t n) {
   return (n + (ARENA_ALIGN - 1)) & ~(ARENA_ALIGN - 1);
@@ -152,85 +162,110 @@ static int arena_try_free(struct arena_pool *ap, uint64_t addr, uint64_t length)
   return 0;
 }
 
-int memdbg_arena_config_handle(int fd, const memdbg_arena_config_request_t *req) {
+memdbg_status_t memdbg_arena_config_handle(
+    const memdbg_arena_config_request_t *req) {
+  if (req == NULL || req->enabled > 1U) return MEMDBG_ERR_PARAM;
+  (void)pthread_mutex_lock(&g_arena_mutex);
   g_arena_on = req->enabled ? 1 : 0;
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);
-  return 0;
+  (void)pthread_mutex_unlock(&g_arena_mutex);
+  return MEMDBG_OK;
 }
 
 int memdbg_arena_alloc_hinted(uint32_t pid, uint64_t *addr, uint64_t length, uint64_t hint) {
   int rc;
+  (void)pthread_mutex_lock(&g_arena_mutex);
   if (g_arena_on && hint == 0x4000) {
     struct arena_pool *ap = arena_for(pid, 1);
     if (ap && arena_try_alloc(ap, length, addr) == 0) { rc = 0; goto done; }
   }
   rc = pal_memory_alloc((int)pid, hint, length, 7, 0, addr);
 done:
+  (void)pthread_mutex_unlock(&g_arena_mutex);
   if (rc == 0) memdbg_process_maps_cache_flush((int)pid);
   return rc;
 }
 
 int memdbg_arena_free_hinted(uint32_t pid, uint64_t addr, uint64_t length) {
   int rc;
+  (void)pthread_mutex_lock(&g_arena_mutex);
   if (g_arena_on) {
     struct arena_pool *ap = arena_for(pid, 0);
     if (ap && arena_try_free(ap, addr, length) == 0) { rc = 0; goto done; }
   }
   rc = pal_memory_free((int)pid, addr, length);
 done:
+  (void)pthread_mutex_unlock(&g_arena_mutex);
   if (rc == 0) memdbg_process_maps_cache_flush((int)pid);
   return rc;
 }
 
 // Bulk write advanced
 
-int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t *req,
-                                  const uint8_t *body, uint32_t body_len) {
+memdbg_status_t memdbg_batch_write_adv_handle(
+    const memdbg_batch_write_adv_request_t *req, const uint8_t *body,
+    uint32_t body_len, uint8_t **status_out, uint32_t *status_len_out) {
+  if (status_out == NULL || status_len_out == NULL) return MEMDBG_ERR_PARAM;
+  *status_out = NULL;
+  *status_len_out = 0U;
   if (!req || req->count == 0 || req->count > MEMDBG_BATCH_WRITE_ADV_MAX_ENTRIES) {
-    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
-    return 1;
+    return MEMDBG_ERR_PARAM;
   }
 
   int want_status = (req->flags & 1u) != 0;
-  if (body_len < sizeof(*req)) {
-    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
-    return 1;
-  }
-
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);  // ack
+  if ((req->flags & ~1U) != 0U || body_len < sizeof(*req))
+    return MEMDBG_ERR_PROTOCOL;
 
   const uint8_t *cursor = body + sizeof(*req);
   const uint8_t *end    = body + body_len;
   uint8_t *status_array = want_status ? (uint8_t *)malloc(req->count) : NULL;
+  if (want_status && status_array == NULL) return MEMDBG_ERR_NOMEM;
 
+  /* Validate the complete variable-length request before performing writes. */
+  const uint8_t *validate = cursor;
+  for (uint32_t i = 0; i < req->count; ++i) {
+    if ((size_t)(end - validate) < 12U) {
+      free(status_array);
+      return MEMDBG_ERR_PROTOCOL;
+    }
+    uint32_t len;
+    memcpy(&len, validate + 8, sizeof(len));
+    validate += 12;
+    if (len > MEMDBG_BATCH_WRITE_ADV_MAX_ENTRY ||
+        (size_t)(end - validate) < len) {
+      free(status_array);
+      return len > MEMDBG_BATCH_WRITE_ADV_MAX_ENTRY
+                 ? MEMDBG_ERR_OVERFLOW : MEMDBG_ERR_PROTOCOL;
+    }
+    validate += len;
+  }
+  if (validate != end) {
+    free(status_array);
+    return MEMDBG_ERR_PROTOCOL;
+  }
+
+  memdbg_status_t overall = MEMDBG_OK;
   for (uint32_t i = 0; i < req->count; i++) {
-    if ((size_t)(end - cursor) < 12) break;
-
     uint64_t addr;
     uint32_t len;
     memcpy(&addr, cursor, 8);
     memcpy(&len,  cursor + 8, 4);
     cursor += 12;
 
-    if (len > MEMDBG_BATCH_WRITE_ADV_MAX_ENTRY || (size_t)(end - cursor) < len)
-      break;
-
     size_t written = 0;
-    memdbg_memory_write(req->pid, addr, cursor, len, &written);
+    memdbg_status_t item_status =
+        memdbg_memory_write(req->pid, addr, cursor, len, &written);
 
     if (status_array)
-      status_array[i] = (written == len) ? 0 : 1;
+      status_array[i] = (item_status == MEMDBG_OK && written == len) ? 0U : 1U;
+    if ((item_status != MEMDBG_OK || written != len) && overall == MEMDBG_OK)
+      overall = item_status != MEMDBG_OK ? item_status : MEMDBG_ERR_IO;
 
     cursor += len;
   }
 
-  if (status_array) {
-    pal_socket_write_all(fd, status_array, req->count);
-    free(status_array);
-  }
-
-  pal_socket_write_all(fd, &(uint32_t){0}, 4);  // CMD_SUCCESS
-  return 0;
+  *status_out = status_array;
+  *status_len_out = want_status ? req->count : 0U;
+  return overall;
 }
 
 // Enhanced ELF loader with JIT shared memory

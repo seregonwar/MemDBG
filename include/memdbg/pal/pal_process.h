@@ -30,6 +30,7 @@ typedef struct pal_process_entry { int pid; int ppid; char name[48]; } pal_proce
 typedef struct pal_process_list {
   pal_process_entry_t *entries;
   size_t               count;
+  size_t               capacity;
 } pal_process_list_t;
 
 memdbg_status_t pal_process_list(pal_process_list_t *out);

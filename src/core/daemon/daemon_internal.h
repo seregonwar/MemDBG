@@ -26,14 +26,13 @@ extern "C" {
 
 #include "memdbg/pal/pal_wait.h"
 
-/* Dynamic thread model: connections are served by on-demand threads.
- * The acceptor thread spawns a handler per connection up to max_connections.
- * RESP_POOL_COUNT is sized to match the default connection cap to avoid
- * contention on the pre-allocated response buffer ring. */
-#define MEMDBG_DEFAULT_MAX_CONNECTIONS   64
+/* Dynamic thread model: connections are served by on-demand threads. */
+/* The desktop deliberately owns four role sockets.  Keep headroom for a
+ * rolling reconnect, diagnostics, and a second trusted client; making the
+ * server limit equal to the pool size leaves new TCP sockets stuck in the
+ * listen backlog while the first client is still draining. */
+#define MEMDBG_DEFAULT_MAX_CONNECTIONS   16
 #define MEMDBG_DEFAULT_IDLE_TIMEOUT_MS   30000
-#define MEMDBG_RESP_POOL_COUNT           64
-#define MEMDBG_RESP_POOL_SIZE            (256U * 1024U)
 
 /* ---- Common type aliases ---- */
 
@@ -55,9 +54,6 @@ memdbg_status_t build_framed_payload(const void *data, uint32_t data_len,
                                      unsigned char **out, uint32_t *out_len);
 
 /* ---- Zero-copy buffer pool (defined in response.c) ---- */
-void            resp_pool_init(void);
-void            resp_pool_fini(void);
-unsigned char  *resp_pool_acquire(size_t needed, size_t *out_size);
 
 /* ---- Acceptor / listener (defined in acceptor.c) ---- */
 
@@ -100,6 +96,9 @@ memdbg_status_t handle_process_list(int fd, const memdbg_packet_header_t *req);
 
 memdbg_status_t handle_process_maps(int fd, const memdbg_packet_header_t *req,
                                     const void *body, uint32_t body_len);
+memdbg_status_t handle_process_maps_v2(int fd,
+                                       const memdbg_packet_header_t *req,
+                                       const void *body, uint32_t body_len);
 
 memdbg_status_t handle_process_info(int fd, const memdbg_packet_header_t *req,
                                     const void *body, uint32_t body_len);

@@ -545,10 +545,11 @@ void request_telemetry_async(AppState &state) {
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
 
   state.telemetry_pending = true;
-  state.telemetry_future = std::async(std::launch::async, [&state]() -> bool {
+  auto client = state.pool.poll_lease();
+  state.telemetry_future = std::async(std::launch::async, [&state, client]() -> bool {
     Client::TelemetrySnapshot snap;
-    if (!state.client.telemetry(snap)) {
-      state.telemetry_temp_error = state.client.last_error();
+    if (!client->telemetry(snap)) {
+      state.telemetry_temp_error = client->last_error();
       return false;
     }
     state.telemetry_temp_snap = snap;

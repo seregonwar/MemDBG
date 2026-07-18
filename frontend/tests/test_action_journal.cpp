@@ -381,6 +381,26 @@ static void test_record_marker() {
   std::filesystem::remove(path, ec);
 }
 
+static void test_clear_active_journal() {
+  std::printf("\n--- clear_active_journal ---\n");
+  auto path = temp_journal_path();
+  ActionJournal journal;
+  TEST("open before clear", journal.open(path.string().c_str()));
+  journal.record("old_entry", "{}");
+  TEST("clear active journal", journal.clear());
+  journal.record("new_entry", "{}");
+  journal.close();
+
+  std::vector<ActionJournalEntry> entries;
+  bool clean = false;
+  ActionJournal::load_recent(path, entries, 100, &clean);
+  TEST("clear removes old entries",
+       entries.size() == 1U && entries[0].action == "new_entry");
+  TEST("cleared journal closes cleanly", clean);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 /* ── set_enabled toggle ───────────────────────────────────────────────── */
 
 static void test_set_enabled() {
@@ -420,6 +440,7 @@ int main() {
   test_json_escape();
   test_crash_report_url();
   test_record_marker();
+  test_clear_active_journal();
   test_set_enabled();
 
   std::printf("\n=== Results ======================================\n");

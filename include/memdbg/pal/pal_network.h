@@ -57,6 +57,10 @@ ssize_t pal_socket_write_all(socket_t fd, const void *buffer, size_t count);
 ssize_t pal_socket_writev_all(socket_t fd,
                               const void *iov0, size_t iov0_len,
                               const void *iov1, size_t iov1_len);
+ssize_t pal_socket_writev3_all(socket_t fd,
+                               const void *iov0, size_t iov0_len,
+                               const void *iov1, size_t iov1_len,
+                               const void *iov2, size_t iov2_len);
 
 /* Enable/disable TCP_CORK (Linux) or TCP_NOPUSH (FreeBSD/PS4/PS5).
  * When corked, the kernel delays sending until the buffer is full or

@@ -27,10 +27,12 @@ void update_payload_version_check(AppState &state) {
       state.payload_outdated ? info.tag_name : std::string{};
   if ((compatibility.status == PayloadVersionStatus::Invalid ||
        compatibility.status == PayloadVersionStatus::ChannelMismatch) &&
-      state.crash_logging_enabled) {
+      state.crash_logging_enabled &&
+      state.payload_version_diagnostic != compatibility.error) {
     state.crash_logger.log(
         "version",
         ("Payload version comparison skipped: " + compatibility.error).c_str());
+    state.payload_version_diagnostic = compatibility.error;
   }
 }
 

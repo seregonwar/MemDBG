@@ -99,18 +99,18 @@ static void run_pointer_scan(AppState &state) {
   state.scan_async_pending = true;
   state.scan_async_owner = Screen::Scanner;
 
-  auto &client = state.client;
+  auto client = state.pool.scan_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_status = state.scan_async_temp_session_status;
   auto &error_out = state.scan_async_error;
 
   state.scan_async_future = std::async(std::launch::async,
-    [&client, request, &temp_result, &temp_status, &error_out,
+    [client, request, &temp_result, &temp_status, &error_out,
      &mtx = state.scan_async_mtx]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult res;
-      if (!client.scan_pointer(request, res)) {
-        error_out = client.last_error();
+      if (!client->scan_pointer(request, res)) {
+        error_out = client->last_error();
         return false;
       }
       temp_result = std::move(res);

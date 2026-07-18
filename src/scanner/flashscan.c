@@ -104,6 +104,8 @@ struct flashscan_sess {
 
 static struct flashscan_sess g_sessions[FLASHSCAN_MAX_SESSIONS];
 static page_alias_ctx_t *g_alias_ctxs[FLASHSCAN_MAX_SESSIONS];
+static int g_session_owner_fd[FLASHSCAN_MAX_SESSIONS];
+static pthread_mutex_t g_session_owner_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static uint64_t g_fs_ram_limit     = 512ULL << 20;
 static char     g_fs_spill_dir[64] = "/data";
@@ -190,6 +192,38 @@ static page_alias_ctx_t *alias_context_get(unsigned slot, uint32_t pid) {
 void flashscan_init(void) {
   memset(g_sessions, 0, sizeof(g_sessions));
   memset(g_alias_ctxs, 0, sizeof(g_alias_ctxs));
+  for (unsigned slot = 0U; slot < FLASHSCAN_MAX_SESSIONS; ++slot)
+    g_session_owner_fd[slot] = -1;
+}
+
+unsigned int flashscan_slot_for_client(int client_fd) {
+  unsigned int free_slot = FLASHSCAN_INVALID_SLOT;
+  (void)pthread_mutex_lock(&g_session_owner_mutex);
+  for (unsigned int slot = 0U; slot < FLASHSCAN_MAX_SESSIONS; ++slot) {
+    if (g_session_owner_fd[slot] == client_fd) {
+      (void)pthread_mutex_unlock(&g_session_owner_mutex);
+      return slot;
+    }
+    if (free_slot == FLASHSCAN_INVALID_SLOT && g_session_owner_fd[slot] < 0)
+      free_slot = slot;
+  }
+  if (free_slot != FLASHSCAN_INVALID_SLOT)
+    g_session_owner_fd[free_slot] = client_fd;
+  (void)pthread_mutex_unlock(&g_session_owner_mutex);
+  return free_slot;
+}
+
+void flashscan_release_client(int client_fd) {
+  (void)pthread_mutex_lock(&g_session_owner_mutex);
+  for (unsigned int slot = 0U; slot < FLASHSCAN_MAX_SESSIONS; ++slot) {
+    if (g_session_owner_fd[slot] != client_fd) continue;
+    /* The connection handler is no longer dispatching requests, so its
+       resident state can be reclaimed before making the slot reusable. */
+    flashscan_free_slot(slot);
+    g_session_owner_fd[slot] = -1;
+    break;
+  }
+  (void)pthread_mutex_unlock(&g_session_owner_mutex);
 }
 
 void flashscan_cleanup_orphans(void) {
@@ -998,13 +1032,170 @@ static int scan_range_stream(int fd,
   return 1;
 }
 
+struct flashscan_parallel_worker {
+  const memdbg_quickscan_start_request_t *req;
+  uint64_t scan_addr;
+  uint64_t scan_len;
+  uint64_t value_len;
+  uint64_t step;
+  uint64_t chunk_size;
+  uint64_t simd_max;
+  const uint8_t *pattern;
+  const uint8_t *mask;
+  const uint8_t *between_hi;
+  uint8_t *read_buf;
+  uint32_t *simd_offsets;
+  page_alias_ctx_t *alias_ctx;
+  struct flashscan_sess result;
+  int ok;
+};
+
+static void *flashscan_parallel_worker_run(void *arg) {
+  struct flashscan_parallel_worker *worker =
+      (struct flashscan_parallel_worker *)arg;
+  worker->ok = scan_range_stream(
+      -1, worker->req, worker->scan_addr, worker->scan_len,
+      worker->value_len, worker->step, worker->pattern, worker->mask,
+      worker->between_hi, 1, worker->read_buf, worker->chunk_size, NULL,
+      worker->simd_offsets, worker->simd_max, &worker->result,
+      worker->alias_ctx);
+  return NULL;
+}
+
+static int flashscan_parallel_stream(
+    int fd, const memdbg_quickscan_start_request_t *req,
+    uint64_t value_len, uint64_t step, const uint8_t *pattern,
+    const uint8_t *mask, const uint8_t *between_hi, int simd_ok,
+    uint64_t chunk_size, uint64_t simd_max) {
+  if ((req->request_flags & MEMDBG_QS_FL_PARALLEL) == 0U || !simd_ok ||
+      req->length < value_len * 2U)
+    return 0;
+
+  uint32_t worker_count = FLASHSCAN_PARALLEL_WORKERS;
+  if (worker_count > FLASHSCAN_PARALLEL_MAX_WORKERS)
+    worker_count = FLASHSCAN_PARALLEL_MAX_WORKERS;
+  uint64_t span = (req->length + worker_count - 1U) / worker_count;
+  span = ((span + value_len - 1U) / value_len) * value_len;
+  if (span == 0U) return 0;
+  worker_count = (uint32_t)((req->length + span - 1U) / span);
+  if (worker_count <= 1U || worker_count > FLASHSCAN_PARALLEL_MAX_WORKERS)
+    return 0;
+
+  struct flashscan_parallel_worker *workers =
+      (struct flashscan_parallel_worker *)calloc(worker_count,
+                                                  sizeof(*workers));
+  pthread_t threads[FLASHSCAN_PARALLEL_MAX_WORKERS];
+  uint8_t spawned[FLASHSCAN_PARALLEL_MAX_WORKERS] = {0U};
+  if (workers == NULL) return 0;
+
+  int allocation_ok = 1;
+  uint32_t record_size = (uint32_t)(8U + value_len);
+  for (uint32_t i = 0U; i < worker_count; ++i) {
+    uint64_t offset = (uint64_t)i * span;
+    uint64_t length = offset + span <= req->length
+                          ? span
+                          : req->length - offset;
+    workers[i].req = req;
+    workers[i].scan_addr = req->address + offset;
+    workers[i].scan_len = length;
+    workers[i].value_len = value_len;
+    workers[i].step = step;
+    workers[i].chunk_size = chunk_size;
+    workers[i].simd_max = simd_max;
+    workers[i].pattern = pattern;
+    workers[i].mask = mask;
+    workers[i].between_hi = between_hi;
+    workers[i].read_buf = (uint8_t *)malloc(chunk_size);
+    workers[i].simd_offsets =
+        (uint32_t *)malloc((size_t)simd_max * sizeof(uint32_t));
+    workers[i].result.buf = mmap_anonymous(FLASHSCAN_PARALLEL_RESULT_CAP);
+    workers[i].result.buf_cap = FLASHSCAN_PARALLEL_RESULT_CAP;
+    workers[i].result.rec_size = record_size;
+    workers[i].result.value_len = value_len;
+    workers[i].alias_ctx =
+        page_alias_begin((uint32_t)req->pid, FLASHSCAN_PARALLEL_ARENA);
+    /* PS5 normally reads through page aliases; PS4 has no DMAP alias engine
+       and uses independent mdbg reads instead. A missing alias must therefore
+       not disable the common parallel SIMD path. */
+    if (workers[i].read_buf == NULL || workers[i].simd_offsets == NULL ||
+        workers[i].result.buf == NULL)
+      allocation_ok = 0;
+  }
+
+  int handled = 0;
+  if (allocation_ok) {
+    /* Keep one partition on the caller thread: four partitions require only
+       three additional threads and avoid an unnecessary context switch. */
+    for (uint32_t i = 1U; i < worker_count; ++i) {
+      if (pthread_create(&threads[i], NULL, flashscan_parallel_worker_run,
+                         &workers[i]) == 0)
+        spawned[i] = 1U;
+    }
+    (void)flashscan_parallel_worker_run(&workers[0]);
+    for (uint32_t i = 1U; i < worker_count; ++i) {
+      if (spawned[i] != 0U)
+        (void)pthread_join(threads[i], NULL);
+      else
+        (void)flashscan_parallel_worker_run(&workers[i]);
+    }
+
+    int all_ok = 1;
+    for (uint32_t i = 0U; i < worker_count; ++i)
+      if (!workers[i].ok) all_ok = 0;
+
+    if (all_ok) {
+      uint8_t *output = (uint8_t *)malloc(0x40000U);
+      if (output != NULL) {
+        uint64_t output_len = 0U;
+        uint64_t flush_threshold = 0x3FFE8ULL - value_len;
+        for (uint32_t i = 0U; i < worker_count; ++i) {
+          uint8_t *records = (uint8_t *)workers[i].result.buf;
+          for (uint64_t r = 0U; r < workers[i].result.count; ++r) {
+            uint8_t *record = records + r * record_size;
+            uint64_t address = 0U;
+            memcpy(&address, record, sizeof(address));
+            uint32_t offset = (uint32_t)(address - req->address);
+            if (output_len > flush_threshold) {
+              memcpy(output, &output_len, sizeof(output_len));
+              (void)socket_send_all(fd, output,
+                                    (size_t)(output_len + 8U));
+              output_len = 0U;
+            }
+            memcpy(output + 8U + output_len, &offset, sizeof(offset));
+            memcpy(output + 12U + output_len, record + 8U, value_len);
+            output_len += 4U + value_len;
+          }
+        }
+        if (output_len != 0U) {
+          memcpy(output, &output_len, sizeof(output_len));
+          (void)socket_send_all(fd, output, (size_t)(output_len + 8U));
+        }
+        free(output);
+        /* Worker output has now been consumed.  Even a peer-side network
+           failure must not trigger a duplicate serial scan/response. */
+        handled = 1;
+      }
+    }
+  }
+
+  for (uint32_t i = 0U; i < worker_count; ++i) {
+    if (workers[i].alias_ctx != NULL) page_alias_end(workers[i].alias_ctx);
+    free(workers[i].read_buf);
+    free(workers[i].simd_offsets);
+    munmap_anonymous(workers[i].result.buf,
+                     workers[i].result.buf_cap);
+  }
+  free(workers);
+  return handled;
+}
+
 int flashscan_handle_caps(int fd) {
   memdbg_quickscan_caps_response_t resp;
   memset(&resp, 0, sizeof(resp));
   resp.protocol_vers = 1;
   resp.engine_flags  = MEMDBG_QS_F_SIMD | MEMDBG_QS_F_RESIDENT |
-                       MEMDBG_QS_F_SNAPSHOT | MEMDBG_QS_F_SNAP_SEGMENTS |
-                       MEMDBG_QS_F_SNAP_CONFIG | MEMDBG_QS_F_SNAP_FIRST |
+                       MEMDBG_QS_F_SNAPSHOT | MEMDBG_QS_F_SNAP_CONFIG |
+                       MEMDBG_QS_F_SNAP_FIRST |
                        MEMDBG_QS_F_SNAP_PREVIOUS | MEMDBG_QS_F_PARALLEL |
                        MEMDBG_QS_F_ALIAS_RESCAN;
   resp.max_workers   = FLASHSCAN_WORKERS;
@@ -1027,7 +1218,8 @@ int flashscan_handle_config(int fd, const memdbg_quickscan_config_request_t *req
 
 int flashscan_handle_regions(int fd, const memdbg_quickscan_regions_request_t *req) {
   memdbg_map_list_t map_list;
-  if (memdbg_process_maps(req->pid, &map_list) != 0 || map_list.count <= 0) {
+  if (memdbg_process_maps_cached(req->pid, &map_list) != 0 ||
+      map_list.count <= 0) {
     socket_send_int32(fd, -1);
     return 1;
   }
@@ -1217,10 +1409,15 @@ int flashscan_handle_start(int fd,
     /* Fall through to streaming */
   }
 
-  scan_range_stream(fd, req, req->address, req->length,
-                    vlen, step, pattern, mask, between_hi,
-                    simd_ok, read_buf, chunk_size, result_buf,
-                    simd_offs, simd_max, NULL, actx);
+  int parallel_handled = flashscan_parallel_stream(
+      fd, req, vlen, step, pattern, mask, between_hi, simd_ok,
+      chunk_size, simd_max);
+  if (!parallel_handled) {
+    scan_range_stream(fd, req, req->address, req->length,
+                      vlen, step, pattern, mask, between_hi,
+                      simd_ok, read_buf, chunk_size, result_buf,
+                      simd_offs, simd_max, NULL, actx);
+  }
 
   uint64_t sentinel = 0xFFFFFFFFFFFFFFFFULL;
   socket_send_all(fd, &sentinel, 8);

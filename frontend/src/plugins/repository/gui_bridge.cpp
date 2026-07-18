@@ -5,6 +5,7 @@
  */
 
 #include "gui_bridge.hpp"
+#include "protocol_broker.hpp"
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "platform.hpp"
@@ -46,6 +47,8 @@ namespace memdbg::frontend::plugins {
 
 GuiBridge::GuiBridge() = default;
 GuiBridge::~GuiBridge() = default;
+bool GuiBridge::start_protocol_broker(ClientPool &) { return false; }
+uint16_t GuiBridge::protocol_broker_port() const { return 0U; }
 
 bool GuiBridge::start(const std::filesystem::path &python_exe,
                      const std::filesystem::path &script_path,
@@ -211,6 +214,15 @@ GuiBridge::~GuiBridge() {
   stop();
 }
 
+bool GuiBridge::start_protocol_broker(ClientPool &pool) {
+  if (!protocol_broker_) protocol_broker_ = std::make_unique<ProtocolBroker>();
+  return protocol_broker_->start(pool);
+}
+
+uint16_t GuiBridge::protocol_broker_port() const {
+  return protocol_broker_ ? protocol_broker_->port() : 0U;
+}
+
 bool GuiBridge::start(const std::filesystem::path &python_exe,
                       const std::filesystem::path &script_path,
                       const std::filesystem::path &context_path) {
@@ -351,7 +363,14 @@ bool GuiBridge::start(const std::filesystem::path &python_exe,
 }
 
 void GuiBridge::stop() {
-  if (!running_.load(std::memory_order_acquire)) return;
+  /* Unblock a plugin that is waiting on a local protocol request before we
+   * wait for its stdio threads.  The console-side pool remains owned by the
+   * application and is not torn down here. */
+  if (protocol_broker_) protocol_broker_->stop();
+
+  if (!running_.load(std::memory_order_acquire)) {
+    return;
+  }
 
   /* Send exit notification */
   {

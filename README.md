@@ -32,6 +32,7 @@ cheating, piracy, account abuse, or unauthorized access.
 - [Desktop and Mobile Frontend](#desktop-and-mobile-frontend)
 - [Build Targets](#build-targets)
 - [Testing](#testing)
+- [PS5 Live Validation](#ps5-live-validation)
 - [Localization](#localization)
 - [Plugins](#plugins)
 - [Wire Protocol](#wire-protocol)
@@ -248,6 +249,19 @@ make check-headers         # verify header/source correspondence
 git diff --check           # reject whitespace errors
 ```
 
+Live console probes are built with the frontend tools:
+
+```sh
+# Functional MDBG command matrix
+./build/frontend/bin/memdbg_probe <console-ip> 9020
+
+# Read-only maps, memory, scan, and four-connection benchmark
+./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin
+
+# Extended session/timeout stability workload
+./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin --stress
+```
+
 Frontend CMake also builds focused test binaries, including:
 
 | Test binary | Coverage |
@@ -258,6 +272,35 @@ Frontend CMake also builds focused test binaries, including:
 | `memdbg_locale_manager_test` | Locale loading, validation, and fallback |
 | `memdbg_structure_compare_test` | Structure comparison helpers |
 | `memdbg_plugin_manager_test` | Plugin manifest and repository behavior |
+
+## PS5 Live Validation
+
+The current payload and protocol feature level were validated on a freshly
+restarted PS5 with a live `eboot.bin` target on **2026-07-18**. The test used
+the production ports (`9020` native protocol, `744` legacy compatibility) and
+four independent native role connections.
+
+| Check | Result |
+|---|---:|
+| Functional protocol matrix | **19 passed, 0 failed, 4 intentionally skipped** |
+| Process list latency (10 requests) | **9.54 ms average** |
+| First maps enumeration (328 maps) | **64.91 ms** |
+| Warm maps latency (20 requests) | **9.92 ms average** |
+| Four-socket maps burst | **11.52 ms wall time** |
+| Memory read, 1 MiB chunks | **7.96 MiB/s** |
+| Four-socket aggregate read | **8.60 MiB/s** |
+| Server-side exact scan | **25.55 MiB/s** |
+| Sustained read-only stress workload | **232 MiB transferred; no disconnect** |
+| Connection cap | **16 accepted, 4 rejected out of 20** |
+| Idle timeout | **inactive connection closed after 30 seconds** |
+| Repeated payload replacement | **verified by HELLO after every injection** |
+
+These are end-to-end LAN measurements, including protocol framing, console
+memory primitives, serialization, compression decisions, and client parsing.
+They are not synthetic memory-copy figures. Full methodology, both normal
+runs, stress results, protocol coverage, limitations, and reproduction steps
+are in
+[`docs/ps5_validation_2026-07-18.md`](docs/ps5_validation_2026-07-18.md).
 
 ## Localization
 
@@ -303,9 +346,10 @@ contract.
 ## Wire Protocol
 
 MemDBG uses a packed little-endian binary protocol identified by
-`MEMDBG_PACKET_MAGIC = "MDBG"`. Protocol version `1` is capability-driven:
-payloads advertise supported features during `HELLO`, and clients gate UI and
-requests accordingly.
+`MEMDBG_PACKET_MAGIC = "MDBG"`. The stable packet framing remains **wire
+version 1**, while the current append-only command and HELLO contract is
+**feature level 2**. Payloads advertise the negotiated feature level and
+capabilities during `HELLO`, and clients gate UI and requests accordingly.
 
 The normative technical specification is
 [`docs/protocol.md`](docs/protocol.md). It documents the frame layout,
@@ -403,6 +447,7 @@ and Android build. Release artifacts include `SHA256SUMS.txt`.
 | [`docs/showcase.md`](docs/showcase.md) | Product walkthrough and feature showcase. |
 | [`docs/protocol.md`](docs/protocol.md) | Internal MDBG wire protocol specification and extension rules. |
 | [`docs/ps5debug_compat.md`](docs/ps5debug_compat.md) | ps5debug compatibility layer for older trainer/debugger clients. |
+| [`docs/ps5_validation_2026-07-18.md`](docs/ps5_validation_2026-07-18.md) | Reproducible PS5 protocol, stability, and performance validation report. |
 | [`docs/feature_research.md`](docs/feature_research.md) | Planned work and technical research notes. |
 | [`docs/plugins.md`](docs/plugins.md) | Plugin manifest and runtime contract. |
 | [`docs/mobile_architecture.md`](docs/mobile_architecture.md) | iOS/Android shell architecture. |
@@ -411,9 +456,9 @@ and Android build. Release artifacts include `SHA256SUMS.txt`.
 
 ## Project Status
 
-MemDBG is in active pre-release development. Protocol version `1` is stable
-enough for current tooling, but new command families and capability bits may be
-added before the first public milestone.
+MemDBG is in active pre-release development. Wire version `1` and feature level
+`2` are stable for current tooling; new append-only commands and capability
+bits may be added before the first public milestone.
 
 Completed areas include process/memory primitives, all current scanner paths,
 native desktop frontend, repository-backed localization, debugger lifecycle,

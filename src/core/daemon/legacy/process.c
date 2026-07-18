@@ -57,7 +57,7 @@ memdbg_status_t legacy_handle_process_maps(socket_t fd, const void *body, uint32
     return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   req = (const legacy_proc_info_packet_t *)body;
   memdbg_map_list_t list; memset(&list, 0, sizeof(list));
-  memdbg_status_t st = memdbg_process_maps((int)req->pid, &list);
+  memdbg_status_t st = memdbg_process_maps_cached((int)req->pid, &list);
   if (st != MEMDBG_OK || list.count == 0U || list.count > UINT32_MAX) {
     memdbg_process_maps_free(&list);
     return legacy_send_memdbg_status(fd, st == MEMDBG_OK ? MEMDBG_ERR_NOT_FOUND : st) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;

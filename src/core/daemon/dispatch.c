@@ -28,10 +28,12 @@
 
 /* ---- External declarations for features without dedicated headers ---- */
 
-extern int memdbg_auth_handle(int fd, const memdbg_auth_key_request_t *req);
-extern int memdbg_arena_config_handle(int fd, const memdbg_arena_config_request_t *req);
-extern int memdbg_batch_write_adv_handle(int fd, const memdbg_batch_write_adv_request_t *req,
-                                         const uint8_t *body, uint32_t body_len);
+extern memdbg_status_t memdbg_auth_handle(const memdbg_auth_key_request_t *req);
+extern memdbg_status_t memdbg_arena_config_handle(
+    const memdbg_arena_config_request_t *req);
+extern memdbg_status_t memdbg_batch_write_adv_handle(
+    const memdbg_batch_write_adv_request_t *req, const uint8_t *body,
+    uint32_t body_len, uint8_t **status_out, uint32_t *status_len_out);
 extern int memdbg_hijack_handle(int fd, const memdbg_process_hijack_request_t *req,
                                 const uint8_t *body, uint32_t body_len);
 
@@ -58,6 +60,7 @@ memdbg_status_t handle_hello(const memdbg_config_t *cfg,
   out->capabilities     = memdbg_capabilities(cfg);
   out->debug_port       = cfg->debug_port;
   out->udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
+  out->feature_level    = MEMDBG_PROTOCOL_FEATURE_LEVEL;
   size_t version_len = sizeof(MEMDBG_VERSION_STRING) - 1U;
   if (version_len >= sizeof(out->version)) version_len = sizeof(out->version) - 1U;
   memcpy(out->version, MEMDBG_VERSION_STRING, version_len);
@@ -103,6 +106,7 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   case MEMDBG_CMD_PROCESS_LIST:       return handle_process_list(fd, req);
   case MEMDBG_CMD_PROCESS_MAPS:       return handle_process_maps(fd, req, body, req->length);
+  case MEMDBG_CMD_PROCESS_MAPS_V2:    return handle_process_maps_v2(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_INFO:       return handle_process_info(fd, req, body, req->length);
   case MEMDBG_CMD_MEMORY_READ:        return handle_memory_read(fd, req, cfg, body, req->length);
   case MEMDBG_CMD_MEMORY_WRITE:       return handle_memory_write(fd, req, cfg, body, req->length);
@@ -203,55 +207,97 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_QUICKSCAN_START: {
     if (req->length < sizeof(memdbg_quickscan_start_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_start_request_t *qs = (const memdbg_quickscan_start_request_t *)body;
-    uint32_t data_off = (uint32_t)sizeof(*qs);
-    uint32_t data_len = qs->value_length;
-    int is_bet = (qs->compare_type == 4);
-    const uint8_t *cmp_data = (data_off + data_len * (is_bet ? 2 : 1) <= req->length)
-                              ? ((const uint8_t *)body + data_off) : NULL;
+    if (qs->pid <= 1 || qs->compare_type > 12U ||
+        qs->value_length == 0U || qs->value_length > 16U)
+      return MEMDBG_ERR_PARAM;
+    /* The v1 FlashScan engine used an interactive read for disjoint segment
+       descriptors. That is not legal inside the framed native protocol and
+       would consume the following request as scan data. Keep it unavailable
+       until a framed V2 request carries the descriptors in its body. */
+    if ((qs->request_flags & MEMDBG_QS_FL_SNAP_SEGMENTS) != 0U)
+      return MEMDBG_ERR_UNSUPPORTED;
+    const size_t data_off = sizeof(*qs);
+    const size_t data_len = (size_t)qs->value_length;
+    const int is_bet = (qs->compare_type == 4U);
+    const int needs_data = ((1U << qs->compare_type) & 0x114FU) != 0U;
+    const size_t compare_len = needs_data
+        ? data_len * (is_bet ? 2U : 1U) : 0U;
+    const size_t mask_len = qs->value_type == MEMDBG_VALUE_AOB ? data_len : 0U;
+    if (data_off > (size_t)req->length ||
+        compare_len > (size_t)req->length - data_off ||
+        mask_len > (size_t)req->length - data_off - compare_len)
+      return MEMDBG_ERR_PROTOCOL;
+    const uint8_t *cmp_data = needs_data
+        ? (const uint8_t *)body + data_off : NULL;
     const uint8_t *qs_mask = NULL;
-    if (qs->value_type == 10) {
-      uint32_t moff = data_off + data_len * (is_bet ? 2 : 1);
-      if (moff + data_len <= req->length) qs_mask = (const uint8_t *)body + moff;
-    }
-    flashscan_handle_start(fd, qs, cmp_data, qs_mask, 0);
+    if (mask_len != 0U)
+      qs_mask = (const uint8_t *)body + data_off + compare_len;
+    unsigned int slot = flashscan_slot_for_client(fd);
+    if (slot == FLASHSCAN_INVALID_SLOT) return MEMDBG_ERR_STATE;
+    flashscan_handle_start(fd, qs, cmp_data, qs_mask, slot);
     return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_QUICKSCAN_COUNT: {
     if (req->length < sizeof(memdbg_quickscan_count_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_count_request_t *qc = (const memdbg_quickscan_count_request_t *)body;
-    uint32_t d_off = (uint32_t)sizeof(*qc);
-    uint32_t d_len = qc->value_length;
-    const uint8_t *cmp_d = (d_off + d_len <= req->length) ? ((const uint8_t *)body + d_off) : NULL;
+    if (qc->pid <= 1 || qc->compare_type > 12U ||
+        qc->value_length == 0U || qc->value_length > 16U)
+      return MEMDBG_ERR_PARAM;
+    const size_t d_off = sizeof(*qc);
+    const size_t d_len = (size_t)qc->value_length;
+    const int needs_data = ((1U << qc->compare_type) & 0x114FU) != 0U;
+    const size_t compare_len = needs_data
+        ? d_len * (qc->compare_type == 4U ? 2U : 1U) : 0U;
+    const size_t mask_len = qc->value_type == MEMDBG_VALUE_AOB ? d_len : 0U;
+    if (d_off > (size_t)req->length ||
+        compare_len > (size_t)req->length - d_off ||
+        mask_len > (size_t)req->length - d_off - compare_len)
+      return MEMDBG_ERR_PROTOCOL;
+    const uint8_t *cmp_d = needs_data
+        ? (const uint8_t *)body + d_off : NULL;
     const uint8_t *qc_mask = NULL;
-    if (qc->value_type == 10) {
-      uint32_t mo = d_off + d_len;
-      if (mo + d_len <= req->length) qc_mask = (const uint8_t *)body + mo;
-    }
-    flashscan_handle_count(fd, qc, cmp_d, qc_mask, 0);
+    if (mask_len != 0U)
+      qc_mask = (const uint8_t *)body + d_off + compare_len;
+    unsigned int slot = flashscan_slot_for_client(fd);
+    if (slot == FLASHSCAN_INVALID_SLOT) return MEMDBG_ERR_STATE;
+    flashscan_handle_count(fd, qc, cmp_d, qc_mask, slot);
     return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_QUICKSCAN_FETCH: {
     if (req->length < sizeof(memdbg_quickscan_fetch_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_fetch_request_t *qf = (const memdbg_quickscan_fetch_request_t *)body;
-    flashscan_handle_fetch(fd, qf, 0);
+    unsigned int slot = flashscan_slot_for_client(fd);
+    if (slot == FLASHSCAN_INVALID_SLOT) return MEMDBG_ERR_STATE;
+    flashscan_handle_fetch(fd, qf, slot);
     return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_QUICKSCAN_END:
-    flashscan_handle_end(fd, 0);
+    {
+      unsigned int slot = flashscan_slot_for_client(fd);
+      if (slot == FLASHSCAN_INVALID_SLOT) return MEMDBG_ERR_STATE;
+      flashscan_handle_end(fd, slot);
+    }
     return MEMDBG_OK;
 
   case MEMDBG_CMD_QUICKSCAN_CANCEL:
-    flashscan_handle_cancel(fd, 0);
+    {
+      unsigned int slot = flashscan_slot_for_client(fd);
+      if (slot == FLASHSCAN_INVALID_SLOT) return MEMDBG_ERR_STATE;
+      flashscan_handle_cancel(fd, slot);
+    }
     return MEMDBG_OK;
 
   case MEMDBG_CMD_QUICKSCAN_CONFIG: {
     if (req->length < sizeof(memdbg_quickscan_config_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_quickscan_config_request_t *qc = (const memdbg_quickscan_config_request_t *)body;
     uint32_t plen = qc->spill_path_len;
-    const uint8_t *pextra = (sizeof(*qc) + plen <= req->length) ? ((const uint8_t *)body + sizeof(*qc)) : NULL;
+    if ((size_t)plen > (size_t)req->length - sizeof(*qc))
+      return MEMDBG_ERR_PROTOCOL;
+    const uint8_t *pextra = plen != 0U
+        ? (const uint8_t *)body + sizeof(*qc) : NULL;
     flashscan_handle_config(fd, qc, pextra, plen);
     return MEMDBG_OK;
   }
@@ -280,9 +326,13 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   }
 
   case MEMDBG_CMD_PTWALK_READ: {
-    if (req->length < sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length != sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_ptwalk_io_request_t *pr = (const memdbg_ptwalk_io_request_t *)body;
-    uint8_t *buf = (uint8_t *)malloc(pr->length);
+    if (pr->pid <= 1 || pr->length == 0U ||
+        pr->length > MEMDBG_PROTOCOL_MAX_READ ||
+        pr->address > UINT64_MAX - pr->length)
+      return MEMDBG_ERR_PARAM;
+    uint8_t *buf = (uint8_t *)malloc((size_t)pr->length);
     if (!buf) return MEMDBG_ERR_NOMEM;
     int rc = ptw_read((uint32_t)pr->pid, pr->address, pr->length, buf);
     memdbg_status_t st = (rc == 0) ? MEMDBG_OK : MEMDBG_ERR_IO;
@@ -294,7 +344,12 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PTWALK_WRITE: {
     if (req->length < sizeof(memdbg_ptwalk_io_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_ptwalk_io_request_t *pw = (const memdbg_ptwalk_io_request_t *)body;
+    if (pw->pid <= 1 || pw->length == 0U ||
+        pw->length > MEMDBG_PROTOCOL_MAX_READ ||
+        pw->address > UINT64_MAX - pw->length)
+      return MEMDBG_ERR_PARAM;
     uint32_t data_len = req->length - (uint32_t)sizeof(*pw);
+    if (pw->length != (uint64_t)data_len) return MEMDBG_ERR_PROTOCOL;
     const uint8_t *data_ptr = (const uint8_t *)body + sizeof(*pw);
     int rc = ptw_write((uint32_t)pw->pid, pw->address, data_len, data_ptr);
     return send_response(fd, req, (rc == 0) ? MEMDBG_OK : MEMDBG_ERR_IO, NULL, 0) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
@@ -321,15 +376,11 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
 
   /* ---- Extended capabilities ---- */
   case MEMDBG_CMD_GET_EXTENDED_CAPS: {
-    uint32_t ext_caps[] = {
-      MEMDBG_EXT_CAP_QUICKSCAN,
-      MEMDBG_EXT_CAP_PTWALK,
-      MEMDBG_EXT_CAP_ALIAS,
-      MEMDBG_EXT_CAP_SIMD,
-      MEMDBG_EXT_CAP_KLOG_SERVER,
-      MEMDBG_EXT_CAP_AUTH,
-      MEMDBG_EXT_CAP_ARENA,
-      MEMDBG_EXT_CAP_BATCH_WRITE_ADV,
+    const uint32_t ext_caps[] = {
+      MEMDBG_EXT_CAP_QUICKSCAN | MEMDBG_EXT_CAP_PTWALK |
+      MEMDBG_EXT_CAP_ALIAS | MEMDBG_EXT_CAP_SIMD |
+      MEMDBG_EXT_CAP_KLOG_SERVER | MEMDBG_EXT_CAP_AUTH |
+      MEMDBG_EXT_CAP_ARENA | MEMDBG_EXT_CAP_BATCH_WRITE_ADV |
       MEMDBG_EXT_CAP_HIJACK
     };
     uint32_t n = (uint32_t)(sizeof(ext_caps) / sizeof(ext_caps[0]));
@@ -348,26 +399,33 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
 
   /* ---- Auth ---- */
   case MEMDBG_CMD_AUTH_KEY: {
-    if (req->length < sizeof(memdbg_auth_key_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length != sizeof(memdbg_auth_key_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_auth_key_request_t *ak = (const memdbg_auth_key_request_t *)body;
-    int r = memdbg_auth_handle(fd, ak);
-    return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
+    memdbg_status_t status = memdbg_auth_handle(ak);
+    return send_response(fd, req, status, NULL, 0U) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 
   /* ---- Arena config ---- */
   case MEMDBG_CMD_ARENA_CONFIG: {
-    if (req->length < sizeof(memdbg_arena_config_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length != sizeof(memdbg_arena_config_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_arena_config_request_t *ac = (const memdbg_arena_config_request_t *)body;
-    memdbg_arena_config_handle(fd, ac);
-    return MEMDBG_OK;
+    memdbg_status_t status = memdbg_arena_config_handle(ac);
+    return send_response(fd, req, status, NULL, 0U) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 
   /* ---- Bulk write advanced ---- */
   case MEMDBG_CMD_BATCH_WRITE_ADV: {
     if (req->length < sizeof(memdbg_batch_write_adv_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_batch_write_adv_request_t *bwa = (const memdbg_batch_write_adv_request_t *)body;
-    int r = memdbg_batch_write_adv_handle(fd, bwa, (const uint8_t *)body, req->length);
-    return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
+    uint8_t *statuses = NULL;
+    uint32_t status_len = 0U;
+    memdbg_status_t status = memdbg_batch_write_adv_handle(
+        bwa, (const uint8_t *)body, req->length, &statuses, &status_len);
+    int rc = send_response(fd, req, status, statuses, status_len);
+    free(statuses);
+    return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   }
 
   /* ---- Klog stream connect ---- */

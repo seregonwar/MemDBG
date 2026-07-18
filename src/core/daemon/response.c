@@ -13,11 +13,55 @@
 #include "memdbg/pal/pal_network.h"
 #include "daemon_internal.h"
 
-#include <stdatomic.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MEMDBG_LZ4_THRESHOLD 4096U
+#define MEMDBG_RESPONSE_COALESCE_MAX 8192U
+#define MEMDBG_RESPONSE_HEAP_COALESCE_MAX (1024U * 1024U)
+
+#if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) || \
+    defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+#define MEMDBG_RESPONSE_CONSOLE 1
+#else
+#define MEMDBG_RESPONSE_CONSOLE 0
+#endif
+
+static int send_raw_framed(int fd, const memdbg_response_header_t *hdr,
+                           const void *data, uint32_t data_len) {
+  const unsigned char raw_marker = 0U;
+#if MEMDBG_RESPONSE_CONSOLE
+  /* Retail PS4/PS5 TCP stacks can impose a delayed-ACK-sized bubble between
+   * a tiny header write and the immediately following body. Coalesce common
+   * memory reads into one write; fall back to bounded split writes if memory
+   * pressure prevents the temporary allocation. */
+  if (data_len <= MEMDBG_RESPONSE_HEAP_COALESCE_MAX) {
+    size_t frame_len = sizeof(*hdr) + 1U + (size_t)data_len;
+    unsigned char *frame = (unsigned char *)malloc(frame_len);
+    if (frame != NULL) {
+      memcpy(frame, hdr, sizeof(*hdr));
+      frame[sizeof(*hdr)] = raw_marker;
+      if (data_len != 0U) memcpy(frame + sizeof(*hdr) + 1U, data, data_len);
+      int rc = pal_socket_write_all(fd, frame, frame_len) < 0 ? -1 : 0;
+      free(frame);
+      return rc;
+    }
+  }
+  {
+    unsigned char prefix[sizeof(*hdr) + 1U];
+    memcpy(prefix, hdr, sizeof(*hdr));
+    prefix[sizeof(*hdr)] = raw_marker;
+    if (pal_socket_write_all(fd, prefix, sizeof(prefix)) < 0) return -1;
+    return data_len == 0U || pal_socket_write_all(fd, data, data_len) >= 0
+        ? 0 : -1;
+  }
+#else
+  return pal_socket_writev3_all(fd, hdr, sizeof(*hdr),
+                                &raw_marker, sizeof(raw_marker),
+                                data, data_len) < 0 ? -1 : 0;
+#endif
+}
 
 /* ---- Framed payload compression ---- */
 
@@ -51,6 +95,7 @@ memdbg_status_t build_framed_payload(const void *data, uint32_t data_len,
     return MEMDBG_OK;
   }
 
+  if (data_len > (uint32_t)INT_MAX) goto _send_raw;
   int bound = lz4_compress_bound((int)data_len);
   unsigned char *compressed = (unsigned char *)malloc((size_t)bound + 5U);
   if (compressed == NULL) goto _send_raw;
@@ -86,19 +131,51 @@ _send_raw:
 int send_framed_response(int fd, const memdbg_packet_header_t *req,
                          memdbg_status_t status, const void *data,
                          uint32_t data_len) {
-  unsigned char *payload = NULL;
-  uint32_t payload_len = 0U;
-  memdbg_status_t frame_status =
-      build_framed_payload(data, data_len, &payload, &payload_len);
-  int rc;
+  if (data == NULL && data_len != 0U)
+    return send_response(fd, req, MEMDBG_ERR_PARAM, NULL, 0U);
 
-  if (frame_status != MEMDBG_OK) {
-    return send_response(fd, req, frame_status, NULL, 0U);
+  if (data_len < MEMDBG_LZ4_THRESHOLD || data_len > (uint32_t)INT_MAX) {
+    memdbg_response_header_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = MEMDBG_PACKET_MAGIC;
+    hdr.version = MEMDBG_PROTOCOL_VERSION;
+    hdr.command = req != NULL ? req->command : 0U;
+    hdr.request_id = req != NULL ? req->request_id : 0U;
+    hdr.status = (int32_t)status;
+    hdr.length = data_len + 1U;
+    return send_raw_framed(fd, &hdr, data, data_len);
   }
 
-  rc = send_response(fd, req, status, payload, payload_len);
-  free(payload);
-  return rc;
+  int bound = lz4_compress_bound((int)data_len);
+  unsigned char *compressed = (unsigned char *)malloc((size_t)bound + 5U);
+  if (compressed != NULL) {
+    int csize = lz4_compress_default((const char *)data,
+                                     (char *)(compressed + 5),
+                                     (int)data_len, bound);
+    if (csize > 0 && (uint32_t)csize < data_len - (data_len / 8U)) {
+      compressed[0] = 0x01U;
+      compressed[1] = (unsigned char)(data_len & 0xFFU);
+      compressed[2] = (unsigned char)((data_len >> 8U) & 0xFFU);
+      compressed[3] = (unsigned char)((data_len >> 16U) & 0xFFU);
+      compressed[4] = (unsigned char)((data_len >> 24U) & 0xFFU);
+      int rc = send_response(fd, req, status, compressed,
+                             (uint32_t)csize + 5U);
+      free(compressed);
+      return rc;
+    }
+    free(compressed);
+  }
+
+  /* Compression was not worthwhile: avoid allocating and copying a raw frame. */
+  memdbg_response_header_t hdr;
+  memset(&hdr, 0, sizeof(hdr));
+  hdr.magic = MEMDBG_PACKET_MAGIC;
+  hdr.version = MEMDBG_PROTOCOL_VERSION;
+  hdr.command = req != NULL ? req->command : 0U;
+  hdr.request_id = req != NULL ? req->request_id : 0U;
+  hdr.status = (int32_t)status;
+  hdr.length = data_len + 1U;
+  return send_raw_framed(fd, &hdr, data, data_len);
 }
 
 /* ---- Send response ---- */
@@ -117,45 +194,41 @@ int send_response(int fd, const memdbg_packet_header_t *req,
 
   if (payload_len == 0U || payload == NULL) {
     if (pal_socket_write_all(fd, &hdr, sizeof(hdr)) < 0) return -1;
-  } else {
+  } else if (payload_len <= MEMDBG_RESPONSE_COALESCE_MAX) {
+    unsigned char frame[sizeof(hdr) + MEMDBG_RESPONSE_COALESCE_MAX];
+    memcpy(frame, &hdr, sizeof(hdr));
+    memcpy(frame + sizeof(hdr), payload, payload_len);
+    if (pal_socket_write_all(fd, frame, sizeof(hdr) + payload_len) < 0)
+      return -1;
+  } else if (payload_len <= MEMDBG_RESPONSE_HEAP_COALESCE_MAX) {
+    size_t frame_len = sizeof(hdr) + (size_t)payload_len;
+    unsigned char *frame = (unsigned char *)malloc(frame_len);
+    if (frame != NULL) {
+      memcpy(frame, &hdr, sizeof(hdr));
+      memcpy(frame + sizeof(hdr), payload, payload_len);
+      int rc = pal_socket_write_all(fd, frame, frame_len) < 0 ? -1 : 0;
+      free(frame);
+      return rc;
+    }
+#if MEMDBG_RESPONSE_CONSOLE
+    if (pal_socket_write_all(fd, &hdr, sizeof(hdr)) < 0 ||
+        pal_socket_write_all(fd, payload, payload_len) < 0)
+      return -1;
+#else
     if (pal_socket_writev_all(fd, &hdr, sizeof(hdr),
                               payload, payload_len) < 0) return -1;
+#endif
+  } else {
+#if MEMDBG_RESPONSE_CONSOLE
+    /* writev is not consistently safe across PS4/PS5 retail payload libc
+       variants. Two bounded writes are preferable to terminating the daemon. */
+    if (pal_socket_write_all(fd, &hdr, sizeof(hdr)) < 0 ||
+        pal_socket_write_all(fd, payload, payload_len) < 0)
+      return -1;
+#else
+    if (pal_socket_writev_all(fd, &hdr, sizeof(hdr),
+                              payload, payload_len) < 0) return -1;
+#endif
   }
   return 0;
-}
-
-/* ---- Zero-copy response buffer pool ---- */
-
-typedef struct {
-  unsigned char *buf;
-  size_t         capacity;
-} response_pool_slot_t;
-
-static response_pool_slot_t g_resp_pool[MEMDBG_RESP_POOL_COUNT];
-static atomic_uint          g_resp_pool_next = 0;
-
-void resp_pool_init(void) {
-  for (int i = 0; i < MEMDBG_RESP_POOL_COUNT; ++i) {
-    g_resp_pool[i].buf = (unsigned char *)malloc(MEMDBG_RESP_POOL_SIZE);
-    g_resp_pool[i].capacity = g_resp_pool[i].buf ? MEMDBG_RESP_POOL_SIZE : 0U;
-  }
-}
-
-void resp_pool_fini(void) {
-  for (int i = 0; i < MEMDBG_RESP_POOL_COUNT; ++i) {
-    free(g_resp_pool[i].buf);
-    g_resp_pool[i].buf = NULL;
-    g_resp_pool[i].capacity = 0U;
-  }
-}
-
-unsigned char *resp_pool_acquire(size_t needed, size_t *out_size) {
-  unsigned int slot = atomic_fetch_add(&g_resp_pool_next, 1U) %
-                      (unsigned int)MEMDBG_RESP_POOL_COUNT;
-  if (g_resp_pool[slot].capacity >= needed) {
-    *out_size = g_resp_pool[slot].capacity;
-    return g_resp_pool[slot].buf;
-  }
-  *out_size = 0U;
-  return NULL;
 }

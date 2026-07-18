@@ -9,38 +9,82 @@
  */
 
 #include "memdbg/pal/pal_debug_ps5.h"
+#include "memdbg/pal/pal_kernel_fast.h"
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 
 #include <ps5/kernel.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+static int debug_kernel_copyout(intptr_t source, void *destination,
+                                size_t length) {
+  return memdbg_kernel_fast_available()
+             ? memdbg_kernel_copyout_fast(source, destination, length)
+             : kernel_copyout(source, destination, length);
+}
+
+static int debug_kernel_copyin(const void *source, intptr_t destination,
+                               size_t length) {
+  return memdbg_kernel_fast_available()
+             ? memdbg_kernel_copyin_fast(source, destination, length)
+             : kernel_copyin(source, destination, length);
+}
+
+static intptr_t debug_kernel_get_proc(pid_t pid) {
+  return memdbg_kernel_fast_available()
+             ? memdbg_kernel_get_proc_fast(pid)
+             : kernel_get_proc(pid);
+}
+
+#define kernel_copyout debug_kernel_copyout
+#define kernel_copyin debug_kernel_copyin
+#define kernel_get_proc debug_kernel_get_proc
 
 /* ---- Kernel thread address resolution (with cache) ---- */
 
 #define KR_THR_CACHE_N 8
 static struct { int32_t pid; int32_t lwpid; uint64_t kthread; } kr_thr_cache[KR_THR_CACHE_N];
 static int kr_thr_cache_next = 0;
+static pthread_mutex_t kr_thr_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void kern_thread_cache_flush(void) {
+  (void)pthread_mutex_lock(&kr_thr_cache_mutex);
   for (int i = 0; i < KR_THR_CACHE_N; i++) {
     kr_thr_cache[i].pid = 0; kr_thr_cache[i].lwpid = 0; kr_thr_cache[i].kthread = 0;
   }
+  kr_thr_cache_next = 0;
+  (void)pthread_mutex_unlock(&kr_thr_cache_mutex);
 }
 
 intptr_t kern_thread_addr(int pid, int lwpid) {
+  uint64_t cached = 0U;
+  (void)pthread_mutex_lock(&kr_thr_cache_mutex);
   for (int i = 0; i < KR_THR_CACHE_N; i++) {
     if (kr_thr_cache[i].pid == (int32_t)pid &&
         kr_thr_cache[i].lwpid == (int32_t)lwpid &&
         kr_thr_cache[i].kthread != 0) {
-      uint32_t v = 0;
-      if (kernel_copyout((intptr_t)(kr_thr_cache[i].kthread + 0x9c), &v, 4) == 0 &&
-          (int32_t)v == (int32_t)lwpid)
-        return (intptr_t)kr_thr_cache[i].kthread;
-      kr_thr_cache[i].pid = 0; kr_thr_cache[i].lwpid = 0; kr_thr_cache[i].kthread = 0;
+      cached = kr_thr_cache[i].kthread;
       break;
     }
+  }
+  (void)pthread_mutex_unlock(&kr_thr_cache_mutex);
+  if (cached != 0U) {
+    uint32_t v = 0;
+    if (kernel_copyout((intptr_t)(cached + 0x9c), &v, 4) == 0 &&
+        (int32_t)v == (int32_t)lwpid)
+      return (intptr_t)cached;
+    (void)pthread_mutex_lock(&kr_thr_cache_mutex);
+    for (int i = 0; i < KR_THR_CACHE_N; ++i) {
+      if (kr_thr_cache[i].kthread == cached) {
+        kr_thr_cache[i].pid = 0;
+        kr_thr_cache[i].lwpid = 0;
+        kr_thr_cache[i].kthread = 0;
+      }
+    }
+    (void)pthread_mutex_unlock(&kr_thr_cache_mutex);
   }
 
   intptr_t kproc = kernel_get_proc((pid_t)pid);
@@ -54,10 +98,12 @@ intptr_t kern_thread_addr(int pid, int lwpid) {
   while (kthread) {
     if (kernel_copyout((intptr_t)kthread, tbuf, 0x680) != 0) return 0;
     if (*(uint32_t *)(tbuf + 0x9c) == (uint32_t)lwpid) {
+      (void)pthread_mutex_lock(&kr_thr_cache_mutex);
       kr_thr_cache[kr_thr_cache_next].pid     = (int32_t)pid;
       kr_thr_cache[kr_thr_cache_next].lwpid   = (int32_t)lwpid;
       kr_thr_cache[kr_thr_cache_next].kthread = (uint64_t)kthread;
       kr_thr_cache_next = (kr_thr_cache_next + 1) % KR_THR_CACHE_N;
+      (void)pthread_mutex_unlock(&kr_thr_cache_mutex);
       return kthread;
     }
     kthread = *(intptr_t *)(tbuf + 0x10);

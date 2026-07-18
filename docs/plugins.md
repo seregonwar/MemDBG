@@ -86,7 +86,8 @@ sandbox is reserved for explicitly trusted plugins.
 
 The context includes:
 
-- `console`: host, debug port, UDP port, connection state
+- `console`: broker host/port, real target host/debug port, UDP port, connection
+  state, and transport kind
 - `process`: selected PID and process name
 - `paths`: dump path, trainer file path, installed plugin path
 - `state`: map count, scan hit count, trainer entry count
@@ -94,6 +95,22 @@ The context includes:
 
 Plugins run on the desktop, not inside the console payload. Use the existing
 payload protocol through MemDBG features for memory operations.
+
+### Shared protocol transport
+
+GUI plugins must use the `console.host` and `console.debug_port` values from the
+runtime context. While a GUI plugin is active these point to a loopback protocol
+broker owned by MemDBG, not directly to the console. The broker validates each
+frame and routes it through the application's existing control, memory, scan,
+or event connection. This keeps the console at the intended four sessions even
+when an older SDK opens a new TCP socket for every request.
+
+The physical console endpoint remains available as `console.target_host` and
+`console.target_debug_port` for display and diagnostics only. Plugins must not
+connect to that endpoint themselves: doing so consumes payload connection slots,
+duplicates connection notifications, and bypasses the frontend's request
+correlation and reconnect handling. Plugins launched outside the GUI bridge may
+still receive the physical endpoint because no shared application session exists.
 
 ## Python App API
 

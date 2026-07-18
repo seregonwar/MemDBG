@@ -208,6 +208,7 @@ add_executable(memdbg_frontend
   # plugins (repository manifests + Lua/Python script runner)
   src/plugins/repository/plugin_manager.cpp
   src/plugins/repository/gui_bridge.cpp
+  src/plugins/repository/protocol_broker.cpp
   src/plugins/repository/lua_engine.cpp
 
   # sandbox (standalone hardened script execution)
@@ -427,6 +428,47 @@ target_include_directories(memdbg_probe PRIVATE
 
 target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 
+# ---- memdbg_performance_probe (read-only live-console benchmark) ----
+
+add_executable(memdbg_performance_probe
+  src/proto/performance_probe.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
+)
+
+target_include_directories(memdbg_performance_probe PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
+)
+
+target_link_libraries(memdbg_performance_probe PRIVATE Threads::Threads)
+
+# ---- memdbg_payload_injection_probe (loader upload + HELLO verification) ----
+
+add_executable(memdbg_payload_injection_probe
+  src/proto/payload_injection_probe.cpp
+  src/core/payload_sender.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
+)
+
+target_include_directories(memdbg_payload_injection_probe PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/proto
+)
+
+target_link_libraries(memdbg_payload_injection_probe PRIVATE Threads::Threads)
+
 # ---- memdbg_auto_search_test ----
 
 add_executable(memdbg_auto_search_test
@@ -561,7 +603,9 @@ target_link_libraries(memdbg_release_check_test PRIVATE Threads::Threads)
 
 add_executable(memdbg_client_test
   tests/test_memdbg_client.cpp
+  src/core/client/client_pool.cpp
   src/core/client/memdbg_client.cpp
+  src/plugins/repository/protocol_broker.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )

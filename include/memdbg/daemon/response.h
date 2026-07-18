@@ -35,9 +35,6 @@ int send_response(int fd, const memdbg_packet_header_t *req,
 
 /* ---- Zero-copy response buffer pool ---- */
 
-void resp_pool_init(void);
-void resp_pool_fini(void);
-unsigned char *resp_pool_acquire(size_t needed, size_t *out_size);
 
 #ifdef __cplusplus
 }

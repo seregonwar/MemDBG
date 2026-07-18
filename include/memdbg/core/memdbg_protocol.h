@@ -30,17 +30,15 @@ extern "C" {
 #endif
 
 #define MEMDBG_PACKET_MAGIC 0x4742444dU /* "MDBG", little-endian */
+/* The packet header stays at wire version 1 for compatibility.  Feature
+ * level 2 identifies the extended command/capability suite introduced after
+ * the original protocol (Maps V2, versioned scans, batch writes, auth, etc.). */
 #define MEMDBG_PROTOCOL_VERSION 1U
+#define MEMDBG_PROTOCOL_FEATURE_LEVEL 2U
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_MAP_RESPONSE (8U * 1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
 
-/* Response header streaming flag: bit 31 of status signals the body is a
- * chunked stream rather than a single payload.  Valid status codes range
- * from 0 to -10, so bit 31 is never set for a normal status value.
- * Clients strip MEMDBG_RESP_STATUS_STREAMING before interpreting the
- * status code. */
-#define MEMDBG_RESP_STATUS_STREAMING 0x80000000U
 #define MEMDBG_BATCH_READ_MAX_ITEMS 64U
 /* Per-item byte cap for batch reads. Kept well below 1 GiB so the running
  * offset + item length arithmetic in memdbg_memory_batch_read() cannot
@@ -129,6 +127,9 @@ typedef enum memdbg_command {
   MEMDBG_CMD_PROCESS_ELF_LOAD = 0x010DU,
   MEMDBG_CMD_PROCESS_HIJACK  = 0x010EU,
   MEMDBG_CMD_PROCESS_DUMP    = 0x010FU,
+  /* Same logical payload as PROCESS_MAPS, wrapped in the standard
+     raw/LZ4 framed-body format used by MEMORY_READ. */
+  MEMDBG_CMD_PROCESS_MAPS_V2 = 0x0110U,
   MEMDBG_CMD_TELEMETRY = 0x0400U,
   MEMDBG_CMD_DISCOVERY = 0x0500U,
   MEMDBG_CMD_KERNEL_BASE = 0x0800U,
@@ -221,10 +222,8 @@ typedef enum memdbg_capability {
 #define MEMDBG_CAP_KLOG_FORWARD (1U << 31)
 #define MEMDBG_CAP_HIJACK_MASK   (1U << 31)
 
-/* Extended capabilities (report at runtime via HELLO caps field;
- * these overlap bit positions with the main caps but are advertised
- * as a second 32-bit word in the quick-scan capabilities response).
- * For HELLO, we stuff the high 16 bits of the protocol's caps field. */
+/* Extended capabilities returned as bit masks by GET_EXTENDED_CAPS.
+ * Word zero contains the flags below; future words extend the namespace. */
 #define MEMDBG_EXT_CAP_QUICKSCAN     0x00000001U
 #define MEMDBG_EXT_CAP_PTWALK         0x00000002U
 #define MEMDBG_EXT_CAP_ALIAS          0x00000004U
@@ -237,7 +236,6 @@ typedef enum memdbg_capability {
 
 typedef struct MEMDBG_PACKED memdbg_extended_caps_response {
   uint32_t count;
-  uint32_t reserved;
   /* followed by 'count' uint32_t capability words */
 } memdbg_extended_caps_response_t;
 
@@ -249,7 +247,10 @@ typedef enum memdbg_value_type {
   MEMDBG_VALUE_U64 = 4U,
   MEMDBG_VALUE_F32 = 5U,
   MEMDBG_VALUE_F64 = 6U,
-  MEMDBG_VALUE_POINTER = 7U
+  MEMDBG_VALUE_POINTER = 7U,
+  /* FlashScan masked byte-pattern value. Values 8 and 9 are reserved for
+     compatibility with the legacy QuickScan ABI. */
+  MEMDBG_VALUE_AOB = 10U
 } memdbg_value_type_t;
 
 typedef struct MEMDBG_PACKED memdbg_packet_header {
@@ -277,7 +278,11 @@ typedef struct MEMDBG_PACKED memdbg_hello_response {
   uint16_t udp_log_port;
   char version[16];
   char name[16];
+  uint16_t feature_level;
+  uint16_t reserved;
 } memdbg_hello_response_t;
+
+#define MEMDBG_HELLO_V1_SIZE offsetof(memdbg_hello_response_t, feature_level)
 
 typedef struct MEMDBG_PACKED memdbg_process_entry {
   int32_t pid;

@@ -72,7 +72,7 @@ static void print_usage(const char *argv0) {
   printf("  --max-read=BYTES         Maximum single read size\n");
   printf("  --max-packet=BYTES       Maximum request packet size\n");
   printf("  --max-scan-results=N     Maximum scanner result count\n");
-  printf("  --max-connections=N      Maximum concurrent TCP clients (default 64)\n");
+  printf("  --max-connections=N      Maximum concurrent TCP clients (default 16)\n");
   printf("  --idle-timeout=MS        Disconnect idle clients after MS ms (default 30000)\n");
   printf("  --replace-existing       Ask a previous payload on the same port to stop (default)\n");
   printf("  --no-replace-existing    Do not stop a previous payload automatically\n");

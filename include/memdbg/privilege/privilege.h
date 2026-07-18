@@ -29,6 +29,7 @@ typedef struct memdbg_ucred_backup {
   bool     fd_modified;
   intptr_t proc_rootdir;
   intptr_t proc_jaildir;
+  intptr_t ucred_prison;
   intptr_t fd_rdir;
   intptr_t fd_jdir;
 } memdbg_ucred_backup_t;

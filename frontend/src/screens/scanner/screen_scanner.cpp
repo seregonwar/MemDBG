@@ -362,7 +362,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       const int32_t pid = state.selected_pid;
       const uint32_t val_len = state.scan_snapshot_value_len;
       const int snap_type = state.scan_snapshot_type;
-      auto &client = state.client;
+      auto client = state.pool.scan_lease();
       const auto snap = state.scan_snapshot;
       const ScanResult original_result = state.scan_result;
       const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
@@ -380,7 +380,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       auto &temp_candidates = state.auto_search_temp_candidates;
 
       state.scan_async_future = std::async(std::launch::async,
-        [&client, pid, val_len, snap_type, tgt, has_batch,
+        [client, pid, val_len, snap_type, tgt, has_batch,
          snap, &temp_result, &temp_snapshot, &temp_snap_val_len,
          &temp_snap_type, &temp_is_unknown, &temp_status,
          &temp_candidates, original_result,
@@ -413,7 +413,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                 batch_items.push_back(item);
               }
               Client::BatchReadResult batch;
-              if (!client.batch_read(pid, batch_items, batch)) {
+              if (!client->batch_read(pid, batch_items, batch)) {
                 if (cancel_requested.load()) break;
                 read_errors += static_cast<uint32_t>(chunk_end - base);
                 units_done.fetch_add(1U);
@@ -442,7 +442,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
             for (size_t i = 0U; i < old_snap.size(); ++i) {
               if (cancel_requested.load()) break;
               std::vector<uint8_t> data;
-              if (!client.memory_read(pid, old_snap[i].address, val_len, data) ||
+              if (!client->memory_read(pid, old_snap[i].address, val_len, data) ||
                   data.size() != val_len) {
                 read_errors++;
                 units_done.fetch_add(1U);

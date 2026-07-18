@@ -190,24 +190,6 @@ typedef struct scan_context {
   scan_match_fn_t match;
 } scan_context_t;
 
-#if defined(MEMDBG_SCAN_CONSOLE)
-static pthread_mutex_t g_process_scan_mtx = PTHREAD_MUTEX_INITIALIZER;
-
-static memdbg_status_t process_scan_guard_begin(void) {
-  int rc = pthread_mutex_trylock(&g_process_scan_mtx);
-  if (rc == 0) return MEMDBG_OK;
-  return rc == EBUSY ? MEMDBG_ERR_STATE : MEMDBG_ERR_IO;
-}
-
-static void process_scan_guard_end(void) {
-  (void)pthread_mutex_unlock(&g_process_scan_mtx);
-}
-
-static memdbg_status_t scan_process_maps_for_scan(int pid,
-                                                  memdbg_map_list_t *maps) {
-  return memdbg_process_maps(pid, maps);
-}
-#else
 static memdbg_status_t process_scan_guard_begin(void) {
   return MEMDBG_OK;
 }
@@ -219,7 +201,6 @@ static memdbg_status_t scan_process_maps_for_scan(int pid,
                                                   memdbg_map_list_t *maps) {
   return memdbg_process_maps_cached(pid, maps);
 }
-#endif
 
 /* ---- Clock ---- */
 

@@ -161,18 +161,18 @@ static void run_aob_scan(AppState &state) {
     request.start = start;
     request.end = end;
 
-    auto &client = state.client;
+    auto client = state.pool.scan_lease();
     auto &temp_result = state.scan_async_temp_result;
     auto &temp_status = state.scan_async_temp_session_status;
     auto &error_out = state.scan_async_error;
 
     state.scan_async_future = std::async(std::launch::async,
-      [&client, request, pattern, mask, text_mode, &temp_result, &temp_status, &error_out,
+      [client, request, pattern, mask, text_mode, &temp_result, &temp_status, &error_out,
        &mtx = state.scan_async_mtx]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult res;
-        if (!client.scan_process_aob(request, pattern, mask, res)) {
-          error_out = client.last_error();
+        if (!client->scan_process_aob(request, pattern, mask, res)) {
+          error_out = client->last_error();
           return false;
         }
         temp_result = std::move(res);
@@ -195,7 +195,7 @@ static void run_aob_scan(AppState &state) {
     state.scan_async_pending = true;
     state.scan_async_owner = Screen::Scanner;
 
-    auto &client = state.client;
+    auto client = state.pool.scan_lease();
     auto &temp_result = state.scan_async_temp_result;
     auto &temp_status = state.scan_async_temp_session_status;
     auto &error_out = state.scan_async_error;
@@ -208,12 +208,12 @@ static void run_aob_scan(AppState &state) {
     request.pattern_length = static_cast<uint32_t>(pattern.size());
 
     state.scan_async_future = std::async(std::launch::async,
-      [&client, request, pattern, mask, text_mode, &temp_result, &temp_status, &error_out,
+      [client, request, pattern, mask, text_mode, &temp_result, &temp_status, &error_out,
        &mtx = state.scan_async_mtx]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult res;
-        if (!client.scan_aob(request, pattern, mask, res)) {
-          error_out = client.last_error();
+        if (!client->scan_aob(request, pattern, mask, res)) {
+          error_out = client->last_error();
           return false;
         }
         temp_result = std::move(res);

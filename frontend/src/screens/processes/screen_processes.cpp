@@ -367,9 +367,19 @@ static void select_process(AppState &state, int row) {
 static void ensure_process_info(AppState &state) {
   if (state.has_process_info) return;
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  /* Skip if payload is busy with an async operation */
-  if (client_async_busy(state)) return;
-  if (state.client.process_info(state.selected_pid, state.selected_process_info))
+  auto cached = state.taskmgr_resources.find(state.selected_pid);
+  if (cached != state.taskmgr_resources.end() && cached->second.has_info) {
+    state.selected_process_info = cached->second.info;
+    state.has_process_info = true;
+    return;
+  }
+  /* Process metadata shares the read-oriented memory lane.  Unrelated scan,
+   * telemetry, and plugin work can continue on their own role connections. */
+  if (state.connect_pending || state.map_refresh_pending ||
+      state.json_dump_pending)
+    return;
+  auto client = state.pool.memory_lease();
+  if (client->process_info(state.selected_pid, state.selected_process_info))
     state.has_process_info = true;
 }
 
@@ -553,11 +563,12 @@ static void draw_process_tree(AppState &state) {
 
 static void request_json_dump_async(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (client_async_busy(state)) return;
+  if (state.json_dump_pending || state.map_refresh_pending) return;
 
   state.json_dump_pending = true;
   state.json_dump_error.clear();
   state.json_dump_output.clear();
+  state.json_dump_cancel_requested = false;
   state.json_dump_start_time = ImGui::GetTime();
 
   uint32_t flags = 0U;
@@ -566,19 +577,15 @@ static void request_json_dump_async(AppState &state) {
   if (state.json_dump_include_preview) flags |= 4U;
 
   int32_t pid = state.selected_pid;
-  std::string host = state.host;
-  uint16_t port = static_cast<uint16_t>(state.debug_port);
+  state.json_dump_client = state.pool.memory_lease();
+  auto client = state.json_dump_client;
 
   state.json_dump_future = std::async(std::launch::async,
-      [host, port, pid, flags]() -> std::tuple<bool, std::string, std::string> {
+      [client = std::move(client), pid, flags]() -> std::tuple<bool, std::string, std::string> {
         try {
-          Client local_client;
-          if (!local_client.connect_to(host, port)) {
-            return {false, "", "JSON dump connect failed: " + local_client.last_error()};
-          }
           std::string json;
-          if (!local_client.process_dump(pid, flags, json)) {
-            return {false, "", "JSON dump request failed: " + local_client.last_error()};
+          if (!client->process_dump(pid, flags, json)) {
+            return {false, "", "JSON dump request failed: " + client->last_error()};
           }
           return {true, std::move(json), ""};
         } catch (const std::exception &e) {
@@ -596,14 +603,17 @@ static void poll_json_dump(AppState &state) {
   auto status = state.json_dump_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) {
     double elapsed = ImGui::GetTime() - state.json_dump_start_time;
-    if (elapsed > 60.0) {
-      state.json_dump_pending = false;
+    if (elapsed > 60.0 && !state.json_dump_cancel_requested) {
+      state.json_dump_cancel_requested = true;
+      if (state.json_dump_client)
+        state.json_dump_client->cancel_pending_io();
       state.json_dump_error = "JSON dump timed out after 60s";
       set_status(state, state.json_dump_error);
     }
     return;
   }
   state.json_dump_pending = false;
+  state.json_dump_client.reset();
   auto [ok, output, error] = state.json_dump_future.get();
   if (ok) {
     state.json_dump_output = std::move(output);
@@ -612,7 +622,8 @@ static void poll_json_dump(AppState &state) {
     push_notification(state, "Process dump JSON received", 4.0);
   } else {
     state.json_dump_output.clear();
-    state.json_dump_error = std::move(error);
+    if (!state.json_dump_cancel_requested)
+      state.json_dump_error = std::move(error);
     set_status(state, state.json_dump_error);
   }
 }
@@ -647,7 +658,7 @@ static void draw_json_dump_dialog(AppState &state) {
   /* Dump button */
   const bool connected = state.client.connected();
   const bool has_pid = state.selected_pid > 0;
-  const bool busy = client_async_busy(state);
+  const bool busy = state.connect_pending || state.map_refresh_pending;
   const bool can_dump = connected && has_pid && !state.json_dump_pending && !busy;
 
   if (!connected) {
@@ -1001,7 +1012,7 @@ static void load_elf_file(AppState &state, const std::string &path) {
 
 static void request_elf_load(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (client_async_busy(state)) return;
+  if (state.elf_load_pending || state.connect_pending) return;
 
   const char *fpath = state.elf_load_path;
   if (fpath[0] == '\0') {
@@ -1027,34 +1038,36 @@ static void request_elf_load(AppState &state) {
   state.elf_load_start_time = ImGui::GetTime();
   state.elf_hijack_accepted = false;
   state.elf_load_result = {};
+  state.elf_load_cancel_requested = false;
 
   const int32_t pid = state.selected_pid;
   const uint32_t flags = state.elf_jump_entry ? 1U : 0U;
   const uint32_t match_flags = state.elf_match_flags;
   const std::string target_region = state.elf_target_region;
-  const std::string host = state.host;
-  const uint16_t port = static_cast<uint16_t>(state.debug_port);
+  state.elf_load_client = state.pool.control_lease();
+  auto client = state.elf_load_client;
 
   state.action_journal.record("elf_load", ("{\"pid\":" + std::to_string(pid) + ",\"path\":\"" + ActionJournal::json_escape(fpath) + "\"}").c_str());
 
   state.elf_load_future = std::async(std::launch::async,
-      [host, port, pid, flags, match_flags, target_region, elf_data = std::move(elf_data)]() -> bool {
+      [client = std::move(client), pid, flags, match_flags, target_region,
+       elf_data = std::move(elf_data)]() -> AppState::ElfAsyncOutcome {
         try {
-          Client local_client;
-          if (!local_client.connect_to(host, port)) return false;
           Client::ProcessElfLoadResult result;
-          if (!local_client.process_elf_load(pid, elf_data, flags, target_region, match_flags, result))
-            return false;
-          return true;
-        } catch (const std::exception &) {
-          return false;
+          if (!client->process_elf_load(pid, elf_data, flags, target_region,
+                                        match_flags, result)) {
+            return {false, false, {}, client->last_error()};
+          }
+          return {true, false, result, {}};
+        } catch (const std::exception &ex) {
+          return {false, false, {}, ex.what()};
         }
       });
 }
 
 static void request_elf_hijack(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (client_async_busy(state)) return;
+  if (state.elf_load_pending || state.connect_pending) return;
 
   const char *fpath = state.elf_load_path;
   if (fpath[0] == '\0') {
@@ -1080,27 +1093,29 @@ static void request_elf_hijack(AppState &state) {
   state.elf_load_start_time = ImGui::GetTime();
   state.elf_hijack_accepted = false;
   state.elf_load_result = {};
+  state.elf_load_cancel_requested = false;
 
   const int32_t pid = state.selected_pid;
-  const uint32_t flags = 3U; /* spawn thread + resume target */
   const uint32_t match_flags = state.elf_match_flags;
   const std::string target_region = state.elf_target_region;
-  const std::string host = state.host;
-  const uint16_t port = static_cast<uint16_t>(state.debug_port);
+  state.elf_load_client = state.pool.control_lease();
+  auto client = state.elf_load_client;
 
   state.action_journal.record("elf_hijack", ("{\"pid\":" + std::to_string(pid) + ",\"path\":\"" + ActionJournal::json_escape(fpath) + "\"}").c_str());
 
   state.elf_load_future = std::async(std::launch::async,
-      [host, port, pid, flags, match_flags, target_region, elf_data = std::move(elf_data)]() -> bool {
+      [client = std::move(client), pid, match_flags, target_region,
+       elf_data = std::move(elf_data)]() -> AppState::ElfAsyncOutcome {
         try {
-          Client local_client;
-          if (!local_client.connect_to(host, port)) return false;
           bool accepted = false;
-          if (!local_client.process_hijack(pid, elf_data, flags, target_region, match_flags, accepted))
-            return false;
-          return accepted;
-        } catch (const std::exception &) {
-          return false;
+          constexpr uint32_t flags = 3U; /* spawn thread + resume target */
+          if (!client->process_hijack(pid, elf_data, flags, target_region,
+                                      match_flags, accepted)) {
+            return {false, false, {}, client->last_error()};
+          }
+          return {true, accepted, {}, {}};
+        } catch (const std::exception &ex) {
+          return {false, false, {}, ex.what()};
         }
       });
 }
@@ -1114,22 +1129,29 @@ static void poll_elf_load(AppState &state) {
   auto status = state.elf_load_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) {
     double elapsed = ImGui::GetTime() - state.elf_load_start_time;
-    if (elapsed > 120.0) {
-      state.elf_load_pending = false;
+    if (elapsed > 120.0 && !state.elf_load_cancel_requested) {
+      state.elf_load_cancel_requested = true;
+      if (state.elf_load_client)
+        state.elf_load_client->cancel_pending_io();
       state.elf_load_error = "ELF operation timed out after 120s";
       set_status(state, state.elf_load_error);
     }
     return;
   }
   state.elf_load_pending = false;
-  bool ok = false;
+  state.elf_load_client.reset();
+  AppState::ElfAsyncOutcome outcome;
   try {
-    ok = state.elf_load_future.get();
+    outcome = state.elf_load_future.get();
   } catch (const std::exception &ex) {
-    state.elf_load_error = ex.what();
+    outcome.error = ex.what();
   } catch (...) {
-    state.elf_load_error = locale::tr("processes.elf_unknown_error");
+    outcome.error = locale::tr("processes.elf_unknown_error");
   }
+  const bool ok = outcome.ok;
+  if (!outcome.error.empty() && !state.elf_load_cancel_requested)
+    state.elf_load_error = std::move(outcome.error);
+  state.elf_load_result = outcome.load_result;
 
   if (!ok && !state.elf_load_error.empty()) {
     char ef_buf[512];
@@ -1140,7 +1162,7 @@ static void poll_elf_load(AppState &state) {
   }
 
   if (state.elf_load_op == "Hijack") {
-    if (ok) {
+    if (ok && outcome.accepted) {
       state.elf_hijack_accepted = true;
       set_status(state, locale::tr("processes.elf_hijack_started"));
       push_notification(state, locale::tr("processes.elf_hijack_started"), 4.0);
@@ -1177,11 +1199,8 @@ static void draw_elf_section(AppState &state) {
   ImGui::Spacing();
 
   /* Collapsible header */
-  static bool elf_expanded = false;
   const char *header_label = locale::tr("processes.elf_header");
   if (ImGui::TreeNodeEx(header_label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
-    elf_expanded = true;
-
     /* File selection row */
     if (!state.elf_recent_files.empty()) {
       ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_recent"));
@@ -1349,7 +1368,7 @@ static void draw_elf_section(AppState &state) {
     ImGui::Spacing();
     const bool connected = state.client.connected();
     const bool has_pid = state.selected_pid > 0;
-    const bool busy = client_async_busy(state);
+    const bool busy = state.connect_pending || state.elf_load_pending;
     const bool can_act = connected && has_pid && !busy && state.elf_load_path[0] != '\0';
 
     ImGui::BeginDisabled(!can_act);
@@ -1374,8 +1393,6 @@ static void draw_elf_section(AppState &state) {
     }
 
     ImGui::TreePop();
-  } else {
-    elf_expanded = false;
   }
 }
 
@@ -1401,7 +1418,11 @@ static void draw_process_table(AppState &state) {
       ImGui::TextUnformatted(process.name.c_str());
       if (ImGui::IsItemHovered() && !process.name.empty()) ImGui::SetTooltip("%s", process.name.c_str());
       ImGui::TableSetColumnIndex(2);
-      if (state.has_process_info && state.selected_pid == process.pid)
+      const auto cached = state.taskmgr_resources.find(process.pid);
+      if (cached != state.taskmgr_resources.end() && cached->second.has_info)
+        ImGui::TextColored(ui::colors().primary2, "%s",
+                           cached->second.info.title_id.c_str());
+      else if (state.has_process_info && state.selected_pid == process.pid)
         ImGui::TextColored(ui::colors().primary2, "%s", state.selected_process_info.title_id.c_str());
       else if (ImGui::IsItemVisible() && i == state.selected_process_row && state.client.connected())
         ensure_process_info(state);
@@ -1413,17 +1434,20 @@ static void draw_process_table(AppState &state) {
   }
 }
 
-static void draw_maps_table(AppState &state) {
+static void draw_maps_table(AppState &state, float height) {
   if (state.selected_pid <= 0) {
     ui::draw_empty_state(locale::tr("processes.no_process_selected"), locale::tr("processes.no_process_desc"));
     return;
   }
   if (ImGui::BeginTable("MapsTable", 7,
-        ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,
-        ImVec2(0,0))) {
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_SizingStretchProp,
+        ImVec2(0, height))) {
     ImGui::TableSetupColumn("##selected", ImGuiTableColumnFlags_WidthFixed, 30);
-    ImGui::TableSetupColumn(locale::tr("processes.start_col"));
-    ImGui::TableSetupColumn(locale::tr("processes.end_col"));
+    ImGui::TableSetupColumn(locale::tr("processes.start_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 140);
+    ImGui::TableSetupColumn(locale::tr("processes.end_col"),
+                            ImGuiTableColumnFlags_WidthFixed, 140);
     ImGui::TableSetupColumn(locale::tr("processes.size_col"), ImGuiTableColumnFlags_WidthFixed, 90);
     ImGui::TableSetupColumn(locale::tr("processes.prot_col"), ImGuiTableColumnFlags_WidthFixed, 58);
     ImGui::TableSetupColumn(locale::tr("processes.elf_segments_type_col"),
@@ -1497,7 +1521,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
     /* Button row: Refresh + Tree toggle + JSON Dump */
-    ImGui::BeginDisabled(client_async_busy(state));
+    ImGui::BeginDisabled(state.connect_pending || state.elf_load_pending);
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(150, 34))) refresh_processes(state);
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1535,7 +1559,8 @@ void draw_processes(AppState &state, ImVec2 avail) {
         ImGui::TextWrapped(locale::tr("processes.path"), state.selected_process_info.path.c_str());
     }
     ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0 ||
-                         client_async_busy(state));
+                         state.connect_pending || state.map_refresh_pending ||
+                         state.json_dump_pending);
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 34))) refresh_maps(state);
     ImGui::SameLine();
     if (ui::soft_button((std::string(icons::kFilter) + "  " + locale::tr("processes.use_filtered_window")).c_str(), ImVec2(185, 34))) set_scan_window_from_filtered_maps(state);
@@ -1609,7 +1634,13 @@ void draw_processes(AppState &state, ImVec2 avail) {
       ImGui::EndChild();
     }
     ImGui::Spacing();
-    draw_maps_table(state);
+    /* A zero-height scrolling table consumes all remaining panel space and
+       makes every section below it unreachable. Reserve a responsive, bounded
+       viewport so ELF controls and diagnostics remain visible; the panel can
+       still scroll as a whole on smaller windows. */
+    const float remaining_y = ImGui::GetContentRegionAvail().y;
+    const float maps_height = std::clamp(remaining_y * 0.58f, 220.0f, 520.0f);
+    draw_maps_table(state, maps_height);
 
     /* ELF Load / Hijack section */
     draw_elf_section(state);

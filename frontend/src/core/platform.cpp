@@ -19,6 +19,7 @@
 #else
 #include <cerrno>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #endif
 
@@ -245,6 +246,12 @@ bool socket_set_recv_buffer(socket_handle_t fd, int bytes) {
                     reinterpret_cast<const char *>(&bytes), sizeof(bytes)) == 0;
 }
 
+bool socket_set_nodelay(socket_handle_t fd) {
+  int one = 1;
+  return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
+                    reinterpret_cast<const char *>(&one), sizeof(one)) == 0;
+}
+
 bool socket_set_nosigpipe(socket_handle_t fd) {
 #if defined(SO_NOSIGPIPE)
   int one = 1;
@@ -426,6 +433,29 @@ bool open_url(const std::string &url) {
   std::string command = "xdg-open " + shell_quote_posix(url);
   return std::system(command.c_str()) == 0;
 #endif
+}
+
+bool open_path(const std::filesystem::path &path) {
+#if defined(MEMDBG_PLATFORM_IOS)
+  (void)path;
+  return false;
+#elif defined(_WIN32)
+  HINSTANCE result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
+                                   nullptr, SW_SHOWNORMAL);
+  return reinterpret_cast<intptr_t>(result) > 32;
+#elif defined(__APPLE__)
+  const std::string command = "open " + shell_quote_posix(path.string());
+  return std::system(command.c_str()) == 0;
+#else
+  const std::string command = "xdg-open " + shell_quote_posix(path.string());
+  return std::system(command.c_str()) == 0;
+#endif
+}
+
+bool open_directory(const std::filesystem::path &path) {
+  std::error_code ec;
+  std::filesystem::create_directories(path, ec);
+  return !ec && open_path(path);
 }
 
 bool download_file(const std::string &url, const std::filesystem::path &out) {

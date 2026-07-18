@@ -86,6 +86,28 @@ bool parse_payload_version(const std::string &input, ParsedVersion &out,
     out.channel = VersionChannel::Nightly;
     return true;
   }
+  if (lowered.rfind("nightly-", 0U) == 0U) {
+    size_t offset = 8U;
+    uint32_t build_date = 0U;
+    const size_t date_start = offset;
+    if (!parse_number(lowered, offset, build_date) ||
+        offset - date_start != 8U || offset + 2U >= lowered.size() ||
+        lowered[offset] != '-' || lowered[offset + 1U] != 'g') {
+      error = "invalid rolling nightly tag";
+      return false;
+    }
+    offset += 2U;
+    const size_t hash_start = offset;
+    while (offset < lowered.size() &&
+           std::isxdigit(static_cast<unsigned char>(lowered[offset])))
+      ++offset;
+    if (offset != lowered.size() || offset - hash_start < 7U) {
+      error = "invalid rolling nightly commit hash";
+      return false;
+    }
+    out.channel = VersionChannel::Nightly;
+    return true;
+  }
 
   size_t offset = 0;
   for (size_t i = 0; i < out.core.size(); ++i) {

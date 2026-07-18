@@ -69,6 +69,18 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
       return;
     }
 
+    /* Plugins speak the normal MemDBG wire format to a loopback broker. The
+       broker routes commands through the already-connected ClientPool, so an
+       old SDK that opens one socket per request no longer creates console
+       connections or consumes the payload's four connection slots. */
+    auto bridge = std::make_shared<plugins::GuiBridge>();
+    if (!bridge->start_protocol_broker(state.pool)) {
+      state.plugin_gui_error = "Cannot start the local plugin protocol broker";
+      state.plugin_gui_starting = false;
+      return;
+    }
+    const uint16_t broker_port = bridge->protocol_broker_port();
+
     /* Build context file */
     std::filesystem::path runtime_dir =
         state.plugin_manager.plugin_data_dir() / "runtime";
@@ -84,10 +96,13 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
       doc["memdbg"]["frontend"] = "MemDBG";
       doc["memdbg"]["protocol_version"] = state.has_hello ? state.hello.protocol_version : 0U;
       doc["memdbg"]["capabilities"] = state.has_hello ? state.hello.capabilities : 0U;
-      doc["console"]["host"] = state.host;
-      doc["console"]["debug_port"] = state.debug_port;
+      doc["console"]["host"] = "127.0.0.1";
+      doc["console"]["debug_port"] = broker_port;
       doc["console"]["udp_port"] = state.udp_port;
       doc["console"]["connected"] = state.client.connected();
+      doc["console"]["transport"] = "frontend-session-broker";
+      doc["console"]["target_host"] = state.host;
+      doc["console"]["target_debug_port"] = state.debug_port;
       doc["process"]["pid"] = state.selected_pid;
       doc["process"]["name"] = selected_process_name(state);
       doc["paths"]["dump"] = state.dump_path;
@@ -108,6 +123,7 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
       if (!out) {
         state.plugin_gui_error = "Cannot write context file for GUI plugin";
         state.plugin_gui_starting = false;
+        bridge->stop();
         return;
       }
       out << doc.dump(2) << "\n";
@@ -117,11 +133,12 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
     std::string python_exe = find_python_interpreter();
 
     /* Start the bridge */
-    state.plugin_gui_bridge = std::make_shared<plugins::GuiBridge>();
-    if (!state.plugin_gui_bridge->start(python_exe, entry_path, context_path)) {
+    state.plugin_gui_bridge = bridge;
+    if (!bridge->start(python_exe, entry_path, context_path)) {
       state.plugin_gui_error = "Failed to start GUI plugin process for " + plugin_name;
       state.plugin_gui_starting = false;
       state.plugin_gui_active_id.clear();
+      bridge->stop();
       set_status(state, state.plugin_gui_error);
       return;
     }

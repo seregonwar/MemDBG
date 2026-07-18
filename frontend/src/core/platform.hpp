@@ -52,6 +52,7 @@ int socket_connect_error(socket_handle_t fd);
 bool socket_set_reuse_addr(socket_handle_t fd);
 bool socket_set_broadcast(socket_handle_t fd);
 bool socket_set_recv_buffer(socket_handle_t fd, int bytes);
+bool socket_set_nodelay(socket_handle_t fd);
 bool socket_set_nosigpipe(socket_handle_t fd);
 int socket_recv(socket_handle_t fd, void *buffer, size_t size);
 int socket_send(socket_handle_t fd, const void *buffer, size_t size);
@@ -68,6 +69,8 @@ std::filesystem::path app_config_dir();
 std::filesystem::path app_cache_dir();
 std::filesystem::path app_data_dir();
 bool open_url(const std::string &url);
+bool open_path(const std::filesystem::path &path);
+bool open_directory(const std::filesystem::path &path);
 bool download_file(const std::string &url, const std::filesystem::path &out);
 
 } // namespace memdbg::frontend::platform

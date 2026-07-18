@@ -106,6 +106,7 @@ bool ActionJournal::open(const char *journal_path) {
   std::lock_guard<std::mutex> lock(mutex_);
   file_      = static_cast<void *>(fp);
   file_open_ = true;
+  path_ = std::filesystem::path(journal_path);
   enabled_.store(true);
 
   write_json_line(fp, std::time(nullptr), "session_start", "{}");
@@ -150,6 +151,29 @@ void ActionJournal::record_marker(const char *marker) {
 bool ActionJournal::is_open() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return file_open_ && file_ != nullptr;
+}
+
+bool ActionJournal::clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!file_open_ || file_ == nullptr || path_.empty()) return false;
+
+  auto *old = static_cast<std::FILE *>(file_);
+  std::fflush(old);
+  std::fclose(old);
+  file_ = nullptr;
+  file_open_ = false;
+
+  std::FILE *fresh = std::fopen(path_.string().c_str(), "w");
+  if (fresh == nullptr) {
+    enabled_.store(false);
+    return false;
+  }
+  file_ = static_cast<void *>(fresh);
+  file_open_ = true;
+  enabled_.store(true);
+  write_json_line(fresh, std::time(nullptr), "session_start", "{}");
+  std::fflush(fresh);
+  return true;
 }
 
 /* ── Static helpers ────────────────────────────────────────────────────── */
@@ -215,28 +239,28 @@ bool ActionJournal::load_recent(const std::filesystem::path &path,
   if (!in) return false;
 
   std::string line;
-  std::deque<ActionJournalEntry> all_entries;
+  std::deque<ActionJournalEntry> recent_entries;
 
   while (std::getline(in, line)) {
     if (line.empty()) continue;
 
     ActionJournalEntry entry;
     if (parse_journal_line(line, entry)) {
+      if (entry.action == "session_start") {
+        if (out_clean_shutdown) *out_clean_shutdown = false;
+        continue;
+      }
       if (entry.action == "clean_shutdown") {
         if (out_clean_shutdown) *out_clean_shutdown = true;
+        continue;
       }
-      all_entries.push_back(std::move(entry));
+      if (max_entries == 0U) continue;
+      recent_entries.push_back(std::move(entry));
+      if (recent_entries.size() > max_entries) recent_entries.pop_front();
     }
   }
 
-  /* Keep only the last max_entries, excluding markers */
-  out_entries.reserve(std::min(all_entries.size(), max_entries));
-  size_t skip = all_entries.size() > max_entries ? all_entries.size() - max_entries : 0;
-  for (size_t i = skip; i < all_entries.size(); ++i) {
-    const auto &e = all_entries[i];
-    if (e.action == "session_start" || e.action == "clean_shutdown") continue;
-    out_entries.push_back(e);
-  }
+  out_entries.assign(recent_entries.begin(), recent_entries.end());
 
   return true;
 }
@@ -315,6 +339,10 @@ static std::string detail_field(const std::string &detail, const char *key) {
     if (json_get_string(val, &s, &slen) == JSON_OK && s && slen > 0) {
       result.assign(s, slen);
     }
+  } else if (val != nullptr && json_is_integer(val)) {
+    int64_t number = 0;
+    if (json_get_int(val, &number) == JSON_OK)
+      result = std::to_string(number);
   }
 
   json_arena_destroy(arena);

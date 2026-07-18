@@ -11,7 +11,9 @@
  */
 
 #include "memdbg/scanner/pt_walker.h"
+#include "memdbg/pal/pal_kernel_fast.h"
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 /* Forward declarations for PS5 kernel copy wrappers. */
@@ -27,6 +29,7 @@ static int kwrite(const void *src, intptr_t kaddr, size_t n);
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
+#include <pthread.h>
 #define PTW_HAS_DMAP 1
 #endif
 
@@ -59,9 +62,10 @@ static int kwrite(const void *src, intptr_t kaddr, size_t n);
 
 static volatile uint64_t g_ptw_known_value = 0x5E7C0DE5E7C0DE71ULL;
 
-static int      g_ptw_state     = 0;
-static uint64_t g_ptw_dmap      = 0;
-static uint64_t g_ptw_pmap_off  = 0;
+static _Atomic int      g_ptw_state     = 0;
+static _Atomic uint64_t g_ptw_dmap      = 0;
+static _Atomic uint64_t g_ptw_pmap_off  = 0;
+static pthread_mutex_t g_ptw_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Per-PID vmspace+cr3 cache (avoids 2 kernel reads per ptw_read/write/probe call)
 #define PTW_VMCACHE_N 4
@@ -69,27 +73,31 @@ static struct { int32_t pid; uint64_t kproc; uint64_t vmspace; uint64_t pml4; ui
 static int g_vmcache_next = 0;
 
 static int ptw_resolve_pid(uint32_t pid, uint64_t *out_cr3) {
+  (void)pthread_mutex_lock(&g_ptw_cache_mutex);
   for (int i = 0; i < PTW_VMCACHE_N; i++) {
     if (g_vmcache[i].pid == (int32_t)pid && g_vmcache[i].cr3 != 0) {
       *out_cr3 = g_vmcache[i].cr3;
+      (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
       return 0;
     }
   }
 
-  intptr_t kproc = (intptr_t)kernel_get_proc((pid_t)pid);
-  if (!kproc) return 1;
+  intptr_t kproc = memdbg_kernel_fast_available()
+                       ? memdbg_kernel_get_proc_fast((pid_t)pid)
+                       : (intptr_t)kernel_get_proc((pid_t)pid);
+  if (!kproc) goto fail;
 
   uint64_t vmspace = 0;
   if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
-    return 1;
+    goto fail;
 
   uint64_t pair[2];
   if (kread((intptr_t)(vmspace + g_ptw_pmap_off), pair, sizeof(pair)) != 0)
-    return 1;
+    goto fail;
 
   uint64_t cr3 = pair[1];
-  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) return 1;
-  if (pair[0] - cr3 != g_ptw_dmap) return 1;
+  if (cr3 == 0 || (cr3 & 0xFFF) || cr3 >= PTW_PHYS_BOUND) goto fail;
+  if (pair[0] - cr3 != g_ptw_dmap) goto fail;
 
   int s = g_vmcache_next;
   g_vmcache[s].pid     = (int32_t)pid;
@@ -99,22 +107,25 @@ static int ptw_resolve_pid(uint32_t pid, uint64_t *out_cr3) {
   g_vmcache[s].cr3     = cr3;
   g_vmcache_next = (g_vmcache_next + 1) % PTW_VMCACHE_N;
   *out_cr3 = cr3;
+  (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
   return 0;
-}
-
-static void ptw_flush_pid(uint32_t pid) {
-  for (int i = 0; i < PTW_VMCACHE_N; i++)
-    if (g_vmcache[i].pid == (int32_t)pid) { g_vmcache[i].pid = 0; g_vmcache[i].cr3 = 0; }
+fail:
+  (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
+  return 1;
 }
 
 // Minimal kernel copy wrappers
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
+  if (memdbg_kernel_fast_available())
+    return memdbg_kernel_copyout_fast(kaddr, dst, n) == 0 ? 0 : -1;
   if (kernel_copyout(kaddr, dst, n) != 0) return -1;
   return 0;
 }
 
 static inline int kwrite(const void *src, intptr_t kaddr, size_t n) {
+  if (memdbg_kernel_fast_available())
+    return memdbg_kernel_copyin_fast(src, kaddr, n) == 0 ? 0 : -1;
   if (kernel_copyin(src, kaddr, n) != 0) return -1;
   return 0;
 }
@@ -193,15 +204,20 @@ static uint64_t ptw_try_offset(uint64_t vmspace, uint64_t off,
 }
 
 int ptw_discover(uint64_t *dmap_base_out, uint64_t *pmap_offset_out) {
+  (void)pthread_mutex_lock(&g_ptw_cache_mutex);
   if (g_ptw_state != 0) {
     if (dmap_base_out) *dmap_base_out = g_ptw_dmap;
     if (pmap_offset_out) *pmap_offset_out = g_ptw_pmap_off;
-    return (g_ptw_state == 1) ? 0 : -1;
+    int rc = (g_ptw_state == 1) ? 0 : -1;
+    (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
+    return rc;
   }
 
   int result = -1;
   pid_t self = getpid();
-  intptr_t kproc = (intptr_t)kernel_get_proc(self);
+  intptr_t kproc = memdbg_kernel_fast_available()
+                       ? memdbg_kernel_get_proc_fast(self)
+                       : (intptr_t)kernel_get_proc(self);
   if (kproc) {
     uint64_t vmspace = 0;
     if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) == 0 && vmspace) {
@@ -228,6 +244,7 @@ int ptw_discover(uint64_t *dmap_base_out, uint64_t *pmap_offset_out) {
   g_ptw_state = result;
   if (dmap_base_out) *dmap_base_out = g_ptw_dmap;
   if (pmap_offset_out) *pmap_offset_out = g_ptw_pmap_off;
+  (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
   return (result == 1) ? 0 : -1;
 }
 
@@ -602,33 +619,58 @@ static int ptw_merge(memdbg_map_entry_t *v, int v_count,
 // Aux cache
 
 #define AUX_CACHE_MAX 4096
-static struct { uint64_t start, end; } g_aux_cache[AUX_CACHE_MAX];
-static int      g_aux_cache_n   = 0;
-static uint32_t g_aux_cache_pid = 0;
+#define AUX_CACHE_SLOTS 4
+struct aux_cache_slot {
+  struct { uint64_t start, end; } ranges[AUX_CACHE_MAX];
+  int count;
+  uint32_t pid;
+};
+static struct aux_cache_slot g_aux_cache[AUX_CACHE_SLOTS];
+static unsigned int g_aux_cache_next;
 
 static void aux_cache_rebuild(uint32_t pid, memdbg_map_entry_t *m, int n) {
+  (void)pthread_mutex_lock(&g_ptw_cache_mutex);
+  unsigned int slot = AUX_CACHE_SLOTS;
+  for (unsigned int i = 0; i < AUX_CACHE_SLOTS; ++i) {
+    if (g_aux_cache[i].pid == pid) { slot = i; break; }
+    if (slot == AUX_CACHE_SLOTS && g_aux_cache[i].pid == 0U) slot = i;
+  }
+  if (slot == AUX_CACHE_SLOTS)
+    slot = g_aux_cache_next++ % AUX_CACHE_SLOTS;
+  struct aux_cache_slot *cache = &g_aux_cache[slot];
   int k = 0;
   for (int i = 0; i < n && k < AUX_CACHE_MAX; i++) {
     const char *nm = m[i].name;
     if (nm[0]=='(' && nm[1]=='p' && nm[2]=='t' && nm[3]=='a' &&
         nm[4]=='u' && nm[5]=='x' && nm[6]==')' && m[i].end > m[i].start) {
-      g_aux_cache[k].start = m[i].start;
-      g_aux_cache[k].end   = m[i].end;
+      cache->ranges[k].start = m[i].start;
+      cache->ranges[k].end   = m[i].end;
       k++;
     }
   }
-  g_aux_cache_n   = k;
-  g_aux_cache_pid = pid;
+  cache->count = k;
+  cache->pid = pid;
+  (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
 }
 
 int ptw_aux_contains(uint32_t pid, uint64_t addr, uint64_t len) {
-  if (pid != g_aux_cache_pid || g_aux_cache_n == 0 || len == 0) return 0;
+  if (len == 0) return 0;
   uint64_t end = addr + len;
   if (end < addr) return 0;
-  for (int i = 0; i < g_aux_cache_n; i++) {
-    if (addr >= g_aux_cache[i].start && end <= g_aux_cache[i].end) return 1;
+  int found = 0;
+  (void)pthread_mutex_lock(&g_ptw_cache_mutex);
+  for (unsigned int slot = 0; slot < AUX_CACHE_SLOTS && !found; ++slot) {
+    if (g_aux_cache[slot].pid != pid) continue;
+    for (int i = 0; i < g_aux_cache[slot].count; ++i) {
+      if (addr >= g_aux_cache[slot].ranges[i].start &&
+          end <= g_aux_cache[slot].ranges[i].end) {
+        found = 1;
+        break;
+      }
+    }
   }
-  return 0;
+  (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
+  return found;
 }
 
 // Public augment
@@ -660,12 +702,15 @@ int ptw_augment_maps(uint32_t pid,
 }
 
 void ptw_flush(void) {
+  (void)pthread_mutex_lock(&g_ptw_cache_mutex);
   g_ptw_state    = 0;
   g_ptw_dmap     = 0;
   g_ptw_pmap_off = 0;
-  g_aux_cache_n   = 0;
-  g_aux_cache_pid = 0;
-  for (int i = 0; i < PTW_VMCACHE_N; i++) { g_vmcache[i].pid = 0; g_vmcache[i].cr3 = 0; }
+  memset(g_vmcache, 0, sizeof(g_vmcache));
+  memset(g_aux_cache, 0, sizeof(g_aux_cache));
+  g_vmcache_next = 0;
+  g_aux_cache_next = 0U;
+  (void)pthread_mutex_unlock(&g_ptw_cache_mutex);
 }
 
 #else /* !PTW_HAS_DMAP */

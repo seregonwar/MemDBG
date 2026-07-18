@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -150,6 +151,42 @@ static void draw_progress_row(const char *label, double fraction, ImVec4 color) 
   ImGui::PopStyleColor(2);
 }
 
+static std::string build_telemetry_report(
+    const AppState &state, const Client::TelemetrySnapshot &t) {
+  std::ostringstream out;
+  out << "MemDBG environment report\n"
+      << "Frontend: " << MEMDBG_VERSION_STRING << "\n"
+      << "Protocol feature level: v" << MEMDBG_PROTOCOL_FEATURE_LEVEL
+      << " (wire v" << MEMDBG_PROTOCOL_VERSION << ")\n";
+#if defined(_WIN32)
+  out << "Host OS: Windows\n";
+#elif defined(__APPLE__)
+  out << "Host OS: macOS\n";
+#elif defined(__linux__)
+  out << "Host OS: Linux\n";
+#else
+  out << "Host OS: Unknown\n";
+#endif
+  out << "Console endpoint: "
+      << (state.report_anonymize ? "<redacted>" : std::string(state.host))
+      << ':' << state.debug_port << "\n"
+      << "Console platform: " << platform_name(state.hello.platform_id) << "\n"
+      << "Payload: " << state.hello.name << ' ' << state.hello.version << "\n"
+      << "Payload protocol: feature level v" << state.hello.feature_level
+      << " (wire v" << state.hello.protocol_version << ")\n"
+      << "Capabilities: " << capability_text(state.hello.capabilities) << "\n"
+      << "Uptime: " << t.uptime_seconds << " s\n"
+      << "Active connections: " << t.active_connections << "\n"
+      << "Worker pool: " << t.thread_pool_size << "\n"
+      << "Read calls: " << t.total_read_calls << "\n"
+      << "Bytes read: " << t.total_bytes_read << "\n"
+      << "Write calls: " << t.total_write_calls << "\n"
+      << "Bytes written: " << t.total_bytes_written << "\n"
+      << "Map cache hits: " << t.scan_cache_hits << "\n"
+      << "Map cache misses: " << t.scan_cache_misses << "\n";
+  return out.str();
+}
+
 } // namespace
 
 void draw_telemetry(AppState &state, ImVec2 avail) {
@@ -198,12 +235,21 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   ui::begin_panel("TelemetryPanel", locale::tr("telemetry.title"), avail);
 
   const float refresh_w = 172.0f;
+  const float copy_w = 158.0f;
   ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("telemetry.runtime_metrics"));
-  const float right_x = ImGui::GetWindowContentRegionMax().x - refresh_w;
+  const float right_x = ImGui::GetWindowContentRegionMax().x - refresh_w -
+                        copy_w - ImGui::GetStyle().ItemSpacing.x;
   if (right_x > ImGui::GetCursorPosX() + 24.0f) {
     ImGui::SameLine();
     ImGui::SetCursorPosX(right_x);
   }
+  if (ui::soft_button((std::string(icons::kCopy) + "  Copy report").c_str(),
+                      ImVec2(copy_w, 36))) {
+    const std::string report = build_telemetry_report(state, t);
+    ImGui::SetClipboardText(report.c_str());
+    set_status(state, "Telemetry environment report copied to clipboard");
+  }
+  ImGui::SameLine();
   ImGui::BeginDisabled(client_async_busy(state));
   if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("telemetry.refresh_now")).c_str(),
                       ImVec2(refresh_w, 36))) {

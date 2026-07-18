@@ -176,7 +176,7 @@ void start_structure_compare(AppState &state) {
   const int32_t pid = state.selected_pid;
   const uint32_t read_size = static_cast<uint32_t>(state.structure_compare_size);
   const bool has_enemy_b = state.structure_compare_has_enemy_b;
-  auto &client = state.client;
+  auto client = state.pool.memory_lease();
   auto &temp_fields = state.structure_compare_temp_fields;
   auto &error_out = state.structure_compare_error;
   state.structure_compare_pending = true;
@@ -186,26 +186,26 @@ void start_structure_compare(AppState &state) {
 
   state.structure_compare_future = std::async(
       std::launch::async,
-      [&client, pid, player_base, enemy_a_base, enemy_b_base, read_size,
+      [client, pid, player_base, enemy_a_base, enemy_b_base, read_size,
        field_width, has_enemy_b, &temp_fields, &error_out,
        &mtx = state.structure_compare_mtx]() -> bool {
         std::vector<uint8_t> player;
         std::vector<uint8_t> enemy_a;
         std::vector<uint8_t> enemy_b;
-        if (!client.memory_read(pid, player_base, read_size, player) ||
+        if (!client->memory_read(pid, player_base, read_size, player) ||
             player.size() != read_size) {
-          error_out = "Could not read player structure: " + client.last_error();
+          error_out = "Could not read player structure: " + client->last_error();
           return false;
         }
-        if (!client.memory_read(pid, enemy_a_base, read_size, enemy_a) ||
+        if (!client->memory_read(pid, enemy_a_base, read_size, enemy_a) ||
             enemy_a.size() != read_size) {
-          error_out = "Could not read enemy A structure: " + client.last_error();
+          error_out = "Could not read enemy A structure: " + client->last_error();
           return false;
         }
         if (has_enemy_b &&
-            (!client.memory_read(pid, enemy_b_base, read_size, enemy_b) ||
+            (!client->memory_read(pid, enemy_b_base, read_size, enemy_b) ||
              enemy_b.size() != read_size)) {
-          error_out = "Could not read enemy B structure: " + client.last_error();
+          error_out = "Could not read enemy B structure: " + client->last_error();
           return false;
         }
 

@@ -15,6 +15,7 @@
  */
 
 #include "memdbg/core/memdbg_protocol.h"
+#include "memdbg/core/memdbg_log.h"
 #include "memdbg/core/memdbg_protocol_debug_handlers.h"
 #include "memdbg/core/memdbg_protocol_process_handlers.h"
 #include "memdbg/debug/memdbg_debugger.h"
@@ -27,6 +28,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+void memdbg_log_write(memdbg_log_level_t level, const char *fmt, ...) {
+  (void)level;
+  (void)fmt;
+}
 
 /* ======================================================================
  * Mock send_response — captures the last call's status, payload, length.
@@ -57,6 +63,14 @@ int send_response(int fd, const memdbg_packet_header_t *req,
     memcpy(g_last_payload, payload, payload_len);
   }
   return g_send_rc;
+}
+
+/* Maps V2 uses the normal LZ4 framing helper. Handler tests only need the
+   logical body, so capture it through the same mock sink. */
+int send_framed_response(int fd, const memdbg_packet_header_t *req,
+                         memdbg_status_t status, const void *payload,
+                         uint32_t payload_len) {
+  return send_response(fd, req, status, payload, payload_len);
 }
 
 /* ======================================================================
@@ -369,6 +383,10 @@ memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
   return MEMDBG_OK;
 }
 
+memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
+  return memdbg_process_maps(pid, out);
+}
+
 void memdbg_process_maps_free(memdbg_map_list_t *list) {
   if (list != NULL) {
     free(list->entries);
@@ -515,6 +533,9 @@ static memdbg_packet_header_t g_req = {
 memdbg_status_t handle_process_list(int fd, const memdbg_packet_header_t *req);
 memdbg_status_t handle_process_maps(int fd, const memdbg_packet_header_t *req,
                                     const void *body, uint32_t body_len);
+memdbg_status_t handle_process_maps_v2(int fd,
+                                       const memdbg_packet_header_t *req,
+                                       const void *body, uint32_t body_len);
 
 /* ======================================================================
  * Test cases
@@ -585,6 +606,13 @@ static void test_proto_process_wire_format(void) {
                   MEMDBG_MAP_FLAG_TYPE_SHIFT,
               MEMDBG_MAP_TYPE_VNODE);
   }
+
+  mock_send_reset();
+  st = handle_process_maps_v2(g_mock_socket, &g_req, &maps_req,
+                              sizeof(maps_req));
+  TEST_OK("process_maps_v2 OK", st);
+  TEST_EQ_U("process_maps_v2 logical payload length", g_last_payload_len,
+            (uint32_t)(sizeof(uint32_t) + sizeof(memdbg_map_entry_t)));
 
   mock_send_reset();
   g_mock_map_count = MOCK_LARGE_MAP_COUNT;

@@ -12,6 +12,7 @@
 #include "memdbg/scanner/page_alias.h"
 #include "memdbg/scanner/pt_walker.h"
 #include "memdbg/pal/pal_memory.h"
+#include "memdbg/pal/pal_kernel_fast.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,10 +77,14 @@ struct page_alias_ctx {
 // Kernel access wrappers
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
+  if (memdbg_kernel_fast_available())
+    return memdbg_kernel_copyout_fast(kaddr, dst, n);
   return kernel_copyout(kaddr, dst, n);
 }
 
 static inline int kwrite(const void *src, intptr_t kaddr, size_t n) {
+  if (memdbg_kernel_fast_available())
+    return memdbg_kernel_copyin_fast(src, kaddr, n);
   return kernel_copyin(src, kaddr, n);
 }
 

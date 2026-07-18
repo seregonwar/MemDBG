@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg);
+bool memdbg_instance_is_current_process(const memdbg_config_t *cfg);
 int memdbg_instance_write_pid_file(const memdbg_config_t *cfg);
 void memdbg_instance_remove_pid_file(const memdbg_config_t *cfg);
 

@@ -5,6 +5,7 @@
  */
 
 #include "internal.h"
+#include "memdbg/scanner/flashscan.h"
 
 /* ---- Shared globals ---- */
 
@@ -13,6 +14,23 @@ socket_t    g_legacy_listen_fd = PAL_INVALID_SOCKET;
 pthread_t   g_legacy_thread;
 bool        g_legacy_thread_started = false;
 memdbg_config_t g_legacy_cfg;
+
+#define LEGACY_REUSABLE_REQUEST_MAX (256U * 1024U)
+
+static void *legacy_request_buffer_acquire(void **reusable, size_t *capacity,
+                                           uint32_t length) {
+  if (length == 0U) return NULL;
+  if (length > LEGACY_REUSABLE_REQUEST_MAX) return malloc(length);
+  if (*capacity < length) {
+    size_t next = *capacity != 0U ? *capacity : 4096U;
+    while (next < length) next *= 2U;
+    void *grown = realloc(*reusable, next);
+    if (grown == NULL) return NULL;
+    *reusable = grown;
+    *capacity = next;
+  }
+  return *reusable;
+}
 
 /* ---- Dispatch ---- */
 
@@ -35,6 +53,8 @@ memdbg_status_t legacy_dispatch(socket_t fd, const memdbg_config_t *cfg,
   case LEGACY_CMD_PROC_WRITE_MULTI: return legacy_handle_write_multi(fd, cfg, body, header->data_len);
   case LEGACY_CMD_PROC_MAPS:        return legacy_handle_process_maps(fd, body, header->data_len);
   case LEGACY_CMD_PROC_INSTALL:     return legacy_handle_install(fd);
+  case LEGACY_CMD_PROC_CALL:        return legacy_handle_proc_call(fd, body, header->data_len);
+  case LEGACY_CMD_PROC_ELF_LOAD:    return legacy_handle_proc_elf_load(fd, body, header->data_len);
   case LEGACY_CMD_PROC_PROTECT:     return legacy_handle_process_protect(fd, body, header->data_len);
   case LEGACY_CMD_PROC_INFO:        return legacy_handle_process_info(fd, body, header->data_len);
   case LEGACY_CMD_PROC_ALLOC:       return legacy_handle_process_alloc(fd, body, header->data_len, false);
@@ -44,7 +64,6 @@ memdbg_status_t legacy_dispatch(socket_t fd, const memdbg_config_t *cfg,
 
   case LEGACY_CMD_SCAN:       return legacy_handle_scan_exact(fd, body, header->data_len);
   case LEGACY_CMD_SCAN_AOB:   return legacy_handle_scan_aob_start(fd, body, header->data_len);
-  case LEGACY_CMD_SCAN_CONT:
   case LEGACY_CMD_SCAN_FETCH: return legacy_handle_scan_cont(fd);
 
   case LEGACY_CMD_DEBUG_ATTACH: {
@@ -52,29 +71,42 @@ memdbg_status_t legacy_dispatch(socket_t fd, const memdbg_config_t *cfg,
     (void)getpeername(fd, (struct sockaddr *)&peer_ss, &peer_len);
     return legacy_handle_debug_attach(fd, body, header->data_len, &peer_ss);
   }
-  case LEGACY_CMD_DEBUG_DETACH:        return legacy_handle_debug_detach(fd);
-  case LEGACY_CMD_DEBUG_STOP:          return legacy_handle_debug_stop_cmd(fd);
-  case LEGACY_CMD_DEBUG_CONTINUE:      return legacy_handle_debug_continue_cmd(fd);
-  case LEGACY_CMD_DEBUG_STEP:          return legacy_handle_debug_step_cmd(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_GET_REGS:      return legacy_handle_debug_get_regs(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_SET_REGS:      return legacy_handle_debug_set_regs(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_SET_BP:        return legacy_handle_debug_set_bp(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_CLEAR_BP:      return legacy_handle_debug_clear_bp(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_SET_WP:        return legacy_handle_debug_set_wp(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_CLEAR_WP:      return legacy_handle_debug_clear_wp(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_GET_THREADS:   return legacy_handle_debug_get_threads(fd);
-  case LEGACY_CMD_DEBUG_SUSPEND_TID:   return legacy_handle_debug_suspend_thread(fd, body, header->data_len);
-  case LEGACY_CMD_DEBUG_RESUME_TID:    return legacy_handle_debug_resume_thread(fd, body, header->data_len);
+  case LEGACY_CMD_DEBUG_DETACH:
+  case LEGACY_CMD_DEBUG_SET_BP:
+  case LEGACY_CMD_DEBUG_SET_WP:
+  case LEGACY_CMD_DEBUG_GET_THREADS:
+  case LEGACY_CMD_DEBUG_SUSPEND_TID:
+  case LEGACY_CMD_DEBUG_RESUME_TID:
+  case LEGACY_CMD_DEBUG_GET_REGS:
+  case LEGACY_CMD_DEBUG_SET_REGS:
+  case LEGACY_CMD_DEBUG_GET_FPREGS:
+  case LEGACY_CMD_DEBUG_SET_FPREGS:
+  case LEGACY_CMD_DEBUG_GET_DBREGS:
+  case LEGACY_CMD_DEBUG_SET_DBREGS:
+  case LEGACY_CMD_DEBUG_GET_FSGSBASE:
+  case LEGACY_CMD_DEBUG_SET_FSGSBASE:
+  case LEGACY_CMD_DEBUG_CONTINUE:
+  case LEGACY_CMD_DEBUG_THREAD_INFO:
+  case LEGACY_CMD_DEBUG_STEP:
+  case LEGACY_CMD_DEBUG_STEP_THREAD:
+  case LEGACY_CMD_DEBUG_PROCESS_STOP:
+    return legacy_handle_debug_command(fd, header->command, body, header->data_len);
 
   case LEGACY_CMD_KERN_BASE:  return legacy_handle_kern_base(fd);
   case LEGACY_CMD_KERN_READ:  return legacy_handle_kern_read(fd, cfg, body, header->data_len);
   case LEGACY_CMD_KERN_WRITE: return legacy_handle_kern_write(fd, cfg, body, header->data_len);
 
+  case LEGACY_CMD_CONSOLE_REBOOT:
+  case LEGACY_CMD_CONSOLE_END:
+  case LEGACY_CMD_CONSOLE_PRINT:
+  case LEGACY_CMD_CONSOLE_NOTIFY:
+  case LEGACY_CMD_CONSOLE_INFO:
+  case LEGACY_CMD_CONSOLE_FOREGROUND:
+    return legacy_handle_console_command(fd, header->command, body, header->data_len);
+
   /* Analysis: disasm, xrefs, remote call, ELF load */
   case LEGACY_CMD_DISASM:        return legacy_handle_disasm(fd, body, header->data_len);
   case LEGACY_CMD_XREFS:         return legacy_handle_xrefs(fd, body, header->data_len);
-  case LEGACY_CMD_PROC_CALL:     return legacy_handle_proc_call(fd, body, header->data_len);
-  case LEGACY_CMD_PROC_ELF_LOAD: return legacy_handle_proc_elf_load(fd, body, header->data_len);
 
   /* FlashScan: server-resident scanning with snapshots */
   case LEGACY_CMD_QUICKSCAN_CAPS:    return legacy_handle_quickscan_caps(fd);
@@ -93,6 +125,8 @@ memdbg_status_t legacy_dispatch(socket_t fd, const memdbg_config_t *cfg,
 /* ---- Client handler ---- */
 
 static void legacy_handle_client(socket_t fd, const memdbg_config_t *cfg) {
+  void *reusable_body = NULL;
+  size_t reusable_capacity = 0U;
   (void)pal_socket_set_nonblocking(fd, false);
   (void)pal_socket_configure(fd);
 
@@ -105,24 +139,29 @@ static void legacy_handle_client(socket_t fd, const memdbg_config_t *cfg) {
     if (header.magic != LEGACY_PACKET_MAGIC) { (void)legacy_send_status(fd, LEGACY_CMD_ERROR); break; }
     if (header.data_len > cfg->max_packet_bytes) { (void)legacy_send_status(fd, LEGACY_CMD_ERROR); break; }
     if (header.data_len != 0U) {
-      body = malloc(header.data_len);
+      body = legacy_request_buffer_acquire(&reusable_body,
+                                           &reusable_capacity,
+                                           header.data_len);
       if (body == NULL) { (void)legacy_send_status(fd, LEGACY_CMD_DATA_NULL); break; }
-      if (pal_socket_read_exact(fd, body, header.data_len) < 0) { free(body); break; }
+      if (pal_socket_read_exact(fd, body, header.data_len) < 0) {
+        if (body != reusable_body) free(body);
+        break;
+      }
     }
-    memdbg_status_t status;
-    if (memdbg_privilege_operation_begin() != 0) {
-      status = MEMDBG_ERR_STATE;
-    } else {
-      status = legacy_dispatch(fd, cfg, &header, body);
-      if (memdbg_privilege_operation_end() != 0 && status == MEMDBG_OK)
-        status = MEMDBG_ERR_STATE;
+    /* Credential-changing debugger operations lock in the privilege layer.
+       A connection-wide lock here needlessly serialized all legacy clients. */
+    memdbg_status_t status = legacy_dispatch(fd, cfg, &header, body);
+    if (status == MEMDBG_ERR_NET) {
+      if (body != reusable_body) free(body);
+      break;
     }
-    if (status == MEMDBG_ERR_NET) { free(body); break; }
-    free(body);
+    if (body != reusable_body) free(body);
   }
 
   pthread_mutex_lock(&g_debugger_mutex); bool dbg_active = g_debugger.attached; pthread_mutex_unlock(&g_debugger_mutex);
   if (dbg_active) { memdbg_log_write(MEMDBG_LOG_INFO, "ps5debug-legacy: client disconnected, cleaning up debugger session"); debugger_session_cleanup(); }
+  free(reusable_body);
+  flashscan_release_client(fd);
   (void)pal_socket_close(fd);
 }
 

@@ -53,7 +53,7 @@ void start_snapshot_worker(AppState &state, bool refine, RefineMode mode,
   state.scan_async_owner = Screen::Scanner;
   state.scan_async_error.clear();
 
-  Client &client = state.client;
+  auto client = state.pool.scan_lease();
   ScanResult &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_value_len = state.scan_async_temp_snapshot_value_len;
@@ -64,7 +64,7 @@ void start_snapshot_worker(AppState &state, bool refine, RefineMode mode,
 
   state.scan_async_future = std::async(
       std::launch::async,
-      [&client, pid, value_len, value_type, has_batch, is_unknown, refine,
+      [client, pid, value_len, value_type, has_batch, is_unknown, refine,
        mode, target_bytes = std::move(target_bytes),
        addresses = std::move(addresses), old_snapshot, original_result,
        &temp_result, &temp_snapshot, &temp_value_len, &temp_type,
@@ -116,7 +116,7 @@ void start_snapshot_worker(AppState &state, bool refine, RefineMode mode,
             }
             attempted_reads += items.size();
             Client::BatchReadResult batch;
-            if (!client.batch_read(pid, items, batch)) {
+            if (!client->batch_read(pid, items, batch)) {
               if (cancel_requested.load()) break;
               read_errors += static_cast<uint32_t>(items.size());
               units_done.fetch_add(1U);
@@ -148,7 +148,7 @@ void start_snapshot_worker(AppState &state, bool refine, RefineMode mode,
             if (cancel_requested.load()) break;
             attempted_reads++;
             std::vector<uint8_t> current;
-            if (!client.memory_read(pid, address, value_len, current) ||
+            if (!client->memory_read(pid, address, value_len, current) ||
                 current.size() != value_len) {
               if (cancel_requested.load()) break;
               read_errors++;

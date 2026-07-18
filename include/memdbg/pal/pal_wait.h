@@ -17,8 +17,9 @@
 extern "C" {
 #endif
 
-/* Poll interval used by the acceptor thread for fast accept (1 ms). */
-#define MEMDBG_ACCEPT_POLL_MS 1
+/* Fast enough for interactive connection setup without allocating console
+ * kernel wait objects thousands of times per second. */
+#define MEMDBG_ACCEPT_POLL_MS 10
 
 /**
  * wait_for_client - Wait until a socket is readable or a timeout expires.

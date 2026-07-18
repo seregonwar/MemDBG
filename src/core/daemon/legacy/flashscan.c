@@ -270,7 +270,14 @@ memdbg_status_t legacy_handle_quickscan_start(socket_t fd,
     return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
                ? MEMDBG_OK : MEMDBG_ERR_NET;
 
-  (void)flashscan_handle_start(writer, lr, cmp_data, qs_mask, 0U);
+  unsigned int slot = flashscan_slot_for_client(fd);
+  if (slot == FLASHSCAN_INVALID_SLOT) {
+    (void)pal_socket_close(writer);
+    (void)pal_socket_close(reader);
+    return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+  (void)flashscan_handle_start(writer, lr, cmp_data, qs_mask, slot);
   (void)pal_socket_close(writer);
 
   if (flashscan_read_native_status(reader, &nstatus) < 0) {
@@ -333,7 +340,14 @@ memdbg_status_t legacy_handle_quickscan_count(socket_t fd,
     return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
                ? MEMDBG_OK : MEMDBG_ERR_NET;
 
-  (void)flashscan_handle_count(writer, lr, cmp_d, qc_mask, 0U);
+  unsigned int slot = flashscan_slot_for_client(fd);
+  if (slot == FLASHSCAN_INVALID_SLOT) {
+    (void)pal_socket_close(writer);
+    (void)pal_socket_close(reader);
+    return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+  (void)flashscan_handle_count(writer, lr, cmp_d, qc_mask, slot);
   (void)pal_socket_close(writer);
 
   if (flashscan_read_native_status(reader, &nstatus) < 0) {
@@ -381,7 +395,14 @@ memdbg_status_t legacy_handle_quickscan_fetch(socket_t fd,
     return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
                ? MEMDBG_OK : MEMDBG_ERR_NET;
 
-  (void)flashscan_handle_fetch(writer, lr, 0U);
+  unsigned int slot = flashscan_slot_for_client(fd);
+  if (slot == FLASHSCAN_INVALID_SLOT) {
+    (void)pal_socket_close(writer);
+    (void)pal_socket_close(reader);
+    return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+  (void)flashscan_handle_fetch(writer, lr, slot);
   (void)pal_socket_close(writer);
 
   if (flashscan_read_native_status(reader, &nstatus) < 0) {
@@ -418,7 +439,14 @@ memdbg_status_t legacy_handle_quickscan_end(socket_t fd) {
     return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
                ? MEMDBG_OK : MEMDBG_ERR_NET;
 
-  (void)flashscan_handle_end(writer, 0U);
+  unsigned int slot = flashscan_slot_for_client(fd);
+  if (slot == FLASHSCAN_INVALID_SLOT) {
+    (void)pal_socket_close(writer);
+    (void)pal_socket_close(reader);
+    return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+  (void)flashscan_handle_end(writer, slot);
   (void)pal_socket_close(writer);
 
   if (flashscan_read_native_status(reader, &nstatus) < 0) {

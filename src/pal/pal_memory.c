@@ -16,6 +16,7 @@
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_fileio.h"
 #include "memdbg/pal/pal_process.h"
+#include "memdbg/pal/pal_kernel_fast.h"
 #include "memdbg/scanner/pt_walker.h"
 
 #include <errno.h>
@@ -397,6 +398,35 @@ void pal_memory_fd_cache_flush(int pid) { (void)pid; }
  * ======================================================================== */
 #elif defined(MEMDBG_PAL_CONSOLE)
 
+#include <pthread.h>
+
+/* Sony's mdbg process-rw syscall shares kernel-side state and is not
+ * re-entrant across payload threads.  Parallel protocol connections remain
+ * useful, but calls into this one primitive must enter one at a time. */
+static pthread_mutex_t g_mdbg_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int console_mdbg_copyout(pid_t pid, intptr_t address, void *buffer,
+                                size_t length) {
+  (void)pthread_mutex_lock(&g_mdbg_mutex);
+  errno = 0;
+  const int rc = mdbg_copyout(pid, address, buffer, length);
+  const int saved_errno = errno;
+  (void)pthread_mutex_unlock(&g_mdbg_mutex);
+  errno = saved_errno;
+  return rc;
+}
+
+static int console_mdbg_copyin_raw(pid_t pid, const void *buffer,
+                                   intptr_t address, size_t length) {
+  (void)pthread_mutex_lock(&g_mdbg_mutex);
+  errno = 0;
+  const int rc = mdbg_copyin(pid, buffer, address, length);
+  const int saved_errno = errno;
+  (void)pthread_mutex_unlock(&g_mdbg_mutex);
+  errno = saved_errno;
+  return rc;
+}
+
 static memdbg_status_t mdbg_errno_status(void) {
   switch (errno) {
   case EACCES:
@@ -413,6 +443,32 @@ static memdbg_status_t mdbg_errno_status(void) {
 }
 
 #if defined(MEMDBG_PAL_PS5)
+static int console_get_vmem_protection(pid_t pid, intptr_t address,
+                                       size_t length) {
+  if (memdbg_kernel_external_begin() != 0) {
+    errno = EBUSY;
+    return -1;
+  }
+  int result = kernel_get_vmem_protection(pid, address, length);
+  int saved_errno = errno;
+  memdbg_kernel_external_end();
+  errno = saved_errno;
+  return result;
+}
+
+static int console_set_vmem_protection(pid_t pid, intptr_t address,
+                                       size_t length, int protection) {
+  if (memdbg_kernel_external_begin() != 0) {
+    errno = EBUSY;
+    return -1;
+  }
+  int result = kernel_set_vmem_protection(pid, address, length, protection);
+  int saved_errno = errno;
+  memdbg_kernel_external_end();
+  errno = saved_errno;
+  return result;
+}
+
 static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
                                            const void *buffer, size_t length) {
   pal_map_list_t maps;
@@ -446,7 +502,7 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
 
     const uint64_t segment_end = map->end < end ? map->end : end;
     const size_t segment_length = (size_t)(segment_end - cursor);
-    const int original_prot = kernel_get_vmem_protection(
+    const int original_prot = console_get_vmem_protection(
         pid, (intptr_t)cursor, segment_length);
     if (original_prot < 0) {
       failure_errno = errno != 0 ? errno : EIO;
@@ -455,14 +511,14 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
 
     bool changed_protection = (original_prot & PROT_WRITE) == 0;
     if (changed_protection &&
-        kernel_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
-                                   original_prot | PROT_READ | PROT_WRITE) != 0) {
+        console_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
+                                    original_prot | PROT_READ | PROT_WRITE) != 0) {
       failure_errno = errno != 0 ? errno : EACCES;
       break;
     }
 
     errno = 0;
-    const int copy_rc = mdbg_copyin(
+    const int copy_rc = console_mdbg_copyin_raw(
         pid, (const uint8_t *)buffer + buffer_offset, (intptr_t)cursor,
         segment_length);
     const int copy_errno = errno;
@@ -475,8 +531,8 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
 
     if (changed_protection) {
       errno = 0;
-      if (kernel_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
-                                     original_prot) != 0) {
+      if (console_set_vmem_protection(pid, (intptr_t)cursor, segment_length,
+                                      original_prot) != 0) {
         failure_errno = errno != 0 ? errno : EIO;
         break;
       }
@@ -512,7 +568,7 @@ static int console_fw_needs_dmap(void) {
 static int console_mdbg_copyin(pid_t pid, intptr_t address, const void *buffer,
                                size_t length) {
   errno = 0;
-  if (mdbg_copyin(pid, buffer, address, length) == 0) {
+  if (console_mdbg_copyin_raw(pid, buffer, address, length) == 0) {
     return 0;
   }
 
@@ -552,14 +608,20 @@ memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
 #endif
 
   errno = 0;
-  if (mdbg_copyout((pid_t)pid, (intptr_t)address, buffer, length) != 0) {
+  if (console_mdbg_copyout((pid_t)pid, (intptr_t)address, buffer, length) != 0) {
+    const int first_errno = errno;
 #if defined(MEMDBG_PAL_PS5)
-    if (ptw_is_available() &&
+    /* DMAP is a fallback for a blocked mdbg primitive, not for an invalid or
+     * partially unmapped user range. Walking an EFAULT range can touch an
+     * absent page-table level and terminate the connection handler. */
+    if ((first_errno == EACCES || first_errno == EPERM) &&
+        ptw_is_available() &&
         ptw_read((uint32_t)pid, address, (uint64_t)length, buffer) == 0) {
       if (read_out != NULL) *read_out = length;
       return MEMDBG_OK;
     }
 #endif
+    errno = first_errno;
     return mdbg_errno_status();
   }
 
@@ -576,7 +638,7 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
   if (length == 0U) return MEMDBG_OK;
 
 #if defined(MEMDBG_PAL_PS5)
-  if (console_fw_needs_dmap() && ptw_is_available() && length >= 256U) {
+  if (console_fw_needs_dmap() && ptw_is_available()) {
     if (ptw_write((uint32_t)pid, address, (uint64_t)length, buffer) == 0) {
       if (written_out != NULL) *written_out = length;
       return MEMDBG_OK;
@@ -618,9 +680,13 @@ memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
     return MEMDBG_ERR_PARAM;
 
 #if defined(MEMDBG_PAL_PS5)
+  if (memdbg_kernel_external_begin() != 0) return MEMDBG_ERR_STATE;
   int old_native = kernel_get_vmem_protection((pid_t)pid, (intptr_t)address,
                                               length);
-  if (old_native < 0) return mdbg_errno_status();
+  if (old_native < 0) {
+    memdbg_kernel_external_end();
+    return mdbg_errno_status();
+  }
   if (old_protection != NULL)
     *old_protection = native_prot_to_memdbg(old_native);
 
@@ -628,8 +694,10 @@ memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
   if (kernel_mprotect((pid_t)pid, (intptr_t)address, length, new_native) != 0 &&
       kernel_set_vmem_protection((pid_t)pid, (intptr_t)address, length,
                                  new_native) != 0) {
+    memdbg_kernel_external_end();
     return mdbg_errno_status();
   }
+  memdbg_kernel_external_end();
   return MEMDBG_OK;
 #else
   (void)protection;
@@ -668,7 +736,7 @@ size_t pal_memory_batch_item(pal_memory_batch_t *b, uint64_t a, void *buf, size_
     return len;
 #endif
   errno = 0;
-  if (mdbg_copyout((pid_t)b->pid, (intptr_t)a, buf, len) != 0) {
+  if (console_mdbg_copyout((pid_t)b->pid, (intptr_t)a, buf, len) != 0) {
 #if defined(MEMDBG_PAL_PS5)
     if (ptw_is_available() &&
         ptw_read((uint32_t)b->pid, a, (uint64_t)len, buf) == 0)

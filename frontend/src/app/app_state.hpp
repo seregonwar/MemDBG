@@ -285,6 +285,7 @@ struct AppState {
   double payload_connect_retry_deadline = 0.0;
   bool payload_outdated = false;          /* true when hello.version < remote tag */
   std::string payload_outdated_remote_tag; /* latest GitHub tag for status bar warning */
+  std::string payload_version_diagnostic;  /* suppress repeated comparison logs */
   ReleaseCheck release_check;
   plugins::PluginManager plugin_manager;
   cheats::CheatRepository cheat_repository;
@@ -360,6 +361,8 @@ struct AppState {
   std::string json_dump_output;
   bool json_dump_pending = false;
   std::future<std::tuple<bool, std::string, std::string>> json_dump_future;
+  std::shared_ptr<Client> json_dump_client;
+  bool json_dump_cancel_requested = false;
   std::string json_dump_error;
   double json_dump_start_time = 0.0;
 
@@ -617,8 +620,16 @@ struct AppState {
     double elf_target_highlight_time = -1.0;
 
   /* Async ELF load / hijack */
+  struct ElfAsyncOutcome {
+    bool ok = false;
+    bool accepted = false;
+    Client::ProcessElfLoadResult load_result{};
+    std::string error;
+  };
   bool elf_load_pending = false;
-  std::future<bool> elf_load_future;
+  std::future<ElfAsyncOutcome> elf_load_future;
+  std::shared_ptr<Client> elf_load_client;
+  bool elf_load_cancel_requested = false;
   std::string elf_load_op;          /* "Load ELF" or "Hijack" */
   double elf_load_start_time = 0.0;
   Client::ProcessElfLoadResult elf_load_result;

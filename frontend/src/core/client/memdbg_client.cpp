@@ -67,6 +67,13 @@ namespace {
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
 
+uint32_t max_response_for_command(uint16_t command) {
+  return command == MEMDBG_CMD_PROCESS_MAPS ||
+         command == MEMDBG_CMD_PROCESS_MAPS_V2
+             ? MEMDBG_PROTOCOL_MAX_MAP_RESPONSE
+             : MEMDBG_PROTOCOL_MAX_PACKET + 1024U * 1024U;
+}
+
 template <typename T> bool read_object(const std::vector<uint8_t> &data, T &out) {
   if (data.size() < sizeof(T)) {
     return false;
@@ -180,6 +187,7 @@ bool Client::connect_to(const std::string &host, uint16_t port,
   std::lock_guard<std::mutex> lock(io_mutex_);
   disconnect_unlocked();
   cancel_requested_.store(false);
+  compressed_maps_support_.store(-1);
 
   std::string startup_error;
   if (!platform::socket_startup(&startup_error)) {
@@ -276,9 +284,10 @@ bool Client::connect_to(const std::string &host, uint16_t port,
 
   (void)platform::socket_set_recv_timeout(fd, socket_timeout_ms_);
   (void)platform::socket_set_send_timeout(fd, socket_timeout_ms_);
+  (void)platform::socket_set_nodelay(fd);
   (void)platform::socket_set_nosigpipe(fd);
 
-  last_error_.clear();
+  clear_error();
   return true;
 }
 
@@ -304,6 +313,8 @@ void Client::disconnect() {
 
 void Client::disconnect_unlocked() {
   klog_disconnect();
+  pipeline_reset_unlocked();
+  compressed_maps_support_.store(-1);
   const platform::socket_handle_t fd =
       fd_.exchange(platform::invalid_socket());
   if (platform::socket_valid(fd)) {
@@ -323,7 +334,7 @@ void Client::close_after_connection_loss() {
 platform::socket_handle_t Client::release_fd() {
   std::lock_guard<std::mutex> lock(io_mutex_);
   platform::socket_handle_t fd = fd_.exchange(platform::invalid_socket());
-  last_error_.clear();
+  clear_error();
   return fd;
 }
 
@@ -340,15 +351,20 @@ void Client::take_fd(platform::socket_handle_t fd) {
     socket_runtime_active_ = true;
   }
   cancel_requested_.store(false);
+  compressed_maps_support_.store(-1);
   fd_.store(fd);
-  last_error_.clear();
+  if (platform::socket_valid(fd)) (void)platform::socket_set_nodelay(fd);
+  clear_error();
 }
 
 bool Client::connected() const {
   return platform::socket_valid(fd_.load());
 }
 
-const std::string &Client::last_error() const { return last_error_; }
+std::string Client::last_error() const {
+  std::lock_guard<std::mutex> lock(error_mutex_);
+  return last_error_;
+}
 
 bool Client::hello(HelloInfo &out) {
   std::vector<uint8_t> response;
@@ -357,12 +373,15 @@ bool Client::hello(HelloInfo &out) {
   }
 
   memdbg_hello_response_t wire{};
-  if (!read_object(response, wire)) {
+  if (response.size() < MEMDBG_HELLO_V1_SIZE) {
     set_error("short HELLO response");
     return false;
   }
+  std::memcpy(&wire, response.data(),
+              std::min(response.size(), sizeof(wire)));
 
   out.protocol_version = wire.protocol_version;
+  out.feature_level = wire.feature_level != 0U ? wire.feature_level : 1U;
   out.platform_id = wire.platform_id;
   out.capabilities = wire.capabilities;
   out.debug_port = wire.debug_port;
@@ -380,6 +399,18 @@ bool Client::ping() {
 bool Client::shutdown_payload() {
   std::vector<uint8_t> response;
   return request(MEMDBG_CMD_SHUTDOWN, nullptr, 0, response);
+}
+
+bool Client::raw_request(uint16_t command, const void *payload,
+                         uint32_t payload_len,
+                         std::vector<uint8_t> &response,
+                         int32_t &status) {
+  status = MEMDBG_OK;
+  const bool ok = request(command, payload, payload_len, response, &status);
+  /* request() consumes and validates the complete response before reporting a
+     payload status. Such a response is a successful wire exchange even when
+     the requested operation itself failed. */
+  return ok || status != MEMDBG_OK;
 }
 
 bool Client::process_list(std::vector<ProcessEntry> &out) {
@@ -400,7 +431,28 @@ bool Client::process_maps(int32_t pid, std::vector<MapEntry> &out) {
   body.pid = pid;
 
   std::vector<uint8_t> response;
-  if (!request(MEMDBG_CMD_PROCESS_MAPS, &body, sizeof(body), response)) {
+  if (compressed_maps_support_.load() != 0) {
+    int32_t payload_status = MEMDBG_OK;
+    std::vector<uint8_t> framed;
+    if (request(MEMDBG_CMD_PROCESS_MAPS_V2, &body, sizeof(body), framed,
+                &payload_status)) {
+      compressed_maps_support_.store(1);
+      if (!maybe_decompress(framed, response)) {
+        set_error("compressed map response could not be decompressed");
+        return false;
+      }
+    } else if (payload_status == MEMDBG_ERR_UNSUPPORTED ||
+               payload_status == MEMDBG_ERR_PROTOCOL) {
+      /* Payloads predating the common unsupported-command response used
+         ERR_PROTOCOL for unknown opcodes. Treat both as a V1 capability miss
+         so a new desktop client remains compatible with deployed consoles. */
+      compressed_maps_support_.store(0);
+    } else {
+      return false;
+    }
+  }
+  if (compressed_maps_support_.load() == 0 &&
+      !request(MEMDBG_CMD_PROCESS_MAPS, &body, sizeof(body), response)) {
     return false;
   }
   std::string parse_error;
@@ -581,7 +633,10 @@ bool Client::scan_exact(const memdbg_scan_exact_request_t &request_body,
                response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(response, out, error);
+  if (!ok) set_error(error);
+  return ok;
 }
 
 bool Client::scan_process_exact(
@@ -591,7 +646,10 @@ bool Client::scan_process_exact(
                sizeof(request_body), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(response, out, error);
+  if (!ok) set_error(error);
+  return ok;
 }
 
 bool Client::scan_aob(const memdbg_scan_aob_request_t &request_body,
@@ -612,7 +670,10 @@ bool Client::scan_aob(const memdbg_scan_aob_request_t &request_body,
                static_cast<uint32_t>(body.size()), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(response, out, error);
+  if (!ok) set_error(error);
+  return ok;
 }
 
 bool Client::scan_process_aob(
@@ -634,7 +695,10 @@ bool Client::scan_process_aob(
                static_cast<uint32_t>(body.size()), response)) {
     return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(response, out, error);
+  if (!ok) set_error(error);
+  return ok;
 }
 
 bool Client::scan_pointer(const memdbg_scan_pointer_request_t &request_body,
@@ -646,8 +710,11 @@ bool Client::scan_pointer(const memdbg_scan_pointer_request_t &request_body,
   }
   /* Pointer scan returns memdbg_pointer_chain_entry_t (16 bytes),
    * extracting base_address at offset 0. */
-  return parse_scan_response<memdbg_pointer_chain_entry_t>(
-      response, out, last_error_, offsetof(memdbg_pointer_chain_entry_t, base_address));
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_pointer_chain_entry_t>(
+      response, out, error, offsetof(memdbg_pointer_chain_entry_t, base_address));
+  if (!ok) set_error(error);
+  return ok;
 }
 
 bool Client::telemetry(TelemetrySnapshot &out) {
@@ -797,7 +864,10 @@ bool Client::scan_unknown(const memdbg_scan_unknown_request_t &request_body,
     if (!request(MEMDBG_CMD_SCAN_UNKNOWN, &legacy, sizeof(legacy), response))
       return false;
   }
-  return parse_scan_response<memdbg_scan_result_entry_t>(response, out, last_error_);
+  std::string error;
+  const bool ok = parse_scan_response<memdbg_scan_result_entry_t>(response, out, error);
+  if (!ok) set_error(error);
+  return ok;
 }
 
 bool Client::foreground_app(int32_t pid, char *title_id, size_t title_id_size,
@@ -1070,8 +1140,10 @@ bool Client::klog_connect(const std::string &host, uint16_t &klog_port) {
   header.request_id = next_request_id_++;
   header.length = sizeof(body);
 
-  if (!write_all(&header, sizeof(header)) ||
-      !write_all(&body, sizeof(body))) {
+  std::array<uint8_t, sizeof(header) + sizeof(body)> frame{};
+  std::memcpy(frame.data(), &header, sizeof(header));
+  std::memcpy(frame.data() + sizeof(header), &body, sizeof(body));
+  if (!write_all(frame.data(), frame.size())) {
     return false;
   }
 
@@ -1132,7 +1204,7 @@ bool Client::klog_connect(const std::string &host, uint16_t &klog_port) {
     return false;
   }
 
-  last_error_.clear();
+  clear_error();
 
   /* Start background reader thread */
   klog_reader_closed_ = false;
@@ -1729,6 +1801,11 @@ bool Client::request(uint16_t command, const void *payload,
                      int32_t *payload_status) {
   std::lock_guard<std::mutex> lock(io_mutex_);
   if (payload_status != nullptr) *payload_status = MEMDBG_OK;
+  if ((payload == nullptr && payload_len != 0U) ||
+      payload_len > MEMDBG_PROTOCOL_MAX_PACKET) {
+    set_error("invalid request payload");
+    return false;
+  }
   if (!platform::socket_valid(fd_)) {
     set_error("not connected");
     return false;
@@ -1738,14 +1815,23 @@ bool Client::request(uint16_t command, const void *payload,
   header.magic = MEMDBG_PACKET_MAGIC;
   header.version = MEMDBG_PROTOCOL_VERSION;
   header.command = command;
-  header.request_id = next_request_id_++;
+  header.request_id = next_request_id_unlocked();
   header.length = payload_len;
 
-  if (!write_all(&header, sizeof(header))) {
-    return false;
-  }
-  if (payload_len != 0 && payload != nullptr && !write_all(payload, payload_len)) {
-    return false;
+  /* Most protocol requests have tiny fixed bodies. Send header and body as a
+     single TCP write to avoid an extra packet/ACK turn; large streaming
+     requests stay zero-copy and rely on TCP_NODELAY for the header. */
+  constexpr size_t kInlineRequestMax = 4096U;
+  if (payload_len <= kInlineRequestMax) {
+    std::array<uint8_t, sizeof(header) + kInlineRequestMax> frame{};
+    std::memcpy(frame.data(), &header, sizeof(header));
+    if (payload_len != 0U)
+      std::memcpy(frame.data() + sizeof(header), payload, payload_len);
+    if (!write_all(frame.data(), sizeof(header) + payload_len)) return false;
+  } else {
+    if (!write_all(&header, sizeof(header)) ||
+        !write_all(payload, payload_len))
+      return false;
   }
 
   memdbg_response_header_t response_header{};
@@ -1760,10 +1846,7 @@ bool Client::request(uint16_t command, const void *payload,
     close_after_connection_loss();
     return false;
   }
-  const uint32_t max_response =
-      command == MEMDBG_CMD_PROCESS_MAPS
-          ? MEMDBG_PROTOCOL_MAX_MAP_RESPONSE
-          : MEMDBG_PROTOCOL_MAX_PACKET + 1024U * 1024U;
+  const uint32_t max_response = max_response_for_command(command);
   if (response_header.length > max_response) {
     set_error("response too large");
     /* The announced body is still pending on the stream. Closing is required:
@@ -1789,7 +1872,7 @@ bool Client::request(uint16_t command, const void *payload,
     set_error(oss.str());
     return false;
   }
-  last_error_.clear();
+  clear_error();
   return true;
 }
 
@@ -1801,13 +1884,19 @@ uint32_t Client::pipeline_send(uint16_t command, const void *payload,
    * Returns the request_id for later correlation with pipeline_flush().
    * If the buffer would exceed the safety limit, returns 0 (request_ids
    * start at 1) to signal that the caller must flush before sending more. */
-  if (!payload && payload_len != 0U) return 0U;
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  if ((!payload && payload_len != 0U) ||
+      payload_len > MEMDBG_PROTOCOL_MAX_PACKET) {
+    set_error("invalid pipeline request payload");
+    return 0U;
+  }
 
   const size_t frame_size = sizeof(memdbg_packet_header_t) + payload_len;
-  if (pipeline_buffer_.size() + frame_size > kPipelineMaxBuffer)
+  if (frame_size > kPipelineMaxBuffer ||
+      pipeline_buffer_.size() > kPipelineMaxBuffer - frame_size)
     return 0U; /* caller must flush first */
 
-  uint32_t rid = next_request_id_++;
+  uint32_t rid = next_request_id_unlocked();
 
   memdbg_packet_header_t header{};
   header.magic      = MEMDBG_PACKET_MAGIC;
@@ -1823,32 +1912,36 @@ uint32_t Client::pipeline_send(uint16_t command, const void *payload,
     std::memcpy(pipeline_buffer_.data() + off + sizeof(header),
                 payload, payload_len);
 
-  pipeline_ids_.push_back(rid);
+  pipeline_requests_.push_back({rid, command});
   return rid;
 }
 
 void Client::pipeline_reset() {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  pipeline_reset_unlocked();
+}
+
+void Client::pipeline_reset_unlocked() {
   pipeline_buffer_.clear();
-  pipeline_ids_.clear();
+  pipeline_requests_.clear();
   pipeline_responses_.clear();
   pipeline_statuses_.clear();
 }
 
 bool Client::pipeline_flush() {
-  if (pipeline_ids_.empty()) return true;
-
   std::lock_guard<std::mutex> lock(io_mutex_);
+  if (pipeline_requests_.empty()) return true;
 
   if (!platform::socket_valid(fd_)) {
     set_error("not connected");
-    pipeline_reset();
+    pipeline_reset_unlocked();
     return false;
   }
 
   /* Write the entire batch in one syscall. */
   if (!pipeline_buffer_.empty()) {
     if (!write_all(pipeline_buffer_.data(), pipeline_buffer_.size())) {
-      pipeline_reset();
+      pipeline_reset_unlocked();
       return false;
     }
     pipeline_buffer_.clear();
@@ -1857,45 +1950,53 @@ bool Client::pipeline_flush() {
   /* Read N responses in order. The daemon processes requests
    * sequentially on the same connection; responses arrive in
    * the order they were sent. */
-  const size_t count = pipeline_ids_.size();
+  const size_t count = pipeline_requests_.size();
   for (size_t i = 0; i < count; ++i) {
-    uint32_t expected_rid = pipeline_ids_[i];
+    const PipelineRequest expected = pipeline_requests_[i];
 
     memdbg_response_header_t rhdr{};
     if (!read_exact(&rhdr, sizeof(rhdr))) {
-      pipeline_reset();
+      pipeline_reset_unlocked();
       return false;
     }
 
     if (rhdr.magic != MEMDBG_PACKET_MAGIC ||
         rhdr.version != MEMDBG_PROTOCOL_VERSION ||
-        rhdr.request_id != expected_rid) {
+        rhdr.command != expected.command ||
+        rhdr.request_id != expected.request_id) {
       set_error("invalid pipeline response header");
       close_after_connection_loss();
-      pipeline_reset();
       return false;
     }
 
-    pipeline_statuses_[expected_rid] = rhdr.status;
+    if (rhdr.length > max_response_for_command(expected.command)) {
+      set_error("pipeline response too large");
+      close_after_connection_loss();
+      return false;
+    }
+
+    pipeline_statuses_[expected.request_id] = rhdr.status;
 
     if (rhdr.length > 0U) {
       std::vector<uint8_t> body(rhdr.length);
       if (!read_exact(body.data(), body.size())) {
-        pipeline_reset();
+        pipeline_reset_unlocked();
         return false;
       }
-      pipeline_responses_[expected_rid] = std::move(body);
+      pipeline_responses_[expected.request_id] = std::move(body);
     } else {
-      pipeline_responses_[expected_rid].clear();
+      pipeline_responses_[expected.request_id].clear();
     }
   }
 
+  pipeline_requests_.clear();
   return true;
 }
 
 bool Client::read_pipeline_response(uint32_t request_id,
                                     std::vector<uint8_t> &response_body,
                                     int32_t *out_status) {
+  std::lock_guard<std::mutex> lock(io_mutex_);
   auto it = pipeline_responses_.find(request_id);
   if (it == pipeline_responses_.end()) {
     set_error("pipeline response not found for request_id");
@@ -1903,18 +2004,26 @@ bool Client::read_pipeline_response(uint32_t request_id,
   }
 
   response_body = std::move(it->second);
+  auto status_it = pipeline_statuses_.find(request_id);
   if (out_status != nullptr)
-    *out_status = pipeline_statuses_[request_id];
+    *out_status = status_it != pipeline_statuses_.end()
+                      ? status_it->second : MEMDBG_ERR_PROTOCOL;
 
   pipeline_responses_.erase(it);
-  pipeline_statuses_.erase(request_id);
-
-  /* Clean up consumed id from the ordered list. */
-  auto id_it = std::find(pipeline_ids_.begin(), pipeline_ids_.end(), request_id);
-  if (id_it != pipeline_ids_.end())
-    pipeline_ids_.erase(id_it);
+  if (status_it != pipeline_statuses_.end()) pipeline_statuses_.erase(status_it);
 
   return true;
+}
+
+size_t Client::pipeline_pending() const {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  return pipeline_requests_.size();
+}
+
+uint32_t Client::next_request_id_unlocked() {
+  uint32_t request_id = next_request_id_++;
+  if (request_id == 0U) request_id = next_request_id_++;
+  return request_id;
 }
 
 bool Client::read_exact(void *data, size_t size) {
@@ -1995,18 +2104,26 @@ void Client::set_error_from_errno(const std::string &prefix) {
   int err = platform::socket_last_error_code();
 #if EPIPE
   if (err == EPIPE)
-    last_error_ = prefix + ": connection lost — the console disconnected abruptly";
+    set_error(prefix + ": connection lost — the console disconnected abruptly");
   else
 #endif
 #if ECONNRESET
   if (err == ECONNRESET)
-    last_error_ = prefix + ": connection reset by console";
+    set_error(prefix + ": connection reset by console");
   else
 #endif
-    last_error_ = prefix + ": " + platform::socket_error_text(err);
+    set_error(prefix + ": " + platform::socket_error_text(err));
 }
 
-void Client::set_error(const std::string &message) { last_error_ = message; }
+void Client::set_error(const std::string &message) {
+  std::lock_guard<std::mutex> lock(error_mutex_);
+  last_error_ = message;
+}
+
+void Client::clear_error() {
+  std::lock_guard<std::mutex> lock(error_mutex_);
+  last_error_.clear();
+}
 
 std::string platform_name(uint16_t platform_id) {
   switch (platform_id) {

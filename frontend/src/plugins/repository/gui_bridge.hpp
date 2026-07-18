@@ -23,7 +23,11 @@
 
 #include <nlohmann/json.hpp>
 
+namespace memdbg::frontend { class ClientPool; }
+
 namespace memdbg::frontend::plugins {
+
+class ProtocolBroker;
 
 /* ------------------------------------------------------------------ */
 /*  Widget tree node                                                   */
@@ -111,6 +115,8 @@ public:
   bool start(const std::filesystem::path &python_exe,
              const std::filesystem::path &script_path,
              const std::filesystem::path &context_path);
+  bool start_protocol_broker(ClientPool &pool);
+  uint16_t protocol_broker_port() const;
   void stop();
   bool running() const { return running_.load(std::memory_order_acquire); }
 
@@ -180,6 +186,7 @@ private:
   mutable std::mutex stderr_mutex_;
   std::string stderr_output_;
   static constexpr size_t kMaxStderrBytes = 64U * 1024U;
+  std::unique_ptr<ProtocolBroker> protocol_broker_;
 };
 
 } // namespace memdbg::frontend::plugins

@@ -85,7 +85,6 @@ int pal_socket_configure(socket_t fd) {
   int one = 1;
   (void)setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
   (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-  (void)pal_socket_set_timeouts(fd, 30000U, 30000U);
   /* Default send buffer: 256KB for bulk transfer throughput (matches zftpd). */
   (void)pal_socket_set_sndbuf(fd, 262144);
   return 0;
@@ -296,37 +295,35 @@ const char *pal_socket_last_error(void) { return strerror(errno); }
 
 /* ---- Zero-copy scatter-gather write using writev() ---- */
 
-ssize_t pal_socket_writev_all(socket_t fd,
-                              const void *iov0, size_t iov0_len,
-                              const void *iov1, size_t iov1_len) {
-  struct iovec iov[2];
-  size_t total = iov0_len + iov1_len;
+static ssize_t pal_socket_writev_n(socket_t fd, struct iovec *iov, int count) {
+  size_t total = 0U;
   size_t written = 0U;
 
-  if (fd < 0 || ((iov0 == NULL || iov0_len == 0U) &&
-                 (iov1 == NULL || iov1_len == 0U))) {
+  if (fd < 0 || iov == NULL || count <= 0 || count > 3) {
+    errno = EINVAL;
+    return -1;
+  }
+  for (int i = 0; i < count; ++i) {
+    if (iov[i].iov_len != 0U && iov[i].iov_base == NULL) {
+      errno = EINVAL;
+      return -1;
+    }
+    if (iov[i].iov_len > SIZE_MAX - total) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    total += iov[i].iov_len;
+  }
+  if (total == 0U) {
     errno = EINVAL;
     return -1;
   }
 
-  iov[0].iov_base = (void *)iov0;
-  iov[0].iov_len  = iov0_len;
-  iov[1].iov_base = (void *)iov1;
-  iov[1].iov_len  = iov1_len;
-
   while (written < total) {
-    /* Adjust iovecs for partial writes (writev advances nothing on short write). */
-    struct iovec cur[2];
+    struct iovec cur[3];
     int iovcnt = 0;
-
-    if (iov[0].iov_len > 0U) {
-      cur[iovcnt] = iov[0];
-      iovcnt++;
-    }
-    if (iov[1].iov_len > 0U) {
-      cur[iovcnt] = iov[1];
-      iovcnt++;
-    }
+    for (int i = 0; i < count; ++i)
+      if (iov[i].iov_len > 0U) cur[iovcnt++] = iov[i];
 
     if (iovcnt == 0) break;
 
@@ -342,22 +339,38 @@ ssize_t pal_socket_writev_all(socket_t fd,
 
     written += (size_t)n;
 
-    /* Consume written bytes from iovec buffers */
     size_t remain = (size_t)n;
-    if (iov[0].iov_len <= remain) {
-      remain -= iov[0].iov_len;
-      iov[0].iov_len = 0U;
-      if (remain > 0U) {
-        iov[1].iov_base = (uint8_t *)iov[1].iov_base + remain;
-        iov[1].iov_len -= remain;
+    for (int i = 0; i < count && remain > 0U; ++i) {
+      if (iov[i].iov_len <= remain) {
+        remain -= iov[i].iov_len;
+        iov[i].iov_len = 0U;
+      } else {
+        iov[i].iov_base = (uint8_t *)iov[i].iov_base + remain;
+        iov[i].iov_len -= remain;
+        remain = 0U;
       }
-    } else {
-      iov[0].iov_base = (uint8_t *)iov[0].iov_base + remain;
-      iov[0].iov_len -= remain;
     }
   }
 
   return (ssize_t)total;
+}
+
+ssize_t pal_socket_writev_all(socket_t fd,
+                              const void *iov0, size_t iov0_len,
+                              const void *iov1, size_t iov1_len) {
+  struct iovec iov[2] = {{(void *)iov0, iov0_len},
+                         {(void *)iov1, iov1_len}};
+  return pal_socket_writev_n(fd, iov, 2);
+}
+
+ssize_t pal_socket_writev3_all(socket_t fd,
+                               const void *iov0, size_t iov0_len,
+                               const void *iov1, size_t iov1_len,
+                               const void *iov2, size_t iov2_len) {
+  struct iovec iov[3] = {{(void *)iov0, iov0_len},
+                         {(void *)iov1, iov1_len},
+                         {(void *)iov2, iov2_len}};
+  return pal_socket_writev_n(fd, iov, 3);
 }
 
 /* ---- TCP_CORK / TCP_NOPUSH for batch-write efficiency ---- */

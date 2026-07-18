@@ -39,12 +39,16 @@ typedef struct {
   double      ops_per_sec;
 } bench_result_t;
 
-static bench_result_t g_results[64];
+static bench_result_t g_results[128];
 static int            g_result_count = 0;
-static char           g_labels[64][64];
+static char           g_labels[128][96];
 
 static void bench_record(const char *bname, double total_s,
                          uint64_t iters, size_t bytes) {
+  if (g_result_count >= (int)(sizeof(g_results) / sizeof(g_results[0]))) {
+    fprintf(stderr, "benchmark result capacity exceeded: %s\n", bname);
+    return;
+  }
   bench_result_t *r = &g_results[g_result_count];
   snprintf(g_labels[g_result_count], sizeof(g_labels[0]), "%s", bname);
   r->bench_name      = g_labels[g_result_count];
@@ -55,6 +59,22 @@ static void bench_record(const char *bname, double total_s,
   r->throughput_mb_s = ((double)bytes / (double)(1 << 20)) / denom;
   r->ops_per_sec     = (double)iters / denom;
   g_result_count++;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+#define BENCH_NOINLINE __attribute__((noinline))
+#else
+#define BENCH_NOINLINE
+#endif
+
+static BENCH_NOINLINE void bench_memcpy_call(void *dst, const void *src,
+                                             size_t size) {
+  memcpy(dst, src, size);
+}
+
+static BENCH_NOINLINE int bench_memcmp_call(const void *lhs, const void *rhs,
+                                            size_t size) {
+  return memcmp(lhs, rhs, size);
 }
 
 /* ---- Helpers ---- */
@@ -363,21 +383,21 @@ static void bench_memcpy_throughput(void) {
     if (!src || !dst) { free(src); free(dst); continue; }
     bench_fill_pattern(src, chunk, 0x12345678ULL);
 
-    /* Target ~1 second per benchmark for accurate measurement */
-    const uint64_t ITERS = (chunk <= 65536)    ? 5000000ULL
-                           : (chunk <= 262144)  ? 500000ULL
-                           : (chunk <= 1048576) ? 100000ULL
-                           : 5000ULL;
+    /* Process 16 GiB at every size: long enough for stable timing without
+       making small-block cases dominate the whole suite. */
+    uint64_t ITERS = (16ULL << 30) / chunk;
+    if (ITERS < 16U) ITERS = 16U;
 
     char label[64];
     snprintf(label, sizeof(label), "memcpy %zuB (DMAP proxy)", chunk);
 
-    volatile uint8_t *vd = dst; /* prevent optimization */
-    const uint8_t *vs = src;
     uint64_t t0 = bench_now_ns();
     for (uint64_t i = 0; i < ITERS; ++i)
-      memcpy((void *)vd, vs, chunk);
+      bench_memcpy_call(dst, src, chunk);
     uint64_t t1 = bench_now_ns();
+    /* Make the copied state observable after the timed loop. */
+    volatile uint8_t copied = dst[(chunk - 1U) / 2U];
+    (void)copied;
     double sec = (double)(t1 - t0) / 1e9;
     printf("  %-48s %10.4f s  (%" PRIu64 " iters, %zu B)\n",
            label, sec, ITERS, chunk);
@@ -399,17 +419,20 @@ static void bench_memcmp_throughput(void) {
     bench_fill_pattern(a, chunk, 0xAAAAAAAAULL);
     bench_fill_pattern(b, chunk, 0xAAAAAAAAULL);
 
-    const uint64_t ITERS = (chunk <= 65536)    ? 5000000ULL
-                           : (chunk <= 262144)  ? 500000ULL
-                           : 100000ULL;
+    uint64_t ITERS = (16ULL << 30) / chunk;
+    if (ITERS < 16U) ITERS = 16U;
 
     char label[64];
     snprintf(label, sizeof(label), "memcmp %zuB (scan compare proxy)", chunk);
 
     volatile int vdummy = 0;
     uint64_t t0 = bench_now_ns();
-    for (uint64_t i = 0; i < ITERS; ++i)
-      vdummy += memcmp(a, b, chunk);
+    for (uint64_t i = 0; i < ITERS; ++i) {
+      /* Change the last byte so the comparison must inspect the complete
+         range and cannot be hoisted out as an invariant equal-buffer test. */
+      b[chunk - 1U] ^= (uint8_t)((i & 1U) + 1U);
+      vdummy += bench_memcmp_call(a, b, chunk);
+    }
     uint64_t t1 = bench_now_ns();
     double sec = (double)(t1 - t0) / 1e9;
     printf("  %-48s %10.4f s  (%" PRIu64 " iters)\n", label, sec, ITERS);

@@ -45,6 +45,8 @@ extern "C" {
 #define LEGACY_CMD_SUCCESS   0x40000000U
 #define LEGACY_CMD_DATA_NULL 0xF0000003U
 #define LEGACY_CMD_ERROR     0xF0000002U
+#define LEGACY_CMD_ALREADY_DEBUG 0xF0000008U
+#define LEGACY_CMD_INVALID_INDEX 0xF000000AU
 
 /* ---- Command IDs ---- */
 
@@ -59,54 +61,72 @@ extern "C" {
 #define LEGACY_CMD_PROC_WRITE        0xBDAA0003U
 #define LEGACY_CMD_PROC_MAPS         0xBDAA0004U
 #define LEGACY_CMD_PROC_INSTALL      0xBDAA0005U
+#define LEGACY_CMD_PROC_CALL         0xBDAA0006U
+#define LEGACY_CMD_PROC_ELF_LOAD     0xBDAA0007U
 #define LEGACY_CMD_PROC_PROTECT      0xBDAA0008U
 #define LEGACY_CMD_PROC_INFO         0xBDAA000AU
 #define LEGACY_CMD_PROC_ALLOC        0xBDAA000BU
 #define LEGACY_CMD_PROC_FREE         0xBDAA000CU
 #define LEGACY_CMD_PROC_FIRST_MAP    0xBDAA000DU
 #define LEGACY_CMD_PROC_ALLOC_HINTED 0xBDAA000EU
+#define LEGACY_CMD_PROC_ELF_RPC      0xBDAA0010U
+#define LEGACY_CMD_DISASM            0xBDAA0020U
+#define LEGACY_CMD_EXTRACT_XREFS     0xBDAA0021U
+#define LEGACY_CMD_XREFS             0xBDAA0022U
+#define LEGACY_CMD_PROC_STACK        0xBDAA0023U
+#define LEGACY_CMD_ASSEMBLE          0xBDAA0024U
+#define LEGACY_CMD_SCAN_AOB          0xBDAA0501U
+#define LEGACY_CMD_SCAN_AOB_MULTI    0xBDAA0502U
 #define LEGACY_CMD_PROC_WRITE_MULTI  0xBDAACC04U
 #define LEGACY_CMD_PROC_AUTH         0xBDAACCFFU
 
 #define LEGACY_CMD_SCAN       0xBDAA0009U
-#define LEGACY_CMD_SCAN_AOB   0xBDAACC01U
-#define LEGACY_CMD_SCAN_CONT  0xBDAACC02U
+#define LEGACY_CMD_SCAN_START 0xBDAACC01U
+#define LEGACY_CMD_SCAN_COUNT 0xBDAACC02U
 #define LEGACY_CMD_SCAN_FETCH 0xBDAACC03U
 
-#define LEGACY_CMD_DEBUG_ATTACH       0xBDAA0006U
-#define LEGACY_CMD_DEBUG_DETACH       0xBDAA0007U
-#define LEGACY_CMD_DEBUG_STOP         0xBDAA0010U
-#define LEGACY_CMD_DEBUG_CONTINUE     0xBDAA0011U
-#define LEGACY_CMD_DEBUG_STEP         0xBDAA0012U
-#define LEGACY_CMD_DEBUG_GET_REGS     0xBDAA0013U
-#define LEGACY_CMD_DEBUG_SET_REGS     0xBDAA0014U
-#define LEGACY_CMD_DEBUG_SET_BP       0xBDAA0015U
-#define LEGACY_CMD_DEBUG_CLEAR_BP     0xBDAA0016U
-#define LEGACY_CMD_DEBUG_SET_WP       0xBDAA0017U
-#define LEGACY_CMD_DEBUG_CLEAR_WP     0xBDAA0018U
-#define LEGACY_CMD_DEBUG_GET_THREADS  0xBDAA0019U
-#define LEGACY_CMD_DEBUG_SUSPEND_TID  0xBDAA001AU
-#define LEGACY_CMD_DEBUG_RESUME_TID   0xBDAA001BU
+#define LEGACY_CMD_DEBUG_ATTACH       0xBDBB0001U
+#define LEGACY_CMD_DEBUG_DETACH       0xBDBB0002U
+#define LEGACY_CMD_DEBUG_SET_BP       0xBDBB0003U
+#define LEGACY_CMD_DEBUG_SET_WP       0xBDBB0004U
+#define LEGACY_CMD_DEBUG_GET_THREADS  0xBDBB0005U
+#define LEGACY_CMD_DEBUG_SUSPEND_TID  0xBDBB0006U
+#define LEGACY_CMD_DEBUG_RESUME_TID   0xBDBB0007U
+#define LEGACY_CMD_DEBUG_GET_REGS     0xBDBB0008U
+#define LEGACY_CMD_DEBUG_SET_REGS     0xBDBB0009U
+#define LEGACY_CMD_DEBUG_GET_FPREGS   0xBDBB000AU
+#define LEGACY_CMD_DEBUG_SET_FPREGS   0xBDBB000BU
+#define LEGACY_CMD_DEBUG_GET_DBREGS   0xBDBB000CU
+#define LEGACY_CMD_DEBUG_SET_DBREGS   0xBDBB000DU
+#define LEGACY_CMD_DEBUG_GET_FSGSBASE 0xBDBB000EU
+#define LEGACY_CMD_DEBUG_SET_FSGSBASE 0xBDBB000FU
+#define LEGACY_CMD_DEBUG_CONTINUE     0xBDBB0010U
+#define LEGACY_CMD_DEBUG_THREAD_INFO  0xBDBB0011U
+#define LEGACY_CMD_DEBUG_STEP         0xBDBB0012U
+#define LEGACY_CMD_DEBUG_STEP_THREAD  0xBDBB0013U
+#define LEGACY_CMD_DEBUG_PROCESS_STOP 0xBDBB0500U
 
-#define LEGACY_CMD_INTERRUPT      0xBDAACC07U
 #define LEGACY_DEBUGGER_INT_PORT  755U
 
-#define LEGACY_CMD_KERN_BASE  0xBDAA001CU
-#define LEGACY_CMD_KERN_READ  0xBDAA001DU
-#define LEGACY_CMD_KERN_WRITE 0xBDAA001EU
+#define LEGACY_CMD_KERN_BASE  0xBDCC0001U
+#define LEGACY_CMD_KERN_READ  0xBDCC0002U
+#define LEGACY_CMD_KERN_WRITE 0xBDCC0003U
 
-#define LEGACY_CMD_DISASM        0xBDAA001FU
-#define LEGACY_CMD_XREFS         0xBDAA0020U
-#define LEGACY_CMD_PROC_CALL     0xBDAA0021U
-#define LEGACY_CMD_PROC_ELF_LOAD 0xBDAA0022U
+#define LEGACY_CMD_CONSOLE_REBOOT     0xBDDD0001U
+#define LEGACY_CMD_CONSOLE_END        0xBDDD0002U
+#define LEGACY_CMD_CONSOLE_PRINT      0xBDDD0003U
+#define LEGACY_CMD_CONSOLE_NOTIFY     0xBDDD0004U
+#define LEGACY_CMD_CONSOLE_INFO       0xBDDD0005U
+#define LEGACY_CMD_CONSOLE_FOREGROUND 0xBDDD0006U
 
-#define LEGACY_CMD_QUICKSCAN_CAPS    0xBDAACC08U
-#define LEGACY_CMD_QUICKSCAN_START   0xBDAACC09U
-#define LEGACY_CMD_QUICKSCAN_COUNT   0xBDAACC0AU
-#define LEGACY_CMD_QUICKSCAN_FETCH   0xBDAACC0BU
-#define LEGACY_CMD_QUICKSCAN_END     0xBDAACC0CU
-#define LEGACY_CMD_QUICKSCAN_CONFIG  0xBDAACC0DU
-#define LEGACY_CMD_QUICKSCAN_REGIONS 0xBDAACC0EU
+#define LEGACY_CMD_QUICKSCAN_CAPS    0xBDAACC10U
+#define LEGACY_CMD_QUICKSCAN_START   0xBDAACC11U
+#define LEGACY_CMD_QUICKSCAN_COUNT   0xBDAACC12U
+#define LEGACY_CMD_QUICKSCAN_FETCH   0xBDAACC13U
+#define LEGACY_CMD_QUICKSCAN_END     0xBDAACC14U
+#define LEGACY_CMD_QUICKSCAN_CONFIG  0xBDAACC15U
+#define LEGACY_CMD_QUICKSCAN_REGIONS 0xBDAACC16U
+#define LEGACY_CMD_ARENA_CONFIG      0xBDAACC24U
 
 #define LEGACY_RW_CHUNK               0x10000U
 #define LEGACY_WRITE_MULTI_STATUS     0x1U
@@ -416,12 +436,18 @@ memdbg_status_t legacy_handle_debug_clear_wp(socket_t fd, const void *body, uint
 memdbg_status_t legacy_handle_debug_get_threads(socket_t fd);
 memdbg_status_t legacy_handle_debug_suspend_thread(socket_t fd, const void *body, uint32_t body_len);
 memdbg_status_t legacy_handle_debug_resume_thread(socket_t fd, const void *body, uint32_t body_len);
+memdbg_status_t legacy_handle_debug_command(socket_t fd, uint32_t command,
+                                            const void *body, uint32_t body_len);
 
 /* ---- Kernel bridge (defined in legacy_kernel.c) ---- */
 
 memdbg_status_t legacy_handle_kern_base(socket_t fd);
 memdbg_status_t legacy_handle_kern_read(socket_t fd, const memdbg_config_t *cfg, const void *body, uint32_t body_len);
 memdbg_status_t legacy_handle_kern_write(socket_t fd, const memdbg_config_t *cfg, const void *body, uint32_t body_len);
+
+/* ---- Console bridge (defined in console.c) ---- */
+memdbg_status_t legacy_handle_console_command(socket_t fd, uint32_t command,
+                                              const void *body, uint32_t body_len);
 
 /* ---- Analysis bridge: disasm/xref/remote-call/elf-load (defined in legacy_analysis.c) ---- */
 

@@ -292,7 +292,6 @@ void draw_lua(AppState &state, ImVec2 avail) {
 
     const float scl = ui::dpi_scale();
     const float copy_btn_w = 105.0f * scl;
-    const float row_h = ImGui::GetTextLineHeightWithSpacing();
 
     for (const auto &entry : api_entries) {
       ImGui::PushID(entry.signature);

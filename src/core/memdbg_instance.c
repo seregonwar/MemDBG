@@ -167,6 +167,33 @@ static bool request_previous_shutdown(const memdbg_config_t *cfg) {
   return stopped;
 }
 
+static bool request_previous_legacy_shutdown(const memdbg_config_t *cfg) {
+  struct __attribute__((packed)) {
+    uint32_t magic;
+    uint32_t command;
+    uint32_t data_len;
+  } request = {0xFFAABBCCU, 0xBDDD0002U, 0U};
+  uint32_t response = 0U;
+  socket_t fd = PAL_INVALID_SOCKET;
+
+  if (cfg == NULL || !cfg->enable_legacy_compat || cfg->legacy_port == 0U)
+    return false;
+  if (pal_tcp_connect(instance_control_host(cfg), cfg->legacy_port, 500U,
+                      &fd) != 0)
+    return false;
+  const bool accepted =
+      pal_socket_write_all(fd, &request, sizeof(request)) ==
+          (ssize_t)sizeof(request) &&
+      pal_socket_read_exact(fd, &response, sizeof(response)) ==
+          (ssize_t)sizeof(response);
+  (void)pal_socket_close(fd);
+  if (accepted)
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "instance: previous payload accepted legacy shutdown on %s:%u",
+                     instance_control_host(cfg), cfg->legacy_port);
+  return accepted;
+}
+
 static bool wait_for_process_exit(int pid, uint32_t timeout_ms) {
   const uint32_t step_ms = 50U;
   uint32_t waited = 0U;
@@ -215,6 +242,14 @@ static bool terminate_process(int pid) {
 
 /* ---- Public API ---- */
 
+bool memdbg_instance_is_current_process(const memdbg_config_t *cfg) {
+  char path[MEMDBG_PATH_MAX];
+
+  if (cfg == NULL || build_pid_path(cfg, path, sizeof(path)) != 0)
+    return false;
+  return read_pid_file(path) == (int)getpid();
+}
+
 memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
   char path[MEMDBG_PATH_MAX];
   int prev_pid;
@@ -225,21 +260,27 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
   if (build_pid_path(cfg, path, sizeof(path)) != 0)
     return MEMDBG_ERR_PARAM;
 
+  /* GoldHEN can invoke an ELF again inside the same loader process.  In that
+   * case killing or cooperatively shutting down the PID would also tear down
+   * the already healthy instance.  Treat the existing daemon as authoritative
+   * and let the second entry point return without touching its sockets. */
+  prev_pid = read_pid_file(path);
+  if (prev_pid == getpid()) {
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "instance: MemDBG is already running in pid %d",
+                     prev_pid);
+    return MEMDBG_ERR_STATE;
+  }
+
   /* This also covers old payloads whose pid file was lost or pre-dates the
    * file lifecycle.  Its matching response proves that the listener is
    * memDBG before we ever consider a PID-based fallback. */
   confirmed_live_payload = request_previous_shutdown(cfg);
+  if (!confirmed_live_payload)
+    confirmed_live_payload = request_previous_legacy_shutdown(cfg);
 
   prev_pid = read_pid_file(path);
   if (prev_pid <= 0) return MEMDBG_OK; /* no PID fallback available */
-
-  /* Never kill ourself. */
-  if (prev_pid == getpid()) {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "instance: pid file contains our own pid (%d); ignoring",
-                     prev_pid);
-    return MEMDBG_OK;
-  }
 
   if (!process_exists(prev_pid)) {
     /* Stale PID file — clean it up. */

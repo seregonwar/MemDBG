@@ -39,6 +39,23 @@
 
 #if defined(MEMDBG_PAL_DEBUG_PS5)
 #include <ps5/kernel.h>
+#include "memdbg/pal/pal_kernel_fast.h"
+
+static int pal_debug_kernel_copyout(intptr_t source, void *destination,
+                                    size_t length) {
+  return memdbg_kernel_fast_available()
+             ? memdbg_kernel_copyout_fast(source, destination, length)
+             : kernel_copyout(source, destination, length);
+}
+
+static intptr_t pal_debug_kernel_get_proc(pid_t pid) {
+  return memdbg_kernel_fast_available()
+             ? memdbg_kernel_get_proc_fast(pid)
+             : kernel_get_proc(pid);
+}
+
+#define kernel_copyout pal_debug_kernel_copyout
+#define kernel_get_proc pal_debug_kernel_get_proc
 #endif
 
 #if defined(MEMDBG_PAL_DEBUG_FREEBSD)
@@ -58,7 +75,7 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
    * rejects a denied PT_ATTACH without setting errno, so we synthesize
    * EPERM to give callers an actionable error instead of "No error".
    */
-#if defined(MEMDBG_PAL_DEBUG_PS5)
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE)
   memdbg_ucred_backup_t backup;
   if (memdbg_privilege_begin_ptrace(&backup) != 0) return -1;
 #endif
@@ -68,7 +85,7 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
   int operation_errno = errno;
   if (result == -1 && operation_errno == 0) operation_errno = EPERM;
 
-#if defined(MEMDBG_PAL_DEBUG_PS5)
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE)
   if (memdbg_privilege_end_ptrace(&backup) != 0) {
     if (result != -1) return -1;
   }

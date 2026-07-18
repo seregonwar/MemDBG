@@ -1,6 +1,6 @@
 # MemDBG Internal Protocol Specification
 
-Status: draft standard for `MEMDBG_PROTOCOL_VERSION` 1  
+Status: stable wire version `MEMDBG_PROTOCOL_VERSION` 1, feature level 2
 Canonical header: [`include/memdbg/core/memdbg_protocol.h`](../include/memdbg/core/memdbg_protocol.h)  
 Canonical daemon dispatch: [`src/core/daemon/dispatch.c`](../src/core/daemon/dispatch.c)  
 Canonical frontend client: [`frontend/src/core/client/memdbg_client.cpp`](../frontend/src/core/client/memdbg_client.cpp)
@@ -12,6 +12,14 @@ frontends, automation tools, tests, plugins, and future third-party clients.
 The C header remains the ABI source of truth. This document explains how the
 fields are serialized, how commands are grouped, which behaviors are normative,
 and how the protocol should evolve without breaking existing clients.
+
+`MEMDBG_PROTOCOL_VERSION` identifies the packet framing and remains `1` for
+backward compatibility. `MEMDBG_PROTOCOL_FEATURE_LEVEL` identifies the
+append-only command/HELLO feature set and is currently `2`. User interfaces
+must therefore present the negotiated pair as **feature level v2 (wire v1)**,
+not simply "Protocol v1". A v2 client accepts the shorter legacy HELLO body and
+defaults its missing feature level to `1`; a v2 payload appends the negotiated
+feature level without changing any v1 field offsets.
 
 ## Goals
 
@@ -185,23 +193,8 @@ Every control response starts with `memdbg_response_header_t`.
 | 4 | 2 | `version` | `uint16_t` | Protocol version used by the daemon. |
 | 6 | 2 | `command` | `uint16_t` | Echo of the request command. |
 | 8 | 4 | `request_id` | `uint32_t` | Echo of the request id. |
-| 12 | 4 | `status` | `int32_t` | `memdbg_status_t`. When bit 31 (`MEMDBG_RESP_STATUS_STREAMING`) is set, the body is a chunked stream. Valid status codes range from 0 to -10, so bit 31 is never set for a normal response. Clients must strip the streaming bit before interpreting the status value. |
-| 16 | 4 | `length` | `uint32_t` | Response body size in bytes. For streamed responses, this reflects the total remaining bytes across all chunks. |
-
-### Streaming Responses
-
-When the daemon sets `MEMDBG_RESP_STATUS_STREAMING` (bit 31 of the status
-field), the response body is a sequence of typed chunks rather than a single
-opaque payload. Each chunk has a 2-byte type prefix:
-
-| Prefix | Type | Body |
-|---:|---|---|
-| `0x0000` | Data | `uint32_t chunk_length` + `chunk_length` bytes |
-| `0x0001` | Progress | `uint64_t slot_index` (current scan progress) |
-| `0xFFFF` | End-of-stream | None (the stream is complete) |
-
-QuickScan commands use this format to interleave progress updates with result
-data without blocking the scan loop on socket writes.
+| 12 | 4 | `status` | `int32_t` | `memdbg_status_t`. `0` means success; errors are negative values. |
+| 16 | 4 | `length` | `uint32_t` | Response body size in bytes. |
 
 When `status != MEMDBG_OK`, the response body is usually empty. Some commands
 may return partial per-entry status arrays with a success header status; command
@@ -345,6 +338,8 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_PROCESS_CALL` | `0x010C` | `memdbg_process_call_request_t` | `memdbg_process_call_response_t` |
 | `MEMDBG_CMD_PROCESS_ELF_LOAD` | `0x010D` | `memdbg_process_elf_load_request_t` + ELF bytes | `memdbg_process_elf_load_response_t` |
 | `MEMDBG_CMD_PROCESS_HIJACK` | `0x010E` | `memdbg_process_hijack_request_t` + ELF bytes | `memdbg_process_hijack_response_t` |
+| `MEMDBG_CMD_PROCESS_DUMP` | `0x010F` | `memdbg_process_dump_request_t` | streamed dump response |
+| `MEMDBG_CMD_PROCESS_MAPS_V2` | `0x0110` | `memdbg_process_maps_request_t` | raw/LZ4 framed map list |
 | `MEMDBG_CMD_MEMORY_READ` | `0x0200` | `memdbg_memory_request_t` | framed bytes |
 | `MEMDBG_CMD_MEMORY_WRITE` | `0x0201` | `memdbg_memory_request_t` + bytes | `uint32_t written` |
 | `MEMDBG_CMD_BATCH_READ` | `0x0202` | prefix + `memdbg_batch_read_item_t[]` | result entries + framed bytes |
@@ -410,10 +405,10 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_PTWALK_READ` | `0x0C02` | `memdbg_ptwalk_io_request_t` | raw bytes |
 | `MEMDBG_CMD_PTWALK_WRITE` | `0x0C03` | `memdbg_ptwalk_io_request_t` + bytes | empty |
 | `MEMDBG_CMD_PTWALK_PROBE` | `0x0C04` | `memdbg_ptwalk_probe_request_t` | `memdbg_ptwalk_probe_response_t` |
-| `MEMDBG_CMD_AUTH_KEY` | `0x0D00` | `memdbg_auth_key_request_t` | command-defined |
-| `MEMDBG_CMD_ARENA_CONFIG` | `0x0D01` | `memdbg_arena_config_request_t` | command-defined |
+| `MEMDBG_CMD_AUTH_KEY` | `0x0D00` | `memdbg_auth_key_request_t` | empty; status is in the normal response header |
+| `MEMDBG_CMD_ARENA_CONFIG` | `0x0D01` | `memdbg_arena_config_request_t` | empty; status is in the normal response header |
 | `MEMDBG_CMD_KLOG_CONNECT` | `0x0D02` | `memdbg_klog_connect_request_t` | `uint32_t klog_port` |
-| `MEMDBG_CMD_GET_EXTENDED_CAPS` | `0x0D03` | empty | `uint32_t count` + `uint32_t caps[count]` |
+| `MEMDBG_CMD_GET_EXTENDED_CAPS` | `0x0D03` | empty | `uint32_t count` + `uint32_t capability_words[count]` |
 | `MEMDBG_CMD_SHUTDOWN` | `0x7F00` | empty | empty |
 
 ## Capabilities
@@ -513,6 +508,13 @@ memdbg_process_entry_t entry[count]
 uint32_t count
 memdbg_map_entry_t entry[count]
 ```
+
+`PROCESS_MAPS_V2` carries the same logical body in the standard raw/LZ4
+response frame. A client may probe V2 once per connection and fall back to
+`PROCESS_MAPS` when an older payload returns `MEMDBG_ERR_UNSUPPORTED` (or the
+historical `MEMDBG_ERR_PROTOCOL` used for unknown commands). This preserves
+wire compatibility while reducing large map-table transfers on both PS4 and
+PS5.
 
 Map protection uses `MEMDBG_MAP_PROT_READ`, `MEMDBG_MAP_PROT_WRITE`, and
 `MEMDBG_MAP_PROT_EXEC`.
@@ -762,6 +764,13 @@ Request flags mirror many engine flags:
 `QUICKSCAN_START` and `QUICKSCAN_COUNT` append compare bytes after their fixed
 prefix. Between comparisons append two values. AOB-style values additionally
 append a mask of `value_length` bytes.
+
+`MEMDBG_QS_FL_SNAP_SEGMENTS` is not advertised or accepted by the framed v1
+transport. The original engine attempted to read the segment count and records
+directly from the socket after the request frame, which could consume the next
+packet and permanently desynchronize a pooled connection. Disjoint segments
+will require a future framed command version in which the count and every
+descriptor are included in the declared request body.
 
 `QUICKSCAN_FETCH` pages resident results with `start_index` and `count`.
 `QUICKSCAN_END` releases server-side state. `QUICKSCAN_CANCEL` immediately

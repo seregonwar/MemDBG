@@ -17,11 +17,14 @@ extern "C" {
 #endif
 
 #define FLASHSCAN_MAX_SESSIONS 12U
+#define FLASHSCAN_INVALID_SLOT FLASHSCAN_MAX_SESSIONS
 
 // Lifecycle
 void flashscan_init(void);
 void flashscan_cleanup_orphans(void);
 void flashscan_free_slot(unsigned int slot);
+unsigned int flashscan_slot_for_client(int client_fd);
+void flashscan_release_client(int client_fd);
 
 // Handlers
 int flashscan_handle_caps(int fd);

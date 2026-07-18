@@ -8,8 +8,14 @@
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/pal/pal_time.h"
 
+#include <errno.h>
+#include <signal.h>
+
 legacy_debugger_session_t g_debugger;
 pthread_mutex_t g_debugger_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static uint64_t g_legacy_breakpoints[30];
+static uint64_t g_legacy_watchpoints[4];
 
 void debugger_session_init(void) {
   memset(&g_debugger, 0, sizeof(g_debugger));
@@ -56,9 +62,39 @@ static bool debugger_connect_intr_socket(void) {
 }
 
 int legacy_debugger_send_intr(int32_t lwp) {
-  uint32_t wire[2]; wire[0] = legacy_bitswap32(LEGACY_CMD_INTERRUPT); wire[1] = (uint32_t)lwp;
   if (g_debugger.intr_fd == PAL_INVALID_SOCKET) return -1;
-  return pal_socket_write_all(g_debugger.intr_fd, wire, sizeof(wire)) < 0 ? -1 : 0;
+  uint8_t packet[1184];
+  memset(packet, 0, sizeof(packet));
+  memcpy(packet, &lwp, sizeof(lwp));
+
+  int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
+  char names[MEMDBG_DEBUGGER_MAX_THREADS][24];
+  uint32_t count = MEMDBG_DEBUGGER_MAX_THREADS;
+  if (memdbg_debugger_get_threads(lwps, names, NULL, &count,
+                                  MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
+    for (uint32_t i = 0U; i < count; ++i) {
+      if (lwps[i] == lwp) {
+        legacy_copy_fixed((char *)packet + 8U, 40U, names[i]);
+        break;
+      }
+    }
+  }
+
+  memdbg_debug_regs_t regs;
+  memdbg_debug_fpregs_t fpregs;
+  memdbg_debug_dbregs_t dbregs;
+  memset(&regs, 0, sizeof(regs));
+  memset(&fpregs, 0, sizeof(fpregs));
+  memset(&dbregs, 0, sizeof(dbregs));
+  (void)memdbg_debugger_get_regs(lwp, &regs);
+  (void)memdbg_debugger_get_fpregs(lwp, &fpregs);
+  (void)memdbg_debugger_get_dbregs(lwp, &dbregs);
+  memcpy(packet + 0x30U, &regs, sizeof(regs));
+  memcpy(packet + 0xE0U, fpregs.data,
+         fpregs.length < 832U ? fpregs.length : 832U);
+  memcpy(packet + 0x420U, &dbregs, sizeof(dbregs));
+  return pal_socket_write_all(g_debugger.intr_fd, packet, sizeof(packet)) < 0
+             ? -1 : 0;
 }
 
 static void *legacy_debugger_intr_thread(void *arg) {
@@ -82,7 +118,11 @@ memdbg_status_t legacy_handle_debug_attach(socket_t fd, const void *body, uint32
     return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   const legacy_debug_attach_request_t *req = (const legacy_debug_attach_request_t *)body;
   if (!memdbg_debugger_supported()) return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-  debugger_session_cleanup(); debugger_session_init();
+  if (memdbg_debugger_is_attached())
+    return legacy_send_status(fd, LEGACY_CMD_ALREADY_DEBUG) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  debugger_session_init();
+  memset(g_legacy_breakpoints, 0, sizeof(g_legacy_breakpoints));
+  memset(g_legacy_watchpoints, 0, sizeof(g_legacy_watchpoints));
   memdbg_status_t st = memdbg_debugger_attach((int32_t)req->pid);
   if (st != MEMDBG_OK) return legacy_send_memdbg_status(fd, st) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   if (peer_ss != NULL) (void)legacy_sockaddr_ipv4_host(peer_ss, g_debugger.peer_host, sizeof(g_debugger.peer_host));
@@ -175,4 +215,252 @@ memdbg_status_t legacy_handle_debug_suspend_thread(socket_t fd, const void *body
 memdbg_status_t legacy_handle_debug_resume_thread(socket_t fd, const void *body, uint32_t body_len) {
   if (!legacy_has_body(body, body_len, sizeof(legacy_debug_thread_request_t))) return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   return legacy_send_memdbg_status(fd, memdbg_debugger_resume_thread(((const legacy_debug_thread_request_t *)body)->lwp)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+typedef struct legacy_debug_indexed_breakpoint {
+  uint32_t index;
+  uint32_t enabled;
+  uint64_t address;
+} LEGACY_PACKED legacy_debug_indexed_breakpoint_t;
+
+typedef struct legacy_debug_indexed_watchpoint {
+  uint32_t index;
+  uint32_t enabled;
+  uint32_t length;
+  uint32_t break_type;
+  uint64_t address;
+} LEGACY_PACKED legacy_debug_indexed_watchpoint_t;
+
+typedef struct legacy_debug_blob_request {
+  uint32_t lwp;
+  uint32_t length;
+} LEGACY_PACKED legacy_debug_blob_request_t;
+
+typedef struct legacy_debug_thread_info {
+  uint32_t lwp;
+  uint32_t priority;
+  char name[32];
+} LEGACY_PACKED legacy_debug_thread_info_t;
+
+static memdbg_status_t legacy_debug_send_result(socket_t fd,
+                                                 memdbg_status_t status) {
+  return legacy_send_memdbg_status(fd, status) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+static memdbg_status_t legacy_debug_get_blob(socket_t fd, uint32_t command,
+                                             int32_t lwp) {
+  memdbg_status_t st;
+  if (command == LEGACY_CMD_DEBUG_GET_REGS) {
+    memdbg_debug_regs_t regs;
+    st = memdbg_debugger_get_regs(lwp, &regs);
+    return st == MEMDBG_OK && legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+                   legacy_send_blob(fd, &regs, sizeof(regs)) == 0
+               ? MEMDBG_OK : (st == MEMDBG_OK ? MEMDBG_ERR_NET
+                                               : legacy_debug_send_result(fd, st));
+  }
+  if (command == LEGACY_CMD_DEBUG_GET_DBREGS) {
+    memdbg_debug_dbregs_t regs;
+    st = memdbg_debugger_get_dbregs(lwp, &regs);
+    return st == MEMDBG_OK && legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+                   legacy_send_blob(fd, &regs, sizeof(regs)) == 0
+               ? MEMDBG_OK : (st == MEMDBG_OK ? MEMDBG_ERR_NET
+                                               : legacy_debug_send_result(fd, st));
+  }
+  if (command == LEGACY_CMD_DEBUG_GET_FPREGS) {
+    memdbg_debug_fpregs_t regs;
+    uint8_t wire[832];
+    memset(&regs, 0, sizeof(regs));
+    memset(wire, 0, sizeof(wire));
+    st = memdbg_debugger_get_fpregs(lwp, &regs);
+    if (st == MEMDBG_OK)
+      memcpy(wire, regs.data, regs.length < sizeof(wire) ? regs.length : sizeof(wire));
+    return st == MEMDBG_OK && legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+                   legacy_send_blob(fd, wire, sizeof(wire)) == 0
+               ? MEMDBG_OK : (st == MEMDBG_OK ? MEMDBG_ERR_NET
+                                               : legacy_debug_send_result(fd, st));
+  }
+  if (command == LEGACY_CMD_DEBUG_GET_FSGSBASE) {
+    memdbg_debug_fsgsbase_t base;
+    st = memdbg_debugger_get_fsgsbase(lwp, &base);
+    return st == MEMDBG_OK && legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+                   legacy_send_blob(fd, &base, sizeof(base)) == 0
+               ? MEMDBG_OK : (st == MEMDBG_OK ? MEMDBG_ERR_NET
+                                               : legacy_debug_send_result(fd, st));
+  }
+  return legacy_debug_send_result(fd, MEMDBG_ERR_UNSUPPORTED);
+}
+
+static memdbg_status_t legacy_debug_set_blob(socket_t fd, uint32_t command,
+                                             const legacy_debug_blob_request_t *req) {
+  uint32_t expected = 0U;
+  if (command == LEGACY_CMD_DEBUG_SET_REGS) expected = (uint32_t)sizeof(memdbg_debug_regs_t);
+  else if (command == LEGACY_CMD_DEBUG_SET_DBREGS) expected = (uint32_t)sizeof(memdbg_debug_dbregs_t);
+  else if (command == LEGACY_CMD_DEBUG_SET_FPREGS) {
+    if (req->length != 512U && req->length != 832U)
+      return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    expected = req->length;
+  } else if (command == LEGACY_CMD_DEBUG_SET_FSGSBASE) {
+    expected = (uint32_t)sizeof(memdbg_debug_fsgsbase_t);
+  }
+  if (expected == 0U || req->length != expected)
+    return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+
+  uint8_t *blob = (uint8_t *)malloc(expected);
+  if (blob == NULL) return legacy_debug_send_result(fd, MEMDBG_ERR_NOMEM);
+  if (legacy_send_status(fd, LEGACY_CMD_SUCCESS) != 0) { free(blob); return MEMDBG_ERR_NET; }
+  if (pal_socket_read_exact(fd, blob, expected) < 0) { free(blob); return MEMDBG_ERR_NET; }
+
+  memdbg_status_t st = MEMDBG_ERR_UNSUPPORTED;
+  if (command == LEGACY_CMD_DEBUG_SET_REGS)
+    st = memdbg_debugger_set_regs((int32_t)req->lwp,
+                                  (const memdbg_debug_regs_t *)blob);
+  else if (command == LEGACY_CMD_DEBUG_SET_DBREGS)
+    st = memdbg_debugger_set_dbregs((int32_t)req->lwp,
+                                    (const memdbg_debug_dbregs_t *)blob);
+  else if (command == LEGACY_CMD_DEBUG_SET_FSGSBASE)
+    st = memdbg_debugger_set_fsgsbase((int32_t)req->lwp,
+                                      (const memdbg_debug_fsgsbase_t *)blob);
+  else {
+    memdbg_debug_fpregs_t regs;
+    memset(&regs, 0, sizeof(regs));
+    regs.length = expected;
+    memcpy(regs.data, blob, expected);
+    st = memdbg_debugger_set_fpregs((int32_t)req->lwp, &regs);
+  }
+  free(blob);
+  return legacy_debug_send_result(fd, st);
+}
+
+memdbg_status_t legacy_handle_debug_command(socket_t fd, uint32_t command,
+                                            const void *body,
+                                            uint32_t body_len) {
+  if (command == LEGACY_CMD_DEBUG_DETACH) return legacy_handle_debug_detach(fd);
+
+  if (command == LEGACY_CMD_DEBUG_GET_THREADS) {
+    int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
+    uint32_t count = MEMDBG_DEBUGGER_MAX_THREADS;
+    memdbg_status_t st = memdbg_debugger_get_threads(
+        lwps, NULL, NULL, &count, MEMDBG_DEBUGGER_MAX_THREADS);
+    if (st != MEMDBG_OK) return legacy_debug_send_result(fd, st);
+    return legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+                   legacy_send_blob(fd, &count, sizeof(count)) == 0 &&
+                   legacy_send_blob(fd, lwps, (size_t)count * sizeof(lwps[0])) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+
+  if (command == LEGACY_CMD_DEBUG_STEP) {
+    int32_t lwp = memdbg_debugger_get_stop_lwp();
+    if (lwp <= 0) lwp = memdbg_debugger_attached_pid();
+    return legacy_debug_send_result(fd, memdbg_debugger_step(lwp));
+  }
+
+  if (command == LEGACY_CMD_DEBUG_SET_BP) {
+    if (!legacy_has_body(body, body_len, sizeof(legacy_debug_indexed_breakpoint_t)))
+      return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    const legacy_debug_indexed_breakpoint_t *req =
+        (const legacy_debug_indexed_breakpoint_t *)body;
+    if (req->index >= 30U)
+      return legacy_send_status(fd, LEGACY_CMD_INVALID_INDEX) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+    memdbg_status_t st;
+    if (req->enabled != 0U) {
+      st = memdbg_debugger_set_breakpoint(req->address, MEMDBG_BP_SOFTWARE);
+      if (st == MEMDBG_OK) g_legacy_breakpoints[req->index] = req->address;
+    } else {
+      uint64_t address = g_legacy_breakpoints[req->index];
+      st = address != 0U ? memdbg_debugger_clear_breakpoint(address) : MEMDBG_OK;
+      if (st == MEMDBG_OK) g_legacy_breakpoints[req->index] = 0U;
+    }
+    return legacy_debug_send_result(fd, st);
+  }
+
+  if (command == LEGACY_CMD_DEBUG_SET_WP) {
+    if (!legacy_has_body(body, body_len, sizeof(legacy_debug_indexed_watchpoint_t)))
+      return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    const legacy_debug_indexed_watchpoint_t *req =
+        (const legacy_debug_indexed_watchpoint_t *)body;
+    if (req->index >= 4U)
+      return legacy_send_status(fd, LEGACY_CMD_INVALID_INDEX) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+    static const uint32_t lengths[4] = {1U, 2U, 8U, 4U};
+    memdbg_status_t st;
+    if (req->enabled != 0U) {
+      uint32_t type = req->break_type == 0U ? 0U :
+                      req->break_type == 1U ? 1U : 3U;
+      st = memdbg_debugger_set_watchpoint(req->address,
+                                          lengths[req->length & 3U], type);
+      if (st == MEMDBG_OK) g_legacy_watchpoints[req->index] = req->address;
+    } else {
+      uint64_t address = g_legacy_watchpoints[req->index];
+      st = address != 0U ? memdbg_debugger_clear_watchpoint(address) : MEMDBG_OK;
+      if (st == MEMDBG_OK) g_legacy_watchpoints[req->index] = 0U;
+    }
+    return legacy_debug_send_result(fd, st);
+  }
+
+  if (command == LEGACY_CMD_DEBUG_CONTINUE) {
+    if (!legacy_has_body(body, body_len, sizeof(uint32_t)))
+      return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    uint32_t action = *(const uint32_t *)body;
+    if (action == 0U) return legacy_debug_send_result(fd, memdbg_debugger_continue());
+    if (action == 1U) return legacy_debug_send_result(fd, memdbg_debugger_stop());
+    if (action == 2U) {
+      int32_t pid = memdbg_debugger_attached_pid();
+      return legacy_debug_send_result(fd,
+          pid > 0 && kill((pid_t)pid, SIGKILL) == 0 ? MEMDBG_OK : MEMDBG_ERR_IO);
+    }
+    return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+  }
+
+  if (command == LEGACY_CMD_DEBUG_PROCESS_STOP) {
+    if (body == NULL || body_len != 5U) return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    uint32_t pid; memcpy(&pid, body, sizeof(pid));
+    uint8_t action = ((const uint8_t *)body)[4];
+    static const int signals[3] = {SIGCONT, SIGSTOP, SIGKILL};
+    if (pid == 0U || action > 2U) return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    return legacy_debug_send_result(fd,
+        kill((pid_t)pid, signals[action]) == 0 ? MEMDBG_OK : MEMDBG_ERR_IO);
+  }
+
+  if (!legacy_has_body(body, body_len, sizeof(uint32_t)))
+    return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+  int32_t lwp = (int32_t)*(const uint32_t *)body;
+
+  if (command == LEGACY_CMD_DEBUG_GET_REGS ||
+      command == LEGACY_CMD_DEBUG_GET_FPREGS ||
+      command == LEGACY_CMD_DEBUG_GET_DBREGS ||
+      command == LEGACY_CMD_DEBUG_GET_FSGSBASE)
+    return legacy_debug_get_blob(fd, command, lwp);
+
+  if (command == LEGACY_CMD_DEBUG_SET_REGS ||
+      command == LEGACY_CMD_DEBUG_SET_FPREGS ||
+      command == LEGACY_CMD_DEBUG_SET_DBREGS ||
+      command == LEGACY_CMD_DEBUG_SET_FSGSBASE) {
+    if (!legacy_has_body(body, body_len, sizeof(legacy_debug_blob_request_t)))
+      return legacy_debug_send_result(fd, MEMDBG_ERR_PARAM);
+    return legacy_debug_set_blob(fd, command,
+        (const legacy_debug_blob_request_t *)body);
+  }
+
+  if (command == LEGACY_CMD_DEBUG_SUSPEND_TID)
+    return legacy_debug_send_result(fd, memdbg_debugger_suspend_thread(lwp));
+  if (command == LEGACY_CMD_DEBUG_RESUME_TID)
+    return legacy_debug_send_result(fd, memdbg_debugger_resume_thread(lwp));
+  if (command == LEGACY_CMD_DEBUG_STEP_THREAD)
+    return legacy_debug_send_result(fd, memdbg_debugger_step(lwp));
+  if (command == LEGACY_CMD_DEBUG_THREAD_INFO) {
+    int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
+    char names[MEMDBG_DEBUGGER_MAX_THREADS][24];
+    uint32_t count = MEMDBG_DEBUGGER_MAX_THREADS;
+    legacy_debug_thread_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.lwp = (uint32_t)lwp;
+    memdbg_status_t st = memdbg_debugger_get_threads(
+        lwps, names, NULL, &count, MEMDBG_DEBUGGER_MAX_THREADS);
+    if (st != MEMDBG_OK) return legacy_debug_send_result(fd, st);
+    for (uint32_t i = 0U; i < count; ++i)
+      if (lwps[i] == lwp) { legacy_copy_fixed(info.name, sizeof(info.name), names[i]); break; }
+    return legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+                   legacy_send_blob(fd, &info, sizeof(info)) == 0
+               ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
+  return legacy_debug_send_result(fd, MEMDBG_ERR_UNSUPPORTED);
 }

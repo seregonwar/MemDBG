@@ -5,6 +5,7 @@
  */
 
 #include "memdbg/pal/pal_kernel.h"
+#include "memdbg/pal/pal_kernel_fast.h"
 
 #include <string.h>
 
@@ -68,7 +69,15 @@ memdbg_status_t pal_kernel_read(uint64_t address, void *buffer, size_t length) {
 
 #if defined(MEMDBG_PAL_KERNEL_PS4) || defined(MEMDBG_PAL_KERNEL_PS5)
   errno = 0;
-  if (kernel_copyout((intptr_t)address, buffer, length) != 0)
+  int rc;
+#if defined(MEMDBG_PAL_KERNEL_PS5)
+  rc = memdbg_kernel_fast_available()
+           ? memdbg_kernel_copyout_fast((intptr_t)address, buffer, length)
+           : kernel_copyout((intptr_t)address, buffer, length);
+#else
+  rc = kernel_copyout((intptr_t)address, buffer, length);
+#endif
+  if (rc != 0)
     return kernel_errno_status();
   return MEMDBG_OK;
 #else
@@ -86,7 +95,15 @@ memdbg_status_t pal_kernel_write(uint64_t address, const void *buffer,
 
 #if defined(MEMDBG_PAL_KERNEL_PS4) || defined(MEMDBG_PAL_KERNEL_PS5)
   errno = 0;
-  if (kernel_copyin(buffer, (intptr_t)address, length) != 0)
+  int rc;
+#if defined(MEMDBG_PAL_KERNEL_PS5)
+  rc = memdbg_kernel_fast_available()
+           ? memdbg_kernel_copyin_fast(buffer, (intptr_t)address, length)
+           : kernel_copyin(buffer, (intptr_t)address, length);
+#else
+  rc = kernel_copyin(buffer, (intptr_t)address, length);
+#endif
+  if (rc != 0)
     return kernel_errno_status();
   return MEMDBG_OK;
 #else

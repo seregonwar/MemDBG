@@ -444,7 +444,8 @@ static void draw_actions_section(AppState &state) {
   ImGui::Spacing();
   ImGui::TextWrapped("%s", locale::tr("settings.runtime_desc"));
   ImGui::Spacing();
-  ImGui::Text("Protocol: v%d", MEMDBG_PROTOCOL_VERSION);
+  ImGui::Text(locale::tr("settings.protocol_feature"),
+              MEMDBG_PROTOCOL_FEATURE_LEVEL, MEMDBG_PROTOCOL_VERSION);
   ImGui::Text("Max read: %u bytes", static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_READ));
   ImGui::Text("Max packet: %u bytes", static_cast<unsigned>(MEMDBG_PROTOCOL_MAX_PACKET));
   ImGui::TextWrapped("%s", locale::tr("settings.console_log_path"));
@@ -497,7 +498,8 @@ static void export_diagnostics_bundle(AppState &state) {
   /* ---- System Information ---- */
   out << "## System Information\n\n";
   out << "- **MemDBG version:** " << MEMDBG_VERSION_STRING << "\n";
-  out << "- **Protocol:** v" << MEMDBG_PROTOCOL_VERSION << "\n";
+  out << "- **Protocol feature level:** v" << MEMDBG_PROTOCOL_FEATURE_LEVEL
+      << " (wire v" << MEMDBG_PROTOCOL_VERSION << ")\n";
 #if defined(_WIN32)
   out << "- **Platform:** Windows";
 #elif defined(__APPLE__)
@@ -520,7 +522,9 @@ static void export_diagnostics_bundle(AppState &state) {
   out << "- **Connected:** " << (state.client.connected() ? "yes" : "no") << "\n";
   if (state.has_hello) {
     out << "- **Payload version:** " << state.hello.version << "\n";
-    out << "- **Payload protocol:** v" << state.hello.protocol_version << "\n";
+    out << "- **Payload protocol:** feature level v"
+        << state.hello.feature_level << " (wire v"
+        << state.hello.protocol_version << ")\n";
   }
   out << "- **Crash logging:** " << (state.crash_logging_enabled ? "enabled" : "disabled") << "\n";
   out << "- **Telemetry in reports:** " << (state.report_telemetry_enabled ? "enabled" : "disabled");
@@ -640,7 +644,8 @@ static void draw_diagnostics_section(AppState &state) {
 
     ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.protocol"));
     ImGui::SameLine();
-    ImGui::Text("v%d", MEMDBG_PROTOCOL_VERSION);
+    ImGui::Text(locale::tr("settings.diagnostics.protocol_feature"),
+                MEMDBG_PROTOCOL_FEATURE_LEVEL, MEMDBG_PROTOCOL_VERSION);
 
     ImGui::Spacing();
     ImGui::TextColored(ui::colors().muted, "%s", locale::tr("settings.diagnostics.platform"));
@@ -671,7 +676,9 @@ static void draw_diagnostics_section(AppState &state) {
       if (state.has_hello) {
         ImGui::TextColored(ui::colors().muted, "  Payload:");
         ImGui::SameLine();
-        ImGui::Text("%s (protocol v%u)", state.hello.version.c_str(), state.hello.protocol_version);
+        ImGui::Text(locale::tr("settings.diagnostics.payload_feature"),
+                    state.hello.version.c_str(), state.hello.feature_level,
+                    state.hello.protocol_version);
       }
     } else {
       ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.not_connected"));
@@ -719,7 +726,9 @@ static void draw_diagnostics_section(AppState &state) {
     if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("settings.diagnostics.copy_sysinfo")).c_str(), ImVec2(-1.0f, 32.0f * scl))) {
       std::string info;
       info += "MemDBG " MEMDBG_VERSION_STRING "\n";
-      info += "Protocol v" + std::to_string(MEMDBG_PROTOCOL_VERSION) + "\n";
+      info += "Protocol feature level v" +
+              std::to_string(MEMDBG_PROTOCOL_FEATURE_LEVEL) + " (wire v" +
+              std::to_string(MEMDBG_PROTOCOL_VERSION) + ")\n";
 #if defined(_WIN32)
       info += "Platform: Windows\n";
 #elif defined(__APPLE__)
@@ -729,10 +738,28 @@ static void draw_diagnostics_section(AppState &state) {
 #endif
       info += "Connected: " + std::string(state.client.connected() ? "yes" : "no") + "\n";
       if (state.has_hello) {
-        info += "Payload: " + state.hello.version + " (proto v" + std::to_string(state.hello.protocol_version) + ")\n";
+        info += "Payload: " + state.hello.version + " (feature v" +
+                std::to_string(state.hello.feature_level) + ", wire v" +
+                std::to_string(state.hello.protocol_version) + ")\n";
       }
       ImGui::SetClipboardText(info.c_str());
       set_status(state, locale::tr("settings.diagnostics.sysinfo_copied"));
+    }
+
+    ImGui::Spacing();
+    if (ui::soft_button((std::string(icons::kLoad) + "  " +
+                         locale::tr("settings.diagnostics.open_config_folder")).c_str(),
+                        ImVec2(-1.0f, 32.0f * scl))) {
+      const auto config_dir = platform::app_config_dir();
+      if (platform::open_directory(config_dir)) {
+        set_status(state, std::string(locale::tr(
+                              "settings.diagnostics.config_folder_opened")) +
+                              ": " + config_dir.string());
+      } else {
+        set_status(state, std::string(locale::tr(
+                              "settings.diagnostics.config_folder_failed")) +
+                              ": " + config_dir.string());
+      }
     }
 
     ImGui::Spacing();
@@ -824,7 +851,9 @@ static void draw_diagnostics_section(AppState &state) {
       if (journal_cached_entries.empty()) {
         ImGui::TextColored(ui::colors().dim, "%s", locale::tr("settings.diagnostics.no_entries"));
       } else {
-        for (const auto &entry : journal_cached_entries) {
+        for (auto it = journal_cached_entries.rbegin();
+             it != journal_cached_entries.rend(); ++it) {
+          const auto &entry = *it;
           char time_buf[24];
           std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&entry.timestamp));
           ImGui::TextColored(ui::colors().dim, "[%s]", time_buf);
@@ -839,7 +868,10 @@ static void draw_diagnostics_section(AppState &state) {
     }
     ImGui::EndChild();
 
-    if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("settings.diagnostics.copy_journal")).c_str(), ImVec2(-1.0f, 28.0f * scl))) {
+    const float journal_button_w =
+        (ImGui::GetContentRegionAvail().x -
+         ImGui::GetStyle().ItemSpacing.x * 2.0f) / 3.0f;
+    if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("settings.diagnostics.copy_journal")).c_str(), ImVec2(journal_button_w, 28.0f * scl))) {
       std::string all;
       for (const auto &entry : journal_cached_entries) {
         char time_buf[24];
@@ -851,6 +883,36 @@ static void draw_diagnostics_section(AppState &state) {
       }
       ImGui::SetClipboardText(all.c_str());
       set_status(state, locale::tr("settings.diagnostics.journal_copied"));
+    }
+    ImGui::SameLine();
+    if (ui::soft_button((std::string(icons::kExternalLink) + "  " +
+                         locale::tr("settings.diagnostics.open_journal")).c_str(),
+                        ImVec2(journal_button_w, 28.0f * scl))) {
+      if (platform::open_path(journal_path))
+        set_status(state, locale::tr("settings.diagnostics.journal_opened"));
+      else
+        set_status(state, locale::tr("settings.diagnostics.journal_open_failed"));
+    }
+    ImGui::SameLine();
+    static bool skip_clear_journal = false;
+    if (ui::soft_button((std::string(icons::kTrash) + "  " +
+                         locale::tr("settings.diagnostics.clear_journal")).c_str(),
+                        ImVec2(journal_button_w, 28.0f * scl)))
+      ImGui::OpenPopup("ConfirmClearJournal");
+    if (ui::confirm_modal("ConfirmClearJournal",
+                          locale::tr("settings.diagnostics.clear_journal_confirm"),
+                          nullptr,
+                          &skip_clear_journal, true)) {
+      if (state.action_journal.clear()) {
+        journal_cached_entries.clear();
+        journal_cached_size = 0U;
+        journal_cached_clean = false;
+        journal_loaded = false;
+        set_status(state, locale::tr("settings.diagnostics.journal_cleared"));
+      } else {
+        set_status(state,
+                   locale::tr("settings.diagnostics.journal_clear_failed"));
+      }
     }
   }
   ui::end_panel();
@@ -1076,6 +1138,7 @@ void draw_settings(AppState &state, ImVec2 avail) {
     case SettingsSection::Preferences: draw_preferences_section(state); break;
     case SettingsSection::Actions:     draw_actions_section(state);     break;
     case SettingsSection::Diagnostics: draw_diagnostics_section(state); break;
+    case SettingsSection::COUNT:       break;
   }
 
   ImGui::EndChild();

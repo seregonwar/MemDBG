@@ -23,6 +23,12 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
 int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
                    pthread_t *out_tid);
 
+/* Wake all connection handlers during daemon replacement.  shutdown(2) is
+ * used rather than close(2), so each handler retains ownership of its fd and
+ * can perform normal cleanup without an fd-reuse race. */
+void acceptor_shutdown_clients(void);
+void acceptor_unregister_client(socket_t fd);
+
 #ifdef __cplusplus
 }
 #endif

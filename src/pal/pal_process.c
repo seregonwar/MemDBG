@@ -30,6 +30,7 @@
 #endif
 
 #if defined(__APPLE__) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
+#include <pthread.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/user.h>
@@ -76,16 +77,23 @@ void pal_map_format_name(char *out, size_t out_size, const char *native_name,
 
 #if defined(MEMDBG_PROCESS_HOST_ENUMERATION) || defined(MEMDBG_PROCESS_BSD_SYSCTL)
 static pal_process_entry_t *proc_append(pal_process_list_t *list, int pid, int ppid, const char *name) {
-  size_t nc = list->count + 1U;
-  pal_process_entry_t *next = (pal_process_entry_t *)realloc(list->entries, nc * sizeof(*list->entries));
-  if (next == NULL) return NULL;
-  list->entries = next;
+  if (list->count == list->capacity) {
+    size_t next_capacity = list->capacity == 0U ? 64U : list->capacity * 2U;
+    if (next_capacity <= list->capacity ||
+        next_capacity > SIZE_MAX / sizeof(*list->entries))
+      return NULL;
+    pal_process_entry_t *next = (pal_process_entry_t *)realloc(
+        list->entries, next_capacity * sizeof(*list->entries));
+    if (next == NULL) return NULL;
+    list->entries = next;
+    list->capacity = next_capacity;
+  }
   memset(&list->entries[list->count], 0, sizeof(list->entries[list->count]));
   list->entries[list->count].pid = pid;
   list->entries[list->count].ppid = ppid;
   (void)snprintf(list->entries[list->count].name, sizeof(list->entries[list->count].name),
                  "%s", name && name[0] ? name : "unknown");
-  list->count = nc;
+  list->count++;
   return &list->entries[list->count - 1U];
 }
 #endif
@@ -253,6 +261,12 @@ void pal_process_maps_free(pal_map_list_t *l)    { if (l) { free(l->entries); me
  * ======================================================================== */
 #elif defined(MEMDBG_PROCESS_BSD_SYSCTL)
 
+/* Sony's KERN_PROC snapshot path is not reliably re-entrant across payload
+ * threads. Four frontend roles (and GUI plugins) can legitimately request a
+ * list at once, so serialize only the two sysctl calls that create the short
+ * process snapshot. Maps and memory I/O remain fully parallel. */
+static pthread_mutex_t g_process_sysctl_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static bool bsd_record_has_field(size_t record_size, size_t field_offset,
                                  size_t field_size) {
   return record_size >= field_offset &&
@@ -304,20 +318,60 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
   memset(out, 0, sizeof(*out));
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
   size_t len = 0;
-  if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return MEMDBG_ERR_IO;
-  if (len == 0U) return MEMDBG_OK;
-  if (len > MEMDBG_PROCESS_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
-  unsigned char *buf = (unsigned char *)malloc(len);
-  if (!buf) return MEMDBG_ERR_NOMEM;
-  if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return MEMDBG_ERR_IO; }
-  if (len > MEMDBG_PROCESS_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
+  unsigned char *buf = NULL;
+  memdbg_status_t status = MEMDBG_ERR_IO;
+
+  (void)pthread_mutex_lock(&g_process_sysctl_mutex);
+  /* The process set may grow between the size query and the copy. Reserve
+     slack and retry ENOMEM instead of treating a normal race as fatal. */
+  for (unsigned int attempt = 0U; attempt < 3U; ++attempt) {
+    len = 0U;
+    if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) break;
+    if (len == 0U) {
+      status = MEMDBG_OK;
+      break;
+    }
+    if (len > MEMDBG_PROCESS_SYSCTL_MAX_BYTES) {
+      status = MEMDBG_ERR_OVERFLOW;
+      break;
+    }
+    size_t slack = len / 4U + 4096U;
+    if (slack > MEMDBG_PROCESS_SYSCTL_MAX_BYTES - len)
+      slack = MEMDBG_PROCESS_SYSCTL_MAX_BYTES - len;
+    size_t capacity = len + slack;
+    /* Some Sony sysctl implementations do not always shrink oldlenp to the
+     * bytes written. Zero the reserved slack so a conservative returned
+     * length cannot expose garbage as a synthetic kinfo record. */
+    buf = (unsigned char *)calloc(1U, capacity);
+    if (buf == NULL) {
+      status = MEMDBG_ERR_NOMEM;
+      break;
+    }
+    len = capacity;
+    if (sysctl(mib, 4, buf, &len, NULL, 0) == 0) {
+      status = len <= capacity ? MEMDBG_OK : MEMDBG_ERR_OVERFLOW;
+      break;
+    }
+    free(buf);
+    buf = NULL;
+    if (errno != ENOMEM) break;
+  }
+  (void)pthread_mutex_unlock(&g_process_sysctl_mutex);
+  if (status != MEMDBG_OK) {
+    free(buf);
+    return status;
+  }
+  if (buf == NULL || len == 0U) {
+    free(buf);
+    return MEMDBG_OK;
+  }
 
   for (size_t off = 0U; off + sizeof(int) <= len;) {
     struct kinfo_proc *proc = (struct kinfo_proc *)(void *)(buf + off);
     size_t record_size = proc->ki_structsize > 0
                              ? (size_t)proc->ki_structsize
                              : sizeof(*proc);
-    if (record_size < sizeof(int) || off + record_size > len) break;
+    if (record_size < sizeof(int) || record_size > len - off) break;
     if (bsd_record_has_field(record_size, offsetof(struct kinfo_proc, ki_pid),
                              sizeof(proc->ki_pid)) &&
         proc->ki_pid > 1) {
@@ -328,6 +382,11 @@ memdbg_status_t pal_process_list(pal_process_list_t *out) {
                      sizeof(proc->ki_ppid)) ? (int)proc->ki_ppid : 0;
       if (!proc_append(out, proc->ki_pid, ppid, name))
         { free(buf); pal_process_list_free(out); return MEMDBG_ERR_NOMEM; }
+      if (out->count > 4096U) {
+        free(buf);
+        pal_process_list_free(out);
+        return MEMDBG_ERR_OVERFLOW;
+      }
     }
     off += record_size;
   }
@@ -340,13 +399,64 @@ memdbg_status_t pal_process_maps(int pid, pal_map_list_t *out) {
 #ifdef KERN_PROC_VMMAP
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_VMMAP, pid};
   size_t len = 0;
-  if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return MEMDBG_ERR_IO;
-  if (len == 0U) return MEMDBG_OK;
-  if (len > MEMDBG_VMMAP_SYSCTL_MAX_BYTES) return MEMDBG_ERR_OVERFLOW;
-  unsigned char *buf = (unsigned char *)malloc(len);
-  if (!buf) return MEMDBG_ERR_NOMEM;
-  if (sysctl(mib, 4, buf, &len, NULL, 0) != 0) { free(buf); return MEMDBG_ERR_IO; }
-  if (len > MEMDBG_VMMAP_SYSCTL_MAX_BYTES) { free(buf); return MEMDBG_ERR_OVERFLOW; }
+  unsigned char *buf = NULL;
+  memdbg_status_t snapshot_status = MEMDBG_ERR_IO;
+
+  /* Sony's process sysctl implementation shares snapshot state.  Serialize
+   * the two-call transaction and tolerate maps changing between the size
+   * query and copy instead of issuing overlapping retries from role sockets. */
+  (void)pthread_mutex_lock(&g_process_sysctl_mutex);
+  for (unsigned int attempt = 0U; attempt < 3U; ++attempt) {
+    len = 0U;
+    if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) break;
+    if (len == 0U) {
+      snapshot_status = MEMDBG_OK;
+      break;
+    }
+    if (len > MEMDBG_VMMAP_SYSCTL_MAX_BYTES) {
+      snapshot_status = MEMDBG_ERR_OVERFLOW;
+      break;
+    }
+    size_t slack = len / 4U + 4096U;
+    if (slack > MEMDBG_VMMAP_SYSCTL_MAX_BYTES - len)
+      slack = MEMDBG_VMMAP_SYSCTL_MAX_BYTES - len;
+    size_t capacity = len + slack;
+    /* See pal_process_list(): zeroed slack makes a conservative oldlenp safe
+     * for the variable-sized VMMAP record parser. */
+    buf = (unsigned char *)calloc(1U, capacity);
+    if (buf == NULL) {
+      snapshot_status = MEMDBG_ERR_NOMEM;
+      break;
+    }
+    len = capacity;
+    if (sysctl(mib, 4, buf, &len, NULL, 0) == 0) {
+      snapshot_status = len <= capacity ? MEMDBG_OK : MEMDBG_ERR_OVERFLOW;
+      break;
+    }
+    free(buf);
+    buf = NULL;
+    if (errno != ENOMEM) break;
+  }
+  (void)pthread_mutex_unlock(&g_process_sysctl_mutex);
+  if (snapshot_status != MEMDBG_OK) {
+    free(buf);
+    return snapshot_status;
+  }
+  if (buf == NULL || len == 0U) {
+    free(buf);
+    return MEMDBG_OK;
+  }
+
+  /* Native VMMAP records are much larger than the compact wire entry.
+     Reserve from the returned byte count so titles with thousands of maps
+     normally need one compact allocation instead of a realloc ladder. */
+  size_t estimated_maps = len / sizeof(struct kinfo_vmentry);
+  if (estimated_maps < 64U) estimated_maps = 64U;
+  if (estimated_maps <= SIZE_MAX / sizeof(*out->entries)) {
+    out->entries = (pal_map_entry_t *)malloc(
+        estimated_maps * sizeof(*out->entries));
+    if (out->entries != NULL) out->capacity = estimated_maps;
+  }
 
   for (size_t off = 0U; off + sizeof(int) <= len;) {
     struct kinfo_vmentry *entry = (struct kinfo_vmentry *)(void *)(buf + off);

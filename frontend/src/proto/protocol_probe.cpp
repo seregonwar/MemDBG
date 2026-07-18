@@ -103,7 +103,8 @@ int main(int argc, char **argv) {
       std::cout << "        payload=" << hello.name << " v" << hello.version
                 << "  platform="
                 << memdbg::frontend::platform_name(hello.platform_id)
-                << "  protocol=v" << hello.protocol_version << "\n";
+                << "  protocol=feature-v" << hello.feature_level
+                << " (wire-v" << hello.protocol_version << ")\n";
       std::cout << "        caps="
                 << memdbg::frontend::capability_text(hello.capabilities) << "\n";
       std::cout << "        debug_port=" << hello.debug_port

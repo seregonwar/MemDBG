@@ -223,6 +223,16 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   if (cfg_in == NULL) memdbg_config_defaults(&cfg);
   else                cfg = *cfg_in;
 
+  /* A second GoldHEN injection may execute inside the same process.  Detect
+   * it before touching shared log, UDP, or listener state. */
+  if (memdbg_instance_is_current_process(&cfg)) {
+    if (pal_notification_init() == 0) {
+      pal_notification_send("MemDBG is already running");
+      pal_notification_shutdown();
+    }
+    return MEMDBG_OK;
+  }
+
   atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
   g_start_ticks = monotonic_seconds();
 
@@ -256,10 +266,11 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                    cfg.enable_udp_log ? cfg.udp_log_port : 0U,
 #if defined(__linux__)
                    "epoll",
-#elif defined(__FreeBSD__) || defined(__APPLE__) || defined(PLATFORM_PS4) || \
-      defined(PS4) || defined(__ORBIS__) || defined(PLATFORM_PS5) ||        \
-      defined(PS5) || defined(__PROSPERO__)
+#elif defined(__FreeBSD__) || defined(__APPLE__)
                    "kqueue",
+#elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) || \
+      defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+                   "select",
 #else
                    "select",
 #endif
@@ -325,7 +336,6 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   }
 
   flashscan_init();
-  resp_pool_init();
 
   if (notification_ready)
     pal_notification_send("MemDBG by seregonwar started");
@@ -338,6 +348,10 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
 
   (void)pthread_join(acceptor_tid, NULL);
 
+  /* A remote shutdown must not wait forever for the other three role sockets
+   * in a desktop pool. Wake every handler before draining. */
+  acceptor_shutdown_clients();
+
   /* Drain: wait for all active handler threads to finish.
    * listen_fd is closed inside shutdown_cleanup below. */
   /* We spin with a 10ms sleep so we don't burn CPU. */
@@ -345,8 +359,15 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                    "shutdown: draining %u active connections...",
                    atomic_load_explicit(&g_active_connections,
                                         memory_order_relaxed));
-  while (atomic_load_explicit(&g_active_connections, memory_order_relaxed) > 0U)
+  uint32_t drain_waits = 0U;
+  while (atomic_load_explicit(&g_active_connections, memory_order_relaxed) > 0U &&
+         drain_waits++ < 200U)
     memdbg_sleep_ms(10U);
+  if (atomic_load_explicit(&g_active_connections, memory_order_relaxed) > 0U)
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "shutdown: forcing exit with %u blocked handler(s)",
+                     atomic_load_explicit(&g_active_connections,
+                                          memory_order_relaxed));
 
 shutdown_cleanup:
 
@@ -361,7 +382,6 @@ shutdown_cleanup:
   memdbg_instance_remove_pid_file(&cfg);
   memdbg_process_maps_cache_flush(0);
 
-  resp_pool_fini();
   memdbg_log_write(MEMDBG_LOG_INFO, "MemDBG stopped");
   if (notification_ready) pal_notification_shutdown();
   memdbg_udp_log_stop();

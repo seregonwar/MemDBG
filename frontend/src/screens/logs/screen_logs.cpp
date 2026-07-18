@@ -125,7 +125,7 @@ void draw_logs(AppState &state, ImVec2 avail) {
 }
 
 /* ---- Actions Journal tab ---- */
-static void draw_actions_tab(AppState &state, ImVec2 avail) {
+static void draw_actions_tab(AppState &, ImVec2 avail) {
   ui::begin_panel("ActionsPanel", locale::tr("logs.actions_title"), avail);
 
   ImGui::TextWrapped("%s", locale::tr("logs.actions_desc"));

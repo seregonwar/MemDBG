@@ -13,8 +13,11 @@
 
 #include "memdbg/debug/memdbg_debugger.h"
 #include "memdbg/debug/memdbg_process.h"
+#include "memdbg/core/memdbg_log.h"
 #include "memdbg/pal/pal_time.h"
 
+#include <errno.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -26,7 +29,11 @@ memdbg_status_t handle_process_list(int fd,
   memdbg_process_list_t list;
   memset(&list, 0, sizeof(list));
   memdbg_status_t st = memdbg_process_list(&list);
-  if (st != MEMDBG_OK) return st;
+  if (st != MEMDBG_OK) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "process-list: enumeration failed status=%d", (int)st);
+    return st;
+  }
 
   size_t entries_size = list.count * sizeof(memdbg_process_entry_t);
   size_t payload_len = sizeof(uint32_t) + entries_size;
@@ -56,9 +63,9 @@ memdbg_status_t handle_process_list(int fd,
 
 /* ---- Process maps ---- */
 
-memdbg_status_t handle_process_maps(int fd,
+static memdbg_status_t handle_process_maps_impl(int fd,
     const memdbg_packet_header_t *req,
-    const void *body, uint32_t body_len) {
+    const void *body, uint32_t body_len, bool framed) {
   if (body_len != sizeof(memdbg_process_maps_request_t))
     return MEMDBG_ERR_PROTOCOL;
   const memdbg_process_maps_request_t *mr =
@@ -66,7 +73,11 @@ memdbg_status_t handle_process_maps(int fd,
 
   memdbg_map_list_t list;
   memset(&list, 0, sizeof(list));
-  memdbg_status_t st = memdbg_process_maps(mr->pid, &list);
+  /* KERN_PROC_VMMAP can return tens of MiB of native records on both PS4
+     and PS5.  The compact cache is invalidated by MemDBG map mutations and
+     has a short TTL for external changes, making repeated UI refreshes and
+     scans avoid the dominant sysctl+parse cost. */
+  memdbg_status_t st = memdbg_process_maps_cached(mr->pid, &list);
   if (st != MEMDBG_OK) return st;
 
   size_t entries_size = list.count * sizeof(memdbg_map_entry_t);
@@ -90,10 +101,25 @@ memdbg_status_t handle_process_maps(int fd,
   if (entries_size != 0U)
     memcpy(payload + sizeof(count32), list.entries, entries_size);
 
-  int rc = send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
+  int rc = framed
+      ? send_framed_response(fd, req, MEMDBG_OK, payload,
+                             (uint32_t)payload_len)
+      : send_response(fd, req, MEMDBG_OK, payload, (uint32_t)payload_len);
   free(payload);
   memdbg_process_maps_free(&list);
   return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+}
+
+memdbg_status_t handle_process_maps(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len) {
+  return handle_process_maps_impl(fd, req, body, body_len, false);
+}
+
+memdbg_status_t handle_process_maps_v2(int fd,
+    const memdbg_packet_header_t *req,
+    const void *body, uint32_t body_len) {
+  return handle_process_maps_impl(fd, req, body, body_len, true);
 }
 
 /* ---- Process info ---- */
@@ -164,8 +190,28 @@ memdbg_status_t handle_foreground_app(int fd,
   (void)body; (void)body_len;
   memdbg_foreground_app_response_t fg;
   memset(&fg, 0, sizeof(fg));
-  (void)fg;
-  memdbg_status_t st = MEMDBG_ERR_UNSUPPORTED;
+  memdbg_process_list_t list;
+  memset(&list, 0, sizeof(list));
+  memdbg_status_t st = memdbg_process_list(&list);
+  if (st == MEMDBG_OK) {
+    st = MEMDBG_ERR_NOT_FOUND;
+    for (size_t i = 0U; i < list.count; ++i) {
+      if (strcmp(list.entries[i].name, "eboot.bin") != 0 &&
+          strcmp(list.entries[i].name, "eboot") != 0)
+        continue;
+      memdbg_process_info_response_t info;
+      memset(&info, 0, sizeof(info));
+      st = memdbg_process_info(list.entries[i].pid, &info);
+      if (st == MEMDBG_OK) {
+        fg.pid = info.pid;
+        memcpy(fg.title_id, info.title_id, sizeof(fg.title_id));
+        memcpy(fg.content_id, info.content_id, sizeof(fg.content_id));
+        memcpy(fg.name, info.name, sizeof(info.name));
+      }
+      break;
+    }
+    memdbg_process_list_free(&list);
+  }
   return send_response(fd, req, st,
       st == MEMDBG_OK ? &fg : NULL,
       st == MEMDBG_OK ? (uint32_t)sizeof(fg) : 0U) == 0
@@ -184,9 +230,19 @@ memdbg_status_t handle_process_control(int fd,
       (const memdbg_process_control_request_t *)body;
   if (cr->action != expected_action) return MEMDBG_ERR_PARAM;
 
-  (void)cr;
-  (void)expected_action;
-  memdbg_status_t st = MEMDBG_ERR_UNSUPPORTED;
+  int signal_number = 0;
+  switch (expected_action) {
+  case 1U: signal_number = SIGSTOP; break;
+  case 2U: signal_number = SIGCONT; break;
+  case 3U: signal_number = SIGKILL; break;
+  default: return MEMDBG_ERR_PARAM;
+  }
+  memdbg_status_t st = MEMDBG_OK;
+  if (cr->pid <= 0 || kill((pid_t)cr->pid, signal_number) != 0) {
+    if (errno == ESRCH) st = MEMDBG_ERR_NOT_FOUND;
+    else if (errno == EPERM || errno == EACCES) st = MEMDBG_ERR_PERMISSION;
+    else st = cr->pid <= 0 ? MEMDBG_ERR_PARAM : MEMDBG_ERR_IO;
+  }
   return send_response(fd, req, st, NULL, 0U) == 0
       ? MEMDBG_OK : MEMDBG_ERR_NET;
 }

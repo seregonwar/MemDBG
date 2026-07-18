@@ -63,6 +63,9 @@ public:
   // True when the journal file is open and writable.
   bool is_open() const;
 
+  // Truncate the active journal and start a fresh session atomically.
+  bool clear();
+
   // Default journal path under app data dir.
   static std::filesystem::path default_path();
 
@@ -94,6 +97,7 @@ private:
 
   void *file_ = nullptr;  // FILE* cast to void
   bool   file_open_ = false;
+  std::filesystem::path path_;
 };
 
 } // namespace memdbg::frontend

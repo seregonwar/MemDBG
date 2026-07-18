@@ -91,14 +91,23 @@ void poll_payload_lifecycle(AppState &state) {
       s_payload_inject_error = "Unknown payload injection error";
     }
     if (ok) {
-      const std::string message = "Payload injected on " +
-          std::string(state.host) + ":" + std::to_string(state.payload_port);
-      set_status(state, message);
-      push_notification(state, message, 5.0);
+      const std::string loader = std::string(state.host) + ":" +
+          std::to_string(state.payload_port);
+      state.action_journal.record(
+          "payload_uploaded",
+          ("{\"host\":\"" + ActionJournal::json_escape(state.host) +
+           "\",\"port\":" + std::to_string(state.payload_port) + "}").c_str());
       if (state.payload_connect_after_inject) {
+        set_status(state, "Payload uploaded to " + loader +
+                              "; verifying MemDBG startup...");
         state.payload_post_inject_connect = true;
         state.payload_connect_retry_at = ImGui::GetTime() + 1.0;
-        state.payload_connect_retry_deadline = ImGui::GetTime() + 12.0;
+        state.payload_connect_retry_deadline = ImGui::GetTime() + 20.0;
+      } else {
+        const std::string message = "Payload uploaded to " + loader +
+            " (startup not verified)";
+        set_status(state, message);
+        push_notification(state, message, 5.0);
       }
     } else {
       const std::string message = "Payload injection failed: " +
@@ -127,6 +136,14 @@ void connect_console(AppState &state) {
   ensure_console_targets(state);
   save_current_console_target(state);
   normalize_ports(state);
+  /* Stop the plugin broker before closing the pooled console sockets. This
+     cancels a possible loopback request at its source and gives the plugin a
+     deterministic transport shutdown. */
+  if (state.plugin_gui_bridge) {
+    state.plugin_gui_bridge->stop();
+    state.plugin_gui_starting = false;
+    state.plugin_gui_error.clear();
+  }
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;
@@ -194,15 +211,15 @@ void cancel_connect(AppState &state) {
 
 void request_telemetry_async(AppState &state) {
   if (state.telemetry_pending) return;
-  if (state.map_refresh_pending) return;
   if (!state.client.connected()) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
 
   state.telemetry_pending = true;
-  state.telemetry_future = std::async(std::launch::async, [&state]() -> bool {
+  auto client = state.pool.poll_lease();
+  state.telemetry_future = std::async(std::launch::async, [&state, client]() -> bool {
     Client::TelemetrySnapshot snap;
-    if (!state.client.telemetry(snap)) {
-      state.telemetry_temp_error = state.client.last_error();
+    if (!client->telemetry(snap)) {
+      state.telemetry_temp_error = client->last_error();
       return false;
     }
     state.telemetry_temp_snap = snap;
@@ -245,8 +262,8 @@ void request_maps_refresh_async(AppState &state) {
     set_status(state, "Memory maps refresh already in progress");
     return;
   }
-  if (state.connect_pending || state.telemetry_pending || state.scan_async_pending) {
-    set_status(state, "Wait for the active operation to finish");
+  if (state.connect_pending) {
+    set_status(state, "Wait for the connection to finish");
     return;
   }
   if (!state.client.connected()) {
@@ -275,13 +292,14 @@ void request_maps_refresh_async(AppState &state) {
   set_status(state, "Refreshing memory maps...");
 
   int32_t pid = state.map_refresh_pid;
+  auto map_client = state.pool.memory_lease();
   state.map_refresh_future = std::async(std::launch::async,
-      [pid, &client = state.client,
+      [pid, client = std::move(map_client),
        &temp_maps = state.map_refresh_temp_maps,
        &error = state.map_refresh_error]() -> bool {
         std::vector<MapEntry> maps;
-        if (!client.process_maps(pid, maps)) {
-          error = client.last_error();
+        if (!client->process_maps(pid, maps)) {
+          error = client->last_error();
           if (error.empty()) error = "Memory maps refresh failed";
           return false;
         }
@@ -600,15 +618,16 @@ static void start_taskmgr_prefetch(AppState &state) {
   state.taskmgr_prefetch_error.clear();
 
   const uint32_t capabilities = state.hello.capabilities;
+  auto prefetch_client = state.pool.memory_lease();
   state.taskmgr_prefetch_future = std::async(std::launch::async,
-      [&client = state.client,
+      [client = std::move(prefetch_client),
        &processes_out = state.taskmgr_prefetch_processes,
        &resources_out = state.taskmgr_prefetch_resources,
        &error = state.taskmgr_prefetch_error,
        capabilities]() -> bool {
         std::vector<ProcessEntry> processes;
-        if (!client.process_list(processes)) {
-          error = client.last_error();
+        if (!client->process_list(processes)) {
+          error = client->last_error();
           return false;
         }
 
@@ -632,7 +651,7 @@ static void start_taskmgr_prefetch(AppState &state) {
             if (pids.empty()) continue;
 
             std::vector<ProcessInfo> infos;
-            if (client.batch_process_info(pids, infos)) {
+            if (client->batch_process_info(pids, infos)) {
               for (auto &info : infos) {
                 if (info.pid <= 0) continue;
                 TaskProcessResource &resource = resources[info.pid];
@@ -643,19 +662,19 @@ static void start_taskmgr_prefetch(AppState &state) {
               continue;
             }
 
-            const std::string batch_error = client.last_error();
+            const std::string batch_error = client->last_error();
             if (error.empty()) error = batch_error;
             for (int32_t pid : pids) {
               ProcessInfo info;
               TaskProcessResource &resource = resources[pid];
               resource.pid = pid;
-              if (client.process_info(pid, info)) {
+              if (client->process_info(pid, info)) {
                 resource.info = std::move(info);
                 resource.has_info = true;
                 resource.info_failed = false;
               } else {
                 resource.info_failed = true;
-                if (resource.error.empty()) resource.error = client.last_error();
+                if (resource.error.empty()) resource.error = client->last_error();
               }
             }
           }
@@ -667,13 +686,13 @@ static void start_taskmgr_prefetch(AppState &state) {
             std::vector<MapEntry> maps;
             TaskProcessResource &resource = resources[process.pid];
             resource.pid = process.pid;
-            if (client.process_maps(process.pid, maps)) {
+            if (client->process_maps(process.pid, maps)) {
               resource.maps = summarize_taskmgr_prefetch_maps(maps);
               resource.maps_failed = false;
             } else {
               resource.maps.loaded = true;
               resource.maps_failed = true;
-              resource.error = client.last_error();
+              resource.error = client->last_error();
               if (error.empty()) error = resource.error;
             }
           }
@@ -758,13 +777,31 @@ void poll_connect(AppState &state) {
       set_status(state, "Payload is starting; retrying connection...");
       return;
     }
+    const bool payload_start_failed = state.payload_post_inject_connect;
     state.payload_post_inject_connect = false;
     state.payload_connect_retry_at = 0.0;
     state.payload_connect_retry_deadline = 0.0;
-    if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("Connection failed: " + s_temp_error).c_str());
-    set_status(state, s_temp_error);
-    push_notification(state, "Connection failed: " + s_temp_error, 5.0);
+    if (payload_start_failed) {
+      const std::string detail = s_temp_error.empty()
+          ? std::string("debug port did not answer") : s_temp_error;
+      const std::string message = "Payload upload completed, but MemDBG did not "
+          "start on " + std::string(state.host) + ":" +
+          std::to_string(state.debug_port) + ": " + detail;
+      if (state.crash_logging_enabled)
+        state.crash_logger.log("error", message.c_str());
+      state.action_journal.record(
+          "payload_start_failed",
+          ("{\"host\":\"" + ActionJournal::json_escape(state.host) +
+           "\",\"port\":" + std::to_string(state.debug_port) +
+           ",\"error\":\"" + ActionJournal::json_escape(detail) + "\"}").c_str());
+      set_status(state, message);
+      push_notification(state, message, 8.0);
+    } else {
+      if (state.crash_logging_enabled)
+        state.crash_logger.log("error", ("Connection failed: " + s_temp_error).c_str());
+      set_status(state, s_temp_error);
+      push_notification(state, "Connection failed: " + s_temp_error, 5.0);
+    }
     return;
   }
 
@@ -780,7 +817,9 @@ void poll_connect(AppState &state) {
   state.pool.connect_additional_roles_async(
       std::string(state.host),
       static_cast<uint16_t>(state.debug_port),
-      static_cast<uint32_t>(state.socket_timeout_ms));
+      static_cast<uint32_t>(state.socket_timeout_ms),
+      s_temp_hello);
+  const bool payload_start_verified = state.payload_post_inject_connect;
   state.payload_auto_inject_probe = false;
   state.payload_auto_inject_waiting = false;
   state.payload_post_inject_connect = false;
@@ -796,16 +835,28 @@ void poll_connect(AppState &state) {
   state.taskmgr_prefetch_resources.clear();
   state.taskmgr_prefetch_error.clear();
   std::string udp_error;
-  std::string message = "Connected to console " + std::string(state.host) + ":" + std::to_string(state.debug_port);
+  std::string message = payload_start_verified
+      ? "Payload injected and verified on " + std::string(state.host) + ":" +
+            std::to_string(state.debug_port)
+      : "Connected to console " + std::string(state.host) + ":" +
+            std::to_string(state.debug_port);
   if (!ensure_udp_listener(state, udp_error)) message += " (UDP: " + udp_error + ")";
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", ("Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
 
   state.action_journal.record("connected", ("{\"host\":\"" + ActionJournal::json_escape(state.host) + "\",\"port\":" + std::to_string(state.debug_port) + ",\"version\":\"" + ActionJournal::json_escape(state.hello.version) + "\"}").c_str());
+  if (payload_start_verified)
+    state.action_journal.record("payload_verified", ("{\"host\":\"" +
+        ActionJournal::json_escape(state.host) + "\",\"port\":" +
+        std::to_string(state.debug_port) + "}").c_str());
 
   set_status(state, message);
-  push_notification(state, "Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port));
+  push_notification(state, payload_start_verified
+      ? "Payload injected and verified: connected to " + std::string(state.host) +
+            ":" + std::to_string(state.debug_port)
+      : "Connected to " + std::string(state.host) + ":" +
+            std::to_string(state.debug_port));
   start_taskmgr_prefetch(state);
 }
 
@@ -928,6 +979,11 @@ void disconnect_console(AppState &state, const char *reason) {
   state.tracer_status_text[0] = '\0';
   state.tracer_error.clear();
   state.tracer_temp_events.clear();
+  if (state.plugin_gui_bridge) {
+    state.plugin_gui_bridge->stop();
+    state.plugin_gui_starting = false;
+    state.plugin_gui_error.clear();
+  }
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;
@@ -953,13 +1009,6 @@ void disconnect_console(AppState &state, const char *reason) {
   state.taskmgr_map_summary = ProcessMapSummary{};
   state.taskmgr_has_process_info = false;
   reset_debugger_state(state);
-
-  /* Stop any running GUI plugin bridge */
-  if (state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
-    state.plugin_gui_bridge->stop();
-    state.plugin_gui_starting = false;
-    state.plugin_gui_error.clear();
-  }
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");

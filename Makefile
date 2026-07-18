@@ -60,8 +60,16 @@ PS4_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4/%.o,$(SOURCES))
 PS4_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps4-lib/%.o,$(LIB_SOURCES))
 PS5_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5/%.o,$(SOURCES))
 PS5_LIB_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/ps5-lib/%.o,$(LIB_SOURCES))
+ALL_DEPFILES := $(HOST_OBJECTS:.o=.d) $(PS4_OBJECTS:.o=.d) \
+	$(PS4_LIB_OBJECTS:.o=.d) $(PS5_OBJECTS:.o=.d) \
+	$(PS5_LIB_OBJECTS:.o=.d)
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
+# Header dependency files are essential here: PAL structs cross translation
+# unit boundaries. Without them an incremental payload build can link objects
+# compiled against different layouts and trip the stack protector at runtime.
+-include $(ALL_DEPFILES)
+
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
 
 all: host
 
@@ -102,6 +110,12 @@ test-process-map-metadata: $(BUILD_DIR)/host/pal/pal_process.o tests/test_proces
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_map_metadata.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_process_map_metadata
 	@echo "--- Running process map metadata test ---"
 	$(BUILD_DIR)/test_process_map_metadata
+
+test-process-map-cache: $(BUILD_DIR)/host/debug/process/memdbg_process.o tests/test_process_map_cache.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_map_cache.c $< $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_process_map_cache
+	@echo "--- Running process map cache test ---"
+	$(BUILD_DIR)/test_process_map_cache
 
 test-debugger-e2e: host tests/test_debugger_e2e.c tests/e2e_utils.c tests/e2e_utils.h
 	@mkdir -p $(BUILD_DIR)
@@ -244,7 +258,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)
@@ -310,7 +324,7 @@ $(GENERATED_VERSION_HEADER): $(VERSION_FILE) FORCE
 
 $(BUILD_DIR)/host/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) -c $< -o $@
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(PS4_TARGET): $(PS4_OBJECTS)
 	@mkdir -p $(dir $@)
@@ -330,19 +344,19 @@ $(PS5_LIB_TARGET): $(PS5_LIB_OBJECTS)
 
 $(BUILD_DIR)/ps4/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 $(COMMON_CFLAGS) -c $< -o $@
+	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps4-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -c $< -o $@
+	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps5/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 $(COMMON_CFLAGS) -c $< -o $@
+	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps5-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -c $< -o $@
+	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)

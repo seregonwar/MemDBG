@@ -174,12 +174,12 @@ int main(int argc, char **argv) {
 
   /* ---- Verdicts ---- */
 
-  /* 1. accepted <= expected_max (cap enforced) */
-  if (accepted <= g_expected_max) {
-    printf("  VERDICT 1: accepted=%u <= max=%u  ✓ cap enforced\n",
+  /* 1. The daemon must use every configured slot, not under-count clients. */
+  if (accepted == g_expected_max) {
+    printf("  VERDICT 1: accepted=%u == max=%u  ✓ cap exact\n",
            accepted, g_expected_max);
   } else {
-    printf("  VERDICT 1: accepted=%u > max=%u  ✗ cap NOT enforced\n",
+    printf("  VERDICT 1: accepted=%u != max=%u  ✗ connection accounting broken\n",
            accepted, g_expected_max);
     failures++;
   }

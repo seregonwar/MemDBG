@@ -136,7 +136,7 @@ void scan_range(AppState &state) {
   const int32_t pid = state.selected_pid;
   const int scan_type_snap = state.scan_type;
   const auto snapshot_val_len = value_len;
-  auto &client = state.client;
+  auto client = state.pool.scan_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -147,14 +147,14 @@ void scan_range(AppState &state) {
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
   state.scan_async_future = std::async(std::launch::async,
-    [&client, request, pid, scan_type_snap, snapshot_val_len,
+    [client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
      &mtx = state.scan_async_mtx]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
-      if (!client.scan_exact(request, scan_res)) {
-        error_out = client.last_error();
+      if (!client->scan_exact(request, scan_res)) {
+        error_out = client->last_error();
         return false;
       }
       temp_result = std::move(scan_res);
@@ -184,7 +184,7 @@ void scan_range(AppState &state) {
               batch_items.push_back(item);
             }
             Client::BatchReadResult batch;
-            if (!client.batch_read(pid, batch_items, batch)) {
+            if (!client->batch_read(pid, batch_items, batch)) {
               read_errors += static_cast<uint32_t>(chunk_end - base);
               continue;
             }
@@ -207,7 +207,7 @@ void scan_range(AppState &state) {
         } else {
           for (size_t i = 0U; i < addrs.size(); ++i) {
             std::vector<uint8_t> data;
-            if (!client.memory_read(pid, addrs[i], snapshot_val_len, data) ||
+            if (!client->memory_read(pid, addrs[i], snapshot_val_len, data) ||
                 data.size() != snapshot_val_len) {
               read_errors++;
               continue;
@@ -299,7 +299,7 @@ void scan_selected_maps(AppState &state) {
   state.scan_async_cancel_requested.store(false);
   state.scan_async_owner = Screen::Scanner;
 
-  auto &client = state.client;
+  auto client = state.pool.scan_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -309,7 +309,7 @@ void scan_selected_maps(AppState &state) {
   auto &error_out = state.scan_async_error;
 
   state.scan_async_future = std::async(std::launch::async,
-      [&client, selected_maps = std::move(selected_maps), pid, value,
+      [client, selected_maps = std::move(selected_maps), pid, value,
        value_len, alignment, max_results, scan_type_snap, has_batch,
        parallel_protection_mask,
        &temp_result, &temp_snapshot, &temp_snap_val_len, &temp_snap_type,
@@ -376,9 +376,9 @@ void scan_selected_maps(AppState &state) {
             std::copy(value.begin(), value.end(), request.value);
 
             ScanResult part;
-            if (!client.scan_process_exact(request, part)) {
+            if (!client->scan_process_exact(request, part)) {
               error_out = "Selected map batch " + hex_u64(request.start) +
-                          ": " + client.last_error();
+                          ": " + client->last_error();
               return false;
             }
             merge_part(part, end - base);
@@ -402,9 +402,9 @@ void scan_selected_maps(AppState &state) {
             std::copy(value.begin(), value.end(), request.value);
 
             ScanResult part;
-            if (!client.scan_exact(request, part)) {
+            if (!client->scan_exact(request, part)) {
               error_out = "Selected map " + hex_u64(map.start) + ": " +
-                          client.last_error();
+                          client->last_error();
               return false;
             }
             merge_part(part, 1U);
@@ -437,7 +437,7 @@ void scan_selected_maps(AppState &state) {
                 items.push_back(item);
               }
               Client::BatchReadResult batch;
-              if (!client.batch_read(pid, items, batch)) {
+              if (!client->batch_read(pid, items, batch)) {
                 snapshot_errors += static_cast<uint32_t>(end - base);
                 continue;
               }
@@ -465,7 +465,7 @@ void scan_selected_maps(AppState &state) {
           } else {
             for (uint64_t address : temp_result.addresses) {
               std::vector<uint8_t> data;
-              if (!client.memory_read(pid, address, value_len, data) ||
+              if (!client->memory_read(pid, address, value_len, data) ||
                   data.size() != value_len) {
                 snapshot_errors++;
                 continue;
@@ -520,7 +520,7 @@ void scan_process(AppState &state) {
   const int32_t pid = state.selected_pid;
   const int scan_type_snap = state.scan_type;
   const auto snapshot_val_len = value_len;
-  auto &client = state.client;
+  auto client = state.pool.scan_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -531,14 +531,14 @@ void scan_process(AppState &state) {
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
   state.scan_async_future = std::async(std::launch::async,
-    [&client, request, pid, scan_type_snap, snapshot_val_len,
+    [client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
      &mtx = state.scan_async_mtx]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
-      if (!client.scan_process_exact(request, scan_res)) {
-        error_out = client.last_error();
+      if (!client->scan_process_exact(request, scan_res)) {
+        error_out = client->last_error();
         return false;
       }
       temp_result = std::move(scan_res);
@@ -566,7 +566,7 @@ void scan_process(AppState &state) {
               batch_items.push_back(item);
             }
             Client::BatchReadResult batch;
-            if (!client.batch_read(pid, batch_items, batch)) {
+            if (!client->batch_read(pid, batch_items, batch)) {
               read_errors += static_cast<uint32_t>(chunk_end - base);
               continue;
             }
@@ -589,7 +589,7 @@ void scan_process(AppState &state) {
         } else {
           for (size_t i = 0U; i < addrs.size(); ++i) {
             std::vector<uint8_t> data;
-            if (!client.memory_read(pid, addrs[i], snapshot_val_len, data) ||
+            if (!client->memory_read(pid, addrs[i], snapshot_val_len, data) ||
                 data.size() != snapshot_val_len) {
               read_errors++;
               continue;
@@ -671,7 +671,7 @@ void scan_unknown_process(AppState &state) {
   const uint32_t original_value_len = state.scan_snapshot_value_len;
   const int original_type = state.scan_snapshot_type;
   const bool original_unknown = state.scan_is_unknown_session;
-  auto &client = state.client;
+  auto client = state.pool.scan_lease();
   auto &temp_result = state.scan_async_temp_result;
   auto &temp_snapshot = state.scan_async_temp_snapshot;
   auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
@@ -682,7 +682,7 @@ void scan_unknown_process(AppState &state) {
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
   state.scan_async_future = std::async(std::launch::async,
-    [&client, request, pid, scan_type_snap, snapshot_val_len, max_results,
+    [client, request, pid, scan_type_snap, snapshot_val_len, max_results,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
      original_result, original_snapshot, original_value_len, original_type,
@@ -715,12 +715,12 @@ void scan_unknown_process(AppState &state) {
      };
 
      std::vector<MapEntry> maps;
-     if (!client.process_maps(pid, maps)) {
+     if (!client->process_maps(pid, maps)) {
        if (cancel_requested.load()) {
          preserve_cancelled();
          return true;
        }
-       return fail("Unknown scan map refresh failed: " + client.last_error());
+       return fail("Unknown scan map refresh failed: " + client->last_error());
      }
 
      std::vector<UnknownScanUnit> units;
@@ -755,13 +755,13 @@ void scan_unknown_process(AppState &state) {
        unit_request.max_bytes = unit.end - unit.start;
        unit_request.max_results = static_cast<uint32_t>(remaining);
        ScanResult part;
-       if (!client.scan_unknown(unit_request, part)) {
+       if (!client->scan_unknown(unit_request, part)) {
          if (cancel_requested.load()) {
            preserve_cancelled();
            return true;
          }
          return fail("Unknown scan unit " + hex_u64(unit.start) + ": " +
-                     client.last_error());
+                     client->last_error());
        }
        add_u64(aggregate.bytes_scanned, part.bytes_scanned);
        add_u64(aggregate.elapsed_ns, part.elapsed_ns);
@@ -812,7 +812,7 @@ void scan_unknown_process(AppState &state) {
            items.push_back({aggregate.addresses[i], snapshot_val_len, 0U});
          snapshot_reads += items.size();
          Client::BatchReadResult batch;
-         if (!client.batch_read(pid, items, batch)) {
+         if (!client->batch_read(pid, items, batch)) {
            if (cancel_requested.load()) {
              preserve_cancelled();
              return true;
@@ -851,7 +851,7 @@ void scan_unknown_process(AppState &state) {
          }
          snapshot_reads++;
          std::vector<uint8_t> data;
-         if (!client.memory_read(pid, address, snapshot_val_len, data) ||
+         if (!client->memory_read(pid, address, snapshot_val_len, data) ||
              data.size() != snapshot_val_len) {
            if (cancel_requested.load()) {
              preserve_cancelled();

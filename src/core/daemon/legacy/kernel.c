@@ -13,8 +13,10 @@ memdbg_status_t legacy_handle_kern_base(socket_t fd) {
   uint64_t text_base = 0U, data_base = 0U;
   memdbg_status_t st = pal_kernel_base(&text_base, &data_base);
   if (st != MEMDBG_OK) return legacy_send_memdbg_status(fd, st) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-  legacy_kernel_base_response_t resp; resp.text_base = text_base; resp.data_base = data_base;
-  return (legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 && legacy_send_blob(fd, &resp, sizeof(resp)) == 0) ? MEMDBG_OK : MEMDBG_ERR_NET;
+  (void)text_base;
+  return (legacy_send_status(fd, LEGACY_CMD_SUCCESS) == 0 &&
+          legacy_send_blob(fd, &data_base, sizeof(data_base)) == 0)
+             ? MEMDBG_OK : MEMDBG_ERR_NET;
 }
 
 memdbg_status_t legacy_handle_kern_read(socket_t fd, const memdbg_config_t *cfg, const void *body, uint32_t body_len) {
@@ -36,6 +38,11 @@ memdbg_status_t legacy_handle_kern_write(socket_t fd, const memdbg_config_t *cfg
   if (!legacy_has_body(body, body_len, sizeof(legacy_kernel_memory_request_t))) return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
   const legacy_kernel_memory_request_t *req = (const legacy_kernel_memory_request_t *)body;
   if (req->length == 0U || !legacy_rw_allowed(cfg, req->length)) return legacy_send_status(fd, LEGACY_CMD_ERROR) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-  if (body_len < sizeof(*req) + req->length) return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
-  return legacy_send_memdbg_status(fd, pal_kernel_write(req->address, (const uint8_t *)body + sizeof(*req), req->length)) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  uint8_t *buffer = (uint8_t *)malloc(req->length);
+  if (buffer == NULL) return legacy_send_status(fd, LEGACY_CMD_DATA_NULL) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  if (legacy_send_status(fd, LEGACY_CMD_SUCCESS) != 0) { free(buffer); return MEMDBG_ERR_NET; }
+  if (pal_socket_read_exact(fd, buffer, req->length) < 0) { free(buffer); return MEMDBG_ERR_NET; }
+  memdbg_status_t st = pal_kernel_write(req->address, buffer, req->length);
+  free(buffer);
+  return legacy_send_memdbg_status(fd, st) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 }

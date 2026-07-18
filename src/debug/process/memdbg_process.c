@@ -19,9 +19,13 @@
 #include <string.h>
 #include <time.h>
 
+_Static_assert(offsetof(pal_process_list_t, capacity) ==
+                   sizeof(void *) + sizeof(size_t),
+               "pal_process_list_t layout mismatch");
+
 // Map cache
 
-#define CACHE_MAX 8
+#define CACHE_MAX 16
 
 typedef struct {
   int                pid;
@@ -33,7 +37,10 @@ typedef struct {
 
 static cache_entry_t  g_cache[CACHE_MAX];
 static pthread_mutex_t g_cache_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_cache_cv = PTHREAD_COND_INITIALIZER;
+static int              g_cache_loading[CACHE_MAX];
 static atomic_uint     g_cache_hits, g_cache_misses;
+static atomic_uint_fast64_t g_cache_generation;
 static bool            g_cache_init = false;
 
 static void cache_init(void) {
@@ -47,6 +54,8 @@ static void cache_init(void) {
 
 void memdbg_process_maps_cache_flush(int pid) {
   pthread_mutex_lock(&g_cache_mtx);
+  (void)atomic_fetch_add_explicit(&g_cache_generation, 1U,
+                                  memory_order_relaxed);
   for (int i = 0; i < CACHE_MAX; ++i) {
     if (!g_cache[i].valid) continue;
     if (pid <= 0 || g_cache[i].pid == pid) { free(g_cache[i].entries); memset(&g_cache[i], 0, sizeof(g_cache[i])); }
@@ -61,50 +70,78 @@ void memdbg_process_cache_stats(uint32_t *hits, uint32_t *misses) {
 
 memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
   if (pid <= 0 || out == NULL) return MEMDBG_ERR_PARAM;
+  memset(out, 0, sizeof(*out));
   cache_init();
   time_t now = time(NULL);
 
-  /* Lookup */
+  /* Lookup plus single-flight miss handling.  Without this, the UI maps
+     refresh and a scan starting at the same time both issue the expensive
+     KERN_PROC_VMMAP sysctl and (on PS5) duplicate PT-walk augmentation. */
   pthread_mutex_lock(&g_cache_mtx);
-  for (int i = 0; i < CACHE_MAX; ++i) {
-    if (g_cache[i].valid && g_cache[i].pid == pid && now - g_cache[i].timestamp < 5) {
-      out->count = g_cache[i].count;
-      out->entries = NULL;
-      if (out->count) {
-        out->entries = (memdbg_map_entry_t *)malloc(out->count * sizeof(memdbg_map_entry_t));
-        if (!out->entries) { pthread_mutex_unlock(&g_cache_mtx); return MEMDBG_ERR_NOMEM; }
-        memcpy(out->entries, g_cache[i].entries, out->count * sizeof(memdbg_map_entry_t));
+  int loading_slot = -1;
+  for (;;) {
+    for (int i = 0; i < CACHE_MAX; ++i) {
+      if (g_cache[i].valid && g_cache[i].pid == pid &&
+          now - g_cache[i].timestamp < 5) {
+        out->count = g_cache[i].count;
+        if (out->count != 0U) {
+          out->entries = (memdbg_map_entry_t *)malloc(
+              out->count * sizeof(memdbg_map_entry_t));
+          if (out->entries == NULL) {
+            pthread_mutex_unlock(&g_cache_mtx);
+            return MEMDBG_ERR_NOMEM;
+          }
+          memcpy(out->entries, g_cache[i].entries,
+                 out->count * sizeof(memdbg_map_entry_t));
+        }
+        atomic_fetch_add_explicit(&g_cache_hits, 1U, memory_order_relaxed);
+        pthread_mutex_unlock(&g_cache_mtx);
+        return MEMDBG_OK;
       }
-      atomic_fetch_add_explicit(&g_cache_hits, 1U, memory_order_relaxed);
-      pthread_mutex_unlock(&g_cache_mtx);
-      return MEMDBG_OK;
     }
+
+    bool same_pid_loading = false;
+    for (int i = 0; i < CACHE_MAX; ++i)
+      if (g_cache_loading[i] == pid) same_pid_loading = true;
+    if (same_pid_loading) {
+      (void)pthread_cond_wait(&g_cache_cv, &g_cache_mtx);
+      now = time(NULL);
+      continue;
+    }
+
+    for (int i = 0; i < CACHE_MAX; ++i) {
+      if (g_cache_loading[i] == 0) {
+        loading_slot = i;
+        g_cache_loading[i] = pid;
+        break;
+      }
+    }
+    if (loading_slot >= 0) break;
+    (void)pthread_cond_wait(&g_cache_cv, &g_cache_mtx);
   }
   pthread_mutex_unlock(&g_cache_mtx);
+  uint_fast64_t fetch_generation = atomic_load_explicit(
+      &g_cache_generation, memory_order_relaxed);
 
-    /* Miss — fetch from PAL.
+  /* Miss — fetch from PAL.
    * Note: memdbg_map_entry_t and pal_map_entry_t share identical layout
    * ({uint64_t start/end; uint32_t prot/flags; char name[64]}).  If either
    * struct changes, the other must be kept in sync. */
   atomic_fetch_add_explicit(&g_cache_misses, 1U, memory_order_relaxed);
   pal_map_list_t pmaps;
   memdbg_status_t st = pal_process_maps(pid, &pmaps);
-  if (st != MEMDBG_OK) return st;
-
-#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
-  if (ptw_is_available() && pmaps.count > 0) {
-    memdbg_map_entry_t *aug_maps = NULL;
-    int aug_count = 0;
-    if (ptw_augment_maps((uint32_t)pid,
-                         (memdbg_map_entry_t *)pmaps.entries, (int)pmaps.count,
-                         &aug_maps, &aug_count) == 0 &&
-        aug_maps != NULL && aug_count > 0) {
-      free(pmaps.entries);
-      pmaps.entries = (pal_map_entry_t *)aug_maps;
-      pmaps.count = (size_t)aug_count;
-    }
+  if (st != MEMDBG_OK) {
+    pthread_mutex_lock(&g_cache_mtx);
+    g_cache_loading[loading_slot] = 0;
+    pthread_cond_broadcast(&g_cache_cv);
+    pthread_mutex_unlock(&g_cache_mtx);
+    return st;
   }
-#endif
+
+  /* Keep the hot Maps path to one KERN_PROC_VMMAP snapshot.  A full page
+   * table enumeration is available through the explicit PT-walk commands;
+   * doing it implicitly here adds thousands of kernel reads and is not
+   * needed for DMAP fallback reads. */
 
   out->count   = pmaps.count;
   out->entries = (memdbg_map_entry_t *)pmaps.entries;
@@ -112,25 +149,37 @@ memdbg_status_t memdbg_process_maps_cached(int pid, memdbg_map_list_t *out) {
 
   /* Store */
   pthread_mutex_lock(&g_cache_mtx);
-  int slot = -1;
-  time_t oldest = now;
-  for (int i = 0; i < CACHE_MAX; ++i) {
-    if (!g_cache[i].valid) { slot = i; break; }
-    if (slot < 0 || g_cache[i].timestamp < oldest) { oldest = g_cache[i].timestamp; slot = i; }
-  }
-  if (slot < 0) slot = 0;
-  if (g_cache[slot].valid) free(g_cache[slot].entries);
-  g_cache[slot].pid = pid; g_cache[slot].count = out->count; g_cache[slot].timestamp = now;
-  g_cache[slot].entries = NULL;
-  if (out->count) {
-    g_cache[slot].entries = (memdbg_map_entry_t *)malloc(out->count * sizeof(memdbg_map_entry_t));
-    if (g_cache[slot].entries) {
-      memcpy(g_cache[slot].entries, out->entries, out->count * sizeof(memdbg_map_entry_t));
+  if (fetch_generation == atomic_load_explicit(&g_cache_generation,
+                                                memory_order_relaxed)) {
+    int slot = -1;
+    time_t oldest = now;
+    for (int i = 0; i < CACHE_MAX; ++i) {
+      if (!g_cache[i].valid) { slot = i; break; }
+      if (slot < 0 || g_cache[i].timestamp < oldest) {
+        oldest = g_cache[i].timestamp;
+        slot = i;
+      }
+    }
+    if (slot < 0) slot = 0;
+    if (g_cache[slot].valid) free(g_cache[slot].entries);
+    g_cache[slot].pid = pid;
+    g_cache[slot].count = out->count;
+    g_cache[slot].timestamp = now;
+    g_cache[slot].entries = NULL;
+    if (out->count != 0U) {
+      g_cache[slot].entries = (memdbg_map_entry_t *)malloc(
+          out->count * sizeof(memdbg_map_entry_t));
+      if (g_cache[slot].entries != NULL) {
+        memcpy(g_cache[slot].entries, out->entries,
+               out->count * sizeof(memdbg_map_entry_t));
+        g_cache[slot].valid = true;
+      }
+    } else {
       g_cache[slot].valid = true;
     }
-  } else {
-    g_cache[slot].valid = true;
   }
+  g_cache_loading[loading_slot] = 0;
+  pthread_cond_broadcast(&g_cache_cv);
   pthread_mutex_unlock(&g_cache_mtx);
   return MEMDBG_OK;
 }
@@ -169,21 +218,6 @@ memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
   pal_map_list_t pmaps;
   memdbg_status_t st = pal_process_maps(pid, &pmaps);
   if (st != MEMDBG_OK) return st;
-
-#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
-  if (ptw_is_available() && pmaps.count > 0) {
-    memdbg_map_entry_t *aug_maps = NULL;
-    int aug_count = 0;
-    if (ptw_augment_maps((uint32_t)pid,
-                         (memdbg_map_entry_t *)pmaps.entries, (int)pmaps.count,
-                         &aug_maps, &aug_count) == 0 &&
-        aug_maps != NULL && aug_count > 0) {
-      free(pmaps.entries);
-      pmaps.entries = (pal_map_entry_t *)aug_maps;
-      pmaps.count = (size_t)aug_count;
-    }
-  }
-#endif
 
   out->count   = pmaps.count;
   out->entries = (memdbg_map_entry_t *)pmaps.entries;

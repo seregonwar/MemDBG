@@ -15,9 +15,7 @@
 #ifndef EPOLLRDHUP
 #define EPOLLRDHUP 0x2000
 #endif
-#elif defined(__FreeBSD__) || defined(__APPLE__) || defined(PLATFORM_PS4) || \
-      defined(PS4) || defined(__ORBIS__) || defined(PLATFORM_PS5) ||        \
-      defined(PS5) || defined(__PROSPERO__)
+#elif defined(__FreeBSD__) || defined(__APPLE__)
 #include <sys/event.h>
 #endif
 
@@ -45,9 +43,7 @@ int wait_for_client(socket_t fd, int timeout_ms) {
   }
   return rc; /* 0 = timeout, <0 = error */
 
-#elif defined(__FreeBSD__) || defined(__APPLE__) || defined(PLATFORM_PS4) || \
-      defined(PS4) || defined(__ORBIS__) || defined(PLATFORM_PS5) ||        \
-      defined(PS5) || defined(__PROSPERO__)
+#elif defined(__FreeBSD__) || defined(__APPLE__)
   /* Use kqueue for precise polling. */
   int kq = kqueue();
   if (kq < 0) goto fallback_select;
@@ -56,10 +52,14 @@ int wait_for_client(socket_t fd, int timeout_ms) {
   EV_SET(&ev, fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
 
   struct timespec ts;
-  ts.tv_sec  = timeout_ms / 1000;
-  ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+  struct timespec *tsp = NULL;
+  if (timeout_ms >= 0) {
+    ts.tv_sec  = timeout_ms / 1000;
+    ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+    tsp = &ts;
+  }
 
-  int rc = kevent(kq, &ev, 1, &ev, 1, &ts);
+  int rc = kevent(kq, &ev, 1, &ev, 1, tsp);
   close(kq);
 
   if (rc > 0) {
@@ -67,6 +67,13 @@ int wait_for_client(socket_t fd, int timeout_ms) {
     return (ev.filter == EVFILT_READ) ? 1 : 0;
   }
   return rc; /* 0 = timeout, <0 = error */
+#elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) || \
+      defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
+  /* The console kqueue implementations are not equivalent to desktop
+   * FreeBSD for this short-lived usage.  Creating and closing a kqueue on
+   * every accept poll can eventually stop delivering listener events.
+   * select() is reliable here and the daemon only watches one descriptor. */
+  goto fallback_select;
 #endif
 
 fallback_select:
@@ -77,14 +84,17 @@ fallback_select:
 
     fd_set rfds;
     struct timeval tv;
+    struct timeval *tvp = NULL;
     FD_ZERO(&rfds);
     FD_SET(fd, &rfds);
-    tv.tv_sec  = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    int fsrc;
-    do {
-      fsrc = select(fd + 1, &rfds, NULL, NULL, &tv);
-    } while (fsrc < 0 && errno == EINTR);
+    if (timeout_ms >= 0) {
+      tv.tv_sec  = timeout_ms / 1000;
+      tv.tv_usec = (timeout_ms % 1000) * 1000;
+      tvp = &tv;
+    }
+    /* Let the caller retry EINTR with freshly initialized fd_set/timeval;
+     * select is allowed to mutate both arguments on interruption. */
+    int fsrc = select(fd + 1, &rfds, NULL, NULL, tvp);
     if (fsrc <= 0) return fsrc;
     return FD_ISSET(fd, &rfds) ? 1 : 0;
   }

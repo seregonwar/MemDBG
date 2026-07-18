@@ -47,6 +47,7 @@ struct ProcessInfo {
 
 struct HelloInfo {
   uint16_t protocol_version = 0;
+  uint16_t feature_level = 1;
   uint16_t platform_id = 0;
   uint32_t capabilities = 0;
   uint16_t debug_port = 0;
@@ -82,11 +83,19 @@ public:
   platform::socket_handle_t release_fd();      /* Release fd ownership for async transfer */
   void take_fd(platform::socket_handle_t fd);  /* Adopt a connected fd from async transfer */
   bool connected() const;
-  const std::string &last_error() const;
+  std::string last_error() const;
 
   bool hello(HelloInfo &out);
   bool ping();
   bool shutdown_payload();
+
+  /* Forward one native protocol command while preserving payload status.
+     Used by the loopback plugin broker so plugins share the desktop session
+     instead of opening independent console sockets. Returns false only for a
+     transport/protocol failure; payload errors are returned in status. */
+  bool raw_request(uint16_t command, const void *payload,
+                   uint32_t payload_len, std::vector<uint8_t> &response,
+                   int32_t &status);
   bool process_list(std::vector<ProcessEntry> &out);
   bool process_maps(int32_t pid, std::vector<MapEntry> &out);
   bool process_info(int32_t pid, ProcessInfo &out);
@@ -344,8 +353,8 @@ public:
                               std::vector<uint8_t> &response_body,
                               int32_t *out_status = nullptr);
 
-  /* Number of requests sent via pipeline_send() that haven't been flushed yet. */
-  size_t pipeline_pending() const { return pipeline_ids_.size(); }
+  /* Number of queued requests that have not been flushed yet. */
+  size_t pipeline_pending() const;
 
   /* Discard all accumulated pipeline state without sending. */
   void pipeline_reset();
@@ -358,8 +367,11 @@ private:
   bool write_all(const void *data, size_t size);
   void disconnect_unlocked();
   void close_after_connection_loss();
+  void pipeline_reset_unlocked();
+  uint32_t next_request_id_unlocked();
   void set_error_from_errno(const std::string &prefix);
   void set_error(const std::string &message);
+  void clear_error();
 
   std::atomic<platform::socket_handle_t> fd_{platform::invalid_socket()};
   platform::socket_handle_t klog_fd_ = platform::invalid_socket();
@@ -367,13 +379,20 @@ private:
   uint32_t next_request_id_ = 1;
   uint32_t socket_timeout_ms_ = 60000U;
   std::string last_error_;
+  mutable std::mutex error_mutex_;
   mutable std::mutex io_mutex_;
   std::atomic<bool> cancel_requested_{false};
+  /* -1 unknown, 0 legacy payload, 1 compressed maps v2 available. */
+  std::atomic<int> compressed_maps_support_{-1};
 
   /* Pipeline state */
   static constexpr size_t kPipelineMaxBuffer = 1024U * 1024U; /* 1 MB auto-flush threshold */
+  struct PipelineRequest {
+    uint32_t request_id;
+    uint16_t command;
+  };
   std::vector<uint8_t> pipeline_buffer_;
-  std::vector<uint32_t> pipeline_ids_;
+  std::vector<PipelineRequest> pipeline_requests_;
   std::unordered_map<uint32_t, std::vector<uint8_t>> pipeline_responses_;
   std::unordered_map<uint32_t, int32_t> pipeline_statuses_;
 

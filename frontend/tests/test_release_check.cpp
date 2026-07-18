@@ -39,6 +39,10 @@ int main() {
   expect_status("rolling nightly accepts numbered nightly",
                 "0.2.0-nightly.32.gf00fe03", "nightly",
                 PayloadVersionStatus::Compatible);
+  expect_status("dated rolling nightly accepts numbered nightly",
+                "0.2.0-nightly.32.gf00fe03",
+                "nightly-20260718-g4c09468",
+                PayloadVersionStatus::Compatible);
   expect_status("newer nightly sequence is outdated",
                 "0.2.0-nightly.32.gf00fe03", "0.2.0-nightly.33.gabcdef",
                 PayloadVersionStatus::Outdated);
