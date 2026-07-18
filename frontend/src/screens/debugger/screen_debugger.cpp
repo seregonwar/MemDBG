@@ -1817,6 +1817,11 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       ImGui::EndTabItem();
     }
 
+    if (ImGui::BeginTabItem("Code Cave")) {
+      draw_code_cave(state, ds, client_busy, scl);
+      ImGui::EndTabItem();
+    }
+
     if (ImGui::BeginTabItem("Notebook")) {
       draw_analysis_notebook(state, ds, client_busy, scl);
       ImGui::EndTabItem();

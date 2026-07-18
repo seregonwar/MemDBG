@@ -134,6 +134,9 @@ jobs:
           printf '%s\n' "${MEMDBG_RELEASE_VERSION}" > VERSION
           echo "MemDBG build version: ${MEMDBG_RELEASE_VERSION}"
 
+      - name: Ensure submodules (nested Zydis/Zycore)
+        run: git submodule update --init --recursive
+
       - name: Validate locale files
         if: matrix.kind == 'host' && matrix.platform == 'linux'
         run: python3 tools/check_locales.py
