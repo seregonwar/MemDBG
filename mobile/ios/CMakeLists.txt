@@ -187,6 +187,7 @@ set(MOBILE_SOURCES
 
   ${FRONTEND_ROOT}/src/core/crash_logger.cpp
   ${FRONTEND_ROOT}/src/core/discovery_client.cpp
+  ${FRONTEND_ROOT}/src/action_journal/action_journal.cpp
   ${FRONTEND_ROOT}/src/core/github_profile.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/client/client_pool.cpp
