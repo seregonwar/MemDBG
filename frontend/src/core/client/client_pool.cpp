@@ -46,7 +46,7 @@ void ClientPool::connect_additional_roles_async(const std::string &host,
    * disconnect_all() can join it on shutdown. */
   role_thread_ = std::thread([this]() {
     auto conn = [this](std::unique_ptr<Client> &out,
-                       const char *label) {
+                       [[maybe_unused]] const char *label) {
       /* If disconnect_all() was called before we got here, bail out. */
       if (!roles_pending_.load()) return;
       auto c = std::make_unique<Client>();
