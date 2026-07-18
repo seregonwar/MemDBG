@@ -94,6 +94,9 @@ static memdbg_status_t send_scan_result(int fd, const memdbg_packet_header_t *re
   if (prefix_size < MEMDBG_PROTOCOL_MAX_PACKET) {
     max_count = (MEMDBG_PROTOCOL_MAX_PACKET - prefix_size) / entry_size;
   }
+  /* Hard cap to avoid oversized single TCP writes on console payloads. */
+  if (max_count > (size_t)MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE)
+    max_count = (size_t)MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE;
   uint32_t send_count = (uint32_t)result->count;
   bool truncated = result->truncated ? true : false;
   if ((size_t)send_count > max_count) {
@@ -231,6 +234,8 @@ static memdbg_status_t handle_scan_unknown_body(
   size_t packet_limit =
       (MEMDBG_PROTOCOL_MAX_PACKET - sizeof(memdbg_scan_response_prefix_t)) /
       sizeof(memdbg_scan_result_entry_t);
+  if (packet_limit > (size_t)MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE)
+    packet_limit = (size_t)MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE;
   size_t memory_limit =
       MEMDBG_SCAN_UNKNOWN_RESULT_BUDGET / sizeof(memdbg_scan_result_entry_t);
   size_t result_limit = packet_limit < memory_limit ? packet_limit

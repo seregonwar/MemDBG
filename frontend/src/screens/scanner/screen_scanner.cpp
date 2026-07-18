@@ -387,9 +387,10 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Combo(locale::tr("scanner.value_type"), &state.scan_type, type_names, IM_ARRAYSIZE(type_names));
   ImGui::InputText(locale::tr("scanner.value"), state.scan_value, sizeof(state.scan_value));
   ImGui::InputInt(locale::tr("scanner.alignment"), &state.scan_alignment);
-  ImGui::InputInt(locale::tr("scanner.max_results"), &state.scan_max_results);
+  ImGui::InputInt(locale::tr("scanner.max_results"), &state.scan_max_results, 100, 1000);
   state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::max(state.scan_max_results, 1);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::InputText(locale::tr("scanner.start"), state.scan_start, sizeof(state.scan_start));

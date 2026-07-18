@@ -287,8 +287,9 @@ void draw_aob_scanner(AppState &state, ImVec2 avail) {
     ImGui::InputText(locale::tr("aob_scanner.length"), state.scan_length, sizeof(state.scan_length));
   }
 
-  ImGui::InputInt(locale::tr("aob_scanner.max_results"), &state.scan_max_results);
-  state.scan_max_results = std::max(state.scan_max_results, 1);
+  ImGui::InputInt(locale::tr("aob_scanner.max_results"), &state.scan_max_results, 100, 1000);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   ImGui::Spacing();
   const char *scan_action = state.aob_text_mode

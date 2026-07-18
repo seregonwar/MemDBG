@@ -51,7 +51,7 @@ memdbg_status_t legacy_handle_scan_exact(socket_t fd, const void *body, uint32_t
   mreq.length = (req->end > req->start) ? (uint32_t)(req->end - req->start) : 0U;
   mreq.value_type = (uint32_t)req->value_type; mreq.value_length = (uint32_t)req->value_length;
   mreq.alignment = (uint32_t)req->alignment;
-  mreq.max_results = req->max_results > 0U ? req->max_results : 200000U;
+  mreq.max_results = req->max_results > 0U ? req->max_results : MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE;
   if (mreq.max_results > g_legacy_cfg.max_scan_results) mreq.max_results = g_legacy_cfg.max_scan_results;
   memcpy(mreq.value, (const uint8_t *)body + sizeof(*req), req->value_length);
 
@@ -79,7 +79,7 @@ memdbg_status_t legacy_handle_scan_aob_start(socket_t fd, const void *body, uint
   memdbg_scan_aob_request_t mreq; memset(&mreq, 0, sizeof(mreq));
   mreq.pid = -1; mreq.start = req->start;
   mreq.length = (req->end > req->start) ? (uint32_t)(req->end - req->start) : 0U;
-  mreq.max_results = 200000U; mreq.pattern_length = req->pattern_length;
+  mreq.max_results = MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE; mreq.pattern_length = req->pattern_length;
   if (mreq.max_results > g_legacy_cfg.max_scan_results) mreq.max_results = g_legacy_cfg.max_scan_results;
 
   memdbg_scan_result_t result; memset(&result, 0, sizeof(result));

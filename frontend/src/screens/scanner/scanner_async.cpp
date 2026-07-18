@@ -205,7 +205,8 @@ void scan_range(AppState &state) {
   if (length == 0U) { set_status(state, locale::tr("scanner.length_zero")); return; }
   if (!build_scan_value(state.scan_type,state.scan_value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
   state.scan_alignment=std::max(state.scan_alignment,1);
-  state.scan_max_results=std::max(state.scan_max_results,1);
+  state.scan_max_results=std::clamp(state.scan_max_results,1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   memdbg_scan_exact_request_t request{};
   request.pid=state.selected_pid; request.start=start; request.length=length;
   request.value_type=static_cast<uint32_t>(state.scan_type); request.value_length=value_len;
@@ -364,7 +365,8 @@ void scan_selected_maps(AppState &state) {
             });
 
   state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::max(state.scan_max_results, 1);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   const int32_t pid = state.selected_pid;
   const uint32_t alignment = static_cast<uint32_t>(state.scan_alignment);
   const uint32_t max_results = static_cast<uint32_t>(state.scan_max_results);
@@ -611,7 +613,8 @@ void scan_process(AppState &state) {
   if (end != 0U && end <= start) { set_status(state, locale::tr("scanner.end_filter_error")); return; }
   if (!build_scan_value(state.scan_type,state.scan_value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
   state.scan_alignment=std::max(state.scan_alignment,1);
-  state.scan_max_results=std::max(state.scan_max_results,1);
+  state.scan_max_results=std::clamp(state.scan_max_results,1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   memdbg_scan_process_exact_request_t request{};
   request.pid=state.selected_pid; request.value_type=static_cast<uint32_t>(state.scan_type);
   request.value_length=value_len; request.alignment=static_cast<uint32_t>(state.scan_alignment);
@@ -762,7 +765,8 @@ void scan_unknown_process(AppState &state) {
   if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
   if (end != 0U && end <= start) { set_status(state, locale::tr("scanner.end_filter_error")); return; }
   state.scan_alignment=std::max(state.scan_alignment,1);
-  state.scan_max_results=std::max(state.scan_max_results,1);
+  state.scan_max_results=std::clamp(state.scan_max_results,1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   const uint32_t max_results = static_cast<uint32_t>(
       std::min<int>(state.scan_max_results,
                     static_cast<int>(

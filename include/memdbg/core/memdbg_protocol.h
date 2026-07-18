@@ -52,6 +52,10 @@ extern "C" {
 #define MEMDBG_SCAN_UNKNOWN_KNOWN_FLAGS MEMDBG_SCAN_UNKNOWN_FLAG_NONZERO
 #define MEMDBG_SCAN_UNKNOWN_MAX_UNIT_BYTES (8ULL * 1024ULL * 1024ULL)
 #define MEMDBG_SCAN_UNKNOWN_RESULT_BUDGET (1024U * 1024U)
+/* Hard cap on scan results per single response to avoid console TCP
+   disconnections caused by oversized single writes.  50 000 results × 8 B
+   per address = 400 KB, safely within any console TCP stack budget. */
+#define MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE 50000U
 #define MEMDBG_MAP_PROT_READ 1U
 #define MEMDBG_MAP_PROT_WRITE 2U
 #define MEMDBG_MAP_PROT_EXEC 4U

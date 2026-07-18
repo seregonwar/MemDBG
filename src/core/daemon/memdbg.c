@@ -110,7 +110,7 @@ void memdbg_config_defaults(memdbg_config_t *cfg) {
   cfg->replace_existing = true;
   cfg->max_packet_bytes = MEMDBG_PROTOCOL_MAX_PACKET;
   cfg->max_read_bytes   = MEMDBG_PROTOCOL_MAX_READ;
-  cfg->max_scan_results = 200000U;
+  cfg->max_scan_results = 50000U;
   cfg->max_connections  = MEMDBG_DEFAULT_MAX_CONNECTIONS;
   cfg->idle_timeout_ms  = MEMDBG_DEFAULT_IDLE_TIMEOUT_MS;
 }

@@ -1097,7 +1097,8 @@ static void mobile_start_range_scan(AppState &state) {
   }
 
   state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::max(state.scan_max_results, 1);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   memdbg_scan_exact_request_t request{};
   request.pid = state.selected_pid;
@@ -1196,7 +1197,8 @@ static void mobile_start_process_scan(AppState &state, bool unknown) {
   }
 
   state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::max(state.scan_max_results, 1);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   memdbg_scan_process_exact_request_t request{};
   request.pid = state.selected_pid;
@@ -1437,9 +1439,10 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
   ImGui::InputInt("Alignment##MobileScanAlignment", &state.scan_alignment);
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputInt("Max results##MobileScanMaxResults",
-                  &state.scan_max_results);
+                  &state.scan_max_results, 100, 1000);
   state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::max(state.scan_max_results, 1);
+  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+      static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   draw_mobile_section_label("Range");
   ImGui::SetNextItemWidth(-1.0f);
