@@ -256,7 +256,7 @@ memdbg_status_t memdbg_batch_write_adv_handle(
         memdbg_memory_write(req->pid, addr, cursor, len, &written);
 
     if (status_array)
-      status_array[i] = (item_status == MEMDBG_OK && written == len) ? 0U : 1U;
+      status_array[i] = (uint8_t)((item_status == MEMDBG_OK && written == len) ? 0U : 1U);
     if ((item_status != MEMDBG_OK || written != len) && overall == MEMDBG_OK)
       overall = item_status != MEMDBG_OK ? item_status : MEMDBG_ERR_IO;
 
