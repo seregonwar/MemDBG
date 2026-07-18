@@ -110,6 +110,7 @@ static void draw_connection_section(AppState &state) {
 }
 
 static void draw_preferences_section(AppState &state) {
+  const float scl = ui::dpi_scale();
   ui::begin_panel("SettingsPreferences", locale::tr("settings.section.preferences"), ImVec2(0, 0));
 
   ImGui::TextColored(ui::colors().muted, "Options");

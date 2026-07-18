@@ -549,7 +549,7 @@ int pal_debug_get_thread_state(int pid, int32_t lwp, int *state_out) {
     return -1;
   }
 
-#ifdef PT_LWPINFO
+#if defined(PT_LWPINFO) && !defined(MEMDBG_PAL_DEBUG_PS5)
   {
     struct ptrace_lwpinfo lwpinfo;
     memset(&lwpinfo, 0, sizeof(lwpinfo));
@@ -589,7 +589,7 @@ int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
                                    uint64_t *pl_siglist_hi) {
   (void)pid;
 
-#ifdef PT_LWPINFO
+#if defined(PT_LWPINFO) && !defined(MEMDBG_PAL_DEBUG_PS5)
   {
     struct ptrace_lwpinfo lwpinfo;
     memset(&lwpinfo, 0, sizeof(lwpinfo));

@@ -116,6 +116,18 @@ memdbg_status_t handle_kernel_read(int fd,
       (const memdbg_kernel_memory_request_t *)body;
   if (kr->address == 0U || kr->length > MEMDBG_PROTOCOL_MAX_READ)
     return MEMDBG_ERR_PARAM;
+
+  /* Validate address against known kernel ranges to avoid page faults. */
+  uint64_t text_base = 0U, data_base = 0U;
+  if (pal_kernel_base(&text_base, &data_base) == MEMDBG_OK) {
+    static const uint64_t kKernelMaxRange = 64ULL * 1024ULL * 1024ULL;
+    uint64_t end = kr->address + (uint64_t)kr->length;
+    bool in_text = (kr->address >= text_base && end <= text_base + kKernelMaxRange);
+    bool in_data = (kr->address >= data_base && end <= data_base + kKernelMaxRange);
+    if (!in_text && !in_data)
+      return MEMDBG_ERR_PARAM;
+  }
+
   uint8_t *buffer = (uint8_t *)malloc(kr->length == 0U ? 1U : kr->length);
   if (buffer == NULL) return MEMDBG_ERR_NOMEM;
   memdbg_status_t st = pal_kernel_read(kr->address, buffer, kr->length);
@@ -135,6 +147,18 @@ memdbg_status_t handle_kernel_write(int fd,
     return MEMDBG_ERR_PARAM;
   if (body_len != sizeof(*kw) + kw->length)
     return MEMDBG_ERR_PROTOCOL;
+
+  /* Same bounds validation as handle_kernel_read. */
+  uint64_t text_base = 0U, data_base = 0U;
+  if (pal_kernel_base(&text_base, &data_base) == MEMDBG_OK) {
+    static const uint64_t kKernelMaxRange = 64ULL * 1024ULL * 1024ULL;
+    uint64_t end = kw->address + (uint64_t)kw->length;
+    bool in_text = (kw->address >= text_base && end <= text_base + kKernelMaxRange);
+    bool in_data = (kw->address >= data_base && end <= data_base + kKernelMaxRange);
+    if (!in_text && !in_data)
+      return MEMDBG_ERR_PARAM;
+  }
+
   const uint8_t *data = (const uint8_t *)body + sizeof(*kw);
   memdbg_status_t st = pal_kernel_write(kw->address, data, kw->length);
   return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK

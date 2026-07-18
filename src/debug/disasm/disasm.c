@@ -11,38 +11,62 @@
 
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/debug/memdbg_memory.h"
+#include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_network.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #if defined(MEMDBG_HAS_ZYDIS)
-#include "Zydis.h"
+#include <Zydis/Zydis.h>
 #endif
 
 // Public helpers
 
 int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
                   const uint8_t *code, uint32_t code_len) {
-  if (!req || !code || code_len == 0) {
+  if (!req) {
     pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
     return 1;
   }
+
+  /* If no inline code was sent, read from process memory. */
+  uint8_t *code_buf = NULL;
+  if (!code || code_len == 0) {
+    if (req->length == 0 || req->length > (16U << 20)) {
+      pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+      return 1;
+    }
+    code_buf = (uint8_t *)malloc(req->length);
+    if (!code_buf) {
+      pal_socket_write_all(fd, &(uint32_t){0xF0000003u}, 4);
+      return 1;
+    }
+    size_t got = 0;
+    memdbg_memory_read(req->pid, req->address, code_buf, req->length, &got);
+    if (got == 0) {
+      free(code_buf);
+      pal_socket_write_all(fd, &(uint32_t){0xF0000004u}, 4);
+      return 1;
+    }
+    code = code_buf;
+    code_len = (uint32_t)got;
+  }
+
+  int result = 0;
 
 #if defined(MEMDBG_HAS_ZYDIS)
   uint32_t max_entries = req->count_max ? req->count_max : 200u;
   memdbg_disasm_entry_t *entries =
       (memdbg_disasm_entry_t *)malloc((size_t)max_entries * sizeof(*entries));
   if (!entries) {
-    pal_socket_write_all(fd, &(uint32_t){0xF0000003u}, 4);
-    return 1;
+    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+    result = 1;
+    goto cleanup;
   }
 
   ZydisDecoder decoder;
-  ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_ADDRESS_WIDTH_64);
-
-  ZydisFormatter formatter;
-  ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
+  ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
 
   size_t offset = 0;
   uint32_t count = 0;
@@ -63,10 +87,10 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
     e->opcode_kind = 0;
 
     switch (insn.meta.category) {
-    case ZYDIS_CATEGORY_UNCOND_BRANCH:
+    case ZYDIS_CATEGORY_UNCOND_BR:
       e->opcode_kind = (insn.mnemonic == ZYDIS_MNEMONIC_CALL) ? 2 : 1;
       break;
-    case ZYDIS_CATEGORY_COND_BRANCH: e->opcode_kind = 4; break;
+    case ZYDIS_CATEGORY_COND_BR: e->opcode_kind = 4; break;
     case ZYDIS_CATEGORY_RET:         e->opcode_kind = 3; break;
     }
 
@@ -89,7 +113,7 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
           e->mem_index_reg = (uint8_t)(operands[i].mem.index & 0xFF);
         if (operands[i].mem.scale > 0)
           e->mem_scale = (uint8_t)operands[i].mem.scale;
-        if (operands[i].mem.disp.has_displacement)
+        if (operands[i].mem.disp.size > 0)
           e->mem_displacement = operands[i].mem.disp.value;
         break;
       }
@@ -112,7 +136,9 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
   pal_socket_write_all(fd, &zero, 4);
 #endif
 
-  return 0;
+cleanup:
+  free(code_buf);
+  return result;
 }
 
 int memdbg_xrefs(int fd, const memdbg_xrefs_to_request_t *req) {
@@ -121,54 +147,85 @@ int memdbg_xrefs(int fd, const memdbg_xrefs_to_request_t *req) {
     return 1;
   }
 
-  uint64_t chunk = 0x100000ULL;
-  uint64_t target = req->target_address;
+  /* Restrict scan to readable mapped regions to avoid hangs on PS5. */
+  memdbg_map_list_t maps;
+  memdbg_status_t mst = memdbg_process_maps_cached(req->pid, &maps);
+  if (mst != MEMDBG_OK) {
+    pal_socket_write_all(fd, &(uint32_t){0xF0000002u}, 4);
+    return 1;
+  }
+
+  uint64_t scan_start = req->scan_address;
+  uint64_t scan_end   = req->scan_address + req->scan_length;
+  uint64_t chunk      = 0x100000ULL;
+  uint64_t target     = req->target_address;
   uint64_t max_results = 32768ULL;
+
   uint8_t *buf = (uint8_t *)malloc(chunk);
   uint64_t *results = (uint64_t *)malloc((size_t)(max_results * 8));
-
   if (!buf || !results) {
     free(buf); free(results);
+    memdbg_process_maps_free(&maps);
     pal_socket_write_all(fd, &(uint32_t){0xF0000003u}, 4);
     return 1;
   }
 
-  uint64_t addr = req->scan_address;
-  uint64_t remaining = req->scan_length;
   uint64_t count = 0;
 
-  while (remaining > 0 && count < max_results) {
-    uint64_t n = (remaining > chunk) ? chunk : remaining;
-    size_t ro = 0;
-    memdbg_memory_read(req->pid, addr, buf, n, &ro);
-    if (ro < 8) { addr += (ro > 0) ? ro : 0x1000ULL; remaining -= (ro > 0) ? ro : 0x1000ULL; continue; }
+  /* Walk only mapped, readable regions that overlap the scan range. */
+  for (size_t mi = 0U; mi < maps.count && count < max_results; ++mi) {
+    const memdbg_map_entry_t *map = &maps.entries[mi];
+    if (map->end <= map->start) continue;
+    if ((map->protection & MEMDBG_MAP_PROT_READ) != MEMDBG_MAP_PROT_READ)
+      continue;
+    if (map->start >= scan_end || map->end <= scan_start) continue;
 
-    for (uint64_t i = 0; i <= ro - 8; i += 8) {
-      uint64_t val;
-      memcpy(&val, buf + i, 8);
-      if (val == target && count < max_results)
-        results[count++] = addr + i;
-      /* Also check misaligned if alignment doesn't match */
-      else if (i + 1 <= ro - 8) {
-        uint64_t v2;
-        memcpy(&v2, buf + i + 1, 8);
-        if (v2 == target && count < max_results)
-          results[count++] = addr + i + 1;
+    uint64_t region_start = map->start > scan_start ? map->start : scan_start;
+    uint64_t region_end   = map->end   < scan_end   ? map->end   : scan_end;
+
+    uint64_t addr      = region_start;
+    uint64_t remaining = region_end - region_start;
+
+    while (remaining > 0 && count < max_results) {
+      uint64_t n = (remaining > chunk) ? chunk : remaining;
+      size_t ro = 0;
+      memdbg_memory_read(req->pid, addr, buf, n, &ro);
+      if (ro < 8) {
+        /* Page fault or unreadable — always skip at least one page. */
+        uint64_t skip = 0x1000ULL;
+        if (skip > remaining) break;
+        addr      += skip;
+        remaining -= skip;
+        continue;
       }
-      /* And offset by 2, 3, 4 */
-      for (int off = 2; off <= 4 && count < max_results; off += 2) {
-        if (i + (uint64_t)off <= ro - 8) {
-          uint64_t vo;
-          memcpy(&vo, buf + i + off, 8);
-          if (vo == target && count < max_results)
-            results[count++] = addr + i + (uint64_t)off;
+
+      for (uint64_t i = 0; i <= ro - 8; i += 8) {
+        uint64_t val;
+        memcpy(&val, buf + i, 8);
+        if (val == target && count < max_results)
+          results[count++] = addr + i;
+        else if (i + 1 <= ro - 8) {
+          uint64_t v2;
+          memcpy(&v2, buf + i + 1, 8);
+          if (v2 == target && count < max_results)
+            results[count++] = addr + i + 1;
+        }
+        for (int off = 2; off <= 4 && count < max_results; off += 2) {
+          if (i + (uint64_t)off <= ro - 8) {
+            uint64_t vo;
+            memcpy(&vo, buf + i + off, 8);
+            if (vo == target && count < max_results)
+              results[count++] = addr + i + (uint64_t)off;
+          }
         }
       }
-    }
 
-    addr += ro;
-    remaining -= ro;
+      addr      += ro;
+      remaining -= ro;
+    }
   }
+
+  memdbg_process_maps_free(&maps);
 
   pal_socket_write_all(fd, &(uint32_t){0}, 4);  /* CMD_SUCCESS */
   pal_socket_write_all(fd, &(uint64_t){count}, 8);

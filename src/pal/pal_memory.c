@@ -44,6 +44,8 @@
 #include <ps5/kernel.h>
 #include <ps5/mdbg.h>
 #include <sys/mman.h>
+
+extern long __crt_syscall(long sysno, ...);
 #endif
 
 #if defined(__FreeBSD__) && !defined(MEMDBG_PAL_CONSOLE)
@@ -641,6 +643,14 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
   if (console_fw_needs_dmap() && ptw_is_available()) {
     if (ptw_write((uint32_t)pid, address, (uint64_t)length, buffer) == 0) {
       if (written_out != NULL) *written_out = length;
+      /* PTWALK writes physical memory directly, bypassing the CPU cache.
+       * Follow up with a VA-path write via the safe mdbg_copyin to force
+       * instruction-cache coherency on x86-64 (AMD Zen 2).  If the caller
+       * used PROCESS_PROTECT first, mdbg_copyin will succeed and properly
+       * flush the icache.  If it returns EACCES (hypervisor W^X), the
+       * ptw_write already succeeded — this is best-effort. */
+      (void)console_mdbg_copyin_raw((pid_t)pid, buffer,
+                                    (intptr_t)address, length);
       return MEMDBG_OK;
     }
   }
@@ -705,17 +715,113 @@ memdbg_status_t pal_memory_protect(int pid, uint64_t address, size_t length,
 #endif
 }
 
+/* ---- PS5 td_proc-switch helper (shared by alloc / free) ---- */
+
+#if defined(MEMDBG_PAL_PS5)
+
+typedef struct {
+  intptr_t my_td;
+  intptr_t saved_proc;
+} td_proc_ctx_t;
+
+/* Switch the current kernel thread's proc pointer to the target process.
+ * On return the caller is inside the kernel-external lock and can safely
+ * issue __crt_syscall(mmap/munmap/...).  Call td_proc_switch_restore()
+ * afterwards to revert and unlock.
+ *
+ * td_proc is at offset 0x8 inside struct thread (right after td_lock)
+ * on every supported FreeBSD kernel version.  The p_threads offset varies
+ * (0x10 on FreeBSD 12, 0x60 on FreeBSD 9-11); we probe both. */
+static memdbg_status_t td_proc_switch_to_target(int pid, td_proc_ctx_t *ctx) {
+  memset(ctx, 0, sizeof(*ctx));
+
+  if (memdbg_kernel_external_begin() != 0) return MEMDBG_ERR_STATE;
+
+  intptr_t target_proc = kernel_get_proc((pid_t)pid);
+  intptr_t my_proc     = kernel_get_proc(getpid());
+  if (target_proc == 0 || my_proc == 0) {
+    memdbg_kernel_external_end();
+    return target_proc == 0 ? MEMDBG_ERR_NOT_FOUND : MEMDBG_ERR_STATE;
+  }
+
+  /* Find one of our own threads by walking p_threads. */
+  static const int k_thr_off_candidates[] = {0x10, 0x60};
+  intptr_t my_td = 0;
+  for (size_t ci = 0U;
+       ci < sizeof(k_thr_off_candidates) / sizeof(k_thr_off_candidates[0]); ++ci) {
+    intptr_t candidate = kernel_getlong(my_proc + k_thr_off_candidates[ci]);
+    /* td_proc is at thread+0x8 — validate the candidate points back
+     * to our own proc. */
+    if (candidate != 0 &&
+        (intptr_t)kernel_getlong(candidate + 0x8) == my_proc) {
+      my_td = candidate;
+      break;
+    }
+  }
+  if (my_td == 0) {
+    memdbg_kernel_external_end();
+    return MEMDBG_ERR_STATE;
+  }
+
+  ctx->my_td      = my_td;
+  ctx->saved_proc = kernel_getlong(my_td + 0x8);
+  (void)kernel_setlong(my_td + 0x8, target_proc);
+  return MEMDBG_OK;
+}
+
+static void td_proc_switch_restore(const td_proc_ctx_t *ctx) {
+  (void)kernel_setlong(ctx->my_td + 0x8, ctx->saved_proc);
+  memdbg_kernel_external_end();
+}
+
+#endif /* MEMDBG_PAL_PS5 */
+
 memdbg_status_t pal_memory_alloc(int pid, uint64_t hint, size_t length,
                                  uint32_t protection, uint32_t flags,
                                  uint64_t *address_out) {
+#if defined(MEMDBG_PAL_PS5)
+  if (address_out != NULL) *address_out = 0U;
+  if (pid <= 1 || length == 0U) return MEMDBG_ERR_PARAM;
+  (void)flags;
+
+  td_proc_ctx_t ctx;
+  memdbg_status_t st = td_proc_switch_to_target(pid, &ctx);
+  if (st != MEMDBG_OK) return st;
+
+  int native_prot = (int)(protection & 0x7U);
+  int mmap_flags  = 0x1002;  /* MAP_ANON | MAP_PRIVATE */
+  void *result = (void *)__crt_syscall(477, hint, (long)length,
+                                       (long)native_prot, (long)mmap_flags,
+                                       (long)-1, (long)0);
+
+  td_proc_switch_restore(&ctx);
+
+  if (result == (void *)-1) return MEMDBG_ERR_IO;
+  if (address_out != NULL) *address_out = (uint64_t)(uintptr_t)result;
+  return MEMDBG_OK;
+#else
   (void)pid; (void)hint; (void)length; (void)protection; (void)flags;
   if (address_out != NULL) *address_out = 0U;
   return MEMDBG_ERR_UNSUPPORTED;
+#endif
 }
 
 memdbg_status_t pal_memory_free(int pid, uint64_t address, size_t length) {
+#if defined(MEMDBG_PAL_PS5)
+  if (pid <= 1 || address == 0U || length == 0U) return MEMDBG_ERR_PARAM;
+
+  td_proc_ctx_t ctx;
+  memdbg_status_t st = td_proc_switch_to_target(pid, &ctx);
+  if (st != MEMDBG_OK) return st;
+
+  long rc = __crt_syscall(73, (long)address, (long)length);
+
+  td_proc_switch_restore(&ctx);
+  return rc == 0 ? MEMDBG_OK : MEMDBG_ERR_IO;
+#else
   (void)pid; (void)address; (void)length;
   return MEMDBG_ERR_UNSUPPORTED;
+#endif
 }
 
 struct pal_memory_batch { int pid; };
@@ -764,8 +870,12 @@ size_t pal_memory_batch_write_item(pal_memory_batch_write_t *b, uint64_t a, cons
   if (b->pid <= 1) return 0U;
 #if defined(MEMDBG_PAL_PS5)
   if (console_fw_needs_dmap() && ptw_is_available()) {
-    if (ptw_write((uint32_t)b->pid, a, (uint64_t)len, buf) == 0)
+    if (ptw_write((uint32_t)b->pid, a, (uint64_t)len, buf) == 0) {
+      /* Best-effort cache coherency via safe mdbg_copyin (see
+       * pal_memory_write for rationale). */
+      (void)console_mdbg_copyin_raw((pid_t)b->pid, buf, (intptr_t)a, len);
       return len;
+    }
   }
 #endif
   return console_mdbg_copyin((pid_t)b->pid, (intptr_t)a, buf, len) == 0 ? len : 0U;

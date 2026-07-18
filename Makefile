@@ -37,6 +37,22 @@ PS5_CC ?= $(PS5_PAYLOAD_SDK)/bin/prospero-clang
 PS5_AR ?= $(PS5_PAYLOAD_SDK)/bin/prospero-ar
 PS5_DEPLOY ?= $(PS5_PAYLOAD_SDK)/bin/prospero-deploy
 
+# Zydis x86-64 disassembler (cross-compiled for PS5 payload)
+ZYDIS_DIR := $(CURDIR)/external/zydis
+ZYCORE_DIR := $(ZYDIS_DIR)/dependencies/zycore
+ZYDIS_SOURCES := $(wildcard $(ZYDIS_DIR)/src/*.c)
+ZYCORE_SOURCES := $(wildcard $(ZYCORE_DIR)/src/*.c)
+PS5_ZYDIS_OBJECTS := $(patsubst $(ZYDIS_DIR)/src/%.c,$(BUILD_DIR)/ps5-zydis/%.o,$(ZYDIS_SOURCES))
+PS5_ZYCORE_OBJECTS := $(patsubst $(ZYCORE_DIR)/src/%.c,$(BUILD_DIR)/ps5-zycore/%.o,$(ZYCORE_SOURCES))
+ZYDIS_PS5_CFLAGS := -I$(ZYDIS_DIR)/include -I$(ZYDIS_DIR)/src \
+	-I$(ZYCORE_DIR)/include -I$(ZYCORE_DIR)/src \
+	-DZYDIS_STATIC_BUILD -DZYCORE_STATIC_BUILD \
+	-DZYDIS_DISABLE_FORMATTER -DZYDIS_DISABLE_ENCODER \
+	-std=c11 -O2
+
+# Keystone x86-64 assembler (pre-compiled for PS5)
+KEYSTONE_DIR := $(CURDIR)/external/keystone
+
 COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude -Isrc/core/daemon
 COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
@@ -338,9 +354,9 @@ $(PS4_LIB_TARGET): $(PS4_LIB_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(PS4_AR) rcs $@ $^
 
-$(PS5_TARGET): $(PS5_OBJECTS)
+$(PS5_TARGET): $(PS5_OBJECTS) $(PS5_ZYDIS_OBJECTS) $(PS5_ZYCORE_OBJECTS)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $^ -lpthread -o $@
+	$(PS5_CC) $^ $(KEYSTONE_DIR)/lib/libkeystone.a -lpthread -lunwind -lc++ -lc++abi -o $@
 
 $(PS5_LIB_TARGET): $(PS5_LIB_OBJECTS)
 	@mkdir -p $(dir $@)
@@ -356,11 +372,20 @@ $(BUILD_DIR)/ps4-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 
 $(BUILD_DIR)/ps5/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	$(PS5_CC) $(COMMON_CPPFLAGS) -I$(ZYDIS_DIR)/include -I$(ZYCORE_DIR)/include -I$(KEYSTONE_DIR)/include -DPLATFORM_PS5=1 -DMEMDBG_HAS_ZYDIS=1 -DMEMDBG_HAS_KEYSTONE=1 -mavx2 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps5-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	$(PS5_CC) $(COMMON_CPPFLAGS) -I$(ZYDIS_DIR)/include -I$(ZYCORE_DIR)/include -I$(KEYSTONE_DIR)/include -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 -DMEMDBG_HAS_ZYDIS=1 -DMEMDBG_HAS_KEYSTONE=1 -mavx2 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+# Zydis disassembler objects (cross-compiled for PS5)
+$(BUILD_DIR)/ps5-zydis/%.o: $(ZYDIS_DIR)/src/%.c
+	@mkdir -p $(dir $@)
+	$(PS5_CC) $(ZYDIS_PS5_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ps5-zycore/%.o: $(ZYCORE_DIR)/src/%.c
+	@mkdir -p $(dir $@)
+	$(PS5_CC) $(ZYDIS_PS5_CFLAGS) -c $< -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)

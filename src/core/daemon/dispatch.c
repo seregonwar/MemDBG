@@ -143,10 +143,13 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PROCESS_CALL:       return handle_process_call(fd, req, body, req->length, send_response, memdbg_sleep_ms);
   case MEMDBG_CMD_PROCESS_ELF_LOAD:   return handle_process_elf_load(fd, req, body, req->length);
   case MEMDBG_CMD_PROCESS_HIJACK: {
-    if (req->length < sizeof(memdbg_process_hijack_request_t)) return MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_process_hijack_request_t))
+      return MEMDBG_ERR_PROTOCOL;
     const memdbg_process_hijack_request_t *hj = (const memdbg_process_hijack_request_t *)body;
-    int r = memdbg_hijack_handle(fd, hj, (const uint8_t *)body, req->length);
-    return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
+    /* Writes its own raw response (error code or hijack_response_t) —
+     * always return MEMDBG_OK to avoid double-write stream corruption. */
+    (void)memdbg_hijack_handle(fd, hj, (const uint8_t *)body, req->length);
+    return MEMDBG_OK;
   }
   case MEMDBG_CMD_PROCESS_DUMP:
     return handle_process_dump(fd, req, body, req->length);
@@ -194,20 +197,28 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     memdbg_daemon_request_stop();
     return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
 
-  /* ---- Assembler / disassembler ---- */
+  /* ---- Assembler / disassembler ----
+   *
+   * These handlers write their own raw responses (both success and error)
+   * directly to fd via pal_socket_write_all().  Always return MEMDBG_OK so
+   * that handler.c does NOT emit a second framed error response, which
+   * would corrupt the TCP stream. */
   case MEMDBG_CMD_ASM_ENCODE:
-    return memdbg_asm_encode(fd, (const uint8_t *)body, req->length);
+    (void)memdbg_asm_encode(fd, (const uint8_t *)body, req->length);
+    return MEMDBG_OK;
 
   case MEMDBG_CMD_DISASM: {
-    if (req->length < sizeof(memdbg_disasm_request_t)) return MEMDBG_ERR_PROTOCOL;
-    int r = memdbg_disasm_multiple(fd, (const uint8_t *)body, req->length);
-    return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_disasm_request_t))
+      return MEMDBG_ERR_PROTOCOL;
+    (void)memdbg_disasm_multiple(fd, (const uint8_t *)body, req->length);
+    return MEMDBG_OK;
   }
 
   case MEMDBG_CMD_XREFS_TO: {
-    if (req->length < sizeof(memdbg_xrefs_to_request_t)) return MEMDBG_ERR_PROTOCOL;
-    int r = memdbg_xrefs_multiple(fd, (const uint8_t *)body, req->length);
-    return (r == 0) ? MEMDBG_OK : MEMDBG_ERR_PROTOCOL;
+    if (req->length < sizeof(memdbg_xrefs_to_request_t))
+      return MEMDBG_ERR_PROTOCOL;
+    (void)memdbg_xrefs_multiple(fd, (const uint8_t *)body, req->length);
+    return MEMDBG_OK;
   }
 
   /* ---- FlashScan engine ---- */
