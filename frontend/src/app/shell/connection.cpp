@@ -123,11 +123,104 @@ void poll_payload_lifecycle(AppState &state) {
       ImGui::GetTime() >= state.payload_connect_retry_at &&
       !state.conn.connect_pending && !state.client.connected()) {
     state.payload_connect_retry_at = 0.0;
-    connect_console(state);
+    connect_console(state, ConnectIntent::ManualFreshConnection);
   }
 }
 
-void connect_console(AppState &state) {
+/* ---- Transport lifecycle helpers ---- */
+
+static void quiesce_transport(AppState &state) {
+  /* Cancel I/O and drain futures without destroying UI state. */
+  if (state.scan.async_future.valid()) {
+    state.scan.async_cancel_requested.store(true);
+    state.pool.cancel_all_pending_io();
+    state.scan.async_future.wait();
+  }
+  if (state.map_dump_future.valid()) {
+    state.map_dump_cancel_requested.store(true);
+    state.pool.cancel_all_pending_io();
+    state.map_dump_future.wait();
+  }
+  if (state.telemetry_future.valid()) state.telemetry_future.wait();
+  if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
+  if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
+  if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
+  if (state.conn.heartbeat_future.valid()) state.conn.heartbeat_future.wait();
+  if (state.tracer.future.valid()) state.tracer.future.wait();
+  if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
+  if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
+
+  /* Bump the epoch so any in-flight async results from the old connection
+   * are silently rejected when they complete. */
+  ++state.conn.reconnect.epoch;
+
+  state.conn.heartbeat_pending = false;
+  state.conn.heartbeat_error.clear();
+  state.conn.heartbeat_failures = 0;
+  state.conn.next_heartbeat = 0.0;
+  state.scan.async_pending = false;
+  state.map_dump_pending = false;
+  state.map_dump_client.reset();
+  state.telemetry_pending = false;
+  state.map_refresh_pending = false;
+  state.taskmgr.resource_pending = false;
+  state.taskmgr.prefetch_pending = false;
+
+  /* Disconnect the control socket and drop all role connections. */
+  state.pool.control().disconnect();
+  state.pool.invalidate_roles();
+  state.pool_active = false;
+  state.has_hello = false;
+  state.klog.connected = false;
+  state.klog.paused = false;
+
+  /* Mark remote state as stale but DO NOT clear UI data */
+  state.conn.reconnect.stale = true;
+  state.conn.reconnect.phase = ConnectionPhase::ConnectionLost;
+}
+
+static void reset_remote_session(AppState &state) {
+  /* Full destructive cleanup — called on manual disconnect or shutdown. */
+  state.processes.clear();
+  state.maps.clear();
+  state.selected_map_starts.clear();
+  state.mem.memory.clear();
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear();
+  state.scan.snapshot_value_len = 0;
+  state.scan.is_unknown_session = false;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
+  state.selected_pid = 0;
+  state.selected_process_row = -1;
+  state.selected_map_row = -1;
+  state.has_process_info = false;
+  state.telemetry_available = false;
+  state.next_telemetry_poll = 0.0;
+  state.taskmgr.resources.clear();
+  state.taskmgr.fmem_by_name.clear();
+  state.taskmgr.prefetch_processes.clear();
+  state.taskmgr.prefetch_resources.clear();
+  state.taskmgr.prefetch_error.clear();
+  state.taskmgr.last_log_received = 0U;
+  state.taskmgr.selected_row = -1;
+  state.taskmgr.selected_pid = 0;
+  state.taskmgr.detail_open = false;
+  state.taskmgr.map_summary = ProcessMapSummary{};
+  state.taskmgr.has_process_info = false;
+  reset_debugger_state(state);
+  state.tracer.pending = false;
+  state.tracer.detach_pending = false;
+  state.tracer.detach_requested = false;
+  state.tracer.status_pending = false;
+  state.tracer.events_pending = false;
+  state.tracer.target_pid = 0;
+  state.tracer.status = {};
+  state.tracer.status_text[0] = '\0';
+  state.tracer.error.clear();
+  state.tracer.temp_events.clear();
+}
+
+void connect_console(AppState &state, ConnectIntent intent) {
   if (state.conn.connect_pending) return;  /* already connecting */
   if (s_connect_future.valid()) {
     set_status(state, "Previous connection attempt is still completing");
@@ -136,32 +229,35 @@ void connect_console(AppState &state) {
   ensure_console_targets(state);
   save_current_console_target(state);
   normalize_ports(state);
-  /* Stop the plugin broker before closing the pooled console sockets. This
-     cancels a possible loopback request at its source and gives the plugin a
-     deterministic transport shutdown. */
-  if (state.plugin_gui_bridge) {
-    state.plugin_gui_bridge->stop();
-    state.plugin.gui_starting = false;
-    state.plugin.gui_error.clear();
+
+  const bool is_reconnect = intent == ConnectIntent::AutomaticReconnect;
+
+  if (!is_reconnect) {
+    /* Full teardown for manual connections. */
+    if (state.plugin_gui_bridge) {
+      state.plugin_gui_bridge->stop();
+      state.plugin.gui_starting = false;
+      state.plugin.gui_error.clear();
+    }
+    state.pool.disconnect();
+    quiesce_transport(state);
+    reset_remote_session(state);
+    state.conn.reconnect.manual_disconnect = false;
+    state.conn.reconnect.stale = false;
+  } else {
+    /* Reconnect: quiesce but preserve UI state. */
+    quiesce_transport(state);
+    /* Don't clear processes, maps, scan results, trainer, or selections. */
   }
-  state.pool.disconnect();
-  state.pool_active = false;
-  state.has_hello = false;
-  state.klog.connected = false;
-  state.klog.paused = false;
-  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.mem.memory.clear();
-  state.scan.result = ScanResult{};
-  state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
-  state.scan.is_unknown_session = false;
-  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
-  state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
-  state.has_process_info = false;
+
   s_temp_client.set_socket_timeout_ms(static_cast<uint32_t>(std::max(1000, state.socket_timeout_ms)));
   s_temp_client.disconnect();
   s_temp_hello = {};
   s_temp_error.clear();
   state.conn.connect_pending = true;
   state.conn.connect_cancel_requested = false;
+  state.conn.reconnect.phase = is_reconnect ? ConnectionPhase::Reconnecting
+                                             : ConnectionPhase::Connecting;
   s_connect_generation = ++state.conn.connect_generation;
 
   if (state.crash_logging_enabled) {
@@ -169,10 +265,14 @@ void connect_console(AppState &state) {
   }
   state.action_journal.record("connect", ("{\"host\":\"" + ActionJournal::json_escape(state.host) + "\",\"port\":" + std::to_string(state.debug_port) + "}").c_str());
 
-  set_status(state, "Connecting to " + std::string(state.host) + "...");
+  set_status(state, is_reconnect ? "Reconnecting to " + std::string(state.host) + "..."
+                                  : "Connecting to " + std::string(state.host) + "...");
 
   std::string host = state.host;
   uint16_t port = static_cast<uint16_t>(state.debug_port);
+  const uint32_t timeout_ms = is_reconnect ? 2000U
+      : static_cast<uint32_t>(std::max(1000, state.socket_timeout_ms));
+  s_temp_client.set_socket_timeout_ms(timeout_ms);
   s_connect_future = std::async(std::launch::async, [host, port]() -> bool {
     if (!s_temp_client.connect_to(host, port)) {
       s_temp_error = s_temp_client.last_error();
@@ -186,6 +286,20 @@ void connect_console(AppState &state) {
     s_temp_error.clear();
     return true;
   });
+}
+
+void schedule_reconnect_retry(AppState &state) {
+  if (state.conn.reconnect.manual_disconnect) return;
+  using namespace std::chrono;
+  static constexpr std::array<milliseconds, 6> kBackoff{
+    milliseconds(500),  milliseconds(1000), milliseconds(2000),
+    milliseconds(4000), milliseconds(8000), milliseconds(10000)};
+  const size_t idx = std::min<size_t>(state.conn.reconnect.attempt, 5);
+  state.conn.reconnect.next_attempt_at = steady_clock::now() + kBackoff[idx];
+  state.conn.reconnect.reason = "Console in rest mode or unreachable";
+  state.conn.reconnect.phase = ConnectionPhase::WaitingForWake;
+  ++state.conn.reconnect.attempt;
+  state.conn.heartbeat_failures = 0;
 }
 
 void cancel_connect(AppState &state) {
@@ -777,6 +891,14 @@ void poll_connect(AppState &state) {
       set_status(state, "Payload is starting; retrying connection...");
       return;
     }
+
+    /* Automatic reconnect: schedule next attempt instead of showing error. */
+    if (state.conn.reconnect.phase == ConnectionPhase::Reconnecting ||
+        state.conn.reconnect.phase == ConnectionPhase::WaitingForWake) {
+      schedule_reconnect_retry(state);
+      return;
+    }
+
     const bool payload_start_failed = state.payload_post_inject_connect;
     state.payload_post_inject_connect = false;
     state.payload_connect_retry_at = 0.0;
@@ -805,20 +927,27 @@ void poll_connect(AppState &state) {
     return;
   }
 
-  /* Success: transfer connected fd from temp client to main client */
-  /* Transfer control fd to pool, then connect additional roles in background. */
+  /* Success */
   {
     platform::socket_handle_t cfd = s_temp_client.release_fd();
-    state.pool.control().take_fd(cfd);
+  /* On reconnect path: swap control socket, keep pool identity. */
+  if (state.conn.reconnect.phase == ConnectionPhase::Reconnecting) {
+      auto new_control = std::make_shared<Client>();
+      new_control->take_fd(cfd);
+      state.pool.replace_control(std::move(new_control));
+      state.pool.invalidate_roles();
+    } else {
+      /* Fresh connect path: transfer to pool. */
+      state.pool.control().take_fd(cfd);
+    }
   }
   state.pool_active = true;
-  /* Kick off Memory / Scan / Poll role connections asynchronously.
-   * These are non-blocking — roles that fail to connect fall back to Control. */
   state.pool.connect_additional_roles_async(
       std::string(state.host),
       static_cast<uint16_t>(state.debug_port),
       static_cast<uint32_t>(state.socket_timeout_ms),
       s_temp_hello);
+
   const bool payload_start_verified = state.payload_post_inject_connect;
   state.payload_auto_inject_probe = false;
   state.payload_auto_inject_waiting = false;
@@ -828,6 +957,24 @@ void poll_connect(AppState &state) {
   state.hello = s_temp_hello;
   state.has_hello = true;
   update_payload_version_check(state);
+  state.conn.heartbeat_failures = 0;
+  state.conn.heartbeat_error.clear();
+
+  /* On reconnect, mark remote state as stale but don't clear UI data. */
+  if (state.conn.reconnect.phase == ConnectionPhase::Reconnecting) {
+    state.conn.reconnect.attempt = 0;
+    state.conn.reconnect.stale = true;
+    state.conn.reconnect.reason.clear();
+    state.conn.reconnect.phase = ConnectionPhase::Online;
+    ++state.conn.reconnect.epoch;
+    std::string msg = "Reconnected to " + std::string(state.host);
+    set_status(state, msg);
+    push_notification(state, msg, 4.0);
+    return;
+  }
+
+  /* Fresh connect: full initialization. */
+  state.conn.reconnect.phase = ConnectionPhase::Online;
   state.taskmgr.resources.clear();
   state.taskmgr.fmem_by_name.clear();
   state.taskmgr.last_log_received = 0U;
@@ -919,103 +1066,22 @@ void draw_connect_spinner(AppState &state) {
 }
 
 void disconnect_console(AppState &state, const char *reason) {
+  state.conn.reconnect.manual_disconnect = true;
+  state.conn.reconnect.reason.clear();
+  state.conn.reconnect.attempt = 0;
+  state.conn.reconnect.phase = ConnectionPhase::Disconnected;
+  state.conn.reconnect.stale = false;
+
   if (state.conn.connect_pending) cancel_connect(state);
 
-  /* Drain async futures before clearing flags (std::future blocks on destructor). */
-  state.conn.connect_pending = false;  /* cancel any in-flight async connect */
-
-  /* Interrupt scanner I/O before draining its future. */
-  if (state.scan.async_future.valid()) {
-    state.scan.async_cancel_requested.store(true);
-    state.pool.cancel_all_pending_io();
-  }
-  if (state.map_dump_future.valid()) {
-    state.map_dump_cancel_requested.store(true);
-    state.pool.cancel_all_pending_io();
-  }
-  if (state.scan.async_future.valid()) state.scan.async_future.wait();
-  if (state.map_dump_future.valid()) state.map_dump_future.wait();
-  if (state.telemetry_future.valid()) state.telemetry_future.wait();
-  if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
-  if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
-  if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
-  if (state.conn.heartbeat_future.valid()) state.conn.heartbeat_future.wait();
-  if (state.tracer.future.valid()) state.tracer.future.wait();
-  if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
-  if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
-  if (s_connect_future.valid()) {
-    s_connect_future.wait();
-    try {
-      (void)s_connect_future.get();
-    } catch (const std::exception &ex) {
-      if (state.crash_logging_enabled)
-        state.crash_logger.log(
-            "error", ("Connection worker shutdown failed: " +
-                      std::string(ex.what())).c_str());
-    }
-    s_temp_client.disconnect();
-  }
-
-  state.conn.connect_pending = false;
-  state.conn.connect_cancel_requested = false;
-  state.scan.async_pending = false;  /* cancel any in-flight async scan */
-  state.map_dump_pending = false;
-  state.map_dump_client.reset();
-  state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
-  state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
-  state.taskmgr.resource_pending = false;  /* cancel any in-flight task manager fetch */
-  state.taskmgr.prefetch_pending = false;
-  state.conn.heartbeat_pending = false;
-  state.conn.heartbeat_error.clear();
-  state.conn.next_heartbeat = 0.0;
-  const bool tracer_may_own_target = state.tracer.pending ||
-      state.tracer.target_pid > 0 ||
-      state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING;
-  if (state.client.connected() && state.has_hello && tracer_may_own_target &&
-      (state.hello.capabilities & MEMDBG_CAP_TRACER)) {
-    /* Do not leave a traced process stopped when the frontend disconnects. */
-    (void)state.client.tracer_detach();
-  }
-  state.tracer.pending = false;
-  state.tracer.detach_pending = false;
-  state.tracer.detach_requested = false;
-  state.tracer.status_pending = false;
-  state.tracer.events_pending = false;
-  state.tracer.target_pid = 0;
-  state.tracer.status = {};
-  state.tracer.status_text[0] = '\0';
-  state.tracer.error.clear();
-  state.tracer.temp_events.clear();
+  quiesce_transport(state);
+  state.pool.disconnect();
   if (state.plugin_gui_bridge) {
     state.plugin_gui_bridge->stop();
     state.plugin.gui_starting = false;
     state.plugin.gui_error.clear();
   }
-  state.pool.disconnect();
-  state.pool_active = false;
-  state.has_hello = false;
-  state.klog.connected = false;
-  state.klog.paused = false;
-  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.mem.memory.clear();
-  state.scan.result = ScanResult{};
-  state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
-  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
-  state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
-  state.has_process_info = false;
-  state.telemetry_available = false;
-  state.next_telemetry_poll = 0.0;
-  state.taskmgr.resources.clear();
-  state.taskmgr.fmem_by_name.clear();
-  state.taskmgr.prefetch_processes.clear();
-  state.taskmgr.prefetch_resources.clear();
-  state.taskmgr.prefetch_error.clear();
-  state.taskmgr.last_log_received = 0U;
-  state.taskmgr.selected_row = -1;
-  state.taskmgr.selected_pid = 0;
-  state.taskmgr.detail_open = false;
-  state.taskmgr.map_summary = ProcessMapSummary{};
-  state.taskmgr.has_process_info = false;
-  reset_debugger_state(state);
+  reset_remote_session(state);
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Disconnected from console");

@@ -713,7 +713,7 @@ void draw_top_bar(AppState &state, ImVec2 size) {
         cancel_connect(state);
     } else {
       if (topbar_button("TopbarConnect", icons::kConnect, locale::tr("topbar.connect"), btn_w, true))
-        connect_console(state);
+        connect_console(state, ConnectIntent::ManualFreshConnection);
     }
   }
   ImGui::EndChild();

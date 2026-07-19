@@ -514,6 +514,18 @@ struct ScannerState {
   std::vector<AutoSearchCandidate> auto_search_temp_candidates;
 };
 
+enum class ConnectIntent { ManualFreshConnection, AutomaticReconnect, PostInjectionVerification };
+
+enum class ConnectionPhase {
+  Disconnected,
+  Connecting,
+  Online,
+  ConnectionLost,
+  WaitingForWake,
+  Reconnecting,
+  Restoring,
+};
+
 /* ---- Connection state ----
  * Extracted from the monolithic AppState to reduce God Object risk
  * (external audit recommendation). */
@@ -522,12 +534,27 @@ struct ConnectionState {
   bool connect_cancel_requested = false;
   uint64_t connect_generation = 0;
   bool heartbeat_pending = false;
+  int heartbeat_failures = 0;       /* consecutive heartbeat failures */
   bool debugger_attach_pending = false;
   bool debugger_threads_pending = false;
   std::future<bool> heartbeat_future;
   std::string heartbeat_error;
   double next_heartbeat = 0.0;
   bool shutdown_started = false;
+
+  /* ---- Reconnect state (rest mode resilience) ---- */
+  struct ReconnectState {
+    bool enabled = true;
+    bool manual_disconnect = false;            /* user explicitly disconnected */
+    bool stale = false;                        /* remote state (PID, maps, etc.) is suspect */
+    ConnectionPhase phase{ConnectionPhase::Disconnected};
+    uint32_t attempt = 0;
+    uint64_t epoch = 0;                        /* bumped on each disconnect cycle; async results from
+                                                   older epochs are silently dropped */
+    std::chrono::steady_clock::time_point next_attempt_at{};
+    std::chrono::steady_clock::time_point started_at{};
+    std::string reason;
+  } reconnect;
 };
 
 /* ---- Memory view state ----
@@ -1138,7 +1165,7 @@ void save_current_console_target(AppState &state);
 void add_console_target(AppState &state);
 void remove_selected_console_target(AppState &state);
 bool ensure_udp_listener(AppState &state, std::string &error);
-void connect_console(AppState &state);
+void connect_console(AppState &state, ConnectIntent intent = ConnectIntent::ManualFreshConnection);
 void request_payload_inject(AppState &state, bool connect_after = true);
 void disconnect_console(AppState &state, const char *reason = nullptr);
 void reset_debugger_state(AppState &state);

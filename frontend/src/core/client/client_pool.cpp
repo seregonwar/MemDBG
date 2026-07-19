@@ -223,17 +223,51 @@ std::shared_ptr<Client> ClientPool::poll_client() const {
 
 std::shared_ptr<Client> ClientPool::memory_lease() const {
   std::lock_guard<std::mutex> lock(roles_mutex_);
-  return memory_ && memory_->connected() ? memory_ : control_;
+  if (memory_ && memory_->connected()) return memory_;
+  /* Only fall back to control if it is actually healthy. */
+  if (control_ && control_->connected()) return control_;
+  return {};
 }
 
 std::shared_ptr<Client> ClientPool::scan_lease() const {
   std::lock_guard<std::mutex> lock(roles_mutex_);
-  return scan_ && scan_->connected() ? scan_ : control_;
+  if (scan_ && scan_->connected()) return scan_;
+  if (control_ && control_->connected()) return control_;
+  return {};
 }
 
 std::shared_ptr<Client> ClientPool::poll_lease() const {
   std::lock_guard<std::mutex> lock(roles_mutex_);
-  return poll_ && poll_->connected() ? poll_ : control_;
+  if (poll_ && poll_->connected()) return poll_;
+  if (control_ && control_->connected()) return control_;
+  return {};
+}
+
+void ClientPool::invalidate_roles() {
+  /* Drop memory/scan/poll without touching control. */
+  role_generation_.fetch_add(1U);
+  roles_cv_.notify_all();
+  if (role_thread_.joinable()) role_thread_.join();
+  cancel_all_pending_io();
+  std::lock_guard<std::mutex> lock(roles_mutex_);
+  if (memory_) { memory_->disconnect(); memory_.reset(); }
+  if (scan_)   { scan_->disconnect();   scan_.reset();   }
+  if (poll_)   { poll_->disconnect();   poll_.reset();   }
+  connecting_.fill(nullptr);
+  roles_active_.store(false);
+  roles_pending_.store(false);
+}
+
+void ClientPool::replace_control(std::shared_ptr<Client> new_control) {
+  if (!new_control) return;
+  std::shared_ptr<Client> old;
+  {
+    /* control_ is a shared_ptr — swap atomically under lock. */
+    std::lock_guard<std::mutex> lock(roles_mutex_);
+    old = control_;
+    control_ = std::move(new_control);
+  }
+  if (old) old->disconnect();
 }
 
 void ClientPool::disconnect_all() {

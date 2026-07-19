@@ -354,7 +354,7 @@ static void draw_mobile_network(AppState &state, ImVec2 size) {
       if (mobile_action_button(std::string(icons::kConnect) + "  Connect",
                                true)) {
         save_current_console_target(state);
-        connect_console(state);
+        connect_console(state, ConnectIntent::ManualFreshConnection);
       }
     }
     ImGui::EndDisabled();
@@ -2340,7 +2340,7 @@ static void draw_mobile_session(AppState &state, ImVec2 size) {
                            "  Connect").c_str(),
                           ImVec2(ImGui::GetContentRegionAvail().x,
                                  42.0f * scl))) {
-        connect_console(state);
+        connect_console(state, ConnectIntent::ManualFreshConnection);
       }
     }
     ImGui::EndDisabled();

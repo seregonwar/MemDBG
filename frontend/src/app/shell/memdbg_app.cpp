@@ -740,7 +740,7 @@ void init_app_shared(AppState &state, float dpi_scale) {
 
   if (state.payload_auto_inject) {
     state.payload_auto_inject_probe = true;
-    connect_console(state);
+    connect_console(state, ConnectIntent::ManualFreshConnection);
   }
 
 }

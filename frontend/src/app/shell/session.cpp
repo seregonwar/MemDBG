@@ -78,13 +78,52 @@ void poll_locale_repository(AppState &state) {
   }
 }
 
+/* ---- Reconnect helpers (rest mode resilience) ---- */
+
+void begin_reconnect(AppState &state, const std::string &reason) {
+  if (state.conn.reconnect.manual_disconnect) return;
+  if (!state.conn.reconnect.enabled) return;
+
+  using namespace std::chrono;
+
+  /* Immediately disconnect the dead socket so the UI never sees a zombie. */
+  state.pool.control().disconnect();
+
+  state.conn.reconnect.attempt = 0;
+  state.conn.reconnect.started_at = steady_clock::now();
+  state.conn.reconnect.next_attempt_at = steady_clock::now() + milliseconds(500);
+  state.conn.reconnect.reason = reason;
+  state.conn.reconnect.stale = true;
+  state.conn.reconnect.phase = ConnectionPhase::WaitingForWake;
+
+  set_status(state, reason + " — reconnecting automatically...");
+}
+
+void poll_reconnect(AppState &state) {
+  if (!state.conn.reconnect.enabled) return;
+  if (state.conn.reconnect.manual_disconnect) return;
+  if (state.conn.connect_pending) return;  /* already attempting */
+  if (state.client.connected()) return;     /* already online */
+
+  using namespace std::chrono;
+  const auto now = steady_clock::now();
+  if (now < state.conn.reconnect.next_attempt_at) return;
+
+  /* Only attempt reconnect if we're in a reconnectable phase. */
+  if (state.conn.reconnect.phase != ConnectionPhase::WaitingForWake &&
+      state.conn.reconnect.phase != ConnectionPhase::Reconnecting)
+    return;
+
+  state.conn.reconnect.phase = ConnectionPhase::Reconnecting;
+  connect_console(state, ConnectIntent::AutomaticReconnect);
+}
+
 void poll_session_health(AppState &state) {
+  /* Transport-level failure (socket died unexpectedly). */
   if (state.has_hello && !state.client.connected() && !state.conn.connect_pending) {
     const std::string error = state.client.last_error();
-    const std::string message = error.empty()
-                                    ? "Payload connection lost"
-                                    : "Payload connection lost: " + error;
-    disconnect_console(state, message.c_str());
+    begin_reconnect(state, error.empty() ? "Payload connection lost"
+                                         : "Payload connection lost: " + error);
     return;
   }
 
@@ -110,14 +149,18 @@ void poll_session_health(AppState &state) {
     state.conn.heartbeat_pending = false;
 
     if (!ok) {
-      const std::string error = state.conn.heartbeat_error.empty()
-                                    ? state.client.last_error()
-                                    : state.conn.heartbeat_error;
-      const std::string message = error.empty()
-                                      ? "Payload connection lost"
-                                      : "Payload connection lost: " + error;
-      disconnect_console(state, message.c_str());
-      return;
+      ++state.conn.heartbeat_failures;
+      /* Require 2 consecutive failures before triggering reconnect. */
+      if (state.conn.heartbeat_failures >= 2) {
+        const std::string error = state.conn.heartbeat_error.empty()
+                                      ? state.client.last_error()
+                                      : state.conn.heartbeat_error;
+        begin_reconnect(state, error.empty() ? "Heartbeat lost"
+                                             : "Heartbeat lost: " + error);
+        return;
+      }
+    } else {
+      state.conn.heartbeat_failures = 0;
     }
 
     state.conn.next_heartbeat = ImGui::GetTime() + 2.5;
@@ -204,7 +247,7 @@ void handle_global_shortcuts(AppState &state) {
     } else if (state.client.connected()) {
       disconnect_console(state);
     } else {
-      connect_console(state);
+      connect_console(state, ConnectIntent::ManualFreshConnection);
     }
   }
 }
