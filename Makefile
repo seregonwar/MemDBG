@@ -339,6 +339,32 @@ verify:
 	$(MAKE) payload-ps4
 	$(MAKE) payload-ps5
 
+# ---- Sanitizer targets (use system clang, not HOST_CC) ----
+SAN_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L
+
+host-asan:
+	$(MAKE) clean
+	$(MAKE) host HOST_CC=clang \
+		HOST_CPPFLAGS="$(SAN_CPPFLAGS)" \
+		HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -O1 -g -fsanitize=address -fno-omit-frame-pointer" \
+		HOST_LDFLAGS="-fsanitize=address"
+	@echo "Built with AddressSanitizer. Run with: ASAN_OPTIONS=detect_leaks=1 ./build/MemDBG-host"
+
+host-ubsan:
+	$(MAKE) clean
+	$(MAKE) host HOST_CC=clang \
+		HOST_CPPFLAGS="$(SAN_CPPFLAGS)" \
+		HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+	@echo "Built with UBSan. Run with: UBSAN_OPTIONS=halt_on_error=1 ./build/MemDBG-host"
+
+host-tsan:
+	$(MAKE) clean
+	$(MAKE) host HOST_CC=clang \
+		HOST_CPPFLAGS="$(SAN_CPPFLAGS)" \
+		HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -O1 -g -fsanitize=thread" \
+		HOST_LDFLAGS="-fsanitize=thread"
+	@echo "Built with ThreadSanitizer. Run with: TSAN_OPTIONS=history_size=7 ./build/MemDBG-host"
+
 $(HOST_TARGET): $(HOST_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $^ $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $@

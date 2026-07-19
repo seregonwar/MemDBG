@@ -10,6 +10,7 @@
 #define MEMDBG_DAEMON_ACCEPTOR_H
 
 #include "memdbg/core/memdbg.h"
+#include "memdbg/daemon/thread_pool.h"
 #include "memdbg/pal/pal_network.h"
 #include <pthread.h>
 
@@ -21,7 +22,7 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
                                     socket_t *listen_fd);
 
 int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
-                   pthread_t *out_tid);
+                   memdbg_thread_pool_t *pool, pthread_t *out_tid);
 
 /* Wake all connection handlers during daemon replacement.  shutdown(2) is
  * used rather than close(2), so each handler retains ownership of its fd and

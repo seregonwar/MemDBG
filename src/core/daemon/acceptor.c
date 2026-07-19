@@ -17,6 +17,7 @@
 #include "memdbg/pal/pal_wait.h" /* MEMDBG_ACCEPT_POLL_MS */
 #include "memdbg/daemon/net_util.h"
 #include "memdbg/daemon/handler.h"
+#include "memdbg/daemon/thread_pool.h"
 
 #include <errno.h>
 #include <netinet/in.h>
@@ -160,14 +161,16 @@ void acceptor_unregister_hello_session(uint32_t session_cookie) {
 /* ---- Acceptor thread ---- */
 
 typedef struct {
-  socket_t       listen_fd;
-  memdbg_config_t cfg;
+  socket_t             listen_fd;
+  memdbg_config_t      cfg;
+  memdbg_thread_pool_t *pool;
 } acceptor_args_t;
 
 static void *acceptor_thread(void *arg) {
   acceptor_args_t *aargs = (acceptor_args_t *)arg;
   socket_t listen_fd      = aargs->listen_fd;
   memdbg_config_t cfg     = aargs->cfg;
+  memdbg_thread_pool_t *pool = aargs->pool;
   free(aargs);
 
   while (!memdbg_daemon_should_stop()) {
@@ -250,18 +253,18 @@ static void *acceptor_thread(void *arg) {
       continue;
     }
 
-    pthread_t hthread;
-    if (pthread_create(&hthread, NULL, connection_handler_thread, hargs) != 0) {
+    /* Enqueue for handling by a pre-created worker thread.
+     * If the pool is shutting down or full, fall back to dropping. */
+    if (memdbg_thread_pool_enqueue(pool, hargs) != 0) {
       acceptor_unregister_client(client_fd);
       atomic_fetch_sub_explicit(&g_active_connections, 1U,
                                 memory_order_relaxed);
       memdbg_log_write(MEMDBG_LOG_ERROR,
-                       "failed to spawn handler thread; dropping connection");
+                       "failed to enqueue handler; dropping connection");
       free(hargs);
       (void)pal_socket_close(client_fd);
       continue;
     }
-    pthread_detach(hthread);
   }
 
   return NULL;
@@ -313,7 +316,7 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
 }
 
 int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
-                   pthread_t *out_tid) {
+                   memdbg_thread_pool_t *pool, pthread_t *out_tid) {
   acceptor_args_t *aargs = (acceptor_args_t *)malloc(sizeof(*aargs));
   if (aargs == NULL) {
     memdbg_log_write(MEMDBG_LOG_ERROR, "failed to allocate acceptor args");
@@ -321,6 +324,7 @@ int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
   }
   aargs->listen_fd = listen_fd;
   aargs->cfg       = *cfg;
+  aargs->pool      = pool;
 
   if (pthread_create(out_tid, NULL, acceptor_thread, aargs) != 0) {
     free(aargs);

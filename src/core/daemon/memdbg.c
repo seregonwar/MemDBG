@@ -34,6 +34,7 @@
 #include "memdbg/daemon/net_util.h"
 #include "memdbg/daemon/response.h"
 #include "memdbg/daemon/acceptor.h"
+#include "memdbg/daemon/thread_pool.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -341,8 +342,24 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     pal_notification_send("MemDBG by seregonwar started");
 
   pthread_t acceptor_tid;
-  if (acceptor_start(&cfg, listen_fd, &acceptor_tid) != 0) {
+  /* Create a bounded worker pool for connection handlers.
+   * One worker can handle multiple sequential connections (the acceptor
+   * round-robins new connections to idle workers).  The pool size is
+   * derived from max_connections so a console with one frontend gets
+   * ~4 workers while a dev host accepting many tools gets more. */
+  unsigned int pool_workers =
+      cfg.max_connections < 4U ? 2U :
+      cfg.max_connections < 8U ? 4U : 8U;
+  memdbg_thread_pool_t *pool = memdbg_thread_pool_create(pool_workers);
+  if (pool == NULL) {
+    memdbg_log_write(MEMDBG_LOG_ERROR, "failed to create handler thread pool");
+    goto shutdown_cleanup;
+  }
+
+  if (acceptor_start(&cfg, listen_fd, pool, &acceptor_tid) != 0) {
     memdbg_daemon_request_stop();
+    memdbg_thread_pool_shutdown(pool);
+    memdbg_thread_pool_destroy(pool);
     goto shutdown_cleanup;
   }
 
@@ -352,22 +369,10 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
    * in a desktop pool. Wake every handler before draining. */
   acceptor_shutdown_clients();
 
-  /* Drain: wait for all active handler threads to finish.
-   * listen_fd is closed inside shutdown_cleanup below. */
-  /* We spin with a 10ms sleep so we don't burn CPU. */
-  memdbg_log_write(MEMDBG_LOG_INFO,
-                   "shutdown: draining %u active connections...",
-                   atomic_load_explicit(&g_active_connections,
-                                        memory_order_relaxed));
-  uint32_t drain_waits = 0U;
-  while (atomic_load_explicit(&g_active_connections, memory_order_relaxed) > 0U &&
-         drain_waits++ < 200U)
-    memdbg_sleep_ms(10U);
-  if (atomic_load_explicit(&g_active_connections, memory_order_relaxed) > 0U)
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "shutdown: forcing exit with %u blocked handler(s)",
-                     atomic_load_explicit(&g_active_connections,
-                                          memory_order_relaxed));
+  /* Signal all worker threads to finish and join them.  This replaces the
+   * ad-hoc spin-drain that was needed with detached per-connection threads. */
+  memdbg_thread_pool_shutdown(pool);
+  memdbg_thread_pool_destroy(pool);
 
 shutdown_cleanup:
 
