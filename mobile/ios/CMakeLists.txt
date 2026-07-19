@@ -200,6 +200,7 @@ set(MOBILE_SOURCES
   ${FRONTEND_ROOT}/src/plugins/repository/plugin_manager.cpp
   ${FRONTEND_ROOT}/src/plugins/repository/gui_bridge.cpp
   ${FRONTEND_ROOT}/src/plugins/repository/lua_engine.cpp
+  ${FRONTEND_ROOT}/src/plugins/repository/protocol_broker.cpp
 
   ${FRONTEND_ROOT}/src/sandbox/sandbox_common.cpp
   ${FRONTEND_ROOT}/src/sandbox/sandbox_lua.cpp
