@@ -284,6 +284,7 @@ static void dump_filtered_maps(AppState &state) {
   const bool executable = state.map_filter_executable;
   const bool hide_system = state.map_filter_hide_system;
   const int min_kb = state.map_filter_min_kb;
+  state.map_dump_epoch = state.conn.reconnect.epoch;
   state.map_dump_pending = true;
   state.map_dump_cancel_requested.store(false);
   state.map_dump_maps_done.store(0U);
@@ -395,6 +396,10 @@ static void poll_filtered_map_dump(AppState &state) {
     return;
   state.map_dump_pending = false;
   state.map_dump_client.reset();
+
+  /* Reject stale results from a previous connection epoch. */
+  if (state.map_dump_epoch != state.conn.reconnect.epoch) return;
+
   const bool cancelled = state.map_dump_cancel_requested.exchange(false);
   auto [ok, dumped_maps, skipped_maps, dumped_total, out_dir, error] =
       state.map_dump_future.get();

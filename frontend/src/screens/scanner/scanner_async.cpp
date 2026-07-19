@@ -102,6 +102,8 @@ void poll_scanner_async(AppState &state) {
   auto status = state.scan.async_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
+  /* Reject stale results from a previous connection epoch. */
+  const uint64_t captured_epoch = state.scan.async_epoch;
   state.scan.async_pending = false;
   state.scan.async_cancellable = false;
   const bool was_cancelled = state.scan.async_cancel_requested.exchange(false);
@@ -120,6 +122,17 @@ void poll_scanner_async(AppState &state) {
     state.scan.async_error = ex.what();
   } catch (...) {
     state.scan.async_error = "Unknown scanner error";
+  }
+
+  /* Reject stale results from a previous connection epoch. */
+  if (captured_epoch != state.conn.reconnect.epoch) {
+    state.scan.async_temp_result = ScanResult{};
+    state.scan.async_temp_snapshot.clear();
+    state.scan.async_temp_snapshot_value_len = 0U;
+    state.scan.async_temp_snapshot_type = MEMDBG_VALUE_U32;
+    state.scan.async_temp_is_unknown = false;
+    state.scan.async_temp_session_status[0] = '\0';
+    return;
   }
 
   if (state.scan.async_owner != Screen::Scanner) return;
@@ -216,6 +229,7 @@ void scan_range(AppState &state) {
 
   state.scan.async_label = "Range scan";
   state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_epoch = state.conn.reconnect.epoch;
   state.scan.async_pending = true;
   state.scan.async_owner = Screen::Scanner;
 
@@ -381,6 +395,7 @@ void scan_selected_maps(AppState &state) {
 
   state.scan.async_label = locale::tr("scanner.selected_maps_scan");
   state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_epoch = state.conn.reconnect.epoch;
   state.scan.async_pending = true;
   state.scan.async_cancellable = true;
   state.scan.async_cancel_requested.store(false);
@@ -625,6 +640,7 @@ void scan_process(AppState &state) {
 
   state.scan.async_label = "Process scan";
   state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_epoch = state.conn.reconnect.epoch;
   state.scan.async_pending = true;
   state.scan.async_cancellable = true;
   state.scan.async_cancel_requested.store(false);
@@ -791,6 +807,7 @@ void scan_unknown_process(AppState &state) {
 
   state.scan.async_label = "Unknown value scan";
   state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_epoch = state.conn.reconnect.epoch;
   state.scan.async_pending = true;
   state.scan.async_cancellable = true;
   state.scan.async_cancel_requested.store(false);

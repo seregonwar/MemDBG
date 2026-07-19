@@ -505,6 +505,7 @@ struct ScannerState {
   bool async_temp_is_unknown = false;
   char async_temp_session_status[256] = {};
   std::string async_error;
+  uint64_t async_epoch = 0;          /* captured at request time; stale if != conn.reconnect.epoch */
 
   /* -- Auto-Search (heuristic game value discovery) -- */
   bool auto_search_enabled = false;
@@ -685,6 +686,7 @@ struct AppState {
   std::atomic<uint64_t> map_dump_bytes_done{0U};
   std::atomic<uint64_t> map_dump_bytes_total{0U};
   int32_t map_dump_pid = 0;
+  uint64_t map_dump_epoch = 0;      /* captured at request time; stale if != conn.reconnect.epoch */
   double map_dump_start_time = 0.0;
 
   /* ---- Process Tree ---- */
@@ -1149,6 +1151,16 @@ inline bool client_async_busy(const AppState &state) {
          state.taskmgr.resource_pending || state.taskmgr.prefetch_pending ||
          state.plugin.refresh_pending || state.plugin.run_pending ||
          state.plugin.gui_starting;
+}
+
+/* ---- Reconnect safety gate ----
+ * Blocks new remote operations when the session is offline or stale.
+ * Poll functions that drain old futures must still run — this guards
+ * only the *launch* of new async work. */
+inline bool remote_ready(const AppState &state) {
+  return state.client.connected() &&
+         state.conn.reconnect.phase == ConnectionPhase::Online &&
+         !state.conn.reconnect.stale;
 }
 
 inline bool connect_sequence_pending(const AppState &state) {
