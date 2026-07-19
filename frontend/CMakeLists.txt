@@ -565,6 +565,44 @@ if(MSVC)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+
+# ---- memdbg_app_reconnect_test ----
+
+add_executable(memdbg_app_reconnect_test
+  tests/test_app_reconnect.cpp
+  src/core/client/client_pool.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/platform.cpp
+  src/core/crash_logger.cpp
+  src/core/discovery_client.cpp
+  src/core/payload_fetcher.cpp
+  src/core/udp_log_listener.cpp
+  src/action_journal/action_journal.cpp
+  src/plugins/repository/lua_engine.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson/sJson.c
+)
+
+target_include_directories(memdbg_app_reconnect_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/action_journal
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/repository
+  ${CMAKE_CURRENT_SOURCE_DIR}/../external/sjson
+  ${imgui_SOURCE_DIR}
+  ${nlohmann_json_SOURCE_DIR}/include
+)
+
+target_link_libraries(memdbg_app_reconnect_test PRIVATE memdbg_lua Threads::Threads)
+
+if(MSVC)
+  set_property(TARGET memdbg_app_reconnect_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 # ---- memdbg_payload_fetcher_test ----
 
 add_executable(memdbg_payload_fetcher_test
@@ -870,6 +908,7 @@ if(WIN32)
   target_compile_definitions(memdbg_client_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_auto_search_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_app_state_parsing_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_app_reconnect_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_trainer_formats_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_plugin_manager_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_lua_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -901,6 +940,7 @@ if(MSVC)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4)
   target_compile_options(memdbg_structure_compare_test PRIVATE /W4)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4)
+  target_compile_options(memdbg_app_reconnect_test PRIVATE /W4)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE /W4)
   target_compile_options(memdbg_payload_sender_test PRIVATE /W4)
   target_compile_options(memdbg_release_check_test PRIVATE /W4)
@@ -920,6 +960,7 @@ else()
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_structure_compare_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_app_reconnect_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_sender_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_release_check_test PRIVATE -Wall -Wextra -Wpedantic)
