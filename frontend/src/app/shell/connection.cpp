@@ -150,10 +150,10 @@ void connect_console(AppState &state) {
   state.klog_connected = false;
   state.klog_paused = false;
   state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
-  state.scan_is_unknown_session = false;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "No scan session");
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
+  state.scan.is_unknown_session = false;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
   s_temp_client.set_socket_timeout_ms(static_cast<uint32_t>(std::max(1000, state.socket_timeout_ms)));
@@ -925,15 +925,15 @@ void disconnect_console(AppState &state, const char *reason) {
   state.connect_pending = false;  /* cancel any in-flight async connect */
 
   /* Interrupt scanner I/O before draining its future. */
-  if (state.scan_async_future.valid()) {
-    state.scan_async_cancel_requested.store(true);
+  if (state.scan.async_future.valid()) {
+    state.scan.async_cancel_requested.store(true);
     state.pool.cancel_all_pending_io();
   }
   if (state.map_dump_future.valid()) {
     state.map_dump_cancel_requested.store(true);
     state.pool.cancel_all_pending_io();
   }
-  if (state.scan_async_future.valid()) state.scan_async_future.wait();
+  if (state.scan.async_future.valid()) state.scan.async_future.wait();
   if (state.map_dump_future.valid()) state.map_dump_future.wait();
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
@@ -958,7 +958,7 @@ void disconnect_console(AppState &state, const char *reason) {
 
   state.connect_pending = false;
   state.connect_cancel_requested = false;
-  state.scan_async_pending = false;  /* cancel any in-flight async scan */
+  state.scan.async_pending = false;  /* cancel any in-flight async scan */
   state.map_dump_pending = false;
   state.map_dump_client.reset();
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
@@ -997,9 +997,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.klog_connected = false;
   state.klog_paused = false;
   state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "No scan session");
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
   state.telemetry_available = false;

@@ -433,6 +433,87 @@ struct PluginState {
   std::string gui_error;
 };
 
+/* ---- Scanner state ----
+ * Extracted from the monolithic AppState to reduce God Object risk
+ * (external audit recommendation, ~2026-07).
+ *
+ * Includes core scan config, value editor, AOB/Pointer scanners,
+ * async scan infrastructure, and auto-search. */
+struct ScannerState {
+  /* -- Core scan configuration -- */
+  int type = MEMDBG_VALUE_U32;
+  char value[128] = "0";
+  char start[32] = "0x0";
+  char length[32] = "0x1000";
+  char end[32] = "0x0";
+  int alignment = 4;
+  int max_results = 4096;
+  bool readable_only = true;
+  bool unknown_nonzero_prefilter = false;
+  ScanResult result;
+  std::vector<ScanSnapshotEntry> snapshot;
+  uint32_t snapshot_value_len = 0;
+  int snapshot_type = MEMDBG_VALUE_U32;
+  char session_status[256] = "No scan session";
+  bool is_unknown_session = false;
+
+  /* -- Value editor -- */
+  bool value_editor_open = false;
+  bool value_editor_request_open = false;
+  uint64_t value_editor_address = 0U;
+  int value_editor_type = MEMDBG_VALUE_U32;
+  char value_editor_text[256] = "0";
+  std::vector<uint8_t> value_editor_original;
+  bool value_editor_lock = false;
+  bool value_editor_add_trainer = true;
+
+  /* -- AOB Scanner -- */
+  char aob_pattern[512] = "";
+  ScanResult aob_result;
+  bool aob_process_wide = false;
+  bool aob_text_mode = false;
+
+  /* -- Pointer Scanner -- */
+  char pointer_target_address[32] = "0x0";
+  int pointer_max_depth = 3;
+  int pointer_max_results = 256;
+  int pointer_alignment = 4;
+  ScanResult pointer_result;
+
+  /* -- Async scan (shared by all scanner types) -- */
+  std::mutex async_mtx;
+  bool async_pending = false;
+  bool async_cancellable = false;
+  std::atomic<bool> async_cancel_requested{false};
+  std::atomic<uint64_t> async_units_done{0U};
+  std::atomic<uint64_t> async_units_total{0U};
+  std::atomic<bool> async_units_are_maps{false};
+  std::atomic<uint64_t> async_results_found{0U};
+  std::atomic<uint32_t> async_maps_done{0U};
+  std::atomic<uint32_t> async_maps_total{0U};
+  std::atomic<uint32_t> async_workers_active{0U};
+  std::atomic<uint32_t> async_workers_total{0U};
+  std::shared_future<bool> async_future;
+  std::string async_label;
+  double async_start_time = 0.0;
+  Screen async_owner = Screen::Home;
+  ScanResult async_temp_result;
+  std::vector<ScanSnapshotEntry> async_temp_snapshot;
+  uint32_t async_temp_snapshot_value_len = 0U;
+  int async_temp_snapshot_type = MEMDBG_VALUE_U32;
+  bool async_temp_is_unknown = false;
+  char async_temp_session_status[256] = {};
+  std::string async_error;
+
+  /* -- Auto-Search (heuristic game value discovery) -- */
+  bool auto_search_enabled = false;
+  int auto_search_target = 0;
+  bool auto_search_has_baseline = false;
+  int auto_search_pass = 0;
+  std::vector<AutoSearchCandidate> auto_search_candidates;
+  std::vector<AutoSearchCandidate> auto_search_temp_candidates;
+};
+
 struct AppState {
   ClientPool pool;
   /* Backward-compatible reference: state.client.xxx() routes to pool.control().
@@ -566,29 +647,8 @@ struct AppState {
   int heap_max_maps = 32;
   std::vector<HeapSprayFinding> heap_findings;
 
-  int scan_type = MEMDBG_VALUE_U32;
-  char scan_value[128] = "0";
-  char scan_start[32] = "0x0";
-  char scan_length[32] = "0x1000";
-  char scan_end[32] = "0x0";
-  int scan_alignment = 4;
-  int scan_max_results = 4096;
-  bool scan_readable_only = true;
-  bool scan_unknown_nonzero_prefilter = false;
-  ScanResult scan_result;
-  std::vector<ScanSnapshotEntry> scan_snapshot;
-  uint32_t scan_snapshot_value_len = 0;
-  int scan_snapshot_type = MEMDBG_VALUE_U32;
-  char scan_session_status[256] = "No scan session";
-  bool scan_is_unknown_session = false;
-  bool scanner_value_editor_open = false;
-  bool scanner_value_editor_request_open = false;
-  uint64_t scanner_value_editor_address = 0U;
-  int scanner_value_editor_type = MEMDBG_VALUE_U32;
-  char scanner_value_editor_text[256] = "0";
-  std::vector<uint8_t> scanner_value_editor_original;
-  bool scanner_value_editor_lock = false;
-  bool scanner_value_editor_add_trainer = true;
+  /* ---- Scanner state (see ScannerState above) ---- */
+  ScannerState scan;
 
   /* ---- Structure Compare ---- */
   char structure_player_base[32] = "0x0";
@@ -638,18 +698,9 @@ struct AppState {
   Client::TelemetrySnapshot telemetry_temp_snap;
   std::string telemetry_temp_error;
 
-  /* ---- AOB Scanner ---- */
-  char aob_pattern[512] = "";
-  ScanResult aob_result;
-  bool aob_process_wide = false;  /* Scan across all process maps */
-  bool aob_text_mode = false;     /* Treat aob_pattern as an exact UTF-8 string */
 
-  /* ---- Pointer Scanner ---- */
-  char pointer_target_address[32] = "0x0";
-  int pointer_max_depth = 3;
-  int pointer_max_results = 256;
-  int pointer_alignment = 4;
-  ScanResult pointer_result;
+
+
 
   /* ---- Async connect ---- */
   bool connect_pending = false;
@@ -664,39 +715,9 @@ struct AppState {
   double next_heartbeat = 0.0;
   bool shutdown_started = false;
 
-  /* ---- Async scan (shared by Scanner, AOB Scanner, Pointer Scanner) ---- */
-  std::mutex scan_async_mtx;
-  bool scan_async_pending = false;
-  bool scan_async_cancellable = false;
-  std::atomic<bool> scan_async_cancel_requested{false};
-  std::atomic<uint64_t> scan_async_units_done{0U};
-  std::atomic<uint64_t> scan_async_units_total{0U};
-  std::atomic<bool> scan_async_units_are_maps{false};
-  std::atomic<uint64_t> scan_async_results_found{0U};
-  std::atomic<uint32_t> scan_async_maps_done{0U};
-  std::atomic<uint32_t> scan_async_maps_total{0U};
-  std::atomic<uint32_t> scan_async_workers_active{0U};
-  std::atomic<uint32_t> scan_async_workers_total{0U};
-  std::shared_future<bool> scan_async_future;
-  std::string scan_async_label;
-  double scan_async_start_time = 0.0;
-  Screen scan_async_owner = Screen::Home;  /* prevents cross-screen result contamination */
-  /* Temp storage populated by async worker, consumed by poll on UI thread */
-  ScanResult scan_async_temp_result;
-  std::vector<ScanSnapshotEntry> scan_async_temp_snapshot;
-  uint32_t scan_async_temp_snapshot_value_len = 0U;
-  int scan_async_temp_snapshot_type = MEMDBG_VALUE_U32;
-  bool scan_async_temp_is_unknown = false;
-  char scan_async_temp_session_status[256] = {};
-  std::string scan_async_error;
 
-  /* ---- Auto-Search (smart heuristic game value discovery) ---- */
-  bool auto_search_enabled = false;
-  int  auto_search_target = 0;    /* AutoSearchTarget enum value */
-  bool auto_search_has_baseline = false;
-  int  auto_search_pass = 0;      /* how many refine passes so far */
-  std::vector<AutoSearchCandidate> auto_search_candidates;  /* top scored results */
-  std::vector<AutoSearchCandidate> auto_search_temp_candidates;  /* async temp */
+
+
 
   /* ---- Task Manager state (see TaskMgrState above) ---- */
   TaskMgrState taskmgr;
@@ -1071,7 +1092,7 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 inline bool client_async_busy(const AppState &state) {
   return state.connect_pending || state.payload_inject_pending ||
          state.telemetry_pending ||
-         state.scan_async_pending || state.map_refresh_pending ||
+         state.scan.async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
          state.debugger_attach_pending || state.debugger_threads_pending ||
          state.tracer.pending || state.tracer.status_pending ||

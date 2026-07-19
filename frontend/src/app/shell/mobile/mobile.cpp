@@ -151,9 +151,9 @@ static void mobile_select_map(AppState &state, int row) {
                 hex_u64(map.start).c_str());
   std::snprintf(state.write_address, sizeof(state.write_address), "%s",
                 hex_u64(map.start).c_str());
-  std::snprintf(state.scan_start, sizeof(state.scan_start), "%s",
+  std::snprintf(state.scan.start, sizeof(state.scan.start), "%s",
                 hex_u64(map.start).c_str());
-  std::snprintf(state.scan_length, sizeof(state.scan_length), "%s",
+  std::snprintf(state.scan.length, sizeof(state.scan.length), "%s",
                 hex_u64(map.end - map.start).c_str());
   set_status(state, "Selected map " + hex_u64(map.start) + " - " +
                         hex_u64(map.end));
@@ -173,7 +173,7 @@ static plugins::PluginRunContext mobile_build_plugin_context(
   context.protocol_version = state.has_hello ? state.hello.protocol_version : 0U;
   context.capabilities = state.has_hello ? state.hello.capabilities : 0U;
   context.map_count = state.maps.size();
-  context.scan_hit_count = state.scan_result.addresses.size();
+  context.scan_hit_count = state.scan.result.addresses.size();
   context.trainer_entry_count = state.plugin.cheats.size();
   // Sandbox settings
   context.sandbox_enabled = state.sandbox_enabled;
@@ -948,10 +948,10 @@ static void draw_mobile_plugins(AppState &state, ImVec2 size) {
 static uint32_t mobile_scan_value_len(const AppState &state) {
   std::array<uint8_t, 16> value{};
   uint32_t value_len = 0;
-  if (build_scan_value(state.scan_type, state.scan_value, value, value_len))
+  if (build_scan_value(state.scan.type, state.scan.value, value, value_len))
     return value_len;
 
-  switch (state.scan_type) {
+  switch (state.scan.type) {
   case MEMDBG_VALUE_U8: return 1U;
   case MEMDBG_VALUE_U16: return 2U;
   case MEMDBG_VALUE_U32:
@@ -1049,26 +1049,26 @@ static bool mobile_capture_snapshot_worker(Client &client, int32_t pid,
 
 static void mobile_prepare_scan_async(AppState &state,
                                       const std::string &label) {
-  if (state.scan_async_future.valid()) state.scan_async_future.wait();
+  if (state.scan.async_future.valid()) state.scan.async_future.wait();
   {
-    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-    state.scan_async_temp_result = ScanResult{};
-    state.scan_async_temp_snapshot.clear();
-    state.scan_async_temp_snapshot_value_len = 0U;
-    state.scan_async_temp_snapshot_type = state.scan_type;
-    state.scan_async_temp_is_unknown = false;
-    state.scan_async_temp_session_status[0] = '\0';
-    state.scan_async_error.clear();
-    state.auto_search_temp_candidates.clear();
+    std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+    state.scan.async_temp_result = ScanResult{};
+    state.scan.async_temp_snapshot.clear();
+    state.scan.async_temp_snapshot_value_len = 0U;
+    state.scan.async_temp_snapshot_type = state.scan.type;
+    state.scan.async_temp_is_unknown = false;
+    state.scan.async_temp_session_status[0] = '\0';
+    state.scan.async_error.clear();
+    state.scan.auto_search_temp_candidates.clear();
   }
-  state.scan_async_label = label;
-  state.scan_async_start_time = ImGui::GetTime();
-  state.scan_async_pending = true;
-  state.scan_async_owner = Screen::Scanner;
+  state.scan.async_label = label;
+  state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_pending = true;
+  state.scan.async_owner = Screen::Scanner;
 }
 
 static void mobile_start_range_scan(AppState &state) {
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) {
     set_status(state, "Connect a console before scanning");
     return;
@@ -1086,48 +1086,48 @@ static void mobile_start_range_scan(AppState &state) {
   uint64_t length = 0;
   std::array<uint8_t, 16> value{};
   uint32_t value_len = 0;
-  if (!parse_u64(state.scan_start, start) ||
-      !parse_u64(state.scan_length, length) || length == 0U) {
+  if (!parse_u64(state.scan.start, start) ||
+      !parse_u64(state.scan.length, length) || length == 0U) {
     set_status(state, "Enter a valid start and non-zero length");
     return;
   }
-  if (!build_scan_value(state.scan_type, state.scan_value, value, value_len)) {
+  if (!build_scan_value(state.scan.type, state.scan.value, value, value_len)) {
     set_status(state, "Invalid scan value");
     return;
   }
 
-  state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+  state.scan.alignment = std::max(state.scan.alignment, 1);
+  state.scan.max_results = std::clamp(state.scan.max_results, 1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   memdbg_scan_exact_request_t request{};
   request.pid = state.selected_pid;
   request.start = start;
   request.length = length;
-  request.value_type = static_cast<uint32_t>(state.scan_type);
+  request.value_type = static_cast<uint32_t>(state.scan.type);
   request.value_length = value_len;
-  request.alignment = static_cast<uint32_t>(state.scan_alignment);
-  request.max_results = static_cast<uint32_t>(state.scan_max_results);
+  request.alignment = static_cast<uint32_t>(state.scan.alignment);
+  request.max_results = static_cast<uint32_t>(state.scan.max_results);
   std::copy(value.begin(), value.end(), request.value);
 
   mobile_prepare_scan_async(state, "Range scan");
   const int32_t pid = state.selected_pid;
-  const int scan_type = state.scan_type;
+  const int scan_type = state.scan.type;
   Client &client = state.client;
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_snapshot = state.scan_async_temp_snapshot;
-  auto &temp_value_len = state.scan_async_temp_snapshot_value_len;
-  auto &temp_type = state.scan_async_temp_snapshot_type;
-  auto &temp_unknown = state.scan_async_temp_is_unknown;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_snapshot = state.scan.async_temp_snapshot;
+  auto &temp_value_len = state.scan.async_temp_snapshot_value_len;
+  auto &temp_type = state.scan.async_temp_snapshot_type;
+  auto &temp_unknown = state.scan.async_temp_is_unknown;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
   const bool has_batch = mobile_has_batch_read(state);
 
-  state.scan_async_future = std::async(
+  state.scan.async_future = std::async(
       std::launch::async,
       [&client, request, pid, scan_type, value_len, has_batch, &temp_result,
        &temp_snapshot, &temp_value_len, &temp_type, &temp_unknown,
-       &temp_status, &error_out, &mtx = state.scan_async_mtx]() -> bool {
+       &temp_status, &error_out, &mtx = state.scan.async_mtx]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult result;
         if (!client.scan_exact(request, result)) {
@@ -1166,7 +1166,7 @@ static void mobile_start_process_scan(AppState &state, bool unknown) {
     scan_unknown_process(state);
     return;
   }
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) {
     set_status(state, "Connect a console before scanning");
     return;
@@ -1182,8 +1182,8 @@ static void mobile_start_process_scan(AppState &state, bool unknown) {
 
   uint64_t start = 0;
   uint64_t end = 0;
-  if (!parse_u64(state.scan_start, start) ||
-      !parse_u64(state.scan_end, end) || (end != 0U && end <= start)) {
+  if (!parse_u64(state.scan.start, start) ||
+      !parse_u64(state.scan.end, end) || (end != 0U && end <= start)) {
     set_status(state, "Enter a valid scan window");
     return;
   }
@@ -1191,45 +1191,45 @@ static void mobile_start_process_scan(AppState &state, bool unknown) {
   std::array<uint8_t, 16> value{};
   uint32_t value_len = mobile_scan_value_len(state);
   if (!build_scan_value(
-          state.scan_type, state.scan_value, value, value_len)) {
+          state.scan.type, state.scan.value, value, value_len)) {
     set_status(state, "Invalid scan value");
     return;
   }
 
-  state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+  state.scan.alignment = std::max(state.scan.alignment, 1);
+  state.scan.max_results = std::clamp(state.scan.max_results, 1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   memdbg_scan_process_exact_request_t request{};
   request.pid = state.selected_pid;
-  request.value_type = static_cast<uint32_t>(state.scan_type);
+  request.value_type = static_cast<uint32_t>(state.scan.type);
   request.value_length = value_len;
-  request.alignment = static_cast<uint32_t>(state.scan_alignment);
-  request.max_results = static_cast<uint32_t>(state.scan_max_results);
-  request.protection_mask = state.scan_readable_only ? 1U : 0U;
+  request.alignment = static_cast<uint32_t>(state.scan.alignment);
+  request.max_results = static_cast<uint32_t>(state.scan.max_results);
+  request.protection_mask = state.scan.readable_only ? 1U : 0U;
   request.start = start;
   request.end = end;
   std::copy(value.begin(), value.end(), request.value);
 
   mobile_prepare_scan_async(state, "Process scan");
   const int32_t pid = state.selected_pid;
-  const int scan_type = state.scan_type;
+  const int scan_type = state.scan.type;
   Client &client = state.client;
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_snapshot = state.scan_async_temp_snapshot;
-  auto &temp_value_len = state.scan_async_temp_snapshot_value_len;
-  auto &temp_type = state.scan_async_temp_snapshot_type;
-  auto &temp_unknown = state.scan_async_temp_is_unknown;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_snapshot = state.scan.async_temp_snapshot;
+  auto &temp_value_len = state.scan.async_temp_snapshot_value_len;
+  auto &temp_type = state.scan.async_temp_snapshot_type;
+  auto &temp_unknown = state.scan.async_temp_is_unknown;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
   const bool has_batch = mobile_has_batch_read(state);
 
-  state.scan_async_future = std::async(
+  state.scan.async_future = std::async(
       std::launch::async,
       [&client, request, pid, scan_type, value_len, has_batch,
        &temp_result, &temp_snapshot, &temp_value_len, &temp_type,
        &temp_unknown, &temp_status, &error_out,
-       &mtx = state.scan_async_mtx]() -> bool {
+       &mtx = state.scan.async_mtx]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult result;
         const bool ok = client.scan_process_exact(request, result);
@@ -1265,37 +1265,37 @@ static void mobile_start_process_scan(AppState &state, bool unknown) {
 }
 
 static void mobile_poll_scanner_async(AppState &state) {
-  if (!state.scan_async_pending || !state.scan_async_future.valid()) return;
-  if (state.scan_async_future.wait_for(std::chrono::milliseconds(0)) !=
+  if (!state.scan.async_pending || !state.scan.async_future.valid()) return;
+  if (state.scan.async_future.wait_for(std::chrono::milliseconds(0)) !=
       std::future_status::ready) {
     return;
   }
 
-  state.scan_async_pending = false;
-  state.scan_async_cancellable = false;
-  const bool cancelled = state.scan_async_cancel_requested.exchange(false);
-  state.scan_async_units_done.store(0U);
-  state.scan_async_units_total.store(0U);
+  state.scan.async_pending = false;
+  state.scan.async_cancellable = false;
+  const bool cancelled = state.scan.async_cancel_requested.exchange(false);
+  state.scan.async_units_done.store(0U);
+  state.scan.async_units_total.store(0U);
   bool ok = false;
   try {
-    ok = state.scan_async_future.get();
+    ok = state.scan.async_future.get();
   } catch (const std::exception &ex) {
-    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-    state.scan_async_error = ex.what();
+    std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+    state.scan.async_error = ex.what();
   } catch (...) {
-    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-    state.scan_async_error = "Unknown scanner error";
+    std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+    state.scan.async_error = "Unknown scanner error";
   }
 
-  if (state.scan_async_owner != Screen::Scanner) return;
+  if (state.scan.async_owner != Screen::Scanner) return;
 
   if (!ok) {
     std::string error;
     {
-      std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-      error = state.scan_async_error.empty() ? "Scanner request failed"
-                                             : state.scan_async_error;
-      state.scan_async_error.clear();
+      std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+      error = state.scan.async_error.empty() ? "Scanner request failed"
+                                             : state.scan.async_error;
+      state.scan.async_error.clear();
     }
     set_status(state, error);
     push_notification(state, error, 5.0);
@@ -1309,27 +1309,27 @@ static void mobile_poll_scanner_async(AppState &state) {
   bool unknown = false;
   char status[256] = {};
   {
-    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-    result = std::move(state.scan_async_temp_result);
-    snapshot = std::move(state.scan_async_temp_snapshot);
-    value_len = state.scan_async_temp_snapshot_value_len;
-    type = state.scan_async_temp_snapshot_type;
-    unknown = state.scan_async_temp_is_unknown;
-    std::memcpy(status, state.scan_async_temp_session_status, sizeof(status));
+    std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+    result = std::move(state.scan.async_temp_result);
+    snapshot = std::move(state.scan.async_temp_snapshot);
+    value_len = state.scan.async_temp_snapshot_value_len;
+    type = state.scan.async_temp_snapshot_type;
+    unknown = state.scan.async_temp_is_unknown;
+    std::memcpy(status, state.scan.async_temp_session_status, sizeof(status));
   }
 
-  state.scan_result = std::move(result);
-  state.scan_snapshot = std::move(snapshot);
-  state.scan_snapshot_value_len = value_len;
-  state.scan_snapshot_type = type;
-  state.scan_is_unknown_session = unknown;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
+  state.scan.result = std::move(result);
+  state.scan.snapshot = std::move(snapshot);
+  state.scan.snapshot_value_len = value_len;
+  state.scan.snapshot_type = type;
+  state.scan.is_unknown_session = unknown;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status),
                 "%s", status[0] != '\0' ? status : "Scan complete");
-  set_status(state, state.scan_session_status);
+  set_status(state, state.scan.session_status);
   push_notification(state, cancelled
       ? "Scan stopped"
-      : state.scan_async_label + ": " +
-            std::to_string(state.scan_result.count) + " results");
+      : state.scan.async_label + ": " +
+            std::to_string(state.scan.result.count) + " results");
 }
 
 static void mobile_refresh_scan_snapshot(AppState &state) {
@@ -1386,7 +1386,7 @@ static std::string mobile_scan_value_text(int type,
 
 static const ScanSnapshotEntry *mobile_snapshot_for(const AppState &state,
                                                     uint64_t address) {
-  for (const auto &entry : state.scan_snapshot)
+  for (const auto &entry : state.scan.snapshot)
     if (entry.address == address) return &entry;
   return nullptr;
 }
@@ -1409,7 +1409,7 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
                     ImGuiWindowFlags_AlwaysVerticalScrollbar);
   ImGui::TextColored(palette.primary2, "%s", "Scanner");
   ImGui::SameLine();
-  ui::status_dot(state.scan_async_pending ? palette.warning :
+  ui::status_dot(state.scan.async_pending ? palette.warning :
                  connected && has_pid ? palette.success : palette.dim);
   ImGui::SameLine();
   ImGui::TextColored(palette.muted, "%s", selected_process_name(state).c_str());
@@ -1418,39 +1418,39 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
                     ImGuiWindowFlags_NoScrollbar);
   mobile_info_row("PID", std::to_string(state.selected_pid),
                   has_pid ? palette.text : palette.dim);
-  mobile_info_row("Results", std::to_string(state.scan_result.count) +
-                                 (state.scan_result.truncated ? " truncated"
+  mobile_info_row("Results", std::to_string(state.scan.result.count) +
+                                 (state.scan.result.truncated ? " truncated"
                                                               : ""),
-                  state.scan_result.count != 0 ? palette.success
+                  state.scan.result.count != 0 ? palette.success
                                                : palette.muted);
   mobile_info_row("Speed",
-                  bytes_per_second(state.scan_result.bytes_scanned,
-                                   state.scan_result.elapsed_ns),
+                  bytes_per_second(state.scan.result.bytes_scanned,
+                                   state.scan.result.elapsed_ns),
                   palette.muted);
-  mobile_info_row("Session", state.scan_session_status, palette.dim);
+  mobile_info_row("Session", state.scan.session_status, palette.dim);
   ImGui::EndChild();
 
   draw_mobile_section_label("Exact value");
-  mobile_value_type_combo("Value type##MobileScanType", &state.scan_type);
+  mobile_value_type_combo("Value type##MobileScanType", &state.scan.type);
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Value##MobileScanValue", "0",
-                           state.scan_value, sizeof(state.scan_value));
+                           state.scan.value, sizeof(state.scan.value));
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputInt("Alignment##MobileScanAlignment", &state.scan_alignment);
+  ImGui::InputInt("Alignment##MobileScanAlignment", &state.scan.alignment);
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputInt("Max results##MobileScanMaxResults",
-                  &state.scan_max_results, 100, 1000);
-  state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+                  &state.scan.max_results, 100, 1000);
+  state.scan.alignment = std::max(state.scan.alignment, 1);
+  state.scan.max_results = std::clamp(state.scan.max_results, 1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   draw_mobile_section_label("Range");
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Start##MobileScanStart", "0x0",
-                           state.scan_start, sizeof(state.scan_start));
+                           state.scan.start, sizeof(state.scan.start));
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Length##MobileScanLength", "0x1000",
-                           state.scan_length, sizeof(state.scan_length));
+                           state.scan.length, sizeof(state.scan.length));
 
   const bool can_range = connected && has_pid && !client_async_busy(state) &&
                          payload_supports(state, MEMDBG_CAP_SCAN_EXACT);
@@ -1464,8 +1464,8 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
   draw_mobile_section_label("Process scan");
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("End filter##MobileScanEnd", "0x0",
-                           state.scan_end, sizeof(state.scan_end));
-  ImGui::Checkbox("Readable maps only", &state.scan_readable_only);
+                           state.scan.end, sizeof(state.scan.end));
+  ImGui::Checkbox("Readable maps only", &state.scan.readable_only);
 
   const bool can_process =
       connected && has_pid && !client_async_busy(state) &&
@@ -1482,7 +1482,7 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
       payload_supports(state, MEMDBG_CAP_SCAN_UNKNOWN);
   ImGui::BeginDisabled(!can_unknown);
   ImGui::Checkbox("Exclude zero values (prefilter)",
-                  &state.scan_unknown_nonzero_prefilter);
+                  &state.scan.unknown_nonzero_prefilter);
   if (mobile_action_button(std::string(icons::kSearch) +
                                "  Unknown value baseline",
                            false)) {
@@ -1490,42 +1490,42 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
   }
   ImGui::EndDisabled();
 
-  if (state.scan_async_pending) {
-    ui::draw_scan_progress(state.scan_async_label, icons::kSearch,
-                           ImGui::GetTime() - state.scan_async_start_time,
+  if (state.scan.async_pending) {
+    ui::draw_scan_progress(state.scan.async_label, icons::kSearch,
+                           ImGui::GetTime() - state.scan.async_start_time,
                            ImGui::GetContentRegionAvail().x);
-    const uint64_t total = state.scan_async_units_total.load();
+    const uint64_t total = state.scan.async_units_total.load();
     if (total != 0U) {
-      const uint64_t done = state.scan_async_units_done.load();
+      const uint64_t done = state.scan.async_units_done.load();
       const float fraction = std::min(
           1.0f, static_cast<float>(done) / static_cast<float>(total));
       ImGui::ProgressBar(fraction,
                          ImVec2(ImGui::GetContentRegionAvail().x, 12.0f), "");
-      const char *progress_format = state.scan_async_units_are_maps.load()
+      const char *progress_format = state.scan.async_units_are_maps.load()
           ? locale::tr("scanner.maps_progress")
           : locale::tr("scanner.units_progress");
       ImGui::Text(progress_format,
                   static_cast<unsigned long long>(done),
                   static_cast<unsigned long long>(total));
     }
-    const uint32_t maps_total = state.scan_async_maps_total.load();
+    const uint32_t maps_total = state.scan.async_maps_total.load();
     if (maps_total != 0U) {
       ImGui::Text(locale::tr("scanner.maps_progress"),
                   static_cast<unsigned long long>(
-                      state.scan_async_maps_done.load()),
+                      state.scan.async_maps_done.load()),
                   static_cast<unsigned long long>(maps_total));
     }
     ImGui::Text(locale::tr("scanner.results_found"),
                 static_cast<unsigned long long>(
-                    state.scan_async_results_found.load()));
-    const uint32_t workers_total = state.scan_async_workers_total.load();
+                    state.scan.async_results_found.load()));
+    const uint32_t workers_total = state.scan.async_workers_total.load();
     if (workers_total != 0U) {
       ImGui::Text(locale::tr("scanner.workers_active"),
-                  state.scan_async_workers_active.load(), workers_total);
+                  state.scan.async_workers_active.load(), workers_total);
     }
-    if (state.scan_async_cancellable &&
+    if (state.scan.async_cancellable &&
         mobile_action_button("Stop active scan", true)) {
-      state.scan_async_cancel_requested.store(true);
+      state.scan.async_cancel_requested.store(true);
       set_status(state, "Stopping scan...");
     }
   }
@@ -1534,7 +1534,7 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
   const bool can_refine =
       connected && has_pid && !client_async_busy(state) &&
       payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
-      !state.scan_snapshot.empty();
+      !state.scan.snapshot.empty();
   ImGui::BeginDisabled(!can_refine);
   if (mobile_action_button("Exact value", false))
     mobile_refine_scan(state, RefineMode::ExactValue);
@@ -1554,14 +1554,14 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
   ImGui::EndDisabled();
 
   draw_mobile_section_label("Results");
-  if (state.scan_result.addresses.empty()) {
+  if (state.scan.result.addresses.empty()) {
     ImGui::TextColored(palette.dim, "%s", "No scan results");
   } else {
     if (mobile_action_button(std::string(icons::kCopy) + "  Copy all",
                              false)) {
       std::string all;
-      all.reserve(state.scan_result.addresses.size() * 18U);
-      for (uint64_t address : state.scan_result.addresses)
+      all.reserve(state.scan.result.addresses.size() * 18U);
+      for (uint64_t address : state.scan.result.addresses)
         all += hex_u64(address) + "\n";
       ImGui::SetClipboardText(all.c_str());
       set_status(state, "Copied scan results");
@@ -1570,17 +1570,17 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
     if (mobile_action_button(std::string(icons::kAdd) +
                                  "  First hit to trainer",
                              false)) {
-      const std::string address = hex_u64(state.scan_result.addresses.front());
+      const std::string address = hex_u64(state.scan.result.addresses.front());
       std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                     address.c_str());
-      state.plugin.cheat_type = state.scan_type;
+      state.plugin.cheat_type = state.scan.type;
       state.screen = Screen::Trainer;
     }
 
     const size_t limit =
-        std::min<size_t>(state.scan_result.addresses.size(), 80U);
+        std::min<size_t>(state.scan.result.addresses.size(), 80U);
     for (size_t i = 0; i < limit; ++i) {
-      const uint64_t address = state.scan_result.addresses[i];
+      const uint64_t address = state.scan.result.addresses[i];
       const ScanSnapshotEntry *snap = mobile_snapshot_for(state, address);
       const float card_h = 66.0f * scl;
       ImGui::PushID(static_cast<int>(i));
@@ -1599,7 +1599,7 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
       ImGui::TextColored(
           palette.dim, "%s",
           snap != nullptr
-              ? mobile_scan_value_text(state.scan_snapshot_type, snap->bytes)
+              ? mobile_scan_value_text(state.scan.snapshot_type, snap->bytes)
                     .c_str()
               : "value not captured");
       ImGui::SameLine(ImGui::GetWindowWidth() - 86.0f * scl);
@@ -1614,9 +1614,9 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
       ImGui::EndChild();
       ImGui::PopID();
     }
-    if (state.scan_result.addresses.size() > limit) {
+    if (state.scan.result.addresses.size() > limit) {
       ImGui::TextColored(palette.dim, "%zu more results hidden on mobile",
-                         state.scan_result.addresses.size() - limit);
+                         state.scan.result.addresses.size() - limit);
     }
   }
 
@@ -1844,9 +1844,9 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
     std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                   state.write_address);
   }
-  ImGui::BeginDisabled(state.scan_result.addresses.empty());
+  ImGui::BeginDisabled(state.scan.result.addresses.empty());
   if (mobile_action_button("Use first scan hit", false)) {
-    const std::string address = hex_u64(state.scan_result.addresses.front());
+    const std::string address = hex_u64(state.scan.result.addresses.front());
     std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                   address.c_str());
   }

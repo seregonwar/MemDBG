@@ -19,31 +19,31 @@ namespace memdbg::frontend {
 
 /* ---- Async scan poll ---- */
 static void poll_pointer_async(AppState &state) {
-  if (!state.scan_async_pending) return;
-  if (!state.scan_async_future.valid()) return;
+  if (!state.scan.async_pending) return;
+  if (!state.scan.async_future.valid()) return;
 
-  auto status = state.scan_async_future.wait_for(std::chrono::milliseconds(0));
+  auto status = state.scan.async_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.scan_async_pending = false;
+  state.scan.async_pending = false;
   bool ok = false;
   try {
-    ok = state.scan_async_future.get();
+    ok = state.scan.async_future.get();
   } catch (const std::exception &ex) {
-    state.scan_async_error = ex.what();
+    state.scan.async_error = ex.what();
   } catch (...) {
-    state.scan_async_error = "Unknown pointer scanner error";
+    state.scan.async_error = "Unknown pointer scanner error";
   }
 
-  if (state.scan_async_owner != Screen::Scanner && state.scan_async_owner != Screen::PointerScanner) return;
+  if (state.scan.async_owner != Screen::Scanner && state.scan.async_owner != Screen::PointerScanner) return;
 
 
   if (!ok) {
     std::string error_local;
     {
-      std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-      error_local = state.scan_async_error.empty() ? "Pointer scanner request failed" : state.scan_async_error;
-      state.scan_async_error.clear();
+      std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+      error_local = state.scan.async_error.empty() ? "Pointer scanner request failed" : state.scan.async_error;
+      state.scan.async_error.clear();
     }
     set_status(state, error_local);
     if (state.crash_logging_enabled)
@@ -56,57 +56,57 @@ static void poll_pointer_async(AppState &state) {
   ScanResult result_local;
   char status_local[256] = {};
   {
-    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-    result_local = std::move(state.scan_async_temp_result);
-    std::memcpy(status_local, state.scan_async_temp_session_status, sizeof(status_local));
+    std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+    result_local = std::move(state.scan.async_temp_result);
+    std::memcpy(status_local, state.scan.async_temp_session_status, sizeof(status_local));
   }
-  state.pointer_result = std::move(result_local);
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status),
+  state.scan.pointer_result = std::move(result_local);
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status),
                 "%s", status_local);
-  set_status(state, state.scan_session_status);
+  set_status(state, state.scan.session_status);
 }
 
 /* ---- Pointer scan execution ---- */
 static void run_pointer_scan(AppState &state) {
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) { set_status(state, locale::tr("pointer_scanner.connect_first")); return; }
   if (state.selected_pid <= 0) { set_status(state, locale::tr("pointer_scanner.select_process_first")); return; }
 
   uint64_t start = 0, length = 0, target = 0;
-  if (!parse_u64(state.scan_start, start) || !parse_u64(state.scan_length, length)) {
+  if (!parse_u64(state.scan.start, start) || !parse_u64(state.scan.length, length)) {
     set_status(state, locale::tr("scanner.invalid_range")); return;
   }
   if (length == 0U) { set_status(state, locale::tr("scanner.length_zero")); return; }
-  if (!parse_u64(state.pointer_target_address, target)) {
+  if (!parse_u64(state.scan.pointer_target_address, target)) {
     set_status(state, locale::tr("pointer_scanner.invalid_target")); return;
   }
 
-  state.pointer_max_depth   = std::max(state.pointer_max_depth, 1);
-  state.pointer_max_results = std::max(state.pointer_max_results, 1);
-  state.pointer_alignment   = std::max(state.pointer_alignment, 1);
+  state.scan.pointer_max_depth   = std::max(state.scan.pointer_max_depth, 1);
+  state.scan.pointer_max_results = std::max(state.scan.pointer_max_results, 1);
+  state.scan.pointer_alignment   = std::max(state.scan.pointer_alignment, 1);
 
   memdbg_scan_pointer_request_t request{};
   request.pid            = state.selected_pid;
   request.start          = start;
   request.length         = length;
   request.target_address = target;
-  request.max_depth      = static_cast<uint32_t>(state.pointer_max_depth);
-  request.max_results    = static_cast<uint32_t>(state.pointer_max_results);
-  request.alignment      = static_cast<uint32_t>(state.pointer_alignment);
+  request.max_depth      = static_cast<uint32_t>(state.scan.pointer_max_depth);
+  request.max_results    = static_cast<uint32_t>(state.scan.pointer_max_results);
+  request.alignment      = static_cast<uint32_t>(state.scan.pointer_alignment);
 
-  state.scan_async_label = "Pointer scan";
-  state.scan_async_start_time = ImGui::GetTime();
-  state.scan_async_pending = true;
-  state.scan_async_owner = Screen::Scanner;
+  state.scan.async_label = "Pointer scan";
+  state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_pending = true;
+  state.scan.async_owner = Screen::Scanner;
 
   auto client = state.pool.scan_lease();
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
 
-  state.scan_async_future = std::async(std::launch::async,
+  state.scan.async_future = std::async(std::launch::async,
     [client, request, &temp_result, &temp_status, &error_out,
-     &mtx = state.scan_async_mtx]() -> bool {
+     &mtx = state.scan.async_mtx]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult res;
       if (!client->scan_pointer(request, res)) {
@@ -133,30 +133,30 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
   ImGui::Spacing();
 
-  ImGui::InputText(locale::tr("pointer_scanner.target_address"), state.pointer_target_address,
-                   sizeof(state.pointer_target_address));
+  ImGui::InputText(locale::tr("pointer_scanner.target_address"), state.scan.pointer_target_address,
+                   sizeof(state.scan.pointer_target_address));
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", locale::tr("pointer_scanner.target_tooltip"));
 
   if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("pointer_scanner.use_last_hit")).c_str(),
                       ImVec2(210, 32))) {
-    if (!state.scan_result.addresses.empty())
-      std::snprintf(state.pointer_target_address, sizeof(state.pointer_target_address),
-                    "%s", hex_u64(state.scan_result.addresses.front()).c_str());
+    if (!state.scan.result.addresses.empty())
+      std::snprintf(state.scan.pointer_target_address, sizeof(state.scan.pointer_target_address),
+                    "%s", hex_u64(state.scan.result.addresses.front()).c_str());
   }
 
   ImGui::Spacing();
-  ImGui::InputInt(locale::tr("pointer_scanner.max_depth"), &state.pointer_max_depth);
-  ImGui::InputInt(locale::tr("pointer_scanner.max_results"), &state.pointer_max_results);
-  ImGui::InputInt(locale::tr("pointer_scanner.alignment"), &state.pointer_alignment);
-  state.pointer_max_depth   = std::max(state.pointer_max_depth, 1);
-  state.pointer_max_results = std::max(state.pointer_max_results, 1);
-  state.pointer_alignment   = std::max(state.pointer_alignment, 1);
+  ImGui::InputInt(locale::tr("pointer_scanner.max_depth"), &state.scan.pointer_max_depth);
+  ImGui::InputInt(locale::tr("pointer_scanner.max_results"), &state.scan.pointer_max_results);
+  ImGui::InputInt(locale::tr("pointer_scanner.alignment"), &state.scan.pointer_alignment);
+  state.scan.pointer_max_depth   = std::max(state.scan.pointer_max_depth, 1);
+  state.scan.pointer_max_results = std::max(state.scan.pointer_max_results, 1);
+  state.scan.pointer_alignment   = std::max(state.scan.pointer_alignment, 1);
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-  ImGui::InputText(locale::tr("pointer_scanner.start"), state.scan_start, sizeof(state.scan_start));
-  ImGui::InputText(locale::tr("pointer_scanner.length"), state.scan_length, sizeof(state.scan_length));
+  ImGui::InputText(locale::tr("pointer_scanner.start"), state.scan.start, sizeof(state.scan.start));
+  ImGui::InputText(locale::tr("pointer_scanner.length"), state.scan.length, sizeof(state.scan.length));
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", locale::tr("pointer_scanner.range_tooltip"));
 
@@ -178,9 +178,9 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   }
 
   /* Progress bar for async pointer scans */
-  if (state.scan_async_pending)
-    ui::draw_scan_progress(state.scan_async_label, icons::kPointer,
-                           ImGui::GetTime() - state.scan_async_start_time,
+  if (state.scan.async_pending)
+    ui::draw_scan_progress(state.scan.async_label, icons::kPointer,
+                           ImGui::GetTime() - state.scan.async_start_time,
                            ImGui::GetContentRegionAvail().x);
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
@@ -191,7 +191,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
   ImGui::SameLine();
   ui::begin_panel("PointerResults", locale::tr("pointer_scanner.candidates"), ImVec2(0, avail.y));
 
-  auto &result = state.pointer_result;
+  auto &result = state.scan.pointer_result;
   ImGui::Text(locale::tr("pointer_scanner.candidates_count"),
               result.count, result.truncated ? locale::tr("aob_scanner.truncated") : "",
               static_cast<double>(result.bytes_scanned) / (1024.0 * 1024.0));
@@ -199,7 +199,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
               bytes_per_second(result.bytes_scanned, result.elapsed_ns).c_str(),
               result.regions_scanned, result.read_errors);
   ImGui::Text(locale::tr("pointer_scanner.target_info"),
-              state.pointer_target_address, state.pointer_max_depth);
+              state.scan.pointer_target_address, state.scan.pointer_max_depth);
   ImGui::Spacing();
 
   /* Copy All logic shared between button and keyboard shortcut */
@@ -243,7 +243,7 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
     ImGui::TableSetupColumn(locale::tr("pointer_scanner.col_offset"));
     ImGui::TableHeadersRow();
     uint64_t target = 0;
-    (void)parse_u64(state.pointer_target_address, target);
+    (void)parse_u64(state.scan.pointer_target_address, target);
     for (int i = 0; i < static_cast<int>(result.addresses.size()); ++i) {
       uint64_t addr = result.addresses[i];
       ImGui::TableNextRow();

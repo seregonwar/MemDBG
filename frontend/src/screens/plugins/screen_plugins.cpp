@@ -230,7 +230,7 @@ plugins::PluginRunContext build_run_context(const AppState &state) {
   context.protocol_version = state.has_hello ? state.hello.protocol_version : 0U;
   context.capabilities = state.has_hello ? state.hello.capabilities : 0U;
   context.map_count = state.maps.size();
-  context.scan_hit_count = state.scan_result.addresses.size();
+  context.scan_hit_count = state.scan.result.addresses.size();
   context.trainer_entry_count = state.plugin.cheats.size();
   // Sandbox settings
   context.sandbox_enabled = state.sandbox_enabled;

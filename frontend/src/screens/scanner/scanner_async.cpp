@@ -96,41 +96,41 @@ bool run_tracked_process_scan(
 } // namespace
 
 void poll_scanner_async(AppState &state) {
-  if (!state.scan_async_pending) return;
-  if (!state.scan_async_future.valid()) return;
+  if (!state.scan.async_pending) return;
+  if (!state.scan.async_future.valid()) return;
 
-  auto status = state.scan_async_future.wait_for(std::chrono::milliseconds(0));
+  auto status = state.scan.async_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.scan_async_pending = false;
-  state.scan_async_cancellable = false;
-  const bool was_cancelled = state.scan_async_cancel_requested.exchange(false);
-  state.scan_async_units_done.store(0U);
-  state.scan_async_units_total.store(0U);
-  state.scan_async_units_are_maps.store(false);
-  state.scan_async_results_found.store(0U);
-  state.scan_async_maps_done.store(0U);
-  state.scan_async_maps_total.store(0U);
-  state.scan_async_workers_active.store(0U);
-  state.scan_async_workers_total.store(0U);
+  state.scan.async_pending = false;
+  state.scan.async_cancellable = false;
+  const bool was_cancelled = state.scan.async_cancel_requested.exchange(false);
+  state.scan.async_units_done.store(0U);
+  state.scan.async_units_total.store(0U);
+  state.scan.async_units_are_maps.store(false);
+  state.scan.async_results_found.store(0U);
+  state.scan.async_maps_done.store(0U);
+  state.scan.async_maps_total.store(0U);
+  state.scan.async_workers_active.store(0U);
+  state.scan.async_workers_total.store(0U);
   bool ok = false;
   try {
-    ok = state.scan_async_future.get();
+    ok = state.scan.async_future.get();
   } catch (const std::exception &ex) {
-    state.scan_async_error = ex.what();
+    state.scan.async_error = ex.what();
   } catch (...) {
-    state.scan_async_error = "Unknown scanner error";
+    state.scan.async_error = "Unknown scanner error";
   }
 
-  if (state.scan_async_owner != Screen::Scanner) return;
+  if (state.scan.async_owner != Screen::Scanner) return;
 
 
   if (!ok) {
     std::string error_local;
     {
-      std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-      error_local = state.scan_async_error.empty() ? "Scanner request failed" : state.scan_async_error;
-      state.scan_async_error.clear();
+      std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+      error_local = state.scan.async_error.empty() ? "Scanner request failed" : state.scan.async_error;
+      state.scan.async_error.clear();
     }
     if (state.crash_logging_enabled)
       state.crash_logger.log("error", ("Scan failed: " + error_local).c_str());
@@ -150,93 +150,93 @@ void poll_scanner_async(AppState &state) {
   char status_local[256] = {};
   std::vector<AutoSearchCandidate> auto_search_local;
   {
-    std::lock_guard<std::mutex> lock(state.scan_async_mtx);
-    result_local = std::move(state.scan_async_temp_result);
-    snapshot_local = std::move(state.scan_async_temp_snapshot);
-    snap_val_len = state.scan_async_temp_snapshot_value_len;
-    snap_type = state.scan_async_temp_snapshot_type;
-    is_unknown = state.scan_async_temp_is_unknown;
-    auto_search_local = std::move(state.auto_search_temp_candidates);
-    std::memcpy(status_local, state.scan_async_temp_session_status, sizeof(status_local));
+    std::lock_guard<std::mutex> lock(state.scan.async_mtx);
+    result_local = std::move(state.scan.async_temp_result);
+    snapshot_local = std::move(state.scan.async_temp_snapshot);
+    snap_val_len = state.scan.async_temp_snapshot_value_len;
+    snap_type = state.scan.async_temp_snapshot_type;
+    is_unknown = state.scan.async_temp_is_unknown;
+    auto_search_local = std::move(state.scan.auto_search_temp_candidates);
+    std::memcpy(status_local, state.scan.async_temp_session_status, sizeof(status_local));
   }
-  state.scan_result = std::move(result_local);
-  state.scan_snapshot = std::move(snapshot_local);
-  state.scan_snapshot_value_len = snap_val_len;
-  state.scan_snapshot_type = snap_type;
-  state.scan_is_unknown_session = is_unknown;
+  state.scan.result = std::move(result_local);
+  state.scan.snapshot = std::move(snapshot_local);
+  state.scan.snapshot_value_len = snap_val_len;
+  state.scan.snapshot_type = snap_type;
+  state.scan.is_unknown_session = is_unknown;
 
   /* Post-scan: capture snapshot on the UI thread */
   // snapshot was already captured by the async worker via temp storage
   set_status(state, status_local);
   push_notification(state, was_cancelled
       ? std::string(locale::tr("scanner.scan_stopped"))
-      : std::string(state.scan_async_label) + " complete: " +
-            std::to_string(state.scan_result.count) + " results");  /* If auto-search is enabled and this was a scan, track pass progression.
+      : std::string(state.scan.async_label) + " complete: " +
+            std::to_string(state.scan.result.count) + " results");  /* If auto-search is enabled and this was a scan, track pass progression.
    * Only the auto-search Next Scan lambda populates temp_candidates;
    * regular scans don't, so we gate on the temp vector being non-empty. */
-  if (state.auto_search_enabled && !state.scan_snapshot.empty()) {
-    if (!state.auto_search_has_baseline) {
+  if (state.scan.auto_search_enabled && !state.scan.snapshot.empty()) {
+    if (!state.scan.auto_search_has_baseline) {
       /* Baseline just captured — only set the flag, don't touch candidates */
-      state.auto_search_has_baseline = true;
-      state.auto_search_pass = 0;
-      state.auto_search_candidates.clear();
+      state.scan.auto_search_has_baseline = true;
+      state.scan.auto_search_pass = 0;
+      state.scan.auto_search_candidates.clear();
       char auto_buf[256];
-      std::snprintf(auto_buf, sizeof(auto_buf), locale::tr("notify.auto_baseline"), state.scan_snapshot.size());
+      std::snprintf(auto_buf, sizeof(auto_buf), locale::tr("notify.auto_baseline"), state.scan.snapshot.size());
       push_notification(state, auto_buf);
     } else if (!auto_search_local.empty()) {
       /* Next Scan just completed (only these populate temp_candidates) */
-      state.auto_search_pass++;
-      state.auto_search_candidates = std::move(auto_search_local);
+      state.scan.auto_search_pass++;
+      state.scan.auto_search_candidates = std::move(auto_search_local);
       char pass_buf[256];
-      std::snprintf(pass_buf, sizeof(pass_buf), locale::tr("notify.auto_pass"), state.auto_search_pass, state.scan_result.count);
+      std::snprintf(pass_buf, sizeof(pass_buf), locale::tr("notify.auto_pass"), state.scan.auto_search_pass, state.scan.result.count);
       push_notification(state, pass_buf);
     }
   }
 }
 
 void scan_range(AppState &state) {
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) { set_status(state, locale::tr("scanner.connect_first")); push_notification(state, locale::tr("scanner.connect_first"), 4.0); return; }
   if (state.selected_pid <= 0) { set_status(state, locale::tr("scanner.select_process_first")); push_notification(state, locale::tr("scanner.select_process_first"), 4.0); return; }
   uint64_t start=0, length=0;
   std::array<uint8_t,16> value{};
   uint32_t value_len=0;
-  if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_length,length)) { set_status(state,locale::tr("scanner.invalid_range")); return; }
+  if (!parse_u64(state.scan.start,start)||!parse_u64(state.scan.length,length)) { set_status(state,locale::tr("scanner.invalid_range")); return; }
   if (length == 0U) { set_status(state, locale::tr("scanner.length_zero")); return; }
-  if (!build_scan_value(state.scan_type,state.scan_value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
-  state.scan_alignment=std::max(state.scan_alignment,1);
-  state.scan_max_results=std::clamp(state.scan_max_results,1,
+  if (!build_scan_value(state.scan.type,state.scan.value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
+  state.scan.alignment=std::max(state.scan.alignment,1);
+  state.scan.max_results=std::clamp(state.scan.max_results,1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   memdbg_scan_exact_request_t request{};
   request.pid=state.selected_pid; request.start=start; request.length=length;
-  request.value_type=static_cast<uint32_t>(state.scan_type); request.value_length=value_len;
-  request.alignment=static_cast<uint32_t>(state.scan_alignment);
-  request.max_results=static_cast<uint32_t>(state.scan_max_results);
+  request.value_type=static_cast<uint32_t>(state.scan.type); request.value_length=value_len;
+  request.alignment=static_cast<uint32_t>(state.scan.alignment);
+  request.max_results=static_cast<uint32_t>(state.scan.max_results);
   std::copy(value.begin(),value.end(),request.value);
 
-  state.scan_async_label = "Range scan";
-  state.scan_async_start_time = ImGui::GetTime();
-  state.scan_async_pending = true;
-  state.scan_async_owner = Screen::Scanner;
+  state.scan.async_label = "Range scan";
+  state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_pending = true;
+  state.scan.async_owner = Screen::Scanner;
 
   const int32_t pid = state.selected_pid;
-  const int scan_type_snap = state.scan_type;
+  const int scan_type_snap = state.scan.type;
   const auto snapshot_val_len = value_len;
   auto client = state.pool.scan_lease();
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_snapshot = state.scan_async_temp_snapshot;
-  auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
-  auto &temp_snap_type = state.scan_async_temp_snapshot_type;
-  auto &temp_is_unknown = state.scan_async_temp_is_unknown;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_snapshot = state.scan.async_temp_snapshot;
+  auto &temp_snap_val_len = state.scan.async_temp_snapshot_value_len;
+  auto &temp_snap_type = state.scan.async_temp_snapshot_type;
+  auto &temp_is_unknown = state.scan.async_temp_is_unknown;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
-  state.scan_async_future = std::async(std::launch::async,
+  state.scan.async_future = std::async(std::launch::async,
     [client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
-     &mtx = state.scan_async_mtx]() -> bool {
+     &mtx = state.scan.async_mtx]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
       if (!client->scan_exact(request, scan_res)) {
@@ -325,7 +325,7 @@ void scan_range(AppState &state) {
 }
 
 void scan_selected_maps(AppState &state) {
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) {
     set_status(state, locale::tr("scanner.connect_first"));
     push_notification(state, locale::tr("scanner.connect_first"), 4.0);
@@ -339,7 +339,7 @@ void scan_selected_maps(AppState &state) {
 
   std::array<uint8_t, 16> value{};
   uint32_t value_len = 0;
-  if (!build_scan_value(state.scan_type, state.scan_value, value, value_len)) {
+  if (!build_scan_value(state.scan.type, state.scan.value, value, value_len)) {
     set_status(state, locale::tr("scanner.invalid_value"));
     return;
   }
@@ -350,7 +350,7 @@ void scan_selected_maps(AppState &state) {
     if (map.end <= map.start ||
         state.selected_map_starts.count(map.start) == 0U)
       continue;
-    if (state.scan_readable_only && (map.protection & MEMDBG_MAP_PROT_READ) == 0U)
+    if (state.scan.readable_only && (map.protection & MEMDBG_MAP_PROT_READ) == 0U)
       continue;
     selected_maps.push_back(map);
   }
@@ -364,13 +364,13 @@ void scan_selected_maps(AppState &state) {
               return a.start < b.start;
             });
 
-  state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+  state.scan.alignment = std::max(state.scan.alignment, 1);
+  state.scan.max_results = std::clamp(state.scan.max_results, 1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   const int32_t pid = state.selected_pid;
-  const uint32_t alignment = static_cast<uint32_t>(state.scan_alignment);
-  const uint32_t max_results = static_cast<uint32_t>(state.scan_max_results);
-  const int scan_type_snap = state.scan_type;
+  const uint32_t alignment = static_cast<uint32_t>(state.scan.alignment);
+  const uint32_t max_results = static_cast<uint32_t>(state.scan.max_results);
+  const int scan_type_snap = state.scan.type;
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
   std::unordered_set<uint64_t> effective_selection;
   effective_selection.reserve(selected_maps.size());
@@ -379,48 +379,48 @@ void scan_selected_maps(AppState &state) {
   const uint32_t parallel_protection_mask =
       detail::complete_protection_mask(state.maps, effective_selection);
 
-  state.scan_async_label = locale::tr("scanner.selected_maps_scan");
-  state.scan_async_start_time = ImGui::GetTime();
-  state.scan_async_pending = true;
-  state.scan_async_cancellable = true;
-  state.scan_async_cancel_requested.store(false);
-  state.scan_async_units_done.store(0U);
-  state.scan_async_units_total.store(selected_maps.size());
-  state.scan_async_units_are_maps.store(true);
-  state.scan_async_results_found.store(0U);
-  state.scan_async_maps_done.store(0U);
-  state.scan_async_maps_total.store(static_cast<uint32_t>(
+  state.scan.async_label = locale::tr("scanner.selected_maps_scan");
+  state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_pending = true;
+  state.scan.async_cancellable = true;
+  state.scan.async_cancel_requested.store(false);
+  state.scan.async_units_done.store(0U);
+  state.scan.async_units_total.store(selected_maps.size());
+  state.scan.async_units_are_maps.store(true);
+  state.scan.async_results_found.store(0U);
+  state.scan.async_maps_done.store(0U);
+  state.scan.async_maps_total.store(static_cast<uint32_t>(
       std::min<size_t>(selected_maps.size(), UINT32_MAX)));
-  state.scan_async_workers_active.store(0U);
-  state.scan_async_workers_total.store(0U);
-  state.scan_async_owner = Screen::Scanner;
+  state.scan.async_workers_active.store(0U);
+  state.scan.async_workers_total.store(0U);
+  state.scan.async_owner = Screen::Scanner;
 
   auto client = state.pool.scan_lease();
   auto poll_client = state.pool.poll_lease();
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_snapshot = state.scan_async_temp_snapshot;
-  auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
-  auto &temp_snap_type = state.scan_async_temp_snapshot_type;
-  auto &temp_is_unknown = state.scan_async_temp_is_unknown;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_snapshot = state.scan.async_temp_snapshot;
+  auto &temp_snap_val_len = state.scan.async_temp_snapshot_value_len;
+  auto &temp_snap_type = state.scan.async_temp_snapshot_type;
+  auto &temp_is_unknown = state.scan.async_temp_is_unknown;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
 
-  state.scan_async_future = std::async(std::launch::async,
+  state.scan.async_future = std::async(std::launch::async,
       [client, poll_client, selected_maps = std::move(selected_maps), pid, value,
        value_len, alignment, max_results, scan_type_snap, has_batch,
        parallel_protection_mask,
        &temp_result, &temp_snapshot, &temp_snap_val_len, &temp_snap_type,
        &temp_is_unknown, &temp_status, &error_out,
-       &mtx = state.scan_async_mtx,
-       &cancel_requested = state.scan_async_cancel_requested,
-       &units_done = state.scan_async_units_done,
-       &units_total = state.scan_async_units_total,
-       &units_are_maps = state.scan_async_units_are_maps,
-       &results_found = state.scan_async_results_found,
-       &maps_done = state.scan_async_maps_done,
-       &maps_total = state.scan_async_maps_total,
-       &workers_active = state.scan_async_workers_active,
-       &workers_total = state.scan_async_workers_total]() -> bool {
+       &mtx = state.scan.async_mtx,
+       &cancel_requested = state.scan.async_cancel_requested,
+       &units_done = state.scan.async_units_done,
+       &units_total = state.scan.async_units_total,
+       &units_are_maps = state.scan.async_units_are_maps,
+       &results_found = state.scan.async_results_found,
+       &maps_done = state.scan.async_maps_done,
+       &maps_total = state.scan.async_maps_total,
+       &workers_active = state.scan.async_workers_active,
+       &workers_total = state.scan.async_workers_total]() -> bool {
         std::lock_guard<std::mutex> lock(mtx);
         ScanResult aggregate;
         aggregate.addresses.reserve(max_results);
@@ -603,69 +603,69 @@ void scan_selected_maps(AppState &state) {
 }
 
 void scan_process(AppState &state) {
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) { set_status(state,locale::tr("scanner.connect_first")); push_notification(state, locale::tr("scanner.scan_connect_first_notify"), 4.0); return; }
   if (state.selected_pid <= 0) { set_status(state,locale::tr("scanner.select_process_first")); push_notification(state, locale::tr("scanner.scan_select_process_notify"), 4.0); return; }
   uint64_t start=0, end=0;
   std::array<uint8_t,16> value{};
   uint32_t value_len=0;
-  if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
+  if (!parse_u64(state.scan.start,start)||!parse_u64(state.scan.end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
   if (end != 0U && end <= start) { set_status(state, locale::tr("scanner.end_filter_error")); return; }
-  if (!build_scan_value(state.scan_type,state.scan_value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
-  state.scan_alignment=std::max(state.scan_alignment,1);
-  state.scan_max_results=std::clamp(state.scan_max_results,1,
+  if (!build_scan_value(state.scan.type,state.scan.value,value,value_len)) { set_status(state,locale::tr("scanner.invalid_value")); return; }
+  state.scan.alignment=std::max(state.scan.alignment,1);
+  state.scan.max_results=std::clamp(state.scan.max_results,1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   memdbg_scan_process_exact_request_t request{};
-  request.pid=state.selected_pid; request.value_type=static_cast<uint32_t>(state.scan_type);
-  request.value_length=value_len; request.alignment=static_cast<uint32_t>(state.scan_alignment);
-  request.max_results=static_cast<uint32_t>(state.scan_max_results);
-  request.protection_mask=state.scan_readable_only?1U:0U;
+  request.pid=state.selected_pid; request.value_type=static_cast<uint32_t>(state.scan.type);
+  request.value_length=value_len; request.alignment=static_cast<uint32_t>(state.scan.alignment);
+  request.max_results=static_cast<uint32_t>(state.scan.max_results);
+  request.protection_mask=state.scan.readable_only?1U:0U;
   request.start=start; request.end=end;
   std::copy(value.begin(),value.end(),request.value);
 
-  state.scan_async_label = "Process scan";
-  state.scan_async_start_time = ImGui::GetTime();
-  state.scan_async_pending = true;
-  state.scan_async_cancellable = true;
-  state.scan_async_cancel_requested.store(false);
-  state.scan_async_units_done.store(0U);
-  state.scan_async_units_total.store(0U);
-  state.scan_async_units_are_maps.store(false);
-  state.scan_async_results_found.store(0U);
-  state.scan_async_maps_done.store(0U);
-  state.scan_async_maps_total.store(0U);
-  state.scan_async_workers_active.store(0U);
-  state.scan_async_workers_total.store(0U);
-  state.scan_async_owner = Screen::Scanner;
+  state.scan.async_label = "Process scan";
+  state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_pending = true;
+  state.scan.async_cancellable = true;
+  state.scan.async_cancel_requested.store(false);
+  state.scan.async_units_done.store(0U);
+  state.scan.async_units_total.store(0U);
+  state.scan.async_units_are_maps.store(false);
+  state.scan.async_results_found.store(0U);
+  state.scan.async_maps_done.store(0U);
+  state.scan.async_maps_total.store(0U);
+  state.scan.async_workers_active.store(0U);
+  state.scan.async_workers_total.store(0U);
+  state.scan.async_owner = Screen::Scanner;
 
   const int32_t pid = state.selected_pid;
-  const int scan_type_snap = state.scan_type;
+  const int scan_type_snap = state.scan.type;
   const auto snapshot_val_len = value_len;
   auto client = state.pool.scan_lease();
   auto poll_client = state.pool.poll_lease();
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_snapshot = state.scan_async_temp_snapshot;
-  auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
-  auto &temp_snap_type = state.scan_async_temp_snapshot_type;
-  auto &temp_is_unknown = state.scan_async_temp_is_unknown;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_snapshot = state.scan.async_temp_snapshot;
+  auto &temp_snap_val_len = state.scan.async_temp_snapshot_value_len;
+  auto &temp_snap_type = state.scan.async_temp_snapshot_type;
+  auto &temp_is_unknown = state.scan.async_temp_is_unknown;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
-  state.scan_async_future = std::async(std::launch::async,
+  state.scan.async_future = std::async(std::launch::async,
     [client, poll_client, request, pid, scan_type_snap, snapshot_val_len,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
-     &mtx = state.scan_async_mtx,
-     &cancel_requested = state.scan_async_cancel_requested,
-     &units_done = state.scan_async_units_done,
-     &units_total = state.scan_async_units_total,
-     &units_are_maps = state.scan_async_units_are_maps,
-     &results_found = state.scan_async_results_found,
-     &maps_done = state.scan_async_maps_done,
-     &maps_total = state.scan_async_maps_total,
-     &workers_active = state.scan_async_workers_active,
-     &workers_total = state.scan_async_workers_total]() -> bool {
+     &mtx = state.scan.async_mtx,
+     &cancel_requested = state.scan.async_cancel_requested,
+     &units_done = state.scan.async_units_done,
+     &units_total = state.scan.async_units_total,
+     &units_are_maps = state.scan.async_units_are_maps,
+     &results_found = state.scan.async_results_found,
+     &maps_done = state.scan.async_maps_done,
+     &maps_total = state.scan.async_maps_total,
+     &workers_active = state.scan.async_workers_active,
+     &workers_total = state.scan.async_workers_total]() -> bool {
       std::lock_guard<std::mutex> lock(mtx);
       ScanResult scan_res;
       if (!run_tracked_process_scan(
@@ -755,20 +755,20 @@ void scan_process(AppState &state) {
 }
 
 void scan_unknown_process(AppState &state) {
-  if (state.scan_async_pending) return;
+  if (state.scan.async_pending) return;
   if (!state.client.connected()) { set_status(state,locale::tr("scanner.connect_first")); push_notification(state, locale::tr("scanner.scan_select_process_notify"), 4.0); return; }
   if (state.selected_pid <= 0) { set_status(state,locale::tr("scanner.select_process_first")); push_notification(state, locale::tr("scanner.scan_select_process_notify"), 4.0); return; }
   if (!(state.hello.capabilities & MEMDBG_CAP_SCAN_UNKNOWN)) {
     set_status(state,locale::tr("scanner.no_unknown_cap")); return;
   }
   uint64_t start=0, end=0;
-  if (!parse_u64(state.scan_start,start)||!parse_u64(state.scan_end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
+  if (!parse_u64(state.scan.start,start)||!parse_u64(state.scan.end,end)) { set_status(state,locale::tr("scanner.invalid_window")); return; }
   if (end != 0U && end <= start) { set_status(state, locale::tr("scanner.end_filter_error")); return; }
-  state.scan_alignment=std::max(state.scan_alignment,1);
-  state.scan_max_results=std::clamp(state.scan_max_results,1,
+  state.scan.alignment=std::max(state.scan.alignment,1);
+  state.scan.max_results=std::clamp(state.scan.max_results,1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   const uint32_t max_results = static_cast<uint32_t>(
-      std::min<int>(state.scan_max_results,
+      std::min<int>(state.scan.max_results,
                     static_cast<int>(
                         MEMDBG_SCAN_UNKNOWN_RESULT_BUDGET /
                         sizeof(memdbg_scan_result_entry_t))));
@@ -776,55 +776,55 @@ void scan_unknown_process(AppState &state) {
   request.abi_magic = MEMDBG_SCAN_UNKNOWN_ABI_MAGIC;
   request.abi_version = MEMDBG_SCAN_UNKNOWN_ABI_VERSION;
   request.struct_size = static_cast<uint16_t>(sizeof(request));
-  request.flags = state.scan_unknown_nonzero_prefilter
+  request.flags = state.scan.unknown_nonzero_prefilter
       ? MEMDBG_SCAN_UNKNOWN_FLAG_NONZERO
       : 0U;
   request.pid=state.selected_pid;
-  request.value_type=static_cast<uint32_t>(state.scan_type);
+  request.value_type=static_cast<uint32_t>(state.scan.type);
   request.value_length=current_scan_value_len(state);
-  request.alignment=static_cast<uint32_t>(state.scan_alignment);
+  request.alignment=static_cast<uint32_t>(state.scan.alignment);
   request.max_results=max_results;
   request.protection_mask=MEMDBG_MAP_PROT_READ;
   request.start=start;
   request.end=end;
   request.max_bytes=MEMDBG_SCAN_UNKNOWN_MAX_UNIT_BYTES;
 
-  state.scan_async_label = "Unknown value scan";
-  state.scan_async_start_time = ImGui::GetTime();
-  state.scan_async_pending = true;
-  state.scan_async_cancellable = true;
-  state.scan_async_cancel_requested.store(false);
-  state.scan_async_units_done.store(0U);
-  state.scan_async_units_total.store(0U);
-  state.scan_async_owner = Screen::Scanner;
+  state.scan.async_label = "Unknown value scan";
+  state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_pending = true;
+  state.scan.async_cancellable = true;
+  state.scan.async_cancel_requested.store(false);
+  state.scan.async_units_done.store(0U);
+  state.scan.async_units_total.store(0U);
+  state.scan.async_owner = Screen::Scanner;
 
   const int32_t pid = state.selected_pid;
-  const int scan_type_snap = state.scan_type;
+  const int scan_type_snap = state.scan.type;
   const auto snapshot_val_len = current_scan_value_len(state);
-  const ScanResult original_result = state.scan_result;
-  const auto original_snapshot = state.scan_snapshot;
-  const uint32_t original_value_len = state.scan_snapshot_value_len;
-  const int original_type = state.scan_snapshot_type;
-  const bool original_unknown = state.scan_is_unknown_session;
+  const ScanResult original_result = state.scan.result;
+  const auto original_snapshot = state.scan.snapshot;
+  const uint32_t original_value_len = state.scan.snapshot_value_len;
+  const int original_type = state.scan.snapshot_type;
+  const bool original_unknown = state.scan.is_unknown_session;
   auto client = state.pool.scan_lease();
-  auto &temp_result = state.scan_async_temp_result;
-  auto &temp_snapshot = state.scan_async_temp_snapshot;
-  auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
-  auto &temp_snap_type = state.scan_async_temp_snapshot_type;
-  auto &temp_is_unknown = state.scan_async_temp_is_unknown;
-  auto &temp_status = state.scan_async_temp_session_status;
-  auto &error_out = state.scan_async_error;
+  auto &temp_result = state.scan.async_temp_result;
+  auto &temp_snapshot = state.scan.async_temp_snapshot;
+  auto &temp_snap_val_len = state.scan.async_temp_snapshot_value_len;
+  auto &temp_snap_type = state.scan.async_temp_snapshot_type;
+  auto &temp_is_unknown = state.scan.async_temp_is_unknown;
+  auto &temp_status = state.scan.async_temp_session_status;
+  auto &error_out = state.scan.async_error;
   const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
 
-  state.scan_async_future = std::async(std::launch::async,
+  state.scan.async_future = std::async(std::launch::async,
     [client, request, pid, scan_type_snap, snapshot_val_len, max_results,
      has_batch, &temp_result, &temp_snapshot, &temp_snap_val_len,
      &temp_snap_type, &temp_is_unknown, &temp_status, &error_out,
      original_result, original_snapshot, original_value_len, original_type,
-     original_unknown, &cancel_requested = state.scan_async_cancel_requested,
-     &units_done = state.scan_async_units_done,
-     &units_total = state.scan_async_units_total,
-     &mtx = state.scan_async_mtx]() mutable -> bool {
+     original_unknown, &cancel_requested = state.scan.async_cancel_requested,
+     &units_done = state.scan.async_units_done,
+     &units_total = state.scan.async_units_total,
+     &mtx = state.scan.async_mtx]() mutable -> bool {
      auto preserve_cancelled = [&]() {
        std::lock_guard<std::mutex> lock(mtx);
        temp_result = original_result;

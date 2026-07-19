@@ -11,8 +11,8 @@ namespace memdbg::frontend {
 uint32_t current_scan_value_len(const AppState &state) {
   std::array<uint8_t, 16> value{};
   uint32_t value_len = 0;
-  if (!build_scan_value(state.scan_type, state.scan_value, value, value_len)) {
-    switch (state.scan_type) {
+  if (!build_scan_value(state.scan.type, state.scan.value, value, value_len)) {
+    switch (state.scan.type) {
     case MEMDBG_VALUE_U8:  return 1U;
     case MEMDBG_VALUE_U16: return 2U;
     case MEMDBG_VALUE_U32: case MEMDBG_VALUE_F32: return 4U;

@@ -168,8 +168,8 @@ static void set_scan_window_from_filtered_maps(AppState &state) {
     set_status(state, locale::tr("processes.no_filtered_maps"));
     return;
   }
-  std::snprintf(state.scan_start, sizeof(state.scan_start), "%s", hex_u64(start).c_str());
-  std::snprintf(state.scan_end, sizeof(state.scan_end), "%s", hex_u64(end).c_str());
+  std::snprintf(state.scan.start, sizeof(state.scan.start), "%s", hex_u64(start).c_str());
+  std::snprintf(state.scan.end, sizeof(state.scan.end), "%s", hex_u64(end).c_str());
   set_status(state, locale::tr("processes.scan_window_set"));
 }
 
@@ -426,11 +426,11 @@ static void select_process(AppState &state, int row) {
   state.selected_map_row = -1;
   state.selected_map_starts.clear();
   state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear();
-  state.scan_snapshot_value_len = 0;
-  state.scan_is_unknown_session = false;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear();
+  state.scan.snapshot_value_len = 0;
+  state.scan.is_unknown_session = false;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "Process changed");
   state.has_process_info = false;
   char pid_buf[128];
   std::snprintf(pid_buf, sizeof(pid_buf), locale::tr("processes.selected_pid"), state.selected_pid);
@@ -463,8 +463,8 @@ static void select_map(AppState &state, int row) {
   state.selected_map_row = row;
   std::snprintf(state.read_address, sizeof(state.read_address), "%s", hex_u64(map.start).c_str());
   std::snprintf(state.write_address, sizeof(state.write_address), "%s", hex_u64(map.start).c_str());
-  std::snprintf(state.scan_start, sizeof(state.scan_start), "%s", hex_u64(map.start).c_str());
-  std::snprintf(state.scan_length, sizeof(state.scan_length), "%s", hex_u64(map.end - map.start).c_str());
+  std::snprintf(state.scan.start, sizeof(state.scan.start), "%s", hex_u64(map.start).c_str());
+  std::snprintf(state.scan.length, sizeof(state.scan.length), "%s", hex_u64(map.end - map.start).c_str());
   char map_buf[128];
   std::snprintf(map_buf, sizeof(map_buf), locale::tr("processes.selected_map"), hex_u64(map.start).c_str(), hex_u64(map.end).c_str());
   set_status(state, map_buf);
