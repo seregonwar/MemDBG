@@ -21,7 +21,7 @@ The reconnect system handles all three cases through a layered design:
 | **Connection lifecycle** | `connection.cpp` (`quiesce_transport`, `reset_remote_session`, `connect_console`) | Separates non-destructive quiesce from full session teardown |
 | **Epoch protocol** | `app_state.hpp`, `scanner_async.cpp`, `screen_processes.cpp` | Prevents stale async results from old connections |
 | **Session restoration** | `session.cpp` (`poll_restore_session`, `TargetIdentity`) | Rematches the target process after reconnect using logical identity |
-| **Daemon identity** | `memdbg_protocol.h` (HELLO v2), `dispatch.c` | `daemon_instance_id` detects payload restart vs survival |
+| **Daemon identity** | `memdbg_protocol.h` (HELLO v2), `response.c` | `daemon_instance_id` detects payload restart vs survival |
 
 ---
 
@@ -49,15 +49,16 @@ enum class ConnectionPhase {
        ▼ (user clicks Connect, or payload auto-inject completes)
   Connecting ──────────────► Online
        │                        │
-       │ (failure)              │ (heartbeat ×2 fails)
+       │ (failure / cancel)     │ (heartbeat ×2 fails)
        ▼                        ▼
   Disconnected           ConnectionLost
                                │
                                ▼
-                         WaitingForWake
+                         WaitingForWake ── (user cancels) ──► Disconnected
+                               │
                                │ (backoff timer expires)
                                ▼
-                         Reconnecting
+                         Reconnecting ── (user cancels) ──► Disconnected
                                │
                                ▼ (HELLO succeeds)
                           Restoring
@@ -178,6 +179,26 @@ Collects the result of the async `connect_console()` future:
 - **Cancelled**: stops the reconnect state machine (`manual_disconnect = true`,
   `phase = Disconnected`).
 
+### `cancel_connect()` — `connection.cpp`
+
+Cancels any in-flight connection attempt. If the reconnect state machine is
+active (`WaitingForWake` or `Reconnecting`), this permanently stops it:
+
+```cpp
+void cancel_connect(AppState &state) {
+  state.conn.reconnect.manual_disconnect = true;
+  state.conn.reconnect.phase = ConnectionPhase::Disconnected;
+  state.conn.reconnect.reason.clear();
+  state.conn.reconnect.attempt = 0;
+  state.conn.connect_cancel_requested = true;
+  ++state.conn.connect_generation;
+}
+```
+
+Once `manual_disconnect` is `true`, `begin_reconnect()` and `poll_reconnect()`
+are both gated — the state machine will not restart until the user manually
+connects again.
+
 ### `quiesce_transport()` vs `reset_remote_session()` — `connection.cpp`
 
 | Operation | `quiesce_transport()` | `reset_remote_session()` |
@@ -195,14 +216,33 @@ Collects the result of the async `connect_console()` future:
 
 ### `poll_restore_session()` — `session.cpp`
 
-Called every frame while `phase == Restoring`:
+Called every frame while `phase == Restoring`. Does **not** independently
+request a process list — it polls `taskmgr.prefetch_future`, which was already
+launched by `poll_connect()` falling through to `start_taskmgr_prefetch()`
+after setting `phase = Restoring`.
 
-1. Forces a fresh process list from the daemon (ignores `prefetch_on_connect` setting).
-2. Rematches the target process by `TargetIdentity`:
+```
+poll_connect()                connection.cpp
+  success on reconnect path
+  → phase = Restoring
+  → falls through to start_taskmgr_prefetch()  ← spawns async process list
+
+poll_restore_session()        session.cpp
+  polls taskmgr.prefetch_future                 ← collects the result
+```
+
+**`restore_list_requested` flag**: A bool in `AppState` that gates the forced
+process list refresh. Set to `true` on the first `Restoring` frame (the flag
+is initially `false`, so the first call triggers the refresh). Cleared to
+`false` when the phase leaves `Restoring`. This prevents re-requesting the
+list every frame.
+
+Rematching logic:
+1. Rematches the target process by `TargetIdentity`:
    - **Primary**: `title_id` match via `taskmgr.resources` (requires process info).
    - **Fallback**: `name` match against the process list.
-3. On match: refreshes memory maps, sets `phase = Online`, clears `stale`.
-4. On no match: sets `phase = Online` but leaves `stale = true` — the user must
+2. On match: refreshes memory maps, sets `phase = Online`, clears `stale`.
+3. On no match: sets `phase = Online` but leaves `stale = true` — the user must
    manually re-select the target process on the new daemon instance.
 
 ---
@@ -257,7 +297,8 @@ state.scan.async_epoch = state.conn.reconnect.epoch;
 const uint64_t captured_epoch = state.scan.async_epoch;
 state.scan.async_pending = false;
 if (captured_epoch != state.conn.reconnect.epoch) {
-  // Clear temp storage, do NOT apply results
+  // Clear temp storage and consume the future, do NOT apply results
+  state.scan.async_future.get();
   state.scan.async_temp_result = ScanResult{};
   state.scan.async_temp_snapshot.clear();
   return;
@@ -357,8 +398,9 @@ the first detects the loss, the second advances the backoff state machine.
 - Watchpoint re-enable
 - Tracer re-attach
 
-These are only resumed after the target process is found and the original
-bytes at the patched addresses are verified.
+> **Note**: Trainer write suspension is implemented (PR 3 — `apply_locked_cheats()`
+> checks `remote_ready()`). Automatic byte-verification before re-enabling
+> breakpoints/watchpoints/tracer is **planned for PR 4**.
 
 ---
 
