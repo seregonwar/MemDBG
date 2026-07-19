@@ -158,7 +158,7 @@ static void quiesce_transport(AppState &state) {
   };
   drain(state.scan.async_future);
   drain(state.map_dump_future);
-  drain(state.telemetry_future);
+  drain(state.telemetry.future);
   drain(state.map_refresh_future);
   drain(state.taskmgr.resource_future);
   drain(state.taskmgr.prefetch_future);
@@ -178,7 +178,7 @@ static void quiesce_transport(AppState &state) {
   state.scan.async_pending = false;
   state.map_dump_pending = false;
   state.map_dump_client.reset();
-  state.telemetry_pending = false;
+  state.telemetry.pending = false;
   state.map_refresh_pending = false;
   state.taskmgr.resource_pending = false;
   state.taskmgr.prefetch_pending = false;
@@ -211,8 +211,8 @@ static void reset_remote_session(AppState &state) {
   state.selected_process_row = -1;
   state.selected_map_row = -1;
   state.has_process_info = false;
-  state.telemetry_available = false;
-  state.next_telemetry_poll = 0.0;
+  state.telemetry.available = false;
+  state.telemetry.next_poll = 0.0;
   state.taskmgr.resources.clear();
   state.taskmgr.fmem_by_name.clear();
   state.taskmgr.prefetch_processes.clear();
@@ -358,55 +358,55 @@ void cancel_connect(AppState &state) {
 /* ---- Async telemetry ---- */
 
 void request_telemetry_async(AppState &state) {
-  if (state.telemetry_pending) return;
+  if (state.telemetry.pending) return;
   if (!state.client.connected()) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
 
-  state.telemetry_pending = true;
-  state.telemetry_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
+  state.telemetry.pending = true;
+  state.telemetry.epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   auto client = state.pool.poll_lease();
-  state.telemetry_future = std::async(std::launch::async, [&state, client]() -> bool {
+  state.telemetry.future = std::async(std::launch::async, [&state, client]() -> bool {
     Client::TelemetrySnapshot snap;
     if (!client->telemetry(snap)) {
-      state.telemetry_temp_error = client->last_error();
+      state.telemetry.temp_error = client->last_error();
       return false;
     }
-    state.telemetry_temp_snap = snap;
-    state.telemetry_temp_error.clear();
+    state.telemetry.temp_snap = snap;
+    state.telemetry.temp_error.clear();
     return true;
   });
 }
 
 void poll_telemetry(AppState &state) {
-  if (!state.telemetry_pending) return;
-  if (!state.telemetry_future.valid()) return;
+  if (!state.telemetry.pending) return;
+  if (!state.telemetry.future.valid()) return;
 
-  auto status = state.telemetry_future.wait_for(std::chrono::milliseconds(0));
+  auto status = state.telemetry.future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.telemetry_pending = false;
+  state.telemetry.pending = false;
   bool ok = false;
   try {
-    ok = state.telemetry_future.get();
+    ok = state.telemetry.future.get();
   } catch (const std::exception &ex) {
-    state.telemetry_temp_error = ex.what();
+    state.telemetry.temp_error = ex.what();
   } catch (...) {
-    state.telemetry_temp_error = "Unknown telemetry error";
+    state.telemetry.temp_error = "Unknown telemetry error";
   }
 
   /* Reject stale results from a previous connection epoch. */
-  if (state.telemetry_epoch != state.conn.reconnect.epoch) return;
+  if (state.telemetry.epoch != state.conn.reconnect.epoch) return;
 
   if (!ok) {
     if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("Telemetry failed: " + state.telemetry_temp_error).c_str());
-    set_status(state, "Telemetry: " + state.telemetry_temp_error);
-    state.telemetry_available = false;
+      state.crash_logger.log("error", ("Telemetry failed: " + state.telemetry.temp_error).c_str());
+    set_status(state, "Telemetry: " + state.telemetry.temp_error);
+    state.telemetry.available = false;
     return;
   }
 
-  state.telemetry_snap = state.telemetry_temp_snap;
-  state.telemetry_available = true;
+  state.telemetry.snap = state.telemetry.temp_snap;
+  state.telemetry.available = true;
 }
 
 void request_maps_refresh_async(AppState &state) {
@@ -1056,7 +1056,7 @@ void poll_connect(AppState &state) {
       state.selected_map_row = -1;
       state.selected_map_starts.clear();
       state.has_process_info = false;
-      state.telemetry_available = false;
+      state.telemetry.available = false;
       reset_debugger_state(state);
       push_notification(state, "Payload restarted during rest mode — remote state cleared", 6.0);
     }
