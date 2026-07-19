@@ -69,10 +69,11 @@ COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
 HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2
 # Console (PS4/PS5) builds share the host's strictness where the SDK allows.
-# -Werror is gated behind CONSOLE_WERROR=1 because console SDK headers
-# may trigger warnings outside of MemDBG's control.
+# CONSOLE_WERROR defaults to 1 (treat warnings as errors). Set to 0 to
+# allow warnings from console SDK headers outside MemDBG's control.
+CONSOLE_WERROR ?= 1
 CONSOLE_CFLAGS := $(COMMON_CFLAGS) -Wconversion -Wshadow -Wformat=2
-ifneq ($(CONSOLE_WERROR),0)
+ifeq ($(CONSOLE_WERROR),1)
 CONSOLE_WERROR_FLAG := -Werror
 else
 CONSOLE_WERROR_FLAG :=

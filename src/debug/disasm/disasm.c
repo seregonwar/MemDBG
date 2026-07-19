@@ -93,6 +93,8 @@ int memdbg_disasm(int fd, const memdbg_disasm_request_t *req,
         case ZYDIS_CATEGORY_RET:
           e->opcode_kind = 3;
           break;
+        default:
+          break;
         }
 
         e->mnemonic_id = (uint8_t)(insn.mnemonic & 0xFF);

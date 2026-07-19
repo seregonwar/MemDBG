@@ -730,7 +730,7 @@ static memdbg_status_t tracer_run_full(memdbg_tracer_t *t) {
         ev.event_type = MEMDBG_TRACER_EVENT_SYSCALL_EXIT;
         ev.lwp = t->pending_lwp;
         ev.syscall_no = t->pending_sc_no;
-        ev.syscall_ret = regs.r_rax;
+        ev.syscall_ret = (int32_t)regs.r_rax;
         ev.timestamp_ns = exit_ns;
         ring_push(&t->ring, &ev);
 

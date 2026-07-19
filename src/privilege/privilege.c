@@ -162,11 +162,11 @@ int memdbg_privilege_jailbreak_self(void) {
     else { fd = 0; failures++; }
 #if MEMDBG_PRIVILEGE_HAS_PS5
     if (fd != 0) {
-      backup.fd_rdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR);
-      backup.fd_jdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR);
+      backup.fd_rdir = (intptr_t)kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR);
+      backup.fd_jdir = (intptr_t)kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR);
       backup.fd_modified = true;
-      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, rootv) != 0;
-      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, rootv) != 0;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, (uint64_t)rootv) != 0;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, (uint64_t)rootv) != 0;
     }
 #else
     (void)fd;
@@ -330,11 +330,11 @@ int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
     else { fd = 0; failures++; }
 #if MEMDBG_PRIVILEGE_HAS_PS5
     if (fd != 0) {
-      backup->fd_rdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR);
-      backup->fd_jdir = kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR);
+      backup->fd_rdir = (intptr_t)kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR);
+      backup->fd_jdir = (intptr_t)kernel_getlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR);
       backup->fd_modified = true;
-      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, rootv) != 0;
-      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, rootv) != 0;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, (uint64_t)rootv) != 0;
+      failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, (uint64_t)rootv) != 0;
     }
 #else
     (void)fd;
@@ -387,8 +387,8 @@ void memdbg_privilege_restore_target(pid_t pid,
     if (pid_alive(pid))
       fd = kernel_get_proc_filedesc(pid);
     if (fd != 0) {
-      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, backup->fd_rdir);
-      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, backup->fd_jdir);
+      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, (uint64_t)backup->fd_rdir);
+      kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, (uint64_t)backup->fd_jdir);
     }
   }
 

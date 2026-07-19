@@ -334,12 +334,12 @@ static void pal_debug_regs_to_native(const memdbg_debug_regs_t *src,
   dst->r_rdx = (register_t)src->r_rdx;
   dst->r_rcx = (register_t)src->r_rcx;
   dst->r_rax = (register_t)src->r_rax;
-  dst->r_trapno = (register_t)src->r_trapno;
-  dst->r_fs = (register_t)src->r_fs;
-  dst->r_gs = (register_t)src->r_gs;
-  dst->r_err = (register_t)src->r_err;
-  dst->r_es = (register_t)src->r_es;
-  dst->r_ds = (register_t)src->r_ds;
+  dst->r_trapno = src->r_trapno;
+  dst->r_fs = src->r_fs;
+  dst->r_gs = src->r_gs;
+  dst->r_err = src->r_err;
+  dst->r_es = src->r_es;
+  dst->r_ds = src->r_ds;
   dst->r_rip = (register_t)src->r_rip;
   dst->r_cs = (register_t)src->r_cs;
   dst->r_rflags = (register_t)src->r_rflags;
@@ -514,7 +514,13 @@ int pal_debug_set_dbregs(int pid, int32_t lwp,
 #else
   struct dbreg d;
   memset(&d, 0, sizeof(d));
-  for (int i = 0; i < 16; ++i) d.dr[i] = (long)dbregs->dr[i];
+  for (int i = 0; i < 16; ++i) {
+#if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+    d.dr[i] = (unsigned long)(int64_t)dbregs->dr[i];
+#else
+    d.dr[i] = (long)(int64_t)dbregs->dr[i];
+#endif
+  }
   return (pal_debug_ptrace_raw(PT_SETDBREGS, (int)lwp, &d, 0) == -1) ? -1 : 0;
 #endif
 }
@@ -544,6 +550,7 @@ int pal_debug_get_thread_name(int pid, int32_t lwp, char *name,
 
 int pal_debug_get_thread_state(int pid, int32_t lwp, int *state_out) {
   (void)pid;
+  (void)lwp;
   if (state_out == NULL) {
     errno = EINVAL;
     return -1;
@@ -588,6 +595,7 @@ int pal_debug_get_thread_stop_info(int pid, int32_t lwp,
                                    uint64_t *pl_siglist_lo,
                                    uint64_t *pl_siglist_hi) {
   (void)pid;
+  (void)lwp;
 
 #if defined(PT_LWPINFO) && !defined(MEMDBG_PAL_DEBUG_PS5)
   {

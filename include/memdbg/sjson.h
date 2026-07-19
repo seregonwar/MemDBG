@@ -31,6 +31,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunreachable-code-generic-assoc"
 #endif
 #ifdef __GNUC__
 #pragma GCC diagnostic push

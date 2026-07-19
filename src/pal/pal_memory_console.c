@@ -364,7 +364,7 @@ static memdbg_status_t td_proc_switch_to_target(int pid, td_proc_ctx_t *ctx) {
   intptr_t my_td = 0;
   for (size_t ci = 0U;
        ci < sizeof(k_thr_off_candidates) / sizeof(k_thr_off_candidates[0]); ++ci) {
-    intptr_t candidate = kernel_getlong(my_proc + k_thr_off_candidates[ci]);
+    intptr_t candidate = (intptr_t)kernel_getlong(my_proc + k_thr_off_candidates[ci]);
     /* td_proc is at thread+0x8 - validate the candidate points back
      * to our own proc. */
     if (candidate != 0 &&
@@ -379,13 +379,13 @@ static memdbg_status_t td_proc_switch_to_target(int pid, td_proc_ctx_t *ctx) {
   }
 
   ctx->my_td      = my_td;
-  ctx->saved_proc = kernel_getlong(my_td + 0x8);
-  (void)kernel_setlong(my_td + 0x8, target_proc);
+  ctx->saved_proc = (intptr_t)kernel_getlong(my_td + 0x8);
+  (void)kernel_setlong(my_td + 0x8, (uint64_t)target_proc);
   return MEMDBG_OK;
 }
 
 static void td_proc_switch_restore(const td_proc_ctx_t *ctx) {
-  (void)kernel_setlong(ctx->my_td + 0x8, ctx->saved_proc);
+  (void)kernel_setlong(ctx->my_td + 0x8, (uint64_t)ctx->saved_proc);
   memdbg_kernel_external_end();
 }
 

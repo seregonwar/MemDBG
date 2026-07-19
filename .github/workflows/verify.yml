@@ -325,7 +325,8 @@ jobs:
           make host \
             HOST_CC="clang" \
             HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
-            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all" \
+            HOST_LDFLAGS="-fsanitize=undefined"
 
       - name: Run UBSan tests
         run: |

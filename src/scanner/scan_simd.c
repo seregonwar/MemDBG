@@ -244,7 +244,7 @@ size_t memdbg_simd_find_exact(uint32_t value_type,
       if (value_length == 1U) {
         __m256i chunk = _mm256_loadu_si256((const __m256i *)ptr);
         __m256i cmp   = _mm256_cmpeq_epi8(chunk, pat);
-        uint32_t mask = _mm256_movemask_epi8(cmp);
+        uint32_t mask = (uint32_t)_mm256_movemask_epi8(cmp);
         while (mask != 0U && count < max_offsets) {
           uint32_t bit = (uint32_t)__builtin_ctz(mask);
           size_t idx = i + bit;
@@ -266,7 +266,7 @@ size_t memdbg_simd_find_exact(uint32_t value_type,
       } else if (value_length == 4U) {
         __m256i chunk = _mm256_loadu_si256((const __m256i *)ptr);
         __m256i cmp   = _mm256_cmpeq_epi32(chunk, pat);
-        uint32_t mask = _mm256_movemask_epi8(cmp);
+        uint32_t mask = (uint32_t)_mm256_movemask_epi8(cmp);
         while (mask != 0U && count < max_offsets) {
           uint32_t bit = (uint32_t)__builtin_ctz(mask);
           if ((bit & 3U) == 0U) {
@@ -278,7 +278,7 @@ size_t memdbg_simd_find_exact(uint32_t value_type,
       } else if (value_length == 8U) {
         __m256i chunk = _mm256_loadu_si256((const __m256i *)ptr);
         __m256i cmp   = _mm256_cmpeq_epi64(chunk, pat);
-        uint32_t mask = _mm256_movemask_epi8(cmp);
+        uint32_t mask = (uint32_t)_mm256_movemask_epi8(cmp);
         while (mask != 0U && count < max_offsets) {
           uint32_t bit = (uint32_t)__builtin_ctz(mask);
           if ((bit & 7U) == 0U) {

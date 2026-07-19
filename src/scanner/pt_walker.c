@@ -87,8 +87,7 @@ static int ptw_resolve_pid(uint32_t pid, uint64_t *out_cr3) {
                        : (intptr_t)kernel_get_proc((pid_t)pid);
   if (!kproc) goto fail;
 
-  uint64_t vmspace = 0;
-  if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) != 0 || !vmspace)
+  uint64_t vmspace = 0;    if (kread(kproc + (intptr_t)PTW_PROC_VMSPACE_OFF, &vmspace, 8) != 0 || !vmspace)
     goto fail;
 
   uint64_t pair[2];
@@ -220,7 +219,7 @@ int ptw_discover(uint64_t *dmap_base_out, uint64_t *pmap_offset_out) {
                        : (intptr_t)kernel_get_proc(self);
   if (kproc) {
     uint64_t vmspace = 0;
-    if (kread((intptr_t)(kproc + PTW_PROC_VMSPACE_OFF), &vmspace, 8) == 0 && vmspace) {
+    if (kread(kproc + (intptr_t)PTW_PROC_VMSPACE_OFF, &vmspace, 8) == 0 && vmspace) {
       uint64_t verify_va  = (uint64_t)(uintptr_t)&g_ptw_known_value;
       uint64_t verify_val = g_ptw_known_value;
 
