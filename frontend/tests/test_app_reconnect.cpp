@@ -695,7 +695,7 @@ static void test_client_async_busy() {
   state.tracer.pending = false;
 
   /* Multiple simultaneous */
-  state.telemetry_pending = true;
+  state.telemetry.pending = true;
   state.map_refresh_pending = true;
   TEST("busy with multiple ops", client_async_busy(state));
 }

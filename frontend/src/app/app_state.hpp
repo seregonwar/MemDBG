@@ -655,6 +655,32 @@ struct KlogState {
   size_t total_received = 0;
 };
 
+/* ---- Telemetry state ----
+ * Extracted from the monolithic AppState to reduce God Object risk. */
+struct TelemetryState {
+  Client::TelemetrySnapshot snap;
+  double next_poll = 0.0;
+  bool available = false;
+  bool pending = false;
+  uint64_t epoch = 0;
+  std::future<bool> future;
+  Client::TelemetrySnapshot temp_snap;
+  std::string temp_error;
+};
+
+/* ---- Gadget scan + Heap analysis state ----
+ * Extracted from the monolithic AppState to reduce God Object risk.
+ * Both are tightly coupled to the memory screen. */
+struct GadgetHeapState {
+  bool selected_map_only = true;
+  bool exec_only = true;
+  int max_results = 256;
+  std::vector<GadgetMatch> results;
+  int sample_kb = 256;
+  int max_maps = 32;
+  std::vector<HeapSprayFinding> findings;
+};
+
 struct AppState {
   ClientPool pool;
   /* Backward-compatible reference: state.client.xxx() routes to pool.control().
@@ -759,14 +785,8 @@ struct AppState {
   std::string json_dump_error;
   double json_dump_start_time = 0.0;
 
-  bool gadget_selected_map_only = true;
-  bool gadget_exec_only = true;
-  int gadget_max_results = 256;
-  std::vector<GadgetMatch> gadget_results;
-
-  int heap_sample_kb = 256;
-  int heap_max_maps = 32;
-  std::vector<HeapSprayFinding> heap_findings;
+  /* ---- Gadget/Heap state (see GadgetHeapState above) ---- */
+  GadgetHeapState gadget_heap;
 
   /* ---- Scanner state (see ScannerState above) ---- */
   ScannerState scan;
@@ -810,17 +830,8 @@ struct AppState {
    * the AppState root as core subsystem objects. */
   PluginState plugin;
 
-  /* ---- Telemetry ---- */
-  Client::TelemetrySnapshot telemetry_snap;
-  double next_telemetry_poll = 0.0;
-  bool telemetry_available = false;
-
-  /* ---- Async telemetry ---- */
-  bool telemetry_pending = false;
-  uint64_t telemetry_epoch = 0;        /* captured at request time; stale if != conn.reconnect.epoch */
-  std::future<bool> telemetry_future;
-  Client::TelemetrySnapshot telemetry_temp_snap;
-  std::string telemetry_temp_error;
+  /* ---- Telemetry state (see TelemetryState above) ---- */
+  TelemetryState telemetry;
 
 
 
@@ -1200,7 +1211,7 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 
 inline bool client_async_busy(const AppState &state) {
   return state.conn.connect_pending || state.payload_inject_pending ||
-         state.telemetry_pending ||
+         state.telemetry.pending ||
          state.scan.async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
          state.conn.debugger_attach_pending || state.conn.debugger_threads_pending ||

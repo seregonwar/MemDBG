@@ -195,9 +195,9 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   if (state.client.connected() &&
       (state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY) &&
       !client_async_busy(state)) {
-    if (now >= state.next_telemetry_poll) {
-      state.next_telemetry_poll = now + 1.0;
-      if (!state.telemetry_pending) {
+    if (now >= state.telemetry.next_poll) {
+      state.telemetry.next_poll = now + 1.0;
+      if (!state.telemetry.pending) {
         request_telemetry_async(state);
       }
     }
@@ -219,7 +219,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
     return;
   }
 
-  if (!state.telemetry_available) {
+  if (!state.telemetry.available) {
     ui::begin_panel("TelemetryWaiting", locale::tr("telemetry.title"), avail);
     ui::draw_empty_state(locale::tr("telemetry.polling"),
                          locale::tr("telemetry.polling_desc"));
@@ -227,7 +227,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
     return;
   }
 
-  const auto &t = state.telemetry_snap;
+  const auto &t = state.telemetry.snap;
   const float panel_w = std::max(240.0f, avail.x);
   const bool uptime_valid =
       t.uptime_seconds > 0U && t.uptime_seconds <= kMaxPlausibleUptimeSeconds;
@@ -253,7 +253,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
   ImGui::BeginDisabled(client_async_busy(state));
   if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("telemetry.refresh_now")).c_str(),
                       ImVec2(refresh_w, 36))) {
-    if (!state.telemetry_pending) {
+    if (!state.telemetry.pending) {
       request_telemetry_async(state);
       set_status(state, locale::tr("telemetry.refresh_requested"));
     }
@@ -347,7 +347,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
                      t.active_connections,
                      t.active_connections == 1 ? "" : "s");
   ImGui::TextColored(ui::colors().muted, locale::tr("telemetry.last_poll"),
-                     now - (state.next_telemetry_poll - 1.0));
+                     now - (state.telemetry.next_poll - 1.0));
 
   ui::end_panel();
 }
