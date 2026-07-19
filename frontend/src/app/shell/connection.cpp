@@ -130,25 +130,33 @@ void poll_payload_lifecycle(AppState &state) {
 /* ---- Transport lifecycle helpers ---- */
 
 static void quiesce_transport(AppState &state) {
-  /* Cancel I/O and drain futures without destroying UI state. */
-  if (state.scan.async_future.valid()) {
+  /* Cancel all in-flight I/O so blocked futures wake up promptly. */
+  if (state.scan.async_pending)
     state.scan.async_cancel_requested.store(true);
-    state.pool.cancel_all_pending_io();
-    state.scan.async_future.wait();
-  }
-  if (state.map_dump_future.valid()) {
+  if (state.map_dump_pending)
     state.map_dump_cancel_requested.store(true);
-    state.pool.cancel_all_pending_io();
-    state.map_dump_future.wait();
-  }
-  if (state.telemetry_future.valid()) state.telemetry_future.wait();
-  if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
-  if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
-  if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
-  if (state.conn.heartbeat_future.valid()) state.conn.heartbeat_future.wait();
-  if (state.tracer.future.valid()) state.tracer.future.wait();
-  if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
-  if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
+  state.pool.cancel_all_pending_io();
+
+  /* Drain any futures that have already completed (non-blocking).
+   * Futures that are still in-flight will be drained later by their
+   * poll_*() helpers — the epoch bump below causes them to reject
+   * stale results silently. */
+  auto drain = [](auto &future) {
+    if (future.valid() &&
+        future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      try { future.get(); } catch (...) {}
+    }
+  };
+  drain(state.scan.async_future);
+  drain(state.map_dump_future);
+  drain(state.telemetry_future);
+  drain(state.map_refresh_future);
+  drain(state.taskmgr.resource_future);
+  drain(state.taskmgr.prefetch_future);
+  drain(state.conn.heartbeat_future);
+  drain(state.tracer.future);
+  drain(state.tracer.status_future);
+  drain(state.tracer.events_future);
 
   /* Bump the epoch so any in-flight async results from the old connection
    * are silently rejected when they complete. */
@@ -300,6 +308,13 @@ void schedule_reconnect_retry(AppState &state) {
   state.conn.reconnect.phase = ConnectionPhase::WaitingForWake;
   ++state.conn.reconnect.attempt;
   state.conn.heartbeat_failures = 0;
+
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "%s — attempt %u, retrying in %.0fs",
+                state.conn.reconnect.reason.c_str(),
+                state.conn.reconnect.attempt,
+                static_cast<double>(kBackoff[idx].count()) / 1000.0);
+  set_status(state, buf);
 }
 
 void cancel_connect(AppState &state) {
@@ -309,6 +324,16 @@ void cancel_connect(AppState &state) {
     ++state.conn.connect_generation;
     s_temp_client.cancel_pending_io();
   }
+
+  /* --- Stop automatic reconnect immediately ---
+   * Without this the reconnect state machine can restart after the user
+   * explicitly cancelled because poll_reconnect() sees WaitingForWake
+   * and connect_pending == false. */
+  state.conn.reconnect.manual_disconnect = true;
+  state.conn.reconnect.phase = ConnectionPhase::Disconnected;
+  state.conn.reconnect.reason.clear();
+  state.conn.reconnect.attempt = 0;
+
   state.payload_auto_inject_probe = false;
   state.payload_auto_inject_waiting = false;
   state.payload_post_inject_connect = false;
@@ -1055,6 +1080,12 @@ void poll_connect(AppState &state) {
 /* Modal spinner drawn during async connect */
 void draw_connect_spinner(AppState &state) {
   if (!state.conn.connect_pending) return;
+
+  /* Automatic reconnect uses a non-invasive status-bar message instead of
+   * a modal overlay.  The user can continue using the UI while waiting. */
+  if (state.conn.reconnect.phase == ConnectionPhase::Reconnecting ||
+      state.conn.reconnect.phase == ConnectionPhase::WaitingForWake)
+    return;
 
   const float scl = ui::dpi_scale();
   const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
