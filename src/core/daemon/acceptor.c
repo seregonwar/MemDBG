@@ -31,6 +31,90 @@
 
 extern atomic_uint g_active_connections;
 
+/* ---- Per-peer connection rate limiting ----
+ *
+ * Each unique peer address is tracked by a sliding window of timestamps.
+ * If a peer opens more than MEMDBG_ACCEPT_RATE_LIMIT connections within the
+ * MEMDBG_ACCEPT_RATE_WINDOW_S window, new connections from that peer are
+ * dropped.  This provides basic pre-auth burst protection against
+ * connection-storm attacks without requiring authentication state per peer.
+ */
+#define MEMDBG_ACCEPT_RATE_LIMIT      8U    /* max connections per window */
+#define MEMDBG_ACCEPT_RATE_WINDOW_S   60U   /* sliding window in seconds */
+#define MEMDBG_ACCEPT_RATE_TRACKED    64U   /* number of tracked peers */
+
+typedef struct {
+  uint32_t  peer_address;
+  uint32_t  count;
+  uint64_t  window_start_s;
+} rate_entry_t;
+
+/* monotonic_seconds is declared in daemon_internal.h */
+extern uint64_t monotonic_seconds(void);
+
+static pthread_mutex_t g_accept_rate_mutex = PTHREAD_MUTEX_INITIALIZER;
+static rate_entry_t g_accept_rates[MEMDBG_ACCEPT_RATE_TRACKED];
+
+static bool accept_rate_check(uint32_t peer_address, uint64_t now_s) {
+  (void)pthread_mutex_lock(&g_accept_rate_mutex);
+  size_t slot = MEMDBG_ACCEPT_RATE_TRACKED;
+  size_t empty = MEMDBG_ACCEPT_RATE_TRACKED;
+  for (size_t i = 0U; i < MEMDBG_ACCEPT_RATE_TRACKED; ++i) {
+    if (g_accept_rates[i].peer_address == 0U && g_accept_rates[i].count == 0U) {
+      if (empty == MEMDBG_ACCEPT_RATE_TRACKED) empty = i;
+      continue;
+    }
+    if (g_accept_rates[i].peer_address == peer_address) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot == MEMDBG_ACCEPT_RATE_TRACKED)
+    slot = empty;
+  if (slot == MEMDBG_ACCEPT_RATE_TRACKED) {
+    /* All slots full — replace the slot with the oldest window start time. */
+    uint64_t oldest_ts = UINT64_MAX;
+    for (size_t i = 0U; i < MEMDBG_ACCEPT_RATE_TRACKED; ++i) {
+      if (g_accept_rates[i].window_start_s < oldest_ts) {
+        oldest_ts = g_accept_rates[i].window_start_s;
+        slot = i;
+      }
+    }
+    /* Initialise the evicted slot as a fresh entry for this peer. */
+    g_accept_rates[slot].peer_address = peer_address;
+    g_accept_rates[slot].window_start_s = now_s;
+    g_accept_rates[slot].count = 1U;
+    (void)pthread_mutex_unlock(&g_accept_rate_mutex);
+    return true;
+  }
+
+  rate_entry_t *entry = &g_accept_rates[slot];
+  if (entry->window_start_s == 0U) {
+    entry->peer_address = peer_address;
+    entry->window_start_s = now_s;
+    entry->count = 1U;
+    (void)pthread_mutex_unlock(&g_accept_rate_mutex);
+    return true;
+  }
+
+  /* Reset window if it has expired. */
+  if (now_s - entry->window_start_s >= (uint64_t)MEMDBG_ACCEPT_RATE_WINDOW_S) {
+    entry->window_start_s = now_s;
+    entry->count = 1U;
+    (void)pthread_mutex_unlock(&g_accept_rate_mutex);
+    return true;
+  }
+
+  /* Within window — check limit. */
+  if (entry->count >= MEMDBG_ACCEPT_RATE_LIMIT) {
+    (void)pthread_mutex_unlock(&g_accept_rate_mutex);
+    return false;
+  }
+  ++entry->count;
+  (void)pthread_mutex_unlock(&g_accept_rate_mutex);
+  return true;
+}
+
 #define MEMDBG_TRACKED_CLIENTS 64U
 #define MEMDBG_TRACKED_SESSIONS 64U
 static pthread_mutex_t g_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -219,6 +303,31 @@ static void *acceptor_thread(void *arg) {
                        peer, cfg.allow_host);
       (void)pal_socket_close(client_fd);
       continue;
+    }
+
+    /* ---- Pre-auth rate limiting ----
+     * Track connection attempts per peer within a sliding window.
+     * This rejects burst connections from a single address before they
+     * consume handler threads or reach the HELLO/SESSION checks. */
+    {
+      uint32_t peer_addr = 0U;
+      if (ss.ss_family == AF_INET)
+        peer_addr = ((const struct sockaddr_in *)&ss)->sin_addr.s_addr;
+      if (peer_addr != 0U) {
+        uint64_t now = monotonic_seconds();
+        if (!accept_rate_check(peer_addr, now)) {
+          char peer_host[INET_ADDRSTRLEN];
+          const char *peer = "unknown";
+          if (sockaddr_ipv4_host(&ss, peer_host, sizeof(peer_host)))
+            peer = peer_host;
+          memdbg_log_write(MEMDBG_LOG_WARN,
+                           "connection rate limited: peer=%s (burst >%u in %us)",
+                           peer, MEMDBG_ACCEPT_RATE_LIMIT,
+                           MEMDBG_ACCEPT_RATE_WINDOW_S);
+          (void)pal_socket_close(client_fd);
+          continue;
+        }
+      }
     }
 
     uint32_t active_after_accept =
