@@ -433,6 +433,36 @@ jobs:
           cmake --build build/frontend --config Release --target memdbg_probe
           cmake --build build/frontend --config Release --target memdbg_performance_probe
 
+      - name: Verify /WX flag propagation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Checking /WX in generated MSBuild project files ==="
+          matches=$(find build/frontend -name '*.vcxproj' -exec grep -l '/WX' {} + 2>/dev/null | sort -u || true)
+          if [ -n "$matches" ]; then
+            echo "$matches"
+            count=$(echo "$matches" | wc -l)
+            echo "Found /WX in $count project file(s)"
+            echo "=== Checking test targets specifically ==="
+            test_matches=$(find build/frontend -name '*memdbg_*_test.vcxproj' -exec grep -l '/WX' {} + 2>/dev/null || true)
+            all_tests=$(find build/frontend -name '*memdbg_*_test.vcxproj' 2>/dev/null | sort -u || true)
+            if [ -n "$all_tests" ]; then
+              test_count=$(echo "$all_tests" | wc -l)
+              wx_test_count=$(echo "$test_matches" | wc -l)
+              echo "$wx_test_count of $test_count test project files contain /WX"
+              if [ "$wx_test_count" -lt "$test_count" ]; then
+                echo "::warning::Not all test targets have /WX. Missing targets:"
+                for f in $all_tests; do
+                  if ! grep -q '/WX' "$f" 2>/dev/null; then
+                    echo "  MISSING: $(basename "$f")"
+                  fi
+                done
+              fi
+            fi
+          else
+            echo "::warning::No /WX found in any vcxproj file — check CMakeLists.txt MSVC config"
+          fi
+
   static-analysis:
     name: Static analysis (clang-tidy)
     runs-on: ubuntu-latest
