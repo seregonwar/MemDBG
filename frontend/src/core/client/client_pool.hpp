@@ -53,6 +53,12 @@ public:
   /** Cancel pending I/O on all pooled connections. */
   void cancel_all_pending_io();
 
+  /** Drop all role connections (memory/scan/poll) but leave control intact. */
+  void invalidate_roles();
+
+  /** Swap the control connection after a reconnect (keeps pool identity). */
+  void replace_control(std::shared_ptr<Client> new_control);
+
   /* ---- Additional role connections (parallel memory/scan/poll) ---- */
 
   /** Asynchronously connect additional roles (memory, scan, poll).

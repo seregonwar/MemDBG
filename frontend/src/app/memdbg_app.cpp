@@ -492,10 +492,8 @@ static Client              s_temp_client;
 static HelloInfo           s_temp_hello;
 static std::string         s_temp_error;
 
-void connect_console(AppState &state) {
-  if (state.conn.connect_pending) return;  /* already connecting */
-  if (s_connect_future.valid()) s_connect_future.wait();  /* drain previous async */
-  ensure_console_targets(state);
+/* connect_console is declared in app_state.hpp with a default ConnectIntent
+   parameter — no wrapper needed here. */
   save_current_console_target(state);
   normalize_ports(state);
   state.pool.disconnect();
@@ -1523,7 +1521,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
       ImGui::EndDisabled();
     } else {
       if (topbar_button("TopbarConnect", icons::kConnect, locale::tr("topbar.connect"), 136.0f * scl, true))
-        connect_console(state);
+        connect_console(state, ConnectIntent::ManualFreshConnection);
     }
   }
   ImGui::EndChild();
@@ -1829,7 +1827,7 @@ static void handle_global_shortcuts(AppState &state) {
     } else if (state.client.connected()) {
       disconnect_console(state);
     } else {
-      connect_console(state);
+      connect_console(state, ConnectIntent::ManualFreshConnection);
     }
   }
 }

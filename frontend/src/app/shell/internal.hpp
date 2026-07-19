@@ -34,7 +34,8 @@ bool load_frontend_settings(AppState &state, std::string *error);
 bool save_frontend_settings(const AppState &state, std::string *error);
 
 // connection.cpp
-void connect_console(AppState &state);
+void connect_console(AppState &state, ConnectIntent intent);
+void schedule_reconnect_retry(AppState &state);
 void cancel_connect(AppState &state);
 void request_payload_inject(AppState &state, bool connect_after);
 void poll_payload_lifecycle(AppState &state);
@@ -65,6 +66,8 @@ void topbar_select_process(AppState &state, int row);
 void poll_release_check(AppState &state);
 void poll_locale_repository(AppState &state);
 void poll_session_health(AppState &state);
+void begin_reconnect(AppState &state, const std::string &reason);
+void poll_reconnect(AppState &state);
 void update_payload_version_check(AppState &state);
 void draw_screen(AppState &state, ImVec2 avail);
 void handle_global_shortcuts(AppState &state);
