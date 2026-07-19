@@ -312,9 +312,15 @@ typedef struct MEMDBG_PACKED memdbg_hello_response {
   char name[16];
   uint16_t feature_level;
   uint16_t reserved;
+  /* ---- Added in protocol v2 (rest mode resilience, 2026-07) ---- */
+  uint64_t daemon_instance_id;          /* random ID generated at payload startup;
+                                           identical across rest-mode cycles iff the
+                                           payload process survived */
+  uint64_t daemon_start_monotonic_ns;   /* monotonic clock at payload startup */
 } memdbg_hello_response_t;
 
 #define MEMDBG_HELLO_V1_SIZE offsetof(memdbg_hello_response_t, feature_level)
+#define MEMDBG_HELLO_V2_SIZE sizeof(memdbg_hello_response_t)
 
 typedef struct MEMDBG_PACKED memdbg_process_entry {
   int32_t pid;

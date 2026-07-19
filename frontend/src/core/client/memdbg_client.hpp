@@ -54,6 +54,8 @@ struct HelloInfo {
   uint16_t udp_log_port = 0;
   std::string version;
   std::string name;
+  uint64_t daemon_instance_id = 0;        /* survives rest mode iff payload survived */
+  uint64_t daemon_start_monotonic_ns = 0;
 };
 
 struct ScanResult {
