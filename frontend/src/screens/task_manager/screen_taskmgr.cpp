@@ -83,14 +83,14 @@ static bool parse_fmem_line(const std::string &line, TaskFmemSample &out) {
 
 static void update_fmem_from_udp_logs(AppState &state) {
   const auto stats = state.udp_listener.stats();
-  if (stats.received == state.taskmgr_last_log_received) return;
-  state.taskmgr_last_log_received = stats.received;
+  if (stats.received == state.taskmgr.last_log_received) return;
+  state.taskmgr.last_log_received = stats.received;
 
   const auto logs = state.udp_listener.snapshot();
   for (const auto &line : logs) {
     TaskFmemSample sample;
     if (!parse_fmem_line(line, sample)) continue;
-    state.taskmgr_fmem_by_name[sample.name] = sample;
+    state.taskmgr.fmem_by_name[sample.name] = sample;
   }
 }
 
@@ -103,8 +103,8 @@ static const ProcessEntry *find_process(const AppState &state, int32_t pid) {
 static const TaskFmemSample *find_fmem_sample(const AppState &state,
                                               const ProcessEntry &proc) {
   if (proc.name.empty()) return nullptr;
-  auto it = state.taskmgr_fmem_by_name.find(proc.name);
-  return it != state.taskmgr_fmem_by_name.end() && it->second.loaded
+  auto it = state.taskmgr.fmem_by_name.find(proc.name);
+  return it != state.taskmgr.fmem_by_name.end() && it->second.loaded
       ? &it->second
       : nullptr;
 }
@@ -128,35 +128,35 @@ static ProcessMapSummary summarize_maps(const std::vector<MapEntry> &maps) {
 
 static void start_resource_fetch(AppState &state, int32_t pid) {
   if (pid <= 0 || !state.client.connected()) return;
-  if (state.taskmgr_resource_pending || state.connect_pending ||
+  if (state.taskmgr.resource_pending || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
-      state.map_refresh_pending || state.taskmgr_prefetch_pending) {
+      state.map_refresh_pending || state.taskmgr.prefetch_pending) {
     return;
   }
-  if (state.taskmgr_resource_future.valid()) {
-    state.taskmgr_resource_future.wait();
+  if (state.taskmgr.resource_future.valid()) {
+    state.taskmgr.resource_future.wait();
   }
 
-  state.taskmgr_resource_pending = true;
-  state.taskmgr_resource_pid = pid;
-  state.taskmgr_resource_error.clear();
-  state.taskmgr_resource_temp = TaskProcessResource{};
-  state.taskmgr_resource_temp.pid = pid;
+  state.taskmgr.resource_pending = true;
+  state.taskmgr.resource_pid = pid;
+  state.taskmgr.resource_error.clear();
+  state.taskmgr.resource_temp = TaskProcessResource{};
+  state.taskmgr.resource_temp.pid = pid;
 
   ProcessInfo existing_info;
   bool existing_has_info = false;
   bool existing_info_failed = false;
-  auto existing = state.taskmgr_resources.find(pid);
-  if (existing != state.taskmgr_resources.end()) {
+  auto existing = state.taskmgr.resources.find(pid);
+  if (existing != state.taskmgr.resources.end()) {
     existing_info = existing->second.info;
     existing_has_info = existing->second.has_info;
     existing_info_failed = existing->second.info_failed;
   }
 
-  state.taskmgr_resource_future = std::async(std::launch::async,
+  state.taskmgr.resource_future = std::async(std::launch::async,
       [pid, existing_info = std::move(existing_info), existing_has_info,
        existing_info_failed, &client = state.client,
-       &temp = state.taskmgr_resource_temp]() -> bool {
+       &temp = state.taskmgr.resource_temp]() -> bool {
         TaskProcessResource local;
         local.pid = pid;
         local.info = existing_info;
@@ -178,101 +178,101 @@ static void start_resource_fetch(AppState &state, int32_t pid) {
 }
 
 static void poll_resource_fetch(AppState &state) {
-  if (!state.taskmgr_resource_pending || !state.taskmgr_resource_future.valid()) return;
-  auto status = state.taskmgr_resource_future.wait_for(std::chrono::milliseconds(0));
+  if (!state.taskmgr.resource_pending || !state.taskmgr.resource_future.valid()) return;
+  auto status = state.taskmgr.resource_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.taskmgr_resource_pending = false;
+  state.taskmgr.resource_pending = false;
   try {
-    (void)state.taskmgr_resource_future.get();
+    (void)state.taskmgr.resource_future.get();
   } catch (const std::exception &ex) {
-    state.taskmgr_resource_error = ex.what();
-    state.taskmgr_resource_temp.maps.loaded = true;
-    state.taskmgr_resource_temp.maps_failed = true;
-    state.taskmgr_batch_temp_infos.clear();
-    state.taskmgr_batch_temp_failed_pids.clear();
+    state.taskmgr.resource_error = ex.what();
+    state.taskmgr.resource_temp.maps.loaded = true;
+    state.taskmgr.resource_temp.maps_failed = true;
+    state.taskmgr.batch_temp_infos.clear();
+    state.taskmgr.batch_temp_failed_pids.clear();
   } catch (...) {
-    state.taskmgr_resource_error = "Unknown task manager resource error";
-    state.taskmgr_resource_temp.maps.loaded = true;
-    state.taskmgr_resource_temp.maps_failed = true;
-    state.taskmgr_batch_temp_infos.clear();
-    state.taskmgr_batch_temp_failed_pids.clear();
+    state.taskmgr.resource_error = "Unknown task manager resource error";
+    state.taskmgr.resource_temp.maps.loaded = true;
+    state.taskmgr.resource_temp.maps_failed = true;
+    state.taskmgr.batch_temp_infos.clear();
+    state.taskmgr.batch_temp_failed_pids.clear();
   }
 
   /* Merge batch process_info results into resources (UI thread only). */
   double now = ImGui::GetTime();
-  if (!state.taskmgr_batch_temp_infos.empty()) {
-    for (auto &info : state.taskmgr_batch_temp_infos) {
+  if (!state.taskmgr.batch_temp_infos.empty()) {
+    for (auto &info : state.taskmgr.batch_temp_infos) {
       if (info.pid <= 0) continue;
-      TaskProcessResource &res = state.taskmgr_resources[info.pid];
+      TaskProcessResource &res = state.taskmgr.resources[info.pid];
       res.pid = info.pid;
       res.info = std::move(info);
       res.has_info = true;
       res.info_failed = false;
       res.updated_at = now;
     }
-    state.taskmgr_batch_temp_infos.clear();
+    state.taskmgr.batch_temp_infos.clear();
   }
-  if (!state.taskmgr_batch_temp_failed_pids.empty()) {
-    for (int32_t pid : state.taskmgr_batch_temp_failed_pids) {
+  if (!state.taskmgr.batch_temp_failed_pids.empty()) {
+    for (int32_t pid : state.taskmgr.batch_temp_failed_pids) {
       if (pid <= 0) continue;
-      TaskProcessResource &res = state.taskmgr_resources[pid];
+      TaskProcessResource &res = state.taskmgr.resources[pid];
       res.pid = pid;
       res.info_failed = true;
-      if (!state.taskmgr_resource_error.empty())
-        res.error = state.taskmgr_resource_error;
+      if (!state.taskmgr.resource_error.empty())
+        res.error = state.taskmgr.resource_error;
       res.updated_at = now;
     }
-    state.taskmgr_batch_temp_failed_pids.clear();
+    state.taskmgr.batch_temp_failed_pids.clear();
   }
 
   /* Merge per-pid resource fetch result (maps only, info already populated). */
-  if (state.taskmgr_resource_temp.pid > 0) {
-    state.taskmgr_resource_temp.updated_at = ImGui::GetTime();
+  if (state.taskmgr.resource_temp.pid > 0) {
+    state.taskmgr.resource_temp.updated_at = ImGui::GetTime();
     TaskProcessResource &res =
-        state.taskmgr_resources[state.taskmgr_resource_temp.pid];
-    res.pid = state.taskmgr_resource_temp.pid;
-    if (state.taskmgr_resource_temp.has_info) {
-      res.info = std::move(state.taskmgr_resource_temp.info);
+        state.taskmgr.resources[state.taskmgr.resource_temp.pid];
+    res.pid = state.taskmgr.resource_temp.pid;
+    if (state.taskmgr.resource_temp.has_info) {
+      res.info = std::move(state.taskmgr.resource_temp.info);
       res.has_info = true;
       res.info_failed = false;
-    } else if (state.taskmgr_resource_temp.info_failed) {
+    } else if (state.taskmgr.resource_temp.info_failed) {
       res.info_failed = true;
     }
-    res.maps = state.taskmgr_resource_temp.maps;
-    res.maps_failed = state.taskmgr_resource_temp.maps_failed;
-    res.error = std::move(state.taskmgr_resource_temp.error);
-    res.updated_at = state.taskmgr_resource_temp.updated_at;
+    res.maps = state.taskmgr.resource_temp.maps;
+    res.maps_failed = state.taskmgr.resource_temp.maps_failed;
+    res.error = std::move(state.taskmgr.resource_temp.error);
+    res.updated_at = state.taskmgr.resource_temp.updated_at;
     if (!res.error.empty())
-      state.taskmgr_resource_error = res.error;
-    state.taskmgr_resource_temp = TaskProcessResource{};
+      state.taskmgr.resource_error = res.error;
+    state.taskmgr.resource_temp = TaskProcessResource{};
   }
 }
 
 static bool resource_needs_fetch(const AppState &state, int32_t pid) {
-  auto it = state.taskmgr_resources.find(pid);
-  if (it == state.taskmgr_resources.end()) return true;
+  auto it = state.taskmgr.resources.find(pid);
+  if (it == state.taskmgr.resources.end()) return true;
   const TaskProcessResource &res = it->second;
   return !res.maps.loaded && !res.maps_failed;
 }
 
 static void start_batch_info_fetch(AppState &state) {
   if (!state.client.connected() || state.processes.empty()) return;
-  if (state.taskmgr_resource_pending || state.connect_pending ||
+  if (state.taskmgr.resource_pending || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
-      state.map_refresh_pending || state.taskmgr_prefetch_pending) {
+      state.map_refresh_pending || state.taskmgr.prefetch_pending) {
     return;
   }
-  if (state.taskmgr_resource_future.valid()) {
-    state.taskmgr_resource_future.wait();
+  if (state.taskmgr.resource_future.valid()) {
+    state.taskmgr.resource_future.wait();
   }
 
   /* Collect the next protocol-sized batch of PIDs that don't yet have info. */
   std::vector<int32_t> pids;
   pids.reserve(kTaskMgrBatchInfoMax);
   for (const auto &proc : state.processes) {
-    auto it = state.taskmgr_resources.find(proc.pid);
-    if (it == state.taskmgr_resources.end() ||
+    auto it = state.taskmgr.resources.find(proc.pid);
+    if (it == state.taskmgr.resources.end() ||
         (!it->second.has_info && !it->second.info_failed)) {
       pids.push_back(proc.pid);
       if (pids.size() >= kTaskMgrBatchInfoMax) break;
@@ -280,17 +280,17 @@ static void start_batch_info_fetch(AppState &state) {
   }
   if (pids.empty()) return;
 
-  state.taskmgr_resource_pending = true;
-  state.taskmgr_resource_pid = 0;
-  state.taskmgr_resource_error.clear();
-  state.taskmgr_batch_temp_infos.clear();
-  state.taskmgr_batch_temp_failed_pids.clear();
+  state.taskmgr.resource_pending = true;
+  state.taskmgr.resource_pid = 0;
+  state.taskmgr.resource_error.clear();
+  state.taskmgr.batch_temp_infos.clear();
+  state.taskmgr.batch_temp_failed_pids.clear();
 
-  state.taskmgr_resource_future = std::async(std::launch::async,
+  state.taskmgr.resource_future = std::async(std::launch::async,
       [pids = std::move(pids), &client = state.client,
-       &temp_infos = state.taskmgr_batch_temp_infos,
-       &failed_pids = state.taskmgr_batch_temp_failed_pids,
-       &error = state.taskmgr_resource_error]() -> bool {
+       &temp_infos = state.taskmgr.batch_temp_infos,
+       &failed_pids = state.taskmgr.batch_temp_failed_pids,
+       &error = state.taskmgr.resource_error]() -> bool {
         if (!client.batch_process_info(pids, temp_infos)) {
           error = client.last_error();
           temp_infos.clear();
@@ -303,30 +303,30 @@ static void start_batch_info_fetch(AppState &state) {
 
 static void schedule_resource_fetch(AppState &state, double now) {
   if (!state.client.connected() || state.processes.empty()) return;
-  if (state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
-      now < state.taskmgr_next_resource_fetch) return;
+  if (state.taskmgr.resource_pending || state.taskmgr.prefetch_pending ||
+      now < state.taskmgr.next_resource_fetch) return;
 
   /* First, check if we need a batch process_info fetch for all new PIDs */
   bool need_batch = false;
   for (const auto &proc : state.processes) {
-    auto it = state.taskmgr_resources.find(proc.pid);
-    if (it == state.taskmgr_resources.end() ||
+    auto it = state.taskmgr.resources.find(proc.pid);
+    if (it == state.taskmgr.resources.end() ||
         (!it->second.has_info && !it->second.info_failed)) {
       need_batch = true;
       break;
     }
   }
   if (need_batch) {
-    state.taskmgr_next_resource_fetch = now + 0.08;
+    state.taskmgr.next_resource_fetch = now + 0.08;
     start_batch_info_fetch(state);
     return;
   }
 
   /* Then, schedule per-pid map fetches */
   int32_t pid = 0;
-  if (state.taskmgr_selected_pid > 0 &&
-      resource_needs_fetch(state, state.taskmgr_selected_pid)) {
-    pid = state.taskmgr_selected_pid;
+  if (state.taskmgr.selected_pid > 0 &&
+      resource_needs_fetch(state, state.taskmgr.selected_pid)) {
+    pid = state.taskmgr.selected_pid;
   } else {
     for (const auto &proc : state.processes) {
       if (resource_needs_fetch(state, proc.pid)) {
@@ -337,33 +337,33 @@ static void schedule_resource_fetch(AppState &state, double now) {
   }
 
   if (pid > 0) {
-    state.taskmgr_next_resource_fetch = now + 0.04;
+    state.taskmgr.next_resource_fetch = now + 0.04;
     start_resource_fetch(state, pid);
   }
 }
 
 static const TaskProcessResource *resource_for_pid(const AppState &state,
                                                    int32_t pid) {
-  auto it = state.taskmgr_resources.find(pid);
-  return it != state.taskmgr_resources.end() ? &it->second : nullptr;
+  auto it = state.taskmgr.resources.find(pid);
+  return it != state.taskmgr.resources.end() ? &it->second : nullptr;
 }
 
 static void select_taskmgr_process(AppState &state, int row) {
   if (row < 0 || row >= static_cast<int>(state.processes.size())) return;
-  state.taskmgr_selected_row = row;
-  state.taskmgr_selected_pid = state.processes[row].pid;
-  state.taskmgr_detail_open = true;
+  state.taskmgr.selected_row = row;
+  state.taskmgr.selected_pid = state.processes[row].pid;
+  state.taskmgr.detail_open = true;
 }
 
 static void reset_taskmgr_cache(AppState &state) {
-  if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
-  state.taskmgr_resource_pending = false;
-  state.taskmgr_resources.clear();
-  state.taskmgr_selected_row = -1;
-  state.taskmgr_selected_pid = 0;
-  state.taskmgr_detail_open = false;
-  state.taskmgr_map_summary = ProcessMapSummary{};
-  state.taskmgr_has_process_info = false;
+  if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
+  state.taskmgr.resource_pending = false;
+  state.taskmgr.resources.clear();
+  state.taskmgr.selected_row = -1;
+  state.taskmgr.selected_pid = 0;
+  state.taskmgr.detail_open = false;
+  state.taskmgr.map_summary = ProcessMapSummary{};
+  state.taskmgr.has_process_info = false;
 }
 
 static void draw_detail_title_bar(AppState &state) {
@@ -376,7 +376,7 @@ static void draw_detail_title_bar(AppState &state) {
   if (right_x > ImGui::GetCursorPosX())
     ImGui::SetCursorPosX(right_x);
   if (ui::soft_button("X##TaskMgrCloseDetail", ImVec2(close_w, 26.0f * scl))) {
-    state.taskmgr_detail_open = false;
+    state.taskmgr.detail_open = false;
   }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", "Close process details");
@@ -477,8 +477,8 @@ static void draw_taskmgr_tree_node(AppState &state,
   const auto &node = nodes[node_idx];
   const float scl = ui::dpi_scale();
   const float indent = static_cast<float>(depth) * 20.0f * scl;
-  const bool selected = (node.pid == state.taskmgr_selected_pid &&
-                         state.taskmgr_detail_open);
+  const bool selected = (node.pid == state.taskmgr.selected_pid &&
+                         state.taskmgr.detail_open);
 
   ImGui::TableNextRow();
 
@@ -610,9 +610,9 @@ static void draw_process_table(AppState &state, float height) {
       const auto &proc = state.processes[i];
       const TaskProcessResource *res = resource_for_pid(state, proc.pid);
       const TaskFmemSample *fmem = find_fmem_sample(state, proc);
-      const bool pending = state.taskmgr_resource_pending &&
-                           state.taskmgr_resource_pid == proc.pid;
-      const bool selected = i == state.taskmgr_selected_row;
+      const bool pending = state.taskmgr.resource_pending &&
+                           state.taskmgr.resource_pid == proc.pid;
+      const bool selected = i == state.taskmgr.selected_row;
 
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
@@ -685,9 +685,9 @@ static void draw_process_actions(AppState &state) {
   if (ui::soft_button((std::string(icons::kStop) + "  " +
                        locale::tr("taskmgr.stop_process")).c_str(),
                       ImVec2(button_w, button_h))) {
-    if (state.client.process_stop(state.taskmgr_selected_pid))
+    if (state.client.process_stop(state.taskmgr.selected_pid))
       set_status(state, std::string(locale::tr("taskmgr.process_stopped")) +
-                         " PID " + std::to_string(state.taskmgr_selected_pid));
+                         " PID " + std::to_string(state.taskmgr.selected_pid));
     else
       set_status(state, state.client.last_error());
   }
@@ -696,9 +696,9 @@ static void draw_process_actions(AppState &state) {
   if (ui::soft_button((std::string(icons::kPlay) + "  " +
                        locale::tr("taskmgr.continue_process")).c_str(),
                       ImVec2(button_w, button_h))) {
-    if (state.client.process_continue(state.taskmgr_selected_pid))
+    if (state.client.process_continue(state.taskmgr.selected_pid))
       set_status(state, std::string(locale::tr("taskmgr.process_continued")) +
-                         " PID " + std::to_string(state.taskmgr_selected_pid));
+                         " PID " + std::to_string(state.taskmgr.selected_pid));
     else
       set_status(state, state.client.last_error());
   }
@@ -712,12 +712,12 @@ static void draw_process_actions(AppState &state) {
   }
   char kill_detail[80];
   std::snprintf(kill_detail, sizeof(kill_detail), "PID %d - %s",
-                state.taskmgr_selected_pid, locale::tr("taskmgr.caution"));
+                state.taskmgr.selected_pid, locale::tr("taskmgr.caution"));
   if (ui::confirm_modal("ConfirmKill", locale::tr("taskmgr.confirm_kill"),
                         kill_detail, &skip_kill, true)) {
-    if (state.client.process_kill(state.taskmgr_selected_pid))
+    if (state.client.process_kill(state.taskmgr.selected_pid))
       set_status(state, std::string(locale::tr("taskmgr.process_killed")) +
-                         " PID " + std::to_string(state.taskmgr_selected_pid));
+                         " PID " + std::to_string(state.taskmgr.selected_pid));
     else
       set_status(state, state.client.last_error());
   }
@@ -729,13 +729,13 @@ static void draw_process_actions(AppState &state) {
 }
 
 static void draw_detail_panel(AppState &state) {
-  if (state.taskmgr_selected_pid <= 0) {
+  if (state.taskmgr.selected_pid <= 0) {
     ImGui::TextColored(ui::colors().muted, "%s",
                        locale::tr("taskmgr.select_pid_hint"));
     return;
   }
 
-  const ProcessEntry *proc = find_process(state, state.taskmgr_selected_pid);
+  const ProcessEntry *proc = find_process(state, state.taskmgr.selected_pid);
   if (proc == nullptr) {
     ImGui::TextColored(ui::colors().muted, "%s",
                        locale::tr("taskmgr.select_pid_hint"));
@@ -744,8 +744,8 @@ static void draw_detail_panel(AppState &state) {
 
   const TaskProcessResource *res = resource_for_pid(state, proc->pid);
   const TaskFmemSample *fmem = find_fmem_sample(state, *proc);
-  const bool pending = state.taskmgr_resource_pending &&
-                       state.taskmgr_resource_pid == proc->pid;
+  const bool pending = state.taskmgr.resource_pending &&
+                       state.taskmgr.resource_pid == proc->pid;
   const float scl = ui::dpi_scale();
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg3);
@@ -867,8 +867,8 @@ void draw_taskmgr(AppState &state, ImVec2 avail) {
 
   /* Main content area */
   const float content_h = std::max(180.0f * scl, ImGui::GetContentRegionAvail().y);
-  const bool show_detail = state.taskmgr_detail_open &&
-                           state.taskmgr_selected_pid > 0;
+  const bool show_detail = state.taskmgr.detail_open &&
+                           state.taskmgr.selected_pid > 0;
   const bool side_by_side = show_detail && ImGui::GetContentRegionAvail().x >= 880.0f * scl;
   const float gap = 12.0f * scl;
   const float list_w = std::max(420.0f * scl,

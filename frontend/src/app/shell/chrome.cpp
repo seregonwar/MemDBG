@@ -522,12 +522,12 @@ void topbar_refresh_processes(AppState &state) {
     state.selected_map_row = -1;
     state.selected_map_starts.clear();
   }
-  state.taskmgr_resources.clear();
-  state.taskmgr_selected_row = -1;
-  state.taskmgr_selected_pid = 0;
-  state.taskmgr_detail_open = false;
-  state.taskmgr_map_summary = ProcessMapSummary{};
-  state.taskmgr_has_process_info = false;
+  state.taskmgr.resources.clear();
+  state.taskmgr.selected_row = -1;
+  state.taskmgr.selected_pid = 0;
+  state.taskmgr.detail_open = false;
+  state.taskmgr.map_summary = ProcessMapSummary{};
+  state.taskmgr.has_process_info = false;
   set_status(state, "Process list refreshed (" + std::to_string(state.processes.size()) + " entries)");
   if (state.crash_logging_enabled)
     state.crash_logger.log("refresh", ("Process list: " + std::to_string(state.processes.size()) + " entries").c_str());

@@ -762,10 +762,10 @@ void shutdown_app_shared(AppState &state) {
     state.map_dump_future.wait();
     state.map_dump_pending = false;
   }
-  if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
-  state.taskmgr_resource_pending = false;
-  if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
-  state.taskmgr_prefetch_pending = false;
+  if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
+  state.taskmgr.resource_pending = false;
+  if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
+  state.taskmgr.prefetch_pending = false;
   if (state.plugin_refresh_future.valid()) state.plugin_refresh_future.wait();
   state.plugin_refresh_pending = false;
   if (state.plugin_run_future.valid()) state.plugin_run_future.wait();

@@ -441,8 +441,8 @@ static void select_process(AppState &state, int row) {
 static void ensure_process_info(AppState &state) {
   if (state.has_process_info) return;
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  auto cached = state.taskmgr_resources.find(state.selected_pid);
-  if (cached != state.taskmgr_resources.end() && cached->second.has_info) {
+  auto cached = state.taskmgr.resources.find(state.selected_pid);
+  if (cached != state.taskmgr.resources.end() && cached->second.has_info) {
     state.selected_process_info = cached->second.info;
     state.has_process_info = true;
     return;
@@ -1492,8 +1492,8 @@ static void draw_process_table(AppState &state) {
       ImGui::TextUnformatted(process.name.c_str());
       if (ImGui::IsItemHovered() && !process.name.empty()) ImGui::SetTooltip("%s", process.name.c_str());
       ImGui::TableSetColumnIndex(2);
-      const auto cached = state.taskmgr_resources.find(process.pid);
-      if (cached != state.taskmgr_resources.end() && cached->second.has_info)
+      const auto cached = state.taskmgr.resources.find(process.pid);
+      if (cached != state.taskmgr.resources.end() && cached->second.has_info)
         ImGui::TextColored(ui::colors().primary2, "%s",
                            cached->second.info.title_id.c_str());
       else if (state.has_process_info && state.selected_pid == process.pid)

@@ -181,7 +181,7 @@ bool load_frontend_settings(AppState &state, std::string *error) {
     } else if (key == "last_debugger_pid") {
       state.last_debugger_pid = static_cast<int32_t>(std::atoi(value.c_str()));
     } else if (key == "taskmgr_prefetch_on_connect") {
-      state.taskmgr_prefetch_on_connect =
+      state.taskmgr.prefetch_on_connect =
           value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "payload_auto_fetch") {
       state.payload_auto_fetch =
@@ -292,7 +292,7 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "dump_path=" << state.dump_path << "\n";
   out << "last_debugger_pid=" << state.last_debugger_pid << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
-  out << "taskmgr_prefetch_on_connect=" << (state.taskmgr_prefetch_on_connect ? 1 : 0) << "\n";
+  out << "taskmgr_prefetch_on_connect=" << (state.taskmgr.prefetch_on_connect ? 1 : 0) << "\n";
   out << "payload_auto_fetch=" << (state.payload_auto_fetch ? 1 : 0) << "\n";
   out << "payload_auto_inject=" << (state.payload_auto_inject ? 1 : 0) << "\n";
   out << "payload_auto_shutdown=" << (state.payload_auto_shutdown ? 1 : 0) << "\n";

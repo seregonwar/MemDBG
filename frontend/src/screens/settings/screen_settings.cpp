@@ -142,8 +142,8 @@ static void draw_preferences_section(AppState &state) {
     ImGui::SetTooltip("%s", locale::tr("settings.report_anonymize_hint"));
 
   if (ImGui::Checkbox(locale::tr("settings.taskmgr_prefetch_on_connect"),
-                      &state.taskmgr_prefetch_on_connect)) {
-    set_status(state, state.taskmgr_prefetch_on_connect
+                      &state.taskmgr.prefetch_on_connect)) {
+    set_status(state, state.taskmgr.prefetch_on_connect
         ? locale::tr("settings.taskmgr_prefetch_on")
         : locale::tr("settings.taskmgr_prefetch_off"));
   }
