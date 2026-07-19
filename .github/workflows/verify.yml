@@ -321,6 +321,9 @@ jobs:
           make test-lz4 HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
           make test-scan-partition HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
           make test-debugger-e2e HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS" || echo "::warning::ASan E2E test exited non-zero"
+          # Run the fuzz corpus under ASan — catches memory errors in the MDBG
+          # protocol header, LZ4, sJSON, and process maps response parsers.
+          make fuzz-corpus HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Build with UndefinedBehaviorSanitizer
         run: |
@@ -346,6 +349,9 @@ jobs:
           make test-lz4 HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
           make test-scan-partition HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
           make test-debugger-e2e HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS" || echo "::warning::UBSan E2E test exited non-zero"
+          # Run the fuzz corpus under UBSan — catches undefined behaviour in
+          # the MDBG protocol header, LZ4, sJSON, and process maps parsers.
+          make fuzz-corpus HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Build with ThreadSanitizer
         run: |
@@ -370,6 +376,9 @@ jobs:
           make test-thread-pool HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
           make test-scan-partition HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
           make test-debugger-e2e HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS" || echo "::warning::TSan E2E test exited non-zero"
+          # Run the fuzz corpus under TSan — catches data races in the MDBG
+          # protocol header, LZ4, sJSON, and process maps parsers.
+          make fuzz-corpus HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
   msvc:
     name: MSVC compilation check
