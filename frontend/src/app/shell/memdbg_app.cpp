@@ -264,13 +264,19 @@ void draw_app(AppState &state) {
   poll_locale_repository(state);
   poll_connect(state);
   poll_payload_lifecycle(state);
+
+  /* Detect transport loss first, then advance the reconnect state machine.
+   * poll_session_health fires begin_reconnect on heartbeat failure;
+   * poll_reconnect attempts the actual reconnection when backoff expires. */
+  poll_session_health(state);
+  poll_reconnect(state);
+
   poll_taskmgr_prefetch(state);
   poll_telemetry(state);
   poll_map_refresh(state);
   poll_tracer(state);
   poll_plugin_tasks(state);
   poll_cheat_tasks(state);
-  poll_session_health(state);
   handle_global_shortcuts(state);
 
   /* PayloadFetcher toast: fire once when a new payload release is detected. */

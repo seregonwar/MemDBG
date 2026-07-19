@@ -86,8 +86,18 @@ void begin_reconnect(AppState &state, const std::string &reason) {
 
   using namespace std::chrono;
 
-  /* Immediately disconnect the dead socket so the UI never sees a zombie. */
+  /* Immediately cancel all in-flight I/O so stale futures don't block
+   * the UI and don't produce results from the dead connection. */
+  state.pool.cancel_all_pending_io();
+
+  /* Disconnect the control socket and invalidate ALL role sockets.
+   * Invalidate immediately — don't wait for quiesce_transport later. */
   state.pool.control().disconnect();
+  state.pool.invalidate_roles();
+
+  /* Bump the epoch so any in-flight async results from the old connection
+   * are silently rejected when they eventually complete. */
+  ++state.conn.reconnect.epoch;
 
   state.conn.reconnect.attempt = 0;
   state.conn.reconnect.started_at = steady_clock::now();
@@ -119,8 +129,12 @@ void poll_reconnect(AppState &state) {
 }
 
 void poll_session_health(AppState &state) {
-  /* Transport-level failure (socket died unexpectedly). */
-  if (state.has_hello && !state.client.connected() && !state.conn.connect_pending) {
+  /* Transport-level failure (socket died unexpectedly).
+   * Only transition from Online — once we're already in a reconnect
+   * phase (WaitingForWake, Reconnecting, etc.), skip this check to
+   * avoid resetting the backoff timer every frame. */
+  if (state.has_hello && !state.client.connected() && !state.conn.connect_pending &&
+      state.conn.reconnect.phase == ConnectionPhase::Online) {
     const std::string error = state.client.last_error();
     begin_reconnect(state, error.empty() ? "Payload connection lost"
                                          : "Payload connection lost: " + error);
