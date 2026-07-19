@@ -127,8 +127,8 @@ void poll_session_health(AppState &state) {
   if (!state.client.connected() || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
       state.map_refresh_pending || state.taskmgr.resource_pending ||
-      state.taskmgr.prefetch_pending || state.plugin_refresh_pending ||
-      state.plugin_run_pending) {
+      state.taskmgr.prefetch_pending || state.plugin.refresh_pending ||
+      state.plugin.run_pending) {
     return;
   }
 

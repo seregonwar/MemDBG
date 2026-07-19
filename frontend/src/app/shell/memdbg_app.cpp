@@ -766,10 +766,10 @@ void shutdown_app_shared(AppState &state) {
   state.taskmgr.resource_pending = false;
   if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
   state.taskmgr.prefetch_pending = false;
-  if (state.plugin_refresh_future.valid()) state.plugin_refresh_future.wait();
-  state.plugin_refresh_pending = false;
-  if (state.plugin_run_future.valid()) state.plugin_run_future.wait();
-  state.plugin_run_pending = false;
+  if (state.plugin.refresh_future.valid()) state.plugin.refresh_future.wait();
+  state.plugin.refresh_pending = false;
+  if (state.plugin.run_future.valid()) state.plugin.run_future.wait();
+  state.plugin.run_pending = false;
   if (state.plugin_gui_bridge && state.plugin_gui_bridge->running())
     state.plugin_gui_bridge->stop();
   if (state.payload_auto_shutdown && state.client.connected()) {

@@ -270,7 +270,7 @@ static int load_pipe_delimited(AppState &state, const std::string &path) {
                   : parse_pointer_chain_line(state, tokens, cheat);
     if (ok) {
       if (state.client.connected()) (void)capture_off_value(state, cheat);
-      state.cheats.push_back(std::move(cheat));
+      state.plugin.cheats.push_back(std::move(cheat));
       imported++;
     }
   }
@@ -289,7 +289,7 @@ static bool save_pipe_delimited(AppState &state, const std::string &path) {
     out << "|ID:" << state.selected_process_info.title_id;
   else out << "|ID:unknown";
   out << "|VER:unknown|FM:MemDBG\n";
-  for (const auto &cheat : state.cheats) {
+  for (const auto &cheat : state.plugin.cheats) {
     int section = map_index_for_address(state, cheat.address);
     if (section >= 0) {
       uint64_t offset = cheat.address - state.maps[static_cast<size_t>(section)].start;
@@ -329,7 +329,7 @@ static int load_goldhen_json(AppState &state, const std::string &path) {
   int imported = static_cast<int>(parsed.size());
   for (auto &cheat : parsed) {
     if (state.client.connected()) (void)capture_off_value(state, cheat);
-    state.cheats.push_back(std::move(cheat));
+    state.plugin.cheats.push_back(std::move(cheat));
   }
   return imported;
 }
@@ -604,7 +604,7 @@ static bool save_goldhen_json(const AppState &state, const std::string &path) {
 
   /* Build the mods array. */
   JsonValue *mods = json_make_array(arena);
-  for (const auto &cheat : state.cheats) {
+  for (const auto &cheat : state.plugin.cheats) {
     JsonValue *mem_entry = json_make_object(arena);
     std::string offset = hex_u64(cheat.address);
     json_obj_setz(mem_entry, arena, "offset",
@@ -733,7 +733,7 @@ bool save_trainer_file(AppState &state, const std::string &path) {
     set_status(state, "Failed to save trainer file");
     return false;
   }
-  set_status(state, "Saved " + std::to_string(state.cheats.size()) + " trainer entries (" +
+  set_status(state, "Saved " + std::to_string(state.plugin.cheats.size()) + " trainer entries (" +
                         std::string(trainer_format_name(fmt)) + ")");
   return true;
 }

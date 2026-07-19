@@ -148,7 +148,7 @@ void draw_home(AppState &state, ImVec2 avail) {
   ImGui::Separator();
   detail_row(locale::tr("home.scan_hits"), std::to_string(state.scan_result.count).c_str(), ui::colors().muted);
   detail_row(locale::tr("home.maps"), std::to_string(state.maps.size()).c_str(), ui::colors().muted);
-  detail_row(locale::tr("home.trainer_entries"), std::to_string(state.cheats.size()).c_str(), ui::colors().muted);
+  detail_row(locale::tr("home.trainer_entries"), std::to_string(state.plugin.cheats.size()).c_str(), ui::colors().muted);
   ui::end_panel();
 }
 

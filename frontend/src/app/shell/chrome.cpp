@@ -69,8 +69,8 @@ static void stop_gui_plugin_if_idle(AppState &state) {
   if (state.screen != Screen::PluginGUI &&
       state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
     state.plugin_gui_bridge->stop();
-    state.plugin_gui_starting = false;
-    state.plugin_gui_error.clear();
+    state.plugin.gui_starting = false;
+    state.plugin.gui_error.clear();
   }
 }
 
@@ -102,7 +102,7 @@ static void draw_gui_plugin_launcher(AppState &state) {
 
   std::string active_name;
   for (const auto &pkg : gui_plugins) {
-    if (state.plugin_gui_active_id == pkg.id &&
+    if (state.plugin.gui_active_id == pkg.id &&
         state.screen == Screen::PluginGUI) {
       active_name = pkg.name;
       break;
@@ -147,7 +147,7 @@ static void draw_gui_plugin_launcher(AppState &state) {
     ImGui::TextColored(palette.primary2, "%s Plugin apps", icons::kPlugins);
     ImGui::Separator();
     for (const auto &pkg : gui_plugins) {
-      bool is_selected = (state.plugin_gui_active_id == pkg.id &&
+      bool is_selected = (state.plugin.gui_active_id == pkg.id &&
                           state.screen == Screen::PluginGUI);
       std::string label = pkg.name + "##gui-plugin-" + pkg.id;
       if (ImGui::Selectable(label.c_str(), is_selected)) {
@@ -155,8 +155,8 @@ static void draw_gui_plugin_launcher(AppState &state) {
         if (state.plugin_gui_bridge && state.plugin_gui_bridge->running()) {
           state.plugin_gui_bridge->stop();
         }
-        state.plugin_gui_active_id = pkg.id;
-        state.plugin_gui_error.clear();
+        state.plugin.gui_active_id = pkg.id;
+        state.plugin.gui_error.clear();
         state.screen = Screen::PluginGUI;
         set_status(state, "Opening GUI plugin: " + pkg.name);
       }
@@ -175,8 +175,8 @@ static void draw_gui_plugin_launcher(AppState &state) {
     }
     if (bridge_running && ImGui::MenuItem("Stop active plugin")) {
       state.plugin_gui_bridge->stop();
-      state.plugin_gui_starting = false;
-      state.plugin_gui_error.clear();
+      state.plugin.gui_starting = false;
+      state.plugin.gui_error.clear();
       set_status(state, "GUI plugin stopped");
     }
     ImGui::EndPopup();

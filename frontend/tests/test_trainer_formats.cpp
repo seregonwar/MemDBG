@@ -128,7 +128,7 @@ static void test_goldhen_json_roundtrip() {
   cheat.off_bytes = {0xC5, 0xFA, 0x11, 0x00};
   cheat.has_off_bytes = true;
   cheat.enabled = true;
-  state.cheats.push_back(cheat);
+  state.plugin.cheats.push_back(cheat);
 
   const auto tmp = std::filesystem::temp_directory_path() / "memdbg_test_goldhen.json";
   (void)std::filesystem::remove(tmp);
@@ -138,8 +138,8 @@ static void test_goldhen_json_roundtrip() {
   AppState loaded;
   loaded.selected_pid = 1234;
   TEST("load succeeds", load_trainer_file(loaded, tmp.string()) == 1);
-  if (!loaded.cheats.empty()) {
-    const auto &c = loaded.cheats[0];
+  if (!loaded.plugin.cheats.empty()) {
+    const auto &c = loaded.plugin.cheats[0];
     TEST_EQ("address preserved", c.address, 0x668DA3ULL);
     TEST("description preserved", c.description == "Godmode");
     TEST("bytes preserved", c.bytes == std::vector<uint8_t>({0x90, 0x90, 0x90, 0x90}));
@@ -180,7 +180,7 @@ static void test_goldhen_json_roundtrip_extended() {
   cheat1.has_off_bytes = true;
   cheat1.enabled = true;
   cheat1.locked = true;
-  state.cheats.push_back(cheat1);
+  state.plugin.cheats.push_back(cheat1);
 
   /* Entry 2: disabled, unlocked, no off_bytes */
   CheatEntry cheat2;
@@ -192,7 +192,7 @@ static void test_goldhen_json_roundtrip_extended() {
   cheat2.bytes = {0xFF, 0xFF};
   cheat2.enabled = false;
   cheat2.locked = false;
-  state.cheats.push_back(cheat2);
+  state.plugin.cheats.push_back(cheat2);
 
   const auto tmp = std::filesystem::temp_directory_path() / "memdbg_test_goldhen_ext.json";
   (void)std::filesystem::remove(tmp);
@@ -204,15 +204,15 @@ static void test_goldhen_json_roundtrip_extended() {
   int load_count = load_trainer_file(loaded, tmp.string());
   TEST("load extended count", load_count == 2);
 
-  if (loaded.cheats.size() >= 2) {
-    const auto &c1 = loaded.cheats[0];
+  if (loaded.plugin.cheats.size() >= 2) {
+    const auto &c1 = loaded.plugin.cheats[0];
     TEST("entry1 description", c1.description == "Infinite Health");
     TEST_EQ("entry1 address", c1.address, 0x668DA3ULL);
     TEST("entry1 enabled", c1.enabled == true);
     TEST("entry1 locked", c1.locked == true);
     TEST("entry1 has off", c1.has_off_bytes == true);
 
-    const auto &c2 = loaded.cheats[1];
+    const auto &c2 = loaded.plugin.cheats[1];
     TEST("entry2 description", c2.description == "Infinite Ammo");
     TEST_EQ("entry2 address", c2.address, 0xAABBCCULL);
     TEST("entry2 disabled", c2.enabled == false);
@@ -259,7 +259,7 @@ static void test_goldhen_json_schema() {
   cheat.has_off_bytes = true;
   cheat.enabled = true;
   cheat.locked = true;
-  state.cheats.push_back(cheat);
+  state.plugin.cheats.push_back(cheat);
 
   const auto tmp = std::filesystem::temp_directory_path() / "memdbg_test_schema.json";
   (void)std::filesystem::remove(tmp);
@@ -354,7 +354,7 @@ static void test_pipe_delimited_roundtrip() {
   cheat1.has_off_bytes = true;
   cheat1.enabled = true;
   cheat1.locked = true;
-  state.cheats.push_back(cheat1);
+  state.plugin.cheats.push_back(cheat1);
 
   /* Entry 2: absolute (outside all maps), no off_bytes, unlocked, U16 */
   CheatEntry cheat2;
@@ -366,7 +366,7 @@ static void test_pipe_delimited_roundtrip() {
   cheat2.bytes = {0xFF, 0xFF};
   cheat2.enabled = true;
   cheat2.locked = false;
-  state.cheats.push_back(cheat2);
+  state.plugin.cheats.push_back(cheat2);
 
   /* Entry 3: section-based (map 1), no off_bytes, locked, BYTES */
   CheatEntry cheat3;
@@ -378,7 +378,7 @@ static void test_pipe_delimited_roundtrip() {
   cheat3.bytes = {0x01, 0x02, 0x03, 0x04};
   cheat3.enabled = true;
   cheat3.locked = true;
-  state.cheats.push_back(cheat3);
+  state.plugin.cheats.push_back(cheat3);
 
   const auto tmp = std::filesystem::temp_directory_path() / "memdbg_test_pipe_roundtrip.cht";
   (void)std::filesystem::remove(tmp);
@@ -422,9 +422,9 @@ static void test_pipe_delimited_roundtrip() {
   int load_count = load_trainer_file(loaded, tmp.string());
   TEST("pipe load count", load_count == 3);
 
-  if (loaded.cheats.size() >= 3) {
+  if (loaded.plugin.cheats.size() >= 3) {
     /* Entry 1: section-based, off_bytes, locked, U32 */
-    const auto &c1 = loaded.cheats[0];
+    const auto &c1 = loaded.plugin.cheats[0];
     TEST("c1 description", c1.description == "Infinite Health");
     TEST_EQ("c1 address", c1.address, 0x268DA3ULL);
     TEST("c1 value_type U32", c1.value_type == MEMDBG_VALUE_U32);
@@ -436,7 +436,7 @@ static void test_pipe_delimited_roundtrip() {
     TEST("c1 enabled", c1.enabled == true);
 
     /* Entry 2: absolute, no off_bytes, unlocked, U16 */
-    const auto &c2 = loaded.cheats[1];
+    const auto &c2 = loaded.plugin.cheats[1];
     TEST("c2 description", c2.description == "Infinite Ammo");
     TEST_EQ("c2 address", c2.address, 0x500001ULL);
     TEST("c2 value_type U16", c2.value_type == MEMDBG_VALUE_U16);
@@ -446,7 +446,7 @@ static void test_pipe_delimited_roundtrip() {
     TEST("c2 unlocked", c2.locked == false);
 
     /* Entry 3: section-based (map 1), no off_bytes, locked, BYTES */
-    const auto &c3 = loaded.cheats[2];
+    const auto &c3 = loaded.plugin.cheats[2];
     TEST("c3 description", c3.description == "Max Score");
     TEST_EQ("c3 address", c3.address, 0x401000ULL);
     TEST("c3 value_type BYTES", c3.value_type == MEMDBG_VALUE_BYTES);
@@ -483,7 +483,7 @@ static void test_pipe_delimited_no_maps_roundtrip() {
   cheat1.bytes = {0x90, 0x90, 0x90, 0x90};
   cheat1.locked = true;
   cheat1.enabled = true;
-  state.cheats.push_back(cheat1);
+  state.plugin.cheats.push_back(cheat1);
 
   /* Entry 2: section-based (map 1), absolute address 0x401000 */
   CheatEntry cheat2;
@@ -495,7 +495,7 @@ static void test_pipe_delimited_no_maps_roundtrip() {
   cheat2.bytes = {0x01, 0x02, 0x03, 0x04};
   cheat2.locked = true;
   cheat2.enabled = true;
-  state.cheats.push_back(cheat2);
+  state.plugin.cheats.push_back(cheat2);
 
   /* Entry 3: absolute (outside maps), address 0x500001 */
   CheatEntry cheat3;
@@ -507,7 +507,7 @@ static void test_pipe_delimited_no_maps_roundtrip() {
   cheat3.bytes = {0xFF, 0xFF};
   cheat3.locked = false;
   cheat3.enabled = true;
-  state.cheats.push_back(cheat3);
+  state.plugin.cheats.push_back(cheat3);
 
   const auto tmp = std::filesystem::temp_directory_path() / "memdbg_test_pipe_nomaps.cht";
   (void)std::filesystem::remove(tmp);
@@ -522,20 +522,20 @@ static void test_pipe_delimited_no_maps_roundtrip() {
   int load_count = load_trainer_file(loaded, tmp.string());
   TEST("nomaps load count", load_count == 3);
 
-  if (loaded.cheats.size() >= 3) {
-    const auto &c1 = loaded.cheats[0];
+  if (loaded.plugin.cheats.size() >= 3) {
+    const auto &c1 = loaded.plugin.cheats[0];
     TEST("nomaps c1 description", c1.description == "Infinite Health");
     TEST_EQ("nomaps c1 address resolved via @absolute", c1.address, 0x268DA3ULL);
     TEST("nomaps c1 value_type", c1.value_type == MEMDBG_VALUE_U32);
     TEST("nomaps c1 bytes", c1.bytes == std::vector<uint8_t>({0x90, 0x90, 0x90, 0x90}));
 
-    const auto &c2 = loaded.cheats[1];
+    const auto &c2 = loaded.plugin.cheats[1];
     TEST("nomaps c2 description", c2.description == "Max Score");
     TEST_EQ("nomaps c2 address resolved via @absolute", c2.address, 0x401000ULL);
     TEST("nomaps c2 value_type", c2.value_type == MEMDBG_VALUE_BYTES);
     TEST("nomaps c2 bytes", c2.bytes == std::vector<uint8_t>({0x01, 0x02, 0x03, 0x04}));
 
-    const auto &c3 = loaded.cheats[2];
+    const auto &c3 = loaded.plugin.cheats[2];
     /* Entry 3 was already @absolute even when maps were present.
        Maps don't matter here — it was already saved as @absolute. */
     TEST("nomaps c3 description", c3.description == "Infinite Ammo");
@@ -741,9 +741,9 @@ static void test_malformed_cht() {
     TEST("malformed mixed cht count", loaded == 2);
     if (loaded >= 2) {
       TEST("malformed mixed first good",
-           state.cheats[0].description == "Good cheat");
+           state.plugin.cheats[0].description == "Good cheat");
       TEST("malformed mixed second good",
-           state.cheats[1].description == "Also good cheat");
+           state.plugin.cheats[1].description == "Also good cheat");
     }
     (void)std::filesystem::remove(tmp);
   }
@@ -782,7 +782,7 @@ static void test_malformed_cht() {
     int loaded = load_trainer_file(state, tmp.string());
     TEST("malformed bad-section count", loaded == 1);
     if (loaded >= 1)
-      TEST_EQ("malformed bad-section address", state.cheats[0].address, 0x268DA3ULL);
+      TEST_EQ("malformed bad-section address", state.plugin.cheats[0].address, 0x268DA3ULL);
     (void)std::filesystem::remove(tmp);
   }
 
@@ -846,7 +846,7 @@ static void bench_trainer_formats() {
       cheat.has_off_bytes = true;
     }
 
-    state.cheats.push_back(std::move(cheat));
+    state.plugin.cheats.push_back(std::move(cheat));
   }
 
   long rss_after_data = sample_peak_rss_kb();
@@ -911,7 +911,7 @@ static void bench_trainer_formats() {
   long rss_data_delta = (rss_after_data >= 0 && rss_before_data >= 0)
                             ? rss_after_data - rss_before_data : -1;
   std::printf("  %d cheats generated (%zu bytes in memory)\n", N,
-              state.cheats.size() * sizeof(CheatEntry) + state.cheats.size() * 32);
+              state.plugin.cheats.size() * sizeof(CheatEntry) + state.plugin.cheats.size() * 32);
   if (rss_data_delta >= 0)
     std::printf("  RSS delta (data gen):   %+7ld KiB  (peak: %ld KiB)\n", rss_data_delta, rss_after_data);
 
@@ -1012,7 +1012,7 @@ static void bench_json_libraries() {
       cheat.off_bytes[0] ^= 0xFF;
       cheat.has_off_bytes = true;
     }
-    state.cheats.push_back(std::move(cheat));
+    state.plugin.cheats.push_back(std::move(cheat));
   }
 
   const auto tmp =

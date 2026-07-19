@@ -377,6 +377,62 @@ struct TaskMgrState {
   std::string prefetch_error;
 };
 
+/* ---- Plugin/Cheat/Trainer state ----
+ * Extracted from the monolithic AppState to reduce God Object risk
+ * (external audit recommendation, ~2026-07).
+ *
+ * NOTE: plugin_manager, cheat_repository, and plugin_gui_bridge remain
+ * at the AppState root because they are core subsystem objects with
+ * complex lifecycles, not just volatile UI properties. */
+struct PluginState {
+  /* ---- Plugin sources / repository ---- */
+  char source_name[96] = "Community Repository";
+  char source_url[512] = "";
+  char filter[128] = "";
+  int source_filter = 0;
+  int selected_row = -1;
+  bool description_expanded = false;
+  bool add_source_modal_open = false;
+  bool refresh_pending = false;
+  std::future<bool> refresh_future;
+  std::string refresh_error;
+  bool run_pending = false;
+  std::future<plugins::PluginRunResult> run_future;
+  double run_start_time = 0.0;
+  std::string last_output;
+  std::string last_error;
+  std::string last_command;
+  std::string last_id;
+
+  /* ---- Cheat repository sources ---- */
+  char cheat_repo_filter[128] = "";
+  char cheat_source_name[96] = "HEN Cheats Collection";
+  char cheat_source_url[512] = "";
+  int cheat_source_filter = 0;
+  int cheat_selected_row = -1;
+  bool cheat_add_source_modal_open = false;
+  bool cheat_refresh_pending = false;
+  std::future<bool> cheat_refresh_future;
+  std::string cheat_refresh_error;
+
+  /* ---- Trainer / cheats ---- */
+  std::vector<CheatEntry> cheats;
+  char cheat_description[96] = "New cheat";
+  char cheat_address[32] = "0x0";
+  char cheat_value[256] = "0";
+  int cheat_type = MEMDBG_VALUE_U32;
+  bool cheat_lock = false;
+  float cheat_lock_interval = 0.50f;
+  double next_cheat_lock_time = 0.0;
+  char trainer_file_path[256] = "trainers/session.cht";
+  char batchcode_text[4096] = "";
+
+  /* ---- GUI plugin bridge state ---- */
+  std::string gui_active_id;
+  bool gui_starting = false;
+  std::string gui_error;
+};
+
 struct AppState {
   ClientPool pool;
   /* Backward-compatible reference: state.client.xxx() routes to pool.control().
@@ -566,16 +622,10 @@ struct AppState {
   std::vector<MapEntry> map_refresh_temp_maps;
   std::string map_refresh_error;
 
-  std::vector<CheatEntry> cheats;
-  char cheat_description[96] = "New cheat";
-  char cheat_address[32] = "0x0";
-  char cheat_value[256] = "0";
-  int cheat_type = MEMDBG_VALUE_U32;
-  bool cheat_lock = false;
-  float cheat_lock_interval = 0.50f;
-  double next_cheat_lock_time = 0.0;
-  char trainer_file_path[256] = "trainers/session.cht";
-  char batchcode_text[4096] = "";
+  /* ---- Plugin/Cheat/Trainer state (see PluginState above) ----
+   * plugin_manager, cheat_repository, and plugin_gui_bridge remain at
+   * the AppState root as core subsystem objects. */
+  PluginState plugin;
 
   /* ---- Telemetry ---- */
   Client::TelemetrySnapshot telemetry_snap;
@@ -666,44 +716,7 @@ struct AppState {
   int language = 0;  /* locale::Lang enum value; EN=0 by default */
   int pending_language = -1;  /* language waiting for repository download */
 
-  /* ---- Plugin manager ---- */
-  char plugin_source_name[96] = "Community Repository";
-  char plugin_source_url[512] = "";
-  char plugin_filter[128] = "";
-  int plugin_source_filter = 0; /* 0 = all sources, otherwise sources[index - 1] */
-  int plugin_selected_row = -1;
-  bool plugin_description_expanded = false;
-  bool plugin_add_source_modal_open = false;
-  bool plugin_refresh_pending = false;
-  std::future<bool> plugin_refresh_future;
-  std::string plugin_refresh_error;
-  bool plugin_run_pending = false;
-  std::future<plugins::PluginRunResult> plugin_run_future;
-  double plugin_run_start_time = 0.0;
-  std::string plugin_last_output;
-  std::string plugin_last_error;
-  std::string plugin_last_command;
-  std::string plugin_last_id;
-
-  /* ---- Cheat repository ---- */
-  char cheat_repo_filter[128] = "";
-  char cheat_source_name[96] = "HEN Cheats Collection";
-  char cheat_source_url[512] = "";
-  int cheat_source_filter = 0;
-  int cheat_selected_row = -1;
-  bool cheat_add_source_modal_open = false;
-  bool cheat_refresh_pending = false;
-  std::future<bool> cheat_refresh_future;
-  std::string cheat_refresh_error;
-
-  /* ---- GUI plugin bridge ----
-   *   shared_ptr works with incomplete types; unique_ptr would need the
-   *   complete GuiBridge definition in every translation unit that includes
-   *   app_state.hpp. */
   std::shared_ptr<plugins::GuiBridge> plugin_gui_bridge;
-  std::string plugin_gui_active_id;
-  bool plugin_gui_starting = false;
-  std::string plugin_gui_error;
 
   /* ---- ELF Load/Hijack state (see ElfState above) ---- */
   ElfState elf;
@@ -1066,8 +1079,8 @@ inline bool client_async_busy(const AppState &state) {
           state.elf.load_pending || state.json_dump_pending ||
          state.map_dump_pending ||
          state.taskmgr.resource_pending || state.taskmgr.prefetch_pending ||
-         state.plugin_refresh_pending || state.plugin_run_pending ||
-         state.plugin_gui_starting;
+         state.plugin.refresh_pending || state.plugin.run_pending ||
+         state.plugin.gui_starting;
 }
 
 inline bool connect_sequence_pending(const AppState &state) {

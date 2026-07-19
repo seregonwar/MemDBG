@@ -68,13 +68,13 @@ static CheatEntry &upsert_scanner_cheat(AppState &state, uint64_t address,
                                         const std::string &value_text,
                                         bool locked,
                                         const std::vector<uint8_t> *off_bytes) {
-  auto found = std::find_if(state.cheats.begin(), state.cheats.end(),
+  auto found = std::find_if(state.plugin.cheats.begin(), state.plugin.cheats.end(),
       [&](const CheatEntry &entry) {
         return entry.pid == state.selected_pid && entry.address == address;
       });
-  if (found == state.cheats.end()) {
-    state.cheats.emplace_back();
-    found = std::prev(state.cheats.end());
+  if (found == state.plugin.cheats.end()) {
+    state.plugin.cheats.emplace_back();
+    found = std::prev(state.plugin.cheats.end());
   }
   CheatEntry &cheat = *found;
   cheat.description = "Scanner runtime " + hex_u64(address);

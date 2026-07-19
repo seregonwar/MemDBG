@@ -152,15 +152,15 @@ bool contains_ci_src(const std::string &haystack, const std::string &needle) {
 }
 
 void start_cheat_refresh(AppState &state) {
-  if (state.cheat_refresh_pending) return;
-  if (state.cheat_refresh_future.valid()) state.cheat_refresh_future.wait();
-  state.cheat_refresh_error.clear();
-  state.cheat_refresh_pending = true;
+  if (state.plugin.cheat_refresh_pending) return;
+  if (state.plugin.cheat_refresh_future.valid()) state.plugin.cheat_refresh_future.wait();
+  state.plugin.cheat_refresh_error.clear();
+  state.plugin.cheat_refresh_pending = true;
   set_status(state, locale::tr("trainer.refreshing_sources"));
-  state.cheat_refresh_future = std::async(std::launch::async, [&state]() -> bool {
+  state.plugin.cheat_refresh_future = std::async(std::launch::async, [&state]() -> bool {
     std::string error;
     const bool ok = state.cheat_repository.refresh_all(&error);
-    state.cheat_refresh_error = error;
+    state.plugin.cheat_refresh_error = error;
     return ok;
   });
 }
@@ -189,7 +189,7 @@ bool load_cheat_into_trainer(AppState &state, const cheats::CheatCatalogEntry &e
   int loaded = 0;
   for (auto &cheat : parsed) {
     if (state.client.connected()) (void)capture_off_value(state, cheat);
-    state.cheats.push_back(std::move(cheat));
+    state.plugin.cheats.push_back(std::move(cheat));
     loaded++;
   }
 
@@ -204,7 +204,7 @@ bool load_cheat_into_trainer(AppState &state, const cheats::CheatCatalogEntry &e
 
 void draw_cheat_source_modal(AppState &state) {
   const float scl = ui::dpi_scale();
-  if (state.cheat_add_source_modal_open)
+  if (state.plugin.cheat_add_source_modal_open)
     ImGui::OpenPopup("Add Cheat Source");
 
   const ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -214,12 +214,12 @@ void draw_cheat_source_modal(AppState &state) {
   ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
   ImGui::SetNextWindowSize(modal_size, ImGuiCond_Appearing);
 
-  bool open = state.cheat_add_source_modal_open;
+  bool open = state.plugin.cheat_add_source_modal_open;
   ImGui::PushStyleColor(ImGuiCol_PopupBg, ui::colors().panel2);
   ImGui::PushStyleColor(ImGuiCol_TitleBg, ui::colors().bg3);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * scl, 10.0f * scl));
   if (ImGui::BeginPopupModal("Add Cheat Source", &open, ImGuiWindowFlags_NoResize)) {
-    state.cheat_add_source_modal_open = true;
+    state.plugin.cheat_add_source_modal_open = true;
 
     ImGui::TextColored(ui::colors().primary2, "%s", "Add Cheat Repository");
     ImGui::TextWrapped("%s", "Enter the URL to a cheat index file (e.g. json.txt from a HEN cheats collection) or a structured manifest.json.");
@@ -227,16 +227,16 @@ void draw_cheat_source_modal(AppState &state) {
 
     ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.source_name"));
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##CheatSourceNameModal", state.cheat_source_name, sizeof(state.cheat_source_name));
+    ImGui::InputText("##CheatSourceNameModal", state.plugin.cheat_source_name, sizeof(state.plugin.cheat_source_name));
     ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.source_url"));
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##CheatSourceUrlModal", state.cheat_source_url, sizeof(state.cheat_source_url));
+    ImGui::InputText("##CheatSourceUrlModal", state.plugin.cheat_source_url, sizeof(state.plugin.cheat_source_url));
 
     ImGui::Spacing();
     if (ui::primary_button((std::string(icons::kAdd) + "  " + locale::tr("trainer.add_source")).c_str(),
                            ImVec2(150.0f * scl, 34.0f * scl))) {
       /* Auto-detect format from URL */
-      std::string url = state.cheat_source_url;
+      std::string url = state.plugin.cheat_source_url;
       std::string base_url;
       std::string fmt = "json";
       std::string index_fmt = "flat_txt";
@@ -256,11 +256,11 @@ void draw_cheat_source_modal(AppState &state) {
       else if (lower_url.find("mc4") != std::string::npos) fmt = "mc4";
 
       std::string error;
-      if (state.cheat_repository.add_source(state.cheat_source_name, url, base_url, index_fmt, fmt, "", &error)) {
-        std::snprintf(state.cheat_source_name, sizeof(state.cheat_source_name), "%s", "HEN Cheats Collection");
-        state.cheat_source_url[0] = '\0';
-        state.cheat_source_filter = 0;
-        state.cheat_add_source_modal_open = false;
+      if (state.cheat_repository.add_source(state.plugin.cheat_source_name, url, base_url, index_fmt, fmt, "", &error)) {
+        std::snprintf(state.plugin.cheat_source_name, sizeof(state.plugin.cheat_source_name), "%s", "HEN Cheats Collection");
+        state.plugin.cheat_source_url[0] = '\0';
+        state.plugin.cheat_source_filter = 0;
+        state.plugin.cheat_add_source_modal_open = false;
         set_status(state, locale::tr("trainer.source_added"));
         push_notification(state, locale::tr("trainer.source_added"));
         start_cheat_refresh(state);
@@ -271,7 +271,7 @@ void draw_cheat_source_modal(AppState &state) {
     }
     ImGui::SameLine();
     if (ui::soft_button("Cancel", ImVec2(100.0f * scl, 34.0f * scl))) {
-      state.cheat_add_source_modal_open = false;
+      state.plugin.cheat_add_source_modal_open = false;
       ImGui::CloseCurrentPopup();
     }
 
@@ -299,7 +299,7 @@ void draw_cheat_source_modal(AppState &state) {
         if (ImGui::Checkbox("##cheat_source_enabled", &enabled)) {
           std::string error;
           state.cheat_repository.set_source_enabled(i, enabled, &error);
-          state.cheat_source_filter = 0;
+          state.plugin.cheat_source_filter = 0;
         }
         ImGui::TableSetColumnIndex(1);
         ImGui::TextUnformatted(source.name.c_str());
@@ -311,7 +311,7 @@ void draw_cheat_source_modal(AppState &state) {
         if (ImGui::SmallButton((std::string(icons::kTrash) + "##removeCheat").c_str())) {
           std::string error;
           state.cheat_repository.remove_source(i, &error);
-          state.cheat_source_filter = 0;
+          state.plugin.cheat_source_filter = 0;
         }
         ImGui::PopID();
       }
@@ -324,7 +324,7 @@ void draw_cheat_source_modal(AppState &state) {
   }
   ImGui::PopStyleVar();
   ImGui::PopStyleColor(2);
-  if (!open) state.cheat_add_source_modal_open = false;
+  if (!open) state.plugin.cheat_add_source_modal_open = false;
 }
 
 void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
@@ -342,19 +342,19 @@ void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
   std::vector<cheats::CheatCatalogEntry> catalog = state.cheat_repository.catalog();
 
   /* Filter by source */
-  if (state.cheat_source_filter < 0 ||
-      state.cheat_source_filter > static_cast<int>(sources.size()))
-    state.cheat_source_filter = 0;
+  if (state.plugin.cheat_source_filter < 0 ||
+      state.plugin.cheat_source_filter > static_cast<int>(sources.size()))
+    state.plugin.cheat_source_filter = 0;
 
-  if (state.cheat_source_filter > 0) {
-    const auto &source = sources[static_cast<size_t>(state.cheat_source_filter - 1)];
+  if (state.plugin.cheat_source_filter > 0) {
+    const auto &source = sources[static_cast<size_t>(state.plugin.cheat_source_filter - 1)];
     catalog.erase(std::remove_if(catalog.begin(), catalog.end(),
         [&](const cheats::CheatCatalogEntry &e) { return e.source_id != source.id; }),
         catalog.end());
   }
 
   /* Search filter */
-  const std::string filter = state.cheat_repo_filter;
+  const std::string filter = state.plugin.cheat_repo_filter;
   if (!filter.empty()) {
     catalog.erase(std::remove_if(catalog.begin(), catalog.end(),
         [&](const cheats::CheatCatalogEntry &e) {
@@ -391,22 +391,22 @@ void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
     ImGui::TableSetColumnIndex(0);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##CheatRepoSearch", locale::tr("trainer.search_cheats"),
-                             state.cheat_repo_filter, sizeof(state.cheat_repo_filter));
+                             state.plugin.cheat_repo_filter, sizeof(state.plugin.cheat_repo_filter));
     ImGui::TableSetColumnIndex(1);
     const char *preview = "All sources";
     std::string preview_label;
-    if (state.cheat_source_filter > 0) {
-      preview_label = sources[static_cast<size_t>(state.cheat_source_filter - 1)].name;
+    if (state.plugin.cheat_source_filter > 0) {
+      preview_label = sources[static_cast<size_t>(state.plugin.cheat_source_filter - 1)].name;
       preview = preview_label.c_str();
     }
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("##CheatSourceFilter", preview)) {
-      if (ImGui::Selectable("All sources", state.cheat_source_filter == 0))
-        state.cheat_source_filter = 0;
+      if (ImGui::Selectable("All sources", state.plugin.cheat_source_filter == 0))
+        state.plugin.cheat_source_filter = 0;
       for (size_t i = 0; i < sources.size(); ++i) {
-        const bool selected = state.cheat_source_filter == static_cast<int>(i + 1U);
+        const bool selected = state.plugin.cheat_source_filter == static_cast<int>(i + 1U);
         if (ImGui::Selectable(sources[i].name.c_str(), selected))
-          state.cheat_source_filter = static_cast<int>(i + 1U);
+          state.plugin.cheat_source_filter = static_cast<int>(i + 1U);
         if (selected) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
@@ -416,15 +416,15 @@ void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", "Refresh sources");
     ImGui::TableSetColumnIndex(3);
     if (ui::primary_button(icons::kAdd, ImVec2(btn_w, control_h)))
-      state.cheat_add_source_modal_open = true;
+      state.plugin.cheat_add_source_modal_open = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", "Add cheat source");
     ImGui::EndTable();
   }
   ImGui::PopStyleVar();
 
   /* Catalog list */
-  if (state.cheat_selected_row >= static_cast<int>(catalog.size()))
-    state.cheat_selected_row = catalog.empty() ? -1 : 0;
+  if (state.plugin.cheat_selected_row >= static_cast<int>(catalog.size()))
+    state.plugin.cheat_selected_row = catalog.empty() ? -1 : 0;
 
   ImGui::BeginChild("CheatCatalogList", ImVec2(0, 0), false);
   if (catalog.empty()) {
@@ -432,14 +432,14 @@ void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
   } else {
     for (size_t i = 0; i < catalog.size(); ++i) {
       const auto &entry = catalog[i];
-      const bool selected = state.cheat_selected_row == static_cast<int>(i);
+      const bool selected = state.plugin.cheat_selected_row == static_cast<int>(i);
       ImGui::PushID(static_cast<int>(i));
 
       const ImVec2 pos = ImGui::GetCursorScreenPos();
       const ImVec2 size(ImGui::GetContentRegionAvail().x, 58.0f * scl);
       ImGui::InvisibleButton("##cheat_card", size);
       const bool hovered = ImGui::IsItemHovered();
-      if (ImGui::IsItemClicked()) state.cheat_selected_row = static_cast<int>(i);
+      if (ImGui::IsItemClicked()) state.plugin.cheat_selected_row = static_cast<int>(i);
 
       ImDrawList *draw = ImGui::GetWindowDrawList();
       const ImVec2 max(pos.x + size.x, pos.y + size.y);
@@ -479,8 +479,8 @@ void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
   ui::begin_panel("CheatSourcesDetail", "Details", ImVec2(right_w, right_h));
 
   const cheats::CheatCatalogEntry *selected_cheat = nullptr;
-  if (state.cheat_selected_row >= 0 && state.cheat_selected_row < static_cast<int>(catalog.size()))
-    selected_cheat = &catalog[static_cast<size_t>(state.cheat_selected_row)];
+  if (state.plugin.cheat_selected_row >= 0 && state.plugin.cheat_selected_row < static_cast<int>(catalog.size()))
+    selected_cheat = &catalog[static_cast<size_t>(state.plugin.cheat_selected_row)];
 
   if (selected_cheat == nullptr) {
     ui::draw_empty_state("No cheat selected", "Select a cheat from the catalog to see details and load into the trainer.");
@@ -544,24 +544,24 @@ void draw_cheat_sources(AppState &state, ImVec2 content_avail) {
 
 /* poll_cheat_tasks: called every frame to check async refresh completion */
 void poll_cheat_tasks(AppState &state) {
-  if (state.cheat_refresh_pending && state.cheat_refresh_future.valid()) {
-    auto status = state.cheat_refresh_future.wait_for(std::chrono::milliseconds(0));
+  if (state.plugin.cheat_refresh_pending && state.plugin.cheat_refresh_future.valid()) {
+    auto status = state.plugin.cheat_refresh_future.wait_for(std::chrono::milliseconds(0));
     if (status == std::future_status::ready) {
       bool ok = false;
       try {
-        ok = state.cheat_refresh_future.get();
+        ok = state.plugin.cheat_refresh_future.get();
       } catch (const std::exception &ex) {
-        state.cheat_refresh_error = ex.what();
+        state.plugin.cheat_refresh_error = ex.what();
       } catch (...) {
-        state.cheat_refresh_error = "Unknown cheat refresh error";
+        state.plugin.cheat_refresh_error = "Unknown cheat refresh error";
       }
-      state.cheat_refresh_pending = false;
+      state.plugin.cheat_refresh_pending = false;
       if (ok) {
         set_status(state, locale::tr("trainer.sources_refreshed"));
         push_notification(state, locale::tr("trainer.sources_refreshed"));
       } else {
-        const std::string error = state.cheat_refresh_error.empty()
-            ? "Cheat source refresh failed" : state.cheat_refresh_error;
+        const std::string error = state.plugin.cheat_refresh_error.empty()
+            ? "Cheat source refresh failed" : state.plugin.cheat_refresh_error;
         set_status(state, error);
         push_notification(state, error, 5.0);
       }
@@ -574,17 +574,17 @@ static void add_cheat_from_fields(AppState &state) {
   if (client_async_busy(state)) { set_status(state, locale::tr("trainer.wait_active")); return; }
   uint64_t address=0;
   std::vector<uint8_t> bytes;
-  if (!parse_u64(state.cheat_address, address)) { set_status(state, locale::tr("trainer.invalid_cheat_addr")); return; }
-  if (!build_value_bytes(state.cheat_type, state.cheat_value, bytes)) { set_status(state, locale::tr("trainer.invalid_cheat_value")); return; }
+  if (!parse_u64(state.plugin.cheat_address, address)) { set_status(state, locale::tr("trainer.invalid_cheat_addr")); return; }
+  if (!build_value_bytes(state.plugin.cheat_type, state.plugin.cheat_value, bytes)) { set_status(state, locale::tr("trainer.invalid_cheat_value")); return; }
   CheatEntry cheat;
-  cheat.description = state.cheat_description[0]!='\0'?state.cheat_description:"Cheat";
-  cheat.pid=state.selected_pid; cheat.address=address; cheat.value_type=state.cheat_type;
-  cheat.value_text=state.cheat_value; cheat.bytes=std::move(bytes); cheat.locked=state.cheat_lock;
+  cheat.description = state.plugin.cheat_description[0]!='\0'?state.plugin.cheat_description:"Cheat";
+  cheat.pid=state.selected_pid; cheat.address=address; cheat.value_type=state.plugin.cheat_type;
+  cheat.value_text=state.plugin.cheat_value; cheat.bytes=std::move(bytes); cheat.locked=state.plugin.cheat_lock;
   if (state.client.connected()) (void)capture_off_value(state, cheat);
-  state.cheats.push_back(std::move(cheat));
+  state.plugin.cheats.push_back(std::move(cheat));
   set_status(state, locale::tr("trainer.entry_added"));
   char notify_buf[512];
-  std::snprintf(notify_buf, sizeof(notify_buf), locale::tr("trainer.entry_added_notify"), state.cheat_description);
+  std::snprintf(notify_buf, sizeof(notify_buf), locale::tr("trainer.entry_added_notify"), state.plugin.cheat_description);
   push_notification(state, notify_buf);
 }
 
@@ -598,7 +598,7 @@ static void import_batchcode(AppState &state) {
   }
   std::string error;
   std::vector<BatchcodeEntry> entries;
-  int imported = parse_batchcode(state.batchcode_text, entries, error);
+  int imported = parse_batchcode(state.plugin.batchcode_text, entries, error);
   if (imported < 0) {
     char bce_buf[256]; std::snprintf(bce_buf, sizeof(bce_buf), locale::tr("trainer.batchcode_error"), error.c_str()); set_status(state, bce_buf);
     return;
@@ -612,7 +612,7 @@ static void import_batchcode(AppState &state) {
     cheat.value_text = bytes_to_hex(entries[i].bytes);
     cheat.bytes = std::move(entries[i].bytes);
     cheat.enabled = true;
-    state.cheats.push_back(std::move(cheat));
+    state.plugin.cheats.push_back(std::move(cheat));
   }
     char import_buf[256];
     if (imported > 0) {
@@ -629,16 +629,16 @@ static bool has_batch_write(const AppState &state) {
 }
 
 void apply_locked_cheats(AppState &state) {
-  if (!state.client.connected()||state.cheats.empty()) return;
+  if (!state.client.connected()||state.plugin.cheats.empty()) return;
   if (client_async_busy(state)) return;
   const double now = ImGui::GetTime();
-  const double interval = std::max(0.10f, state.cheat_lock_interval);
-  if (now < state.next_cheat_lock_time) return;
-  state.next_cheat_lock_time = now + interval;
+  const double interval = std::max(0.10f, state.plugin.cheat_lock_interval);
+  if (now < state.plugin.next_cheat_lock_time) return;
+  state.plugin.next_cheat_lock_time = now + interval;
 
   /* Collect locked cheats with valid PID and non-empty bytes */
   std::vector<CheatEntry *> locked;
-  for (auto &cheat : state.cheats)
+  for (auto &cheat : state.plugin.cheats)
     if (cheat.enabled && cheat.locked && !cheat.bytes.empty())
       locked.push_back(&cheat);
 
@@ -692,7 +692,7 @@ void apply_locked_cheats(AppState &state) {
 
 static void apply_enabled_cheats(AppState &state) {
   int applied = 0;
-  for (auto &cheat : state.cheats) {
+  for (auto &cheat : state.plugin.cheats) {
     if (cheat.enabled && apply_cheat(state, cheat)) applied++;
   }
   char applied_buf[256];
@@ -727,14 +727,14 @@ void draw_trainer(AppState &state, ImVec2 avail) {
         locale::tr("file_picker.trainer_files"),
         "*.cht;*.shn;*.json;*.trainer");
     if (!picked.empty()) {
-      std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+      std::snprintf(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path),
                     "%s", picked.c_str());
-      load_trainer_file(state, state.trainer_file_path);
+      load_trainer_file(state, state.plugin.trainer_file_path);
     }
   }
   if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
-    if (state.trainer_file_path[0] != '\0') {
-      save_trainer_file(state, state.trainer_file_path);
+    if (state.plugin.trainer_file_path[0] != '\0') {
+      save_trainer_file(state, state.plugin.trainer_file_path);
     } else {
       std::string picked = memdbg::frontend::ui::pickSaveFile(
           locale::tr("file_picker.save_trainer"),
@@ -742,9 +742,9 @@ void draw_trainer(AppState &state, ImVec2 avail) {
           locale::tr("file_picker.trainer_files"),
           "*.cht;*.shn;*.json;*.trainer");
       if (!picked.empty()) {
-        std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+        std::snprintf(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path),
                       "%s", picked.c_str());
-        save_trainer_file(state, state.trainer_file_path);
+        save_trainer_file(state, state.plugin.trainer_file_path);
       }
     }
   }
@@ -777,7 +777,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
         ImGui::OpenPopup("ConfirmClearDisabled2");
       ImGui::TableSetColumnIndex(2);
       ImGui::AlignTextToFramePadding();
-      ImGui::TextColored(ui::colors().dim, locale::tr("trainer.n_entries"), state.cheats.size());
+      ImGui::TextColored(ui::colors().dim, locale::tr("trainer.n_entries"), state.plugin.cheats.size());
       ImGui::EndTable();
     }
     ImGui::EndDisabled();
@@ -788,26 +788,26 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       apply_enabled_cheats(state);
     if (ui::confirm_modal("ConfirmClearDisabled2", locale::tr("trainer.confirm_clear_disabled"), nullptr,
                           &skip_clear_disabled2, true)) {
-      state.cheats.erase(std::remove_if(state.cheats.begin(), state.cheats.end(),
-          [](const CheatEntry &c){ return !c.enabled; }), state.cheats.end());
+      state.plugin.cheats.erase(std::remove_if(state.plugin.cheats.begin(), state.plugin.cheats.end(),
+          [](const CheatEntry &c){ return !c.enabled; }), state.plugin.cheats.end());
     }
 
     /* Copy All */
-    if (!state.cheats.empty()) {
+    if (!state.plugin.cheats.empty()) {
       if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("trainer.copy_all")).c_str(), ImVec2(200, 30))) {
         std::string all;
-        all.reserve(state.cheats.size() * 18U);
-        for (const auto &cheat : state.cheats) all += hex_u64(cheat.address) + "\n";
+        all.reserve(state.plugin.cheats.size() * 18U);
+        for (const auto &cheat : state.plugin.cheats) all += hex_u64(cheat.address) + "\n";
         ImGui::SetClipboardText(all.c_str());
         char cp_buf[256];
-        std::snprintf(cp_buf, sizeof(cp_buf), locale::tr("trainer.copied_n"), state.cheats.size());
+        std::snprintf(cp_buf, sizeof(cp_buf), locale::tr("trainer.copied_n"), state.plugin.cheats.size());
         set_status(state, cp_buf);
         push_notification(state, cp_buf);
       }
     }
 
     ImGui::Spacing();
-    if (state.cheats.empty()) {
+    if (state.plugin.cheats.empty()) {
       ui::draw_empty_state(locale::tr("trainer.no_entries"), locale::tr("trainer.no_entries_desc"));
     } else if (ImGui::BeginTable("TrainerTable2", 10,
           ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|
@@ -823,8 +823,8 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,136);
       ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,350);
       ImGui::TableHeadersRow();
-      for (int i=0; i<static_cast<int>(state.cheats.size()); ++i) {
-        CheatEntry &cheat = state.cheats[i];
+      for (int i=0; i<static_cast<int>(state.plugin.cheats.size()); ++i) {
+        CheatEntry &cheat = state.plugin.cheats[i];
         ImGui::PushID(i+1000);
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0); ImGui::Checkbox("##enabled2", &cheat.enabled);
@@ -875,7 +875,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
           (lower.size() >= 5U && lower.compare(lower.size() - 5U, 5U, ".json") == 0) ||
           (lower.size() >= 8U && lower.compare(lower.size() - 8U, 8U, ".trainer") == 0);
       if (is_trainer_ext) {
-        std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+        std::snprintf(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path),
                       "%s", path.c_str());
         const int loaded = load_trainer_file(state, path);
         if (loaded >= 0) {
@@ -913,27 +913,27 @@ void draw_trainer(AppState &state, ImVec2 avail) {
                             ImGuiTableFlags_PadOuterX)) {
     ImGui::TableNextColumn();
     if (ui::soft_button(locale::tr("trainer.use_memory_addr"), ImVec2(-1, 36.0f * scl)))
-      std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", state.write_address);
+      std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s", state.write_address);
     ImGui::TableNextColumn();
     ImGui::BeginDisabled(state.scan_result.addresses.empty());
     if (ui::soft_button(locale::tr("trainer.use_first_hit"), ImVec2(-1, 36.0f * scl)))
-      std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s", hex_u64(state.scan_result.addresses.front()).c_str());
+      std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s", hex_u64(state.scan_result.addresses.front()).c_str());
     ImGui::EndDisabled();
     ImGui::EndTable();
   }
 
   labeled_input_text(locale::tr("trainer.name_label"), "##TrainerName",
-                     state.cheat_description, sizeof(state.cheat_description));
+                     state.plugin.cheat_description, sizeof(state.plugin.cheat_description));
   labeled_input_text(locale::tr("trainer.address"), "##TrainerAddress",
-                     state.cheat_address, sizeof(state.cheat_address));
+                     state.plugin.cheat_address, sizeof(state.plugin.cheat_address));
   labeled_combo(locale::tr("trainer.value_type"), "##TrainerValueType",
-                &state.cheat_type, type_names, IM_ARRAYSIZE(type_names));
+                &state.plugin.cheat_type, type_names, IM_ARRAYSIZE(type_names));
   labeled_input_text(locale::tr("trainer.value"), "##TrainerValue",
-                     state.cheat_value, sizeof(state.cheat_value));
-  ImGui::Checkbox(locale::tr("trainer.lock_value"), &state.cheat_lock);
+                     state.plugin.cheat_value, sizeof(state.plugin.cheat_value));
+  ImGui::Checkbox(locale::tr("trainer.lock_value"), &state.plugin.cheat_lock);
   ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.lock_interval"));
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::SliderFloat("##TrainerLockInterval", &state.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
+  ImGui::SliderFloat("##TrainerLockInterval", &state.plugin.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
   bool can_train = state.client.connected() && state.selected_pid > 0 &&
                    !client_async_busy(state) &&
                    payload_supports(state, MEMDBG_CAP_MEMORY_WRITE);
@@ -949,7 +949,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     trainer_opts.dialog_title = locale::tr("file_picker.open_trainer");
     trainer_opts.filter_desc = locale::tr("file_picker.trainer_files");
     trainer_opts.filter_ext = "*.cht;*.shn;*.json;*.trainer";
-    ui::file_path_input(state.trainer_file_path, sizeof(state.trainer_file_path), trainer_opts);
+    ui::file_path_input(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path), trainer_opts);
   }
   ImGui::BeginDisabled(client_async_busy(state));
   if (ImGui::BeginTable("TrainerFileActions", 4,
@@ -958,7 +958,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     ImGui::TableNextColumn();
     if (ui::soft_button((std::string(icons::kLoad) + "  " + locale::tr("trainer.load")).c_str(),
         ImVec2(-1, 38.0f * scl))) {
-      if (load_trainer_file(state, state.trainer_file_path) < 0) {
+      if (load_trainer_file(state, state.plugin.trainer_file_path) < 0) {
         /* error already set by load_trainer_file */
       }
     }
@@ -973,16 +973,16 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       std::string picked = ui::file_open_button(
           (std::string(icons::kLoad) + "  ...").c_str(), open_opts);
       if (!picked.empty()) {
-        std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+        std::snprintf(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path),
                       "%s", picked.c_str());
-        load_trainer_file(state, state.trainer_file_path);
+        load_trainer_file(state, state.plugin.trainer_file_path);
       }
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("file_picker.open_trainer"));
     ImGui::TableNextColumn();
     if (ui::soft_button((std::string(icons::kSave) + "  " + locale::tr("trainer.save")).c_str(),
         ImVec2(-1, 38.0f * scl))) {
-      save_trainer_file(state, state.trainer_file_path);
+      save_trainer_file(state, state.plugin.trainer_file_path);
     }
     ImGui::TableNextColumn();
     {
@@ -996,9 +996,9 @@ void draw_trainer(AppState &state, ImVec2 avail) {
       std::string picked = ui::file_save_button(
           (std::string(icons::kSave) + "  ...").c_str(), save_opts);
       if (!picked.empty()) {
-        std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+        std::snprintf(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path),
                       "%s", picked.c_str());
-        save_trainer_file(state, state.trainer_file_path);
+        save_trainer_file(state, state.plugin.trainer_file_path);
       }
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("file_picker.save_trainer"));
@@ -1008,7 +1008,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "%s", locale::tr("trainer.batchcode_import"));
-  ImGui::InputTextMultiline("##Batchcode", state.batchcode_text, sizeof(state.batchcode_text),
+  ImGui::InputTextMultiline("##Batchcode", state.plugin.batchcode_text, sizeof(state.plugin.batchcode_text),
                             ImVec2(0, 112.0f * scl));
   if (ui::soft_button((std::string(icons::kImport) + "  " + locale::tr("trainer.import_batchcode")).c_str(), ui::full_button(38.0f))) import_batchcode(state);
   ui::text_dim(locale::tr("trainer.batchcode_hint"));
@@ -1045,7 +1045,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     }
     ImGui::TableSetColumnIndex(2);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ui::colors().dim, locale::tr("trainer.n_entries"), state.cheats.size());
+    ImGui::TextColored(ui::colors().dim, locale::tr("trainer.n_entries"), state.plugin.cheats.size());
     ImGui::EndTable();
   } else {
     ImGui::EndDisabled();
@@ -1059,38 +1059,38 @@ void draw_trainer(AppState &state, ImVec2 avail) {
   if (ui::confirm_modal("ConfirmClearDisabled",
                         locale::tr("trainer.confirm_clear_disabled"), nullptr,
                         &skip_clear_disabled, true)) {
-    state.cheats.erase(std::remove_if(state.cheats.begin(), state.cheats.end(),
-      [](const CheatEntry &c){ return !c.enabled; }), state.cheats.end());
+    state.plugin.cheats.erase(std::remove_if(state.plugin.cheats.begin(), state.plugin.cheats.end(),
+      [](const CheatEntry &c){ return !c.enabled; }), state.plugin.cheats.end());
   }
   ImGui::Spacing();
 
   /* Copy All logic shared between button and keyboard shortcut */
   auto copy_all = [&](const char *suffix = nullptr) {
     std::string all;
-    all.reserve(state.cheats.size() * 18U);
-    for (const auto &cheat : state.cheats)
+    all.reserve(state.plugin.cheats.size() * 18U);
+    for (const auto &cheat : state.plugin.cheats)
       all += hex_u64(cheat.address) + "\n";
     ImGui::SetClipboardText(all.c_str());
     char cp_buf[256];
-    std::snprintf(cp_buf, sizeof(cp_buf), locale::tr("trainer.copied_n"), state.cheats.size());
+    std::snprintf(cp_buf, sizeof(cp_buf), locale::tr("trainer.copied_n"), state.plugin.cheats.size());
     set_status(state, cp_buf);
     push_notification(state, cp_buf + std::string(suffix ? suffix : ""));
   };
 
-  if (!state.cheats.empty()) {
+  if (!state.plugin.cheats.empty()) {
     if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("trainer.copy_all")).c_str(),
                         ImVec2(200, 30)))
       copy_all();
     if (ImGui::IsItemHovered()) {
       char tip_buf[128];
-      std::snprintf(tip_buf, sizeof(tip_buf), locale::tr("trainer.copy_all_tooltip"), state.cheats.size());
+      std::snprintf(tip_buf, sizeof(tip_buf), locale::tr("trainer.copy_all_tooltip"), state.plugin.cheats.size());
       ImGui::SetTooltip("%s", tip_buf);
     }
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
       copy_all(" (Ctrl+C)");
   }
 
-  if (state.cheats.empty()) {
+  if (state.plugin.cheats.empty()) {
     ui::draw_empty_state(locale::tr("trainer.no_entries"), locale::tr("trainer.no_entries_desc"));
   } else if (ImGui::BeginTable("TrainerTable", 10,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders|ImGuiTableFlags_ScrollY|
@@ -1107,8 +1107,8 @@ void draw_trainer(AppState &state, ImVec2 avail) {
     ImGui::TableSetupColumn(locale::tr("trainer.col_off"), ImGuiTableColumnFlags_WidthFixed,136);
     ImGui::TableSetupColumn(locale::tr("trainer.col_action"), ImGuiTableColumnFlags_WidthFixed,350);
     ImGui::TableHeadersRow();
-    for (int i=0; i<static_cast<int>(state.cheats.size()); ++i) {
-      CheatEntry &cheat = state.cheats[i];
+    for (int i=0; i<static_cast<int>(state.plugin.cheats.size()); ++i) {
+      CheatEntry &cheat = state.plugin.cheats[i];
       ImGui::PushID(i);
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0); ImGui::Checkbox("##enabled", &cheat.enabled);

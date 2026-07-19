@@ -169,12 +169,12 @@ static plugins::PluginRunContext mobile_build_plugin_context(
   context.selected_pid = state.selected_pid;
   context.selected_process_name = selected_process_name(state);
   context.dump_path = state.dump_path;
-  context.trainer_file_path = state.trainer_file_path;
+  context.trainer_file_path = state.plugin.trainer_file_path;
   context.protocol_version = state.has_hello ? state.hello.protocol_version : 0U;
   context.capabilities = state.has_hello ? state.hello.capabilities : 0U;
   context.map_count = state.maps.size();
   context.scan_hit_count = state.scan_result.addresses.size();
-  context.trainer_entry_count = state.cheats.size();
+  context.trainer_entry_count = state.plugin.cheats.size();
   // Sandbox settings
   context.sandbox_enabled = state.sandbox_enabled;
   context.sandbox_filesystem = state.sandbox_filesystem;
@@ -187,37 +187,37 @@ static plugins::PluginRunContext mobile_build_plugin_context(
 }
 
 static void mobile_start_plugin_refresh(AppState &state) {
-  if (state.plugin_refresh_pending || state.plugin_run_pending) return;
-  if (state.plugin_refresh_future.valid()) state.plugin_refresh_future.wait();
-  state.plugin_refresh_error.clear();
-  state.plugin_refresh_pending = true;
+  if (state.plugin.refresh_pending || state.plugin.run_pending) return;
+  if (state.plugin.refresh_future.valid()) state.plugin.refresh_future.wait();
+  state.plugin.refresh_error.clear();
+  state.plugin.refresh_pending = true;
   set_status(state, "Refreshing plugin sources...");
-  state.plugin_refresh_future = std::async(std::launch::async,
+  state.plugin.refresh_future = std::async(std::launch::async,
       [&state]() -> bool {
         std::string error;
         const bool ok = state.plugin_manager.refresh_all(&error);
-        state.plugin_refresh_error = error;
+        state.plugin.refresh_error = error;
         return ok;
       });
 }
 
 static void mobile_start_plugin_run(AppState &state,
                                     const plugins::PluginPackage &package) {
-  if (!package.installed || state.plugin_refresh_pending ||
-      state.plugin_run_pending) {
+  if (!package.installed || state.plugin.refresh_pending ||
+      state.plugin.run_pending) {
     return;
   }
-  if (state.plugin_run_future.valid()) state.plugin_run_future.wait();
+  if (state.plugin.run_future.valid()) state.plugin.run_future.wait();
   const auto context = mobile_build_plugin_context(state);
   const std::string package_id = package.id;
-  state.plugin_last_output.clear();
-  state.plugin_last_error.clear();
-  state.plugin_last_command.clear();
-  state.plugin_last_id = package_id;
-  state.plugin_run_pending = true;
-  state.plugin_run_start_time = ImGui::GetTime();
+  state.plugin.last_output.clear();
+  state.plugin.last_error.clear();
+  state.plugin.last_command.clear();
+  state.plugin.last_id = package_id;
+  state.plugin.run_pending = true;
+  state.plugin.run_start_time = ImGui::GetTime();
   set_status(state, "Running plugin " + package.name + "...");
-  state.plugin_run_future = std::async(std::launch::async,
+  state.plugin.run_future = std::async(std::launch::async,
       [&state, package_id, context]() {
         return state.plugin_manager.run_plugin(package_id, context);
       });
@@ -248,22 +248,22 @@ static bool mobile_contains_ci(const std::string &haystack,
 
 static std::vector<plugins::PluginPackage> mobile_filtered_plugins(
     AppState &state, const std::vector<plugins::PluginSource> &sources) {
-  if (state.plugin_source_filter < 0 ||
-      state.plugin_source_filter > static_cast<int>(sources.size())) {
-    state.plugin_source_filter = 0;
+  if (state.plugin.source_filter < 0 ||
+      state.plugin.source_filter > static_cast<int>(sources.size())) {
+    state.plugin.source_filter = 0;
   }
 
   std::vector<plugins::PluginPackage> catalog = state.plugin_manager.catalog();
-  if (state.plugin_source_filter > 0) {
+  if (state.plugin.source_filter > 0) {
     const auto &source = sources[static_cast<size_t>(
-        state.plugin_source_filter - 1)];
+        state.plugin.source_filter - 1)];
     catalog.erase(std::remove_if(catalog.begin(), catalog.end(),
         [&](const plugins::PluginPackage &pkg) {
           return pkg.source_id != source.id;
         }), catalog.end());
   }
 
-  const std::string filter = state.plugin_filter;
+  const std::string filter = state.plugin.filter;
   if (!filter.empty()) {
     catalog.erase(std::remove_if(catalog.begin(), catalog.end(),
         [&](const plugins::PluginPackage &pkg) {
@@ -620,38 +620,38 @@ static void draw_mobile_logs(AppState &state, ImVec2 size) {
 
 static void draw_mobile_plugin_source_popup(AppState &state) {
   const float scl = ui::dpi_scale();
-  if (state.plugin_add_source_modal_open)
+  if (state.plugin.add_source_modal_open)
     ImGui::OpenPopup("MobileAddPluginSource");
 
   ImGuiViewport *viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(
       ImVec2(std::min(430.0f * scl, viewport->WorkSize.x - 24.0f * scl), 0),
       ImGuiCond_Appearing);
-  bool open = state.plugin_add_source_modal_open;
+  bool open = state.plugin.add_source_modal_open;
   if (ImGui::BeginPopupModal("MobileAddPluginSource", &open,
                              ImGuiWindowFlags_NoResize)) {
     ImGui::TextColored(ui::colors().primary2, "%s", "Add Plugin Source");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputText("Name##MobilePluginSourceName",
-                     state.plugin_source_name,
-                     sizeof(state.plugin_source_name));
+                     state.plugin.source_name,
+                     sizeof(state.plugin.source_name));
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputText("Manifest URL##MobilePluginSourceUrl",
-                     state.plugin_source_url,
-                     sizeof(state.plugin_source_url));
-    ImGui::BeginDisabled(state.plugin_refresh_pending ||
-                         state.plugin_run_pending);
+                     state.plugin.source_url,
+                     sizeof(state.plugin.source_url));
+    ImGui::BeginDisabled(state.plugin.refresh_pending ||
+                         state.plugin.run_pending);
     if (ui::primary_button((std::string(icons::kAdd) + "  Add").c_str(),
                            ImVec2(ImGui::GetContentRegionAvail().x,
                                   40.0f * scl))) {
       std::string error;
-      if (state.plugin_manager.add_source(state.plugin_source_name,
-                                          state.plugin_source_url, &error)) {
-        std::snprintf(state.plugin_source_name,
-                      sizeof(state.plugin_source_name), "%s",
+      if (state.plugin_manager.add_source(state.plugin.source_name,
+                                          state.plugin.source_url, &error)) {
+        std::snprintf(state.plugin.source_name,
+                      sizeof(state.plugin.source_name), "%s",
                       "Community Repository");
-        state.plugin_source_url[0] = '\0';
-        state.plugin_add_source_modal_open = false;
+        state.plugin.source_url[0] = '\0';
+        state.plugin.add_source_modal_open = false;
         mobile_start_plugin_refresh(state);
         ImGui::CloseCurrentPopup();
       } else {
@@ -662,50 +662,50 @@ static void draw_mobile_plugin_source_popup(AppState &state) {
     if (ui::soft_button("Cancel",
                         ImVec2(ImGui::GetContentRegionAvail().x,
                                38.0f * scl))) {
-      state.plugin_add_source_modal_open = false;
+      state.plugin.add_source_modal_open = false;
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
   }
-  if (!open) state.plugin_add_source_modal_open = false;
+  if (!open) state.plugin.add_source_modal_open = false;
 }
 
 static void draw_mobile_plugin_output(AppState &state) {
-  const bool has_output = state.plugin_run_pending ||
-                          !state.plugin_last_error.empty() ||
-                          !state.plugin_last_id.empty() ||
-                          !state.plugin_last_command.empty() ||
-                          !state.plugin_last_output.empty();
+  const bool has_output = state.plugin.run_pending ||
+                          !state.plugin.last_error.empty() ||
+                          !state.plugin.last_id.empty() ||
+                          !state.plugin.last_command.empty() ||
+                          !state.plugin.last_output.empty();
   if (!has_output) return;
 
   const float scl = ui::dpi_scale();
   draw_mobile_section_label("Runtime output");
-  if (state.plugin_run_pending) {
+  if (state.plugin.run_pending) {
     ui::draw_scan_progress("Plugin script", icons::kTerminal,
-                           ImGui::GetTime() - state.plugin_run_start_time,
+                           ImGui::GetTime() - state.plugin.run_start_time,
                            ImGui::GetContentRegionAvail().x);
     return;
   }
 
-  if (!state.plugin_last_error.empty()) {
+  if (!state.plugin.last_error.empty()) {
     ImGui::TextColored(ui::colors().danger, "%s",
-                       state.plugin_last_error.c_str());
+                       state.plugin.last_error.c_str());
   } else {
     ImGui::TextColored(ui::colors().success, "Last run: %s",
-                       state.plugin_last_id.c_str());
+                       state.plugin.last_id.c_str());
   }
-  if (!state.plugin_last_command.empty()) {
-    text_ellipsis(state.plugin_last_command.c_str(),
+  if (!state.plugin.last_command.empty()) {
+    text_ellipsis(state.plugin.last_command.c_str(),
                   ImGui::GetContentRegionAvail().x, ui::colors().dim);
   }
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
   ImGui::BeginChild("MobilePluginOutputText", ImVec2(0, 150.0f * scl),
                     true);
-  if (state.plugin_last_output.empty())
+  if (state.plugin.last_output.empty())
     ImGui::TextColored(ui::colors().dim, "%s", "Output will appear here.");
   else
-    ImGui::TextUnformatted(state.plugin_last_output.c_str());
+    ImGui::TextUnformatted(state.plugin.last_output.c_str());
   ImGui::EndChild();
   ImGui::PopStyleColor();
 }
@@ -731,8 +731,8 @@ static void draw_mobile_plugin_details(AppState &state,
                      plugins::language_name(package.language),
                      package.version.c_str(), package.source_name.c_str());
 
-  ImGui::BeginDisabled(state.plugin_refresh_pending ||
-                       state.plugin_run_pending);
+  ImGui::BeginDisabled(state.plugin.refresh_pending ||
+                       state.plugin.run_pending);
   if (!package.installed) {
     if (ui::primary_button((std::string(icons::kDump) + "  Install").c_str(),
                            ImVec2(ImGui::GetContentRegionAvail().x,
@@ -802,14 +802,14 @@ static void draw_mobile_plugin_card(AppState &state,
                                     int index) {
   const float scl = ui::dpi_scale();
   const auto &palette = ui::colors();
-  const bool selected = state.plugin_selected_row == index;
+  const bool selected = state.plugin.selected_row == index;
   const ImVec2 pos = ImGui::GetCursorScreenPos();
   const ImVec2 size(ImGui::GetContentRegionAvail().x, 76.0f * scl);
   ImGui::PushID(package.id.c_str());
   ImGui::InvisibleButton("##MobilePluginCard", size);
   if (ImGui::IsItemClicked()) {
-    state.plugin_selected_row = selected ? -1 : index;
-    state.plugin_description_expanded = false;
+    state.plugin.selected_row = selected ? -1 : index;
+    state.plugin.description_expanded = false;
   }
 
   ImDrawList *draw = ImGui::GetWindowDrawList();
@@ -872,24 +872,24 @@ static void draw_mobile_plugins(AppState &state, ImVec2 size) {
   ImGui::TextColored(ui::colors().primary2, "%s", "Plugins");
   ImGui::SameLine();
   ImGui::TextColored(ui::colors().dim, "%s",
-                     state.plugin_run_pending ? "Running" :
-                     state.plugin_refresh_pending ? "Refreshing" :
+                     state.plugin.run_pending ? "Running" :
+                     state.plugin.refresh_pending ? "Refreshing" :
                      "Ready");
 
   std::vector<plugins::PluginSource> sources = state.plugin_manager.sources();
   std::vector<plugins::PluginPackage> catalog =
       mobile_filtered_plugins(state, sources);
-  if (state.plugin_selected_row >= static_cast<int>(catalog.size()))
-    state.plugin_selected_row = catalog.empty() ? -1 : 0;
+  if (state.plugin.selected_row >= static_cast<int>(catalog.size()))
+    state.plugin.selected_row = catalog.empty() ? -1 : 0;
 
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("##MobilePluginSearch", "Search plugins...",
-                           state.plugin_filter, sizeof(state.plugin_filter));
+                           state.plugin.filter, sizeof(state.plugin.filter));
 
   const float gap = 6.0f * scl;
   const float button_w = (ImGui::GetContentRegionAvail().x - gap * 2.0f) / 3.0f;
-  ImGui::BeginDisabled(state.plugin_refresh_pending ||
-                       state.plugin_run_pending);
+  ImGui::BeginDisabled(state.plugin.refresh_pending ||
+                       state.plugin.run_pending);
   if (ui::soft_button((std::string(icons::kRefresh) + " Sync").c_str(),
                       ImVec2(button_w, 38.0f * scl))) {
     mobile_start_plugin_refresh(state);
@@ -897,7 +897,7 @@ static void draw_mobile_plugins(AppState &state, ImVec2 size) {
   ImGui::SameLine(0, gap);
   if (ui::primary_button((std::string(icons::kAdd) + " Source").c_str(),
                          ImVec2(button_w, 38.0f * scl))) {
-    state.plugin_add_source_modal_open = true;
+    state.plugin.add_source_modal_open = true;
   }
   ImGui::SameLine(0, gap);
   if (ui::soft_button((std::string(icons::kSettings) + " GUI").c_str(),
@@ -910,20 +910,20 @@ static void draw_mobile_plugins(AppState &state, ImVec2 size) {
   if (!sources.empty()) {
     const char *preview = "All sources";
     std::string preview_label;
-    if (state.plugin_source_filter > 0) {
+    if (state.plugin.source_filter > 0) {
       preview_label = sources[static_cast<size_t>(
-          state.plugin_source_filter - 1)].name;
+          state.plugin.source_filter - 1)].name;
       preview = preview_label.c_str();
     }
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("Source##MobilePluginSourceFilter", preview)) {
-      if (ImGui::Selectable("All sources", state.plugin_source_filter == 0))
-        state.plugin_source_filter = 0;
+      if (ImGui::Selectable("All sources", state.plugin.source_filter == 0))
+        state.plugin.source_filter = 0;
       for (size_t i = 0; i < sources.size(); ++i) {
         const bool selected =
-            state.plugin_source_filter == static_cast<int>(i + 1U);
+            state.plugin.source_filter == static_cast<int>(i + 1U);
         if (ImGui::Selectable(sources[i].name.c_str(), selected))
-          state.plugin_source_filter = static_cast<int>(i + 1U);
+          state.plugin.source_filter = static_cast<int>(i + 1U);
         if (selected) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
@@ -1571,9 +1571,9 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
                                  "  First hit to trainer",
                              false)) {
       const std::string address = hex_u64(state.scan_result.addresses.front());
-      std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s",
+      std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                     address.c_str());
-      state.cheat_type = state.scan_type;
+      state.plugin.cheat_type = state.scan_type;
       state.screen = Screen::Trainer;
     }
 
@@ -1608,7 +1608,7 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
                       addr.c_str());
         std::snprintf(state.write_address, sizeof(state.write_address), "%s",
                       addr.c_str());
-        std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s",
+        std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                       addr.c_str());
       }
       ImGui::EndChild();
@@ -1739,32 +1739,32 @@ static void mobile_add_cheat_from_fields(AppState &state) {
 
   uint64_t address = 0;
   std::vector<uint8_t> bytes;
-  if (!parse_u64(state.cheat_address, address)) {
+  if (!parse_u64(state.plugin.cheat_address, address)) {
     set_status(state, "Invalid cheat address");
     return;
   }
-  if (!build_value_bytes(state.cheat_type, state.cheat_value, bytes)) {
+  if (!build_value_bytes(state.plugin.cheat_type, state.plugin.cheat_value, bytes)) {
     set_status(state, "Invalid cheat value");
     return;
   }
 
   CheatEntry cheat;
   cheat.description =
-      state.cheat_description[0] != '\0' ? state.cheat_description : "Cheat";
+      state.plugin.cheat_description[0] != '\0' ? state.plugin.cheat_description : "Cheat";
   cheat.pid = state.selected_pid;
   cheat.address = address;
-  cheat.value_type = state.cheat_type;
-  cheat.value_text = state.cheat_value;
+  cheat.value_type = state.plugin.cheat_type;
+  cheat.value_text = state.plugin.cheat_value;
   cheat.bytes = std::move(bytes);
-  cheat.locked = state.cheat_lock;
+  cheat.locked = state.plugin.cheat_lock;
   if (state.client.connected()) (void)capture_off_value(state, cheat);
-  state.cheats.push_back(std::move(cheat));
+  state.plugin.cheats.push_back(std::move(cheat));
   set_status(state, "Trainer entry added");
 }
 
 static void mobile_apply_enabled_cheats(AppState &state) {
   int applied = 0;
-  for (auto &cheat : state.cheats)
+  for (auto &cheat : state.plugin.cheats)
     if (cheat.enabled && mobile_apply_cheat(state, cheat)) applied++;
   const std::string message =
       "Applied " + std::to_string(applied) + " trainer entries";
@@ -1779,7 +1779,7 @@ static void mobile_import_batchcode(AppState &state) {
   }
   std::string error;
   std::vector<BatchcodeEntry> entries;
-  const int imported = parse_batchcode(state.batchcode_text, entries, error);
+  const int imported = parse_batchcode(state.plugin.batchcode_text, entries, error);
   if (imported < 0) {
     char error_buffer[512];
     std::snprintf(error_buffer, sizeof(error_buffer),
@@ -1801,7 +1801,7 @@ static void mobile_import_batchcode(AppState &state) {
     cheat.bytes = std::move(entries[i].bytes);
     cheat.enabled = true;
     if (state.client.connected()) (void)capture_off_value(state, cheat);
-    state.cheats.push_back(std::move(cheat));
+    state.plugin.cheats.push_back(std::move(cheat));
   }
   char import_buffer[256];
   if (imported > 0) {
@@ -1833,21 +1833,21 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
                     ImGuiWindowFlags_NoScrollbar);
   mobile_info_row("PID", std::to_string(state.selected_pid),
                   has_pid ? palette.text : palette.dim);
-  mobile_info_row("Entries", std::to_string(state.cheats.size()),
-                  state.cheats.empty() ? palette.muted : palette.success);
-  mobile_info_row("File", state.trainer_file_path, palette.dim);
+  mobile_info_row("Entries", std::to_string(state.plugin.cheats.size()),
+                  state.plugin.cheats.empty() ? palette.muted : palette.success);
+  mobile_info_row("File", state.plugin.trainer_file_path, palette.dim);
   ImGui::EndChild();
 
   draw_mobile_section_label("Cheat builder");
   ImGui::BeginDisabled(!has_pid);
   if (mobile_action_button("Use memory address", false)) {
-    std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s",
+    std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                   state.write_address);
   }
   ImGui::BeginDisabled(state.scan_result.addresses.empty());
   if (mobile_action_button("Use first scan hit", false)) {
     const std::string address = hex_u64(state.scan_result.addresses.front());
-    std::snprintf(state.cheat_address, sizeof(state.cheat_address), "%s",
+    std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                   address.c_str());
   }
   ImGui::EndDisabled();
@@ -1855,19 +1855,19 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
 
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Name##MobileCheatName", "Cheat name",
-                           state.cheat_description,
-                           sizeof(state.cheat_description));
+                           state.plugin.cheat_description,
+                           sizeof(state.plugin.cheat_description));
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Address##MobileCheatAddress", "0x0",
-                           state.cheat_address, sizeof(state.cheat_address));
-  mobile_value_type_combo("Value type##MobileCheatType", &state.cheat_type);
+                           state.plugin.cheat_address, sizeof(state.plugin.cheat_address));
+  mobile_value_type_combo("Value type##MobileCheatType", &state.plugin.cheat_type);
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Value##MobileCheatValue", "0",
-                           state.cheat_value, sizeof(state.cheat_value));
-  ImGui::Checkbox("Lock on apply", &state.cheat_lock);
+                           state.plugin.cheat_value, sizeof(state.plugin.cheat_value));
+  ImGui::Checkbox("Lock on apply", &state.plugin.cheat_lock);
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::SliderFloat("Lock interval##MobileCheatLockInterval",
-                     &state.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
+                     &state.plugin.cheat_lock_interval, 0.10f, 5.0f, "%.2fs");
 
   ImGui::BeginDisabled(!connected || !has_pid || client_async_busy(state));
   if (mobile_action_button(std::string(icons::kAdd) + "  Add entry", true))
@@ -1877,26 +1877,26 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
   draw_mobile_section_label("Trainer file");
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("Path##MobileTrainerPath", "trainers/session.cht",
-                           state.trainer_file_path,
-                           sizeof(state.trainer_file_path));
+                           state.plugin.trainer_file_path,
+                           sizeof(state.plugin.trainer_file_path));
   /* Browse button using native OS file picker */
   if (mobile_action_button(std::string(icons::kLoad) + "  Browse...", false)) {
     std::string picked = ui::pickFile("Open Trainer File", "Trainer Files", "*.cht");
     if (!picked.empty()) {
-      std::snprintf(state.trainer_file_path, sizeof(state.trainer_file_path),
+      std::snprintf(state.plugin.trainer_file_path, sizeof(state.plugin.trainer_file_path),
                     "%s", picked.c_str());
-      const int count = load_trainer_file(state, state.trainer_file_path);
+      const int count = load_trainer_file(state, state.plugin.trainer_file_path);
       if (count >= 0)
         set_status(state, "Loaded " + std::to_string(count) +
                               " trainer entries");
     }
   }
   if (mobile_action_button(std::string(icons::kSave) + "  Save", false))
-    save_trainer_file(state, state.trainer_file_path);
+    save_trainer_file(state, state.plugin.trainer_file_path);
 
   if (ImGui::CollapsingHeader("Batchcode import")) {
-    ImGui::InputTextMultiline("##MobileBatchcode", state.batchcode_text,
-                              sizeof(state.batchcode_text),
+    ImGui::InputTextMultiline("##MobileBatchcode", state.plugin.batchcode_text,
+                              sizeof(state.plugin.batchcode_text),
                               ImVec2(-1.0f, 112.0f * scl));
     ImGui::BeginDisabled(!has_pid);
     if (mobile_action_button(std::string(icons::kImport) + "  Import",
@@ -1907,7 +1907,7 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
   }
 
   draw_mobile_section_label("Runtime list");
-  if (state.cheats.empty()) {
+  if (state.plugin.cheats.empty()) {
     ImGui::TextColored(palette.dim, "%s", "No trainer entries");
   } else {
     ImGui::BeginDisabled(!connected || client_async_busy(state));
@@ -1919,18 +1919,18 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
     if (mobile_action_button(std::string(icons::kTrash) +
                                  "  Clear disabled",
                              false)) {
-      state.cheats.erase(
-          std::remove_if(state.cheats.begin(), state.cheats.end(),
+      state.plugin.cheats.erase(
+          std::remove_if(state.plugin.cheats.begin(), state.plugin.cheats.end(),
                          [](const CheatEntry &cheat) {
                            return !cheat.enabled;
                          }),
-          state.cheats.end());
+          state.plugin.cheats.end());
       set_status(state, "Disabled trainer entries cleared");
     }
 
     size_t remove_index = std::numeric_limits<size_t>::max();
-    for (size_t i = 0; i < state.cheats.size(); ++i) {
-      CheatEntry &cheat = state.cheats[i];
+    for (size_t i = 0; i < state.plugin.cheats.size(); ++i) {
+      CheatEntry &cheat = state.plugin.cheats[i];
       ImGui::PushID(static_cast<int>(i));
       ImGui::BeginChild("MobileTrainerCheatCard", ImVec2(0, 170.0f * scl),
                         true, ImGuiWindowFlags_NoScrollbar);
@@ -1989,8 +1989,8 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
       ImGui::PopID();
     }
     if (remove_index != std::numeric_limits<size_t>::max() &&
-        remove_index < state.cheats.size()) {
-      state.cheats.erase(state.cheats.begin() +
+        remove_index < state.plugin.cheats.size()) {
+      state.plugin.cheats.erase(state.plugin.cheats.begin() +
                          static_cast<std::ptrdiff_t>(remove_index));
       set_status(state, "Trainer entry removed");
     }

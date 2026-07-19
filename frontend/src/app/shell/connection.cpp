@@ -141,8 +141,8 @@ void connect_console(AppState &state) {
      deterministic transport shutdown. */
   if (state.plugin_gui_bridge) {
     state.plugin_gui_bridge->stop();
-    state.plugin_gui_starting = false;
-    state.plugin_gui_error.clear();
+    state.plugin.gui_starting = false;
+    state.plugin.gui_error.clear();
   }
   state.pool.disconnect();
   state.pool_active = false;
@@ -988,8 +988,8 @@ void disconnect_console(AppState &state, const char *reason) {
   state.tracer.temp_events.clear();
   if (state.plugin_gui_bridge) {
     state.plugin_gui_bridge->stop();
-    state.plugin_gui_starting = false;
-    state.plugin_gui_error.clear();
+    state.plugin.gui_starting = false;
+    state.plugin.gui_error.clear();
   }
   state.pool.disconnect();
   state.pool_active = false;

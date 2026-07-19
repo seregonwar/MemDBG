@@ -1467,7 +1467,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   if (topbar_w > 1480.0f * scl) {
     ImGui::SameLine();
-    topbar_chip("TopbarCheats", locale::tr("topbar.chip_cheats"), std::to_string(state.cheats.size()).c_str(), ui::colors().warning, 104.0f * scl);
+    topbar_chip("TopbarCheats", locale::tr("topbar.chip_cheats"), std::to_string(state.plugin.cheats.size()).c_str(), ui::colors().warning, 104.0f * scl);
   }
 
   std::string update_tag;
@@ -1764,8 +1764,8 @@ static void poll_session_health(AppState &state) {
   if (!state.client.connected() || state.connect_pending ||
       state.telemetry_pending || state.scan_async_pending ||
       state.map_refresh_pending || state.taskmgr.resource_pending ||
-      state.taskmgr.prefetch_pending || state.plugin_refresh_pending ||
-      state.plugin_run_pending) {
+      state.taskmgr.prefetch_pending || state.plugin.refresh_pending ||
+      state.plugin.run_pending) {
     return;
   }
 

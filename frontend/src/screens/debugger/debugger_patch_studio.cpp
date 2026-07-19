@@ -290,7 +290,7 @@ void add_patch_to_trainer(AppState &state, DebuggerState &ds,
   cheat.enabled = true;
   cheat.locked = false;
   cheat.status = "Created from Patch Studio";
-  state.cheats.push_back(std::move(cheat));
+  state.plugin.cheats.push_back(std::move(cheat));
   set_status(state, "Patch exported to Trainer");
   push_notification(state, "Trainer entry added from Patch Studio");
 }

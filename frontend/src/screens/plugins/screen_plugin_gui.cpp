@@ -37,7 +37,7 @@ std::string find_python_interpreter() {
 
 
 void draw_plugin_gui(AppState &state, ImVec2 avail) {
-  if (state.plugin_gui_active_id.empty()) {
+  if (state.plugin.gui_active_id.empty()) {
     ImGui::BeginChild("PluginGUIPlaceholder", avail, false);
     ui::draw_empty_state("No Plugin Selected",
                          "Choose a GUI plugin from the sidebar Plugin Apps launcher.");
@@ -46,16 +46,16 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
   }
 
   /* Start the GUI bridge if not already running */
-  if ((!state.plugin_gui_bridge || !state.plugin_gui_bridge->running()) && !state.plugin_gui_starting) {
-    state.plugin_gui_starting = true;
-    state.plugin_gui_error.clear();
+  if ((!state.plugin_gui_bridge || !state.plugin_gui_bridge->running()) && !state.plugin.gui_starting) {
+    state.plugin.gui_starting = true;
+    state.plugin.gui_error.clear();
 
     /* Find the installed plugin */
     auto installed = state.plugin_manager.catalog();
     std::string entry_path;
     std::string plugin_name;
     for (const auto &pkg : installed) {
-      if (pkg.id == state.plugin_gui_active_id && pkg.installed) {
+      if (pkg.id == state.plugin.gui_active_id && pkg.installed) {
         entry_path = (pkg.installed_path / pkg.entry).string();
         plugin_name = pkg.name;
         break;
@@ -63,9 +63,9 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
     }
 
     if (entry_path.empty()) {
-      state.plugin_gui_error = "Plugin not found or not installed: " + state.plugin_gui_active_id;
-      state.plugin_gui_starting = false;
-      state.plugin_gui_active_id.clear();
+      state.plugin.gui_error = "Plugin not found or not installed: " + state.plugin.gui_active_id;
+      state.plugin.gui_starting = false;
+      state.plugin.gui_active_id.clear();
       return;
     }
 
@@ -75,8 +75,8 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
        connections or consumes the payload's four connection slots. */
     auto bridge = std::make_shared<plugins::GuiBridge>();
     if (!bridge->start_protocol_broker(state.pool)) {
-      state.plugin_gui_error = "Cannot start the local plugin protocol broker";
-      state.plugin_gui_starting = false;
+      state.plugin.gui_error = "Cannot start the local plugin protocol broker";
+      state.plugin.gui_starting = false;
       return;
     }
     const uint16_t broker_port = bridge->protocol_broker_port();
@@ -88,7 +88,7 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
     std::filesystem::create_directories(runtime_dir, ec);
 
     std::string context_path = (runtime_dir /
-        (state.plugin_gui_active_id + "-context.json")).string();
+        (state.plugin.gui_active_id + "-context.json")).string();
 
     /* Write the context JSON */
     {
@@ -106,7 +106,7 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
       doc["process"]["pid"] = state.selected_pid;
       doc["process"]["name"] = selected_process_name(state);
       doc["paths"]["dump"] = state.dump_path;
-      doc["paths"]["trainer"] = state.trainer_file_path;
+      doc["paths"]["trainer"] = state.plugin.trainer_file_path;
       doc["paths"]["plugin"] = std::filesystem::path(entry_path).parent_path().string();
 
       /* Plugin config directory */
@@ -117,12 +117,12 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
 
       doc["state"]["map_count"] = state.maps.size();
       doc["state"]["scan_hit_count"] = state.scan_result.addresses.size();
-      doc["state"]["trainer_entry_count"] = state.cheats.size();
+      doc["state"]["trainer_entry_count"] = state.plugin.cheats.size();
 
       std::ofstream out(context_path, std::ios::binary | std::ios::trunc);
       if (!out) {
-        state.plugin_gui_error = "Cannot write context file for GUI plugin";
-        state.plugin_gui_starting = false;
+        state.plugin.gui_error = "Cannot write context file for GUI plugin";
+        state.plugin.gui_starting = false;
         bridge->stop();
         return;
       }
@@ -135,15 +135,15 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
     /* Start the bridge */
     state.plugin_gui_bridge = bridge;
     if (!bridge->start(python_exe, entry_path, context_path)) {
-      state.plugin_gui_error = "Failed to start GUI plugin process for " + plugin_name;
-      state.plugin_gui_starting = false;
-      state.plugin_gui_active_id.clear();
+      state.plugin.gui_error = "Failed to start GUI plugin process for " + plugin_name;
+      state.plugin.gui_starting = false;
+      state.plugin.gui_active_id.clear();
       bridge->stop();
-      set_status(state, state.plugin_gui_error);
+      set_status(state, state.plugin.gui_error);
       return;
     }
 
-    state.plugin_gui_starting = false;
+    state.plugin.gui_starting = false;
     char gui_buf[256];
     std::snprintf(gui_buf, sizeof(gui_buf), locale::tr("plugins.gui_started"), plugin_name.c_str());
     set_status(state, gui_buf);
@@ -200,8 +200,8 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
   }
 
   /* Show error if present */
-  if (!state.plugin_gui_error.empty()) {
-    ImGui::TextColored(ui::colors().danger, "%s", state.plugin_gui_error.c_str());
+  if (!state.plugin.gui_error.empty()) {
+    ImGui::TextColored(ui::colors().danger, "%s", state.plugin.gui_error.c_str());
   }
 }
 

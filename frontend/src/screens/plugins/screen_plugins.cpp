@@ -226,12 +226,12 @@ plugins::PluginRunContext build_run_context(const AppState &state) {
   context.selected_pid = state.selected_pid;
   context.selected_process_name = selected_process_name(state);
   context.dump_path = state.dump_path;
-  context.trainer_file_path = state.trainer_file_path;
+  context.trainer_file_path = state.plugin.trainer_file_path;
   context.protocol_version = state.has_hello ? state.hello.protocol_version : 0U;
   context.capabilities = state.has_hello ? state.hello.capabilities : 0U;
   context.map_count = state.maps.size();
   context.scan_hit_count = state.scan_result.addresses.size();
-  context.trainer_entry_count = state.cheats.size();
+  context.trainer_entry_count = state.plugin.cheats.size();
   // Sandbox settings
   context.sandbox_enabled = state.sandbox_enabled;
   context.sandbox_filesystem = state.sandbox_filesystem;
@@ -244,54 +244,54 @@ plugins::PluginRunContext build_run_context(const AppState &state) {
 }
 
 void start_refresh(AppState &state) {
-  if (state.plugin_refresh_pending || state.plugin_run_pending) return;
-  if (state.plugin_refresh_future.valid()) state.plugin_refresh_future.wait();
-  state.plugin_refresh_error.clear();
-  state.plugin_refresh_pending = true;
+  if (state.plugin.refresh_pending || state.plugin.run_pending) return;
+  if (state.plugin.refresh_future.valid()) state.plugin.refresh_future.wait();
+  state.plugin.refresh_error.clear();
+  state.plugin.refresh_pending = true;
   set_status(state, locale::tr("plugins.refreshing_sources"));
-  state.plugin_refresh_future = std::async(std::launch::async, [&state]() -> bool {
+  state.plugin.refresh_future = std::async(std::launch::async, [&state]() -> bool {
     std::string error;
     const bool ok = state.plugin_manager.refresh_all(&error);
-    state.plugin_refresh_error = error;
+    state.plugin.refresh_error = error;
     return ok;
   });
 }
 
 void start_run(AppState &state, const PluginPackage &package) {
-  if (!package.installed || state.plugin_refresh_pending || state.plugin_run_pending) return;
-  if (state.plugin_run_future.valid()) state.plugin_run_future.wait();
+  if (!package.installed || state.plugin.refresh_pending || state.plugin.run_pending) return;
+  if (state.plugin.run_future.valid()) state.plugin.run_future.wait();
   const auto context = build_run_context(state);
   const std::string package_id = package.id;
-  state.plugin_last_output.clear();
-  state.plugin_last_error.clear();
-  state.plugin_last_command.clear();
-  state.plugin_last_id = package_id;
-  state.plugin_run_pending = true;
-  state.plugin_run_start_time = ImGui::GetTime();
+  state.plugin.last_output.clear();
+  state.plugin.last_error.clear();
+  state.plugin.last_command.clear();
+  state.plugin.last_id = package_id;
+  state.plugin.run_pending = true;
+  state.plugin.run_start_time = ImGui::GetTime();
   char run_buf[256];
   std::snprintf(run_buf, sizeof(run_buf), locale::tr("plugins.running_plugin"), package.name.c_str());
   set_status(state, run_buf);
-  state.plugin_run_future = std::async(std::launch::async, [&state, package_id, context]() {
+  state.plugin.run_future = std::async(std::launch::async, [&state, package_id, context]() {
     return state.plugin_manager.run_plugin(package_id, context);
   });
 }
 
 std::vector<PluginPackage> filtered_catalog(AppState &state,
                                             const std::vector<PluginSource> &sources) {
-  if (state.plugin_source_filter < 0 ||
-      state.plugin_source_filter > static_cast<int>(sources.size())) {
-    state.plugin_source_filter = 0;
+  if (state.plugin.source_filter < 0 ||
+      state.plugin.source_filter > static_cast<int>(sources.size())) {
+    state.plugin.source_filter = 0;
   }
 
   std::vector<PluginPackage> catalog = state.plugin_manager.catalog();
-  if (state.plugin_source_filter > 0) {
-    const auto &source = sources[static_cast<size_t>(state.plugin_source_filter - 1)];
+  if (state.plugin.source_filter > 0) {
+    const auto &source = sources[static_cast<size_t>(state.plugin.source_filter - 1)];
     catalog.erase(std::remove_if(catalog.begin(), catalog.end(),
         [&](const PluginPackage &pkg) { return pkg.source_id != source.id; }),
         catalog.end());
   }
 
-  const std::string filter = state.plugin_filter;
+  const std::string filter = state.plugin.filter;
   if (!filter.empty()) {
     catalog.erase(std::remove_if(catalog.begin(), catalog.end(),
         [&](const PluginPackage &pkg) {
@@ -382,7 +382,7 @@ void draw_info_row(const char *label, const std::string &value,
 
 void draw_add_source_modal(AppState &state) {
   const float scl = ui::dpi_scale();
-  if (state.plugin_add_source_modal_open) {
+  if (state.plugin.add_source_modal_open) {
     ImGui::OpenPopup("Add Plugin Source");
   }
 
@@ -394,7 +394,7 @@ void draw_add_source_modal(AppState &state) {
                           ImVec2(0.5f, 0.5f));
   ImGui::SetNextWindowSize(modal_size, ImGuiCond_Appearing);
 
-  bool open = state.plugin_add_source_modal_open;
+  bool open = state.plugin.add_source_modal_open;
   ImGui::PushStyleColor(ImGuiCol_PopupBg, ui::colors().panel2);
   ImGui::PushStyleColor(ImGuiCol_TitleBg, ui::colors().bg3);
   ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ui::colors().bg3);
@@ -402,7 +402,7 @@ void draw_add_source_modal(AppState &state) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * scl, 10.0f * scl));
   if (ImGui::BeginPopupModal("Add Plugin Source", &open,
                              ImGuiWindowFlags_NoResize)) {
-    state.plugin_add_source_modal_open = true;
+    state.plugin.add_source_modal_open = true;
 
     ImGui::TextColored(ui::colors().primary2, "%s", "Community repository");
     ImGui::TextWrapped("%s", "Add a forkable source with a manifest.json catalog. GitHub repository URLs, raw manifest URLs, and local folders are accepted.");
@@ -411,25 +411,25 @@ void draw_add_source_modal(AppState &state) {
     const float control_h = 34.0f * scl;
     ImGui::TextColored(ui::colors().muted, "%s", "Name");
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##PluginSourceNameModal", state.plugin_source_name,
-                     sizeof(state.plugin_source_name));
+    ImGui::InputText("##PluginSourceNameModal", state.plugin.source_name,
+                     sizeof(state.plugin.source_name));
     ImGui::TextColored(ui::colors().muted, "%s", "Manifest / repository URL");
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##PluginSourceUrlModal", state.plugin_source_url,
-                     sizeof(state.plugin_source_url));
+    ImGui::InputText("##PluginSourceUrlModal", state.plugin.source_url,
+                     sizeof(state.plugin.source_url));
 
     ImGui::Spacing();
-    ImGui::BeginDisabled(state.plugin_refresh_pending || state.plugin_run_pending);
+    ImGui::BeginDisabled(state.plugin.refresh_pending || state.plugin.run_pending);
     if (ui::primary_button((std::string(icons::kAdd) + "  Add Source").c_str(),
                            ImVec2(168.0f * scl, control_h))) {
       std::string error;
-      if (state.plugin_manager.add_source(state.plugin_source_name,
-                                          state.plugin_source_url, &error)) {
-        std::snprintf(state.plugin_source_name, sizeof(state.plugin_source_name),
+      if (state.plugin_manager.add_source(state.plugin.source_name,
+                                          state.plugin.source_url, &error)) {
+        std::snprintf(state.plugin.source_name, sizeof(state.plugin.source_name),
                       "%s", "Community Repository");
-        state.plugin_source_url[0] = '\0';
-        state.plugin_source_filter = 0;
-        state.plugin_add_source_modal_open = false;
+        state.plugin.source_url[0] = '\0';
+        state.plugin.source_filter = 0;
+        state.plugin.add_source_modal_open = false;
         set_status(state, locale::tr("plugins.source_added"));
         push_notification(state, locale::tr("plugins.source_added"));
         start_refresh(state);
@@ -441,7 +441,7 @@ void draw_add_source_modal(AppState &state) {
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ui::soft_button("Cancel", ImVec2(120.0f * scl, control_h))) {
-      state.plugin_add_source_modal_open = false;
+      state.plugin.add_source_modal_open = false;
       ImGui::CloseCurrentPopup();
     }
 
@@ -471,7 +471,7 @@ void draw_add_source_modal(AppState &state) {
           std::string error;
           if (!state.plugin_manager.set_source_enabled(i, enabled, &error))
             set_status(state, error);
-          state.plugin_source_filter = 0;
+          state.plugin.source_filter = 0;
         }
         ImGui::TableSetColumnIndex(1);
         ImGui::TextUnformatted(source.name.c_str());
@@ -485,7 +485,7 @@ void draw_add_source_modal(AppState &state) {
           std::string error;
           if (!state.plugin_manager.remove_source(i, &error)) set_status(state, error);
           else {
-            state.plugin_source_filter = 0;
+            state.plugin.source_filter = 0;
             set_status(state, locale::tr("plugins.source_removed"));
           }
         }
@@ -501,7 +501,7 @@ void draw_add_source_modal(AppState &state) {
   }
   ImGui::PopStyleVar();
   ImGui::PopStyleColor(4);
-  if (!open) state.plugin_add_source_modal_open = false;
+  if (!open) state.plugin.add_source_modal_open = false;
 }
 
 void draw_catalog_toolbar(AppState &state, const std::vector<PluginSource> &sources) {
@@ -510,9 +510,9 @@ void draw_catalog_toolbar(AppState &state, const std::vector<PluginSource> &sour
   const float button_w = 38.0f * scl;
   const float avail_w = ImGui::GetContentRegionAvail().x;
   const float source_w = std::clamp(avail_w * 0.34f, 190.0f * scl, 300.0f * scl);
-  if (state.plugin_source_filter < 0 ||
-      state.plugin_source_filter > static_cast<int>(sources.size())) {
-    state.plugin_source_filter = 0;
+  if (state.plugin.source_filter < 0 ||
+      state.plugin.source_filter > static_cast<int>(sources.size())) {
+    state.plugin.source_filter = 0;
   }
 
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(9.0f * scl, 7.0f * scl));
@@ -528,30 +528,30 @@ void draw_catalog_toolbar(AppState &state, const std::vector<PluginSource> &sour
     ImGui::TableSetColumnIndex(0);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##PluginSearch", "Search plugins, creators, tags...",
-                             state.plugin_filter, sizeof(state.plugin_filter));
+                             state.plugin.filter, sizeof(state.plugin.filter));
 
     ImGui::TableSetColumnIndex(1);
     const char *preview = "All sources";
     std::string preview_label;
-    if (state.plugin_source_filter > 0) {
-      preview_label = sources[static_cast<size_t>(state.plugin_source_filter - 1)].name;
+    if (state.plugin.source_filter > 0) {
+      preview_label = sources[static_cast<size_t>(state.plugin.source_filter - 1)].name;
       preview = preview_label.c_str();
     }
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("##PluginSourceFilter", preview)) {
-      if (ImGui::Selectable("All sources", state.plugin_source_filter == 0))
-        state.plugin_source_filter = 0;
+      if (ImGui::Selectable("All sources", state.plugin.source_filter == 0))
+        state.plugin.source_filter = 0;
       for (size_t i = 0; i < sources.size(); ++i) {
-        const bool selected = state.plugin_source_filter == static_cast<int>(i + 1U);
+        const bool selected = state.plugin.source_filter == static_cast<int>(i + 1U);
         if (ImGui::Selectable(sources[i].name.c_str(), selected))
-          state.plugin_source_filter = static_cast<int>(i + 1U);
+          state.plugin.source_filter = static_cast<int>(i + 1U);
         if (selected) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
     }
 
     ImGui::TableSetColumnIndex(2);
-    ImGui::BeginDisabled(state.plugin_refresh_pending || state.plugin_run_pending);
+    ImGui::BeginDisabled(state.plugin.refresh_pending || state.plugin.run_pending);
     if (ui::soft_button(icons::kRefresh, ImVec2(button_w, control_h))) {
       start_refresh(state);
     }
@@ -560,7 +560,7 @@ void draw_catalog_toolbar(AppState &state, const std::vector<PluginSource> &sour
 
     ImGui::TableSetColumnIndex(3);
     if (ui::primary_button(icons::kAdd, ImVec2(button_w, control_h))) {
-      state.plugin_add_source_modal_open = true;
+      state.plugin.add_source_modal_open = true;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", "Add plugin source");
     ImGui::EndTable();
@@ -574,7 +574,7 @@ void draw_plugin_card(AppState &state, const PluginPackage &pkg,
   const float row_h = 78.0f * scl;
   const float pad = 8.0f * scl;
   const float thumb = 54.0f * scl;
-  const bool selected = state.plugin_selected_row == row;
+  const bool selected = state.plugin.selected_row == row;
 
   ImGui::PushID(pkg.id.c_str());
   const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -582,8 +582,8 @@ void draw_plugin_card(AppState &state, const PluginPackage &pkg,
   ImGui::InvisibleButton("##plugin_card", size);
   const bool hovered = ImGui::IsItemHovered();
   if (ImGui::IsItemClicked()) {
-    if (state.plugin_selected_row != row) state.plugin_description_expanded = false;
-    state.plugin_selected_row = row;
+    if (state.plugin.selected_row != row) state.plugin.description_expanded = false;
+    state.plugin.selected_row = row;
   }
 
   ImDrawList *draw = ImGui::GetWindowDrawList();
@@ -647,8 +647,8 @@ void draw_catalog(AppState &state, const std::vector<PluginPackage> &catalog) {
   ImGui::SameLine();
   ImGui::TextColored(ui::colors().dim, "%zu plugins", catalog.size());
 
-  if (state.plugin_selected_row >= static_cast<int>(catalog.size()))
-    state.plugin_selected_row = catalog.empty() ? -1 : 0;
+  if (state.plugin.selected_row >= static_cast<int>(catalog.size()))
+    state.plugin.selected_row = catalog.empty() ? -1 : 0;
 
   ImGui::BeginChild("PluginCatalogList", ImVec2(0, 0), false);
   if (catalog.empty()) {
@@ -702,24 +702,24 @@ void draw_package_details(AppState &state, const PluginPackage *pkg) {
   const std::string full_description = plugin_full_description(*pkg);
   const bool can_expand = full_description.size() > kDetailDescriptionLimit;
   const std::string visible_description =
-      state.plugin_description_expanded || !can_expand
+      state.plugin.description_expanded || !can_expand
           ? full_description
           : plugin_detail_preview(*pkg);
   ImGui::TextWrapped("%s", visible_description.c_str());
   if (can_expand) {
-    const char *label = state.plugin_description_expanded ? "Collapse" : "Expand";
+    const char *label = state.plugin.description_expanded ? "Collapse" : "Expand";
     if (ui::soft_button(label, ImVec2(92.0f * scl, 28.0f * scl))) {
-      state.plugin_description_expanded = !state.plugin_description_expanded;
+      state.plugin.description_expanded = !state.plugin.description_expanded;
     }
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", state.plugin_description_expanded
+      ImGui::SetTooltip("%s", state.plugin.description_expanded
                                 ? "Show a compact description"
                                 : "Show the full plugin description");
     }
   }
 
   ImGui::Spacing();
-  ImGui::BeginDisabled(state.plugin_refresh_pending || state.plugin_run_pending);
+  ImGui::BeginDisabled(state.plugin.refresh_pending || state.plugin.run_pending);
   if (!pkg->installed) {
     if (ui::primary_button((std::string(icons::kDump) + "  Install").c_str(),
                            ImVec2(std::min(160.0f * scl, ImGui::GetContentRegionAvail().x),
@@ -814,42 +814,42 @@ void draw_package_details(AppState &state, const PluginPackage *pkg) {
 }
 
 void draw_output(AppState &state) {
-  const bool has_output = state.plugin_run_pending ||
-                          !state.plugin_last_error.empty() ||
-                          !state.plugin_last_id.empty() ||
-                          !state.plugin_last_command.empty() ||
-                          !state.plugin_last_output.empty();
+  const bool has_output = state.plugin.run_pending ||
+                          !state.plugin.last_error.empty() ||
+                          !state.plugin.last_id.empty() ||
+                          !state.plugin.last_command.empty() ||
+                          !state.plugin.last_output.empty();
   if (!has_output) return;
 
   ImGui::Spacing();
   ImGui::Separator();
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "Runtime output");
-  if (state.plugin_run_pending) {
+  if (state.plugin.run_pending) {
     ui::draw_scan_progress("Plugin script", icons::kTerminal,
-                           ImGui::GetTime() - state.plugin_run_start_time,
+                           ImGui::GetTime() - state.plugin.run_start_time,
                            ImGui::GetContentRegionAvail().x);
     return;
   }
 
-  if (!state.plugin_last_error.empty()) {
-    ImGui::TextColored(ui::colors().danger, "%s", state.plugin_last_error.c_str());
-  } else if (!state.plugin_last_id.empty()) {
-    ImGui::TextColored(ui::colors().success, "Last run: %s", state.plugin_last_id.c_str());
+  if (!state.plugin.last_error.empty()) {
+    ImGui::TextColored(ui::colors().danger, "%s", state.plugin.last_error.c_str());
+  } else if (!state.plugin.last_id.empty()) {
+    ImGui::TextColored(ui::colors().success, "Last run: %s", state.plugin.last_id.c_str());
   } else {
     ImGui::TextColored(ui::colors().dim, "No plugin has run in this session.");
   }
 
-  if (!state.plugin_last_command.empty()) {
-    ImGui::TextColored(ui::colors().dim, "%s", state.plugin_last_command.c_str());
+  if (!state.plugin.last_command.empty()) {
+    ImGui::TextColored(ui::colors().dim, "%s", state.plugin.last_command.c_str());
   }
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
   ImGui::BeginChild("PluginOutputText", ImVec2(0, 150.0f * ui::dpi_scale()), true);
-  if (state.plugin_last_output.empty()) {
+  if (state.plugin.last_output.empty()) {
     ImGui::TextColored(ui::colors().dim, "Output will appear here.");
   } else {
-    ImGui::TextUnformatted(state.plugin_last_output.c_str());
+    ImGui::TextUnformatted(state.plugin.last_output.c_str());
   }
   ImGui::EndChild();
   ImGui::PopStyleColor();
@@ -858,47 +858,47 @@ void draw_output(AppState &state) {
 } // namespace
 
 void poll_plugin_tasks(AppState &state) {
-  if (state.plugin_refresh_pending && state.plugin_refresh_future.valid()) {
-    auto status = state.plugin_refresh_future.wait_for(std::chrono::milliseconds(0));
+  if (state.plugin.refresh_pending && state.plugin.refresh_future.valid()) {
+    auto status = state.plugin.refresh_future.wait_for(std::chrono::milliseconds(0));
     if (status == std::future_status::ready) {
       bool ok = false;
       try {
-        ok = state.plugin_refresh_future.get();
+        ok = state.plugin.refresh_future.get();
       } catch (const std::exception &ex) {
-        state.plugin_refresh_error = ex.what();
+        state.plugin.refresh_error = ex.what();
       } catch (...) {
-        state.plugin_refresh_error = "Unknown plugin refresh error";
+        state.plugin.refresh_error = "Unknown plugin refresh error";
       }
-      state.plugin_refresh_pending = false;
+      state.plugin.refresh_pending = false;
       if (ok) {
         set_status(state, locale::tr("plugins.sources_refreshed"));
         push_notification(state, locale::tr("plugins.sources_refreshed"));
       } else {
-        const std::string error = state.plugin_refresh_error.empty()
+        const std::string error = state.plugin.refresh_error.empty()
             ? "Plugin source refresh failed"
-            : state.plugin_refresh_error;
+            : state.plugin.refresh_error;
         set_status(state, error);
         push_notification(state, error, 5.0);
       }
     }
   }
 
-  if (state.plugin_run_pending && state.plugin_run_future.valid()) {
-    auto status = state.plugin_run_future.wait_for(std::chrono::milliseconds(0));
+  if (state.plugin.run_pending && state.plugin.run_future.valid()) {
+    auto status = state.plugin.run_future.wait_for(std::chrono::milliseconds(0));
     if (status == std::future_status::ready) {
       plugins::PluginRunResult result;
       try {
-        result = state.plugin_run_future.get();
+        result = state.plugin.run_future.get();
       } catch (const std::exception &ex) {
         result.error = ex.what();
       } catch (...) {
         result.error = "Unknown plugin runtime error";
       }
-      state.plugin_run_pending = false;
-      state.plugin_last_id = result.plugin_id;
-      state.plugin_last_output = result.output;
-      state.plugin_last_error = result.error;
-      state.plugin_last_command = result.command;
+      state.plugin.run_pending = false;
+      state.plugin.last_id = result.plugin_id;
+      state.plugin.last_output = result.output;
+      state.plugin.last_error = result.error;
+      state.plugin.last_command = result.command;
       if (result.ok) {
         char comp_buf[256];
         std::snprintf(comp_buf, sizeof(comp_buf), locale::tr("plugins.completed"), result.plugin_id.c_str());
@@ -940,9 +940,9 @@ void draw_plugins(AppState &state, ImVec2 avail) {
   std::vector<PluginSource> sources = state.plugin_manager.sources();
   std::vector<PluginPackage> catalog = filtered_catalog(state, sources);
   const PluginPackage *selected = nullptr;
-  if (state.plugin_selected_row >= 0 &&
-      state.plugin_selected_row < static_cast<int>(catalog.size())) {
-    selected = &catalog[static_cast<size_t>(state.plugin_selected_row)];
+  if (state.plugin.selected_row >= 0 &&
+      state.plugin.selected_row < static_cast<int>(catalog.size())) {
+    selected = &catalog[static_cast<size_t>(state.plugin.selected_row)];
   }
 
   draw_add_source_modal(state);
