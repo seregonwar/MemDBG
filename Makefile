@@ -105,7 +105,7 @@ ALL_DEPFILES := $(HOST_OBJECTS:.o=.d) $(PS4_OBJECTS:.o=.d) \
 # compiled against different layouts and trip the stack protector at runtime.
 -include $(ALL_DEPFILES)
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e check-locales check-headers tracer-tool FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine check-locales check-headers tracer-tool FORCE
 
 all: host
 
@@ -255,6 +255,18 @@ test-reconnect-e2e: host tests/test_reconnect_e2e.c
 	rm -rf $$tmpdir; \
 	exit $$rc
 
+test-reconnect-state-machine: host tests/test_reconnect_state_machine.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_reconnect_state_machine.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_reconnect_state_machine
+	@echo "--- Running Reconnect State Machine test ---"
+	@tmpdir=$$(mktemp -d /tmp/memdbg-e2e-sm.XXXXXX); \
+	port=19142; \
+	$(BUILD_DIR)/test_reconnect_state_machine 127.0.0.1 $$port \
+		$(HOST_TARGET) --bind=127.0.0.1 --debug-port=$$port --data-root=$$tmpdir --no-udp-log --no-replace-existing; \
+	rc=$$?; \
+	rm -rf $$tmpdir; \
+	exit $$rc
+
 test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_partition
@@ -310,7 +322,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)
