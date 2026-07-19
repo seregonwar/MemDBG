@@ -341,38 +341,114 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   if (notification_ready)
     pal_notification_send("MemDBG by seregonwar started");
 
-  pthread_t acceptor_tid;
-  /* Create a bounded worker pool for connection handlers.
-   * One worker can handle multiple sequential connections (the acceptor
-   * round-robins new connections to idle workers).  The pool size is
-   * derived from max_connections so a console with one frontend gets
-   * ~4 workers while a dev host accepting many tools gets more. */
+  /* ---- Acceptor supervisor loop (rest mode resilience) ----
+   * On console, the listening socket may be invalidated during rest mode
+   * (EBADF / ENOTSOCK).  The supervisor recreates the network endpoint
+   * and restarts the acceptor, allowing the payload to survive
+   * suspend/resume cycles. */
   unsigned int pool_workers =
       cfg.max_connections < 4U ? 2U :
       cfg.max_connections < 8U ? 4U : 8U;
-  memdbg_thread_pool_t *pool = memdbg_thread_pool_create(pool_workers);
-  if (pool == NULL) {
-    memdbg_log_write(MEMDBG_LOG_ERROR, "failed to create handler thread pool");
-    goto shutdown_cleanup;
-  }
 
-  if (acceptor_start(&cfg, listen_fd, pool, &acceptor_tid) != 0) {
-    memdbg_daemon_request_stop();
+  for (;;) {
+    pthread_t acceptor_tid;
+    acceptor_exit_reason_t exit_reason = ACCEPTOR_EXIT_STOP_REQUESTED;
+
+    memdbg_thread_pool_t *pool = memdbg_thread_pool_create(pool_workers);
+    if (pool == NULL) {
+      memdbg_log_write(MEMDBG_LOG_ERROR, "failed to create handler thread pool");
+      goto shutdown_cleanup;
+    }
+
+    if (acceptor_start(&cfg, listen_fd, pool, &acceptor_tid, &exit_reason) != 0) {
+      memdbg_daemon_request_stop();
+      memdbg_thread_pool_shutdown(pool);
+      memdbg_thread_pool_destroy(pool);
+      goto shutdown_cleanup;
+    }
+
+    (void)pthread_join(acceptor_tid, NULL);
+
+    /* Wake handlers and drain the pool before possibly recreating it. */
+    acceptor_shutdown_clients();
     memdbg_thread_pool_shutdown(pool);
     memdbg_thread_pool_destroy(pool);
-    goto shutdown_cleanup;
+
+    if (exit_reason != ACCEPTOR_EXIT_LISTENER_LOST)
+      break;  /* normal shutdown or fatal error */
+
+    /* Listener socket was invalidated (rest mode).  Recreate the network
+     * endpoint and go around again.  Stop auxiliary services first so their
+     * threads don't become zombies when pal_network_fini tears down sockets. */
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "acceptor: listener lost, recreating network endpoint");
+    memdbg_tracer_daemon_stop();
+    memdbg_legacy_stop();
+    (void)pal_socket_close(listen_fd);
+    listen_fd = PAL_INVALID_SOCKET;
+    memdbg_discovery_stop();
+    memdbg_klog_stop();
+    memdbg_beacon_stop();
+    memdbg_udp_log_stop();
+    pal_network_fini();
+
+    /* Backoff before retrying — give the kernel time to restore the
+     * network stack after a suspend/resume cycle. */
+    for (unsigned int attempt = 0U;
+         attempt < 30U && !memdbg_daemon_should_stop(); ++attempt) {
+      if (pal_network_init() == 0) {
+        if (open_debug_listener(&cfg, &listen_fd) == MEMDBG_OK)
+          break;
+        pal_network_fini();
+      }
+      memdbg_sleep_ms(500U);
+    }
+
+    if (listen_fd == PAL_INVALID_SOCKET || memdbg_daemon_should_stop()) {
+      memdbg_log_write(MEMDBG_LOG_ERROR,
+                       "acceptor: failed to recreate listener after rest mode");
+      break;
+    }
+
+    /* Recreate auxiliary network services torn down by pal_network_fini(). */
+    if (memdbg_daemon_should_stop()) break;
+    if (cfg.enable_udp_log) {
+      memdbg_udp_log_config_t ucfg2;
+      memdbg_udp_log_config_defaults(&ucfg2);
+      (void)snprintf(ucfg2.host, sizeof(ucfg2.host), "%s", cfg.udp_log_host);
+      ucfg2.port = cfg.udp_log_port;
+      ucfg2.broadcast = strcmp(cfg.udp_log_host, "255.255.255.255") == 0;
+      memdbg_status_t us = memdbg_udp_log_start(&ucfg2);
+      if (us != MEMDBG_OK)
+        memdbg_log_write(MEMDBG_LOG_WARN, "UDP log restart: %s",
+                         memdbg_strerror(us));
+    }
+    if (cfg.enable_legacy_compat) {
+      memdbg_status_t ls = memdbg_legacy_start(&cfg);
+      if (ls == MEMDBG_OK)
+        memdbg_log_write(MEMDBG_LOG_INFO, "legacy: restarted on tcp/%u", cfg.legacy_port);
+      else
+        memdbg_log_write(MEMDBG_LOG_WARN, "legacy restart: %s", memdbg_strerror(ls));
+    }
+    {
+      memdbg_status_t ds = memdbg_discovery_start(&cfg);
+      if (ds != MEMDBG_OK)
+        memdbg_log_write(MEMDBG_LOG_WARN, "discovery restart: %s", memdbg_strerror(ds));
+    }
+    {
+      pthread_t btid2;
+      if (memdbg_beacon_start(&btid2) == 0)
+        memdbg_log_write(MEMDBG_LOG_INFO, "beacon: restarted");
+    }
+    {
+      pthread_t ktid2;
+      if (memdbg_klog_start(&ktid2) == 0)
+        memdbg_log_write(MEMDBG_LOG_INFO, "klog: restarted");
+    }
+
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "acceptor: listener recreated, resuming accept loop");
   }
-
-  (void)pthread_join(acceptor_tid, NULL);
-
-  /* A remote shutdown must not wait forever for the other three role sockets
-   * in a desktop pool. Wake every handler before draining. */
-  acceptor_shutdown_clients();
-
-  /* Signal all worker threads to finish and join them.  This replaces the
-   * ad-hoc spin-drain that was needed with detached per-connection threads. */
-  memdbg_thread_pool_shutdown(pool);
-  memdbg_thread_pool_destroy(pool);
 
 shutdown_cleanup:
 

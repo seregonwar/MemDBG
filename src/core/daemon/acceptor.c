@@ -164,6 +164,7 @@ typedef struct {
   socket_t             listen_fd;
   memdbg_config_t      cfg;
   memdbg_thread_pool_t *pool;
+  acceptor_exit_reason_t *exit_reason;
 } acceptor_args_t;
 
 static void *acceptor_thread(void *arg) {
@@ -171,7 +172,11 @@ static void *acceptor_thread(void *arg) {
   socket_t listen_fd      = aargs->listen_fd;
   memdbg_config_t cfg     = aargs->cfg;
   memdbg_thread_pool_t *pool = aargs->pool;
+  acceptor_exit_reason_t *exit_reason = aargs->exit_reason;
   free(aargs);
+
+  /* Default to normal stop unless we detect a socket loss. */
+  if (exit_reason != NULL) *exit_reason = ACCEPTOR_EXIT_STOP_REQUESTED;
 
   while (!memdbg_daemon_should_stop()) {
     struct sockaddr_storage ss;
@@ -189,7 +194,13 @@ static void *acceptor_thread(void *arg) {
         continue;
       }
       if (memdbg_daemon_should_stop()) break;
-      if (errno == EBADF || errno == ENOTSOCK) break;
+      if (errno == EBADF || errno == ENOTSOCK) {
+        /* Listener was invalidated (rest mode, kernel reclaim).  Signal the
+         * daemon supervisor to recreate the network endpoint. */
+        if (exit_reason != NULL)
+          *exit_reason = ACCEPTOR_EXIT_LISTENER_LOST;
+        break;
+      }
       memdbg_log_write(MEMDBG_LOG_WARN, "accept failed: %s",
                        pal_socket_last_error());
       /* A temporary kernel/network error must not permanently disable the
@@ -316,7 +327,8 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
 }
 
 int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
-                   memdbg_thread_pool_t *pool, pthread_t *out_tid) {
+                   memdbg_thread_pool_t *pool, pthread_t *out_tid,
+                   acceptor_exit_reason_t *exit_reason) {
   acceptor_args_t *aargs = (acceptor_args_t *)malloc(sizeof(*aargs));
   if (aargs == NULL) {
     memdbg_log_write(MEMDBG_LOG_ERROR, "failed to allocate acceptor args");
@@ -325,6 +337,7 @@ int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
   aargs->listen_fd = listen_fd;
   aargs->cfg       = *cfg;
   aargs->pool      = pool;
+  aargs->exit_reason = exit_reason;
 
   if (pthread_create(out_tid, NULL, acceptor_thread, aargs) != 0) {
     free(aargs);

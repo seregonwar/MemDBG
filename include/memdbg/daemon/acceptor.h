@@ -18,11 +18,17 @@
 extern "C" {
 #endif
 
+typedef enum {
+  ACCEPTOR_EXIT_STOP_REQUESTED,   /* daemon shutting down normally */
+  ACCEPTOR_EXIT_LISTENER_LOST     /* socket invalidated (rest mode / kernel reclaim) */
+} acceptor_exit_reason_t;
+
 memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
                                     socket_t *listen_fd);
 
 int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
-                   memdbg_thread_pool_t *pool, pthread_t *out_tid);
+                   memdbg_thread_pool_t *pool, pthread_t *out_tid,
+                   acceptor_exit_reason_t *exit_reason);
 
 /* Wake all connection handlers during daemon replacement.  shutdown(2) is
  * used rather than close(2), so each handler retains ownership of its fd and

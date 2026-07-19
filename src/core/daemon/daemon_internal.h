@@ -14,6 +14,7 @@
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/daemon/thread_pool.h"
+#include "memdbg/daemon/acceptor.h"
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -62,7 +63,8 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
                                     socket_t *listen_fd);
 
 int acceptor_start(const memdbg_config_t *cfg, socket_t listen_fd,
-                   memdbg_thread_pool_t *pool, pthread_t *out_tid);
+                   memdbg_thread_pool_t *pool, pthread_t *out_tid,
+                   acceptor_exit_reason_t *exit_reason);
 
 /* daemon_sleep_ms is now memdbg_sleep_ms (include pal_time.h) */
 
