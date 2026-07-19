@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,23 +30,27 @@
 
 static pthread_mutex_t  g_mtx       = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t        g_thread;
-static volatile bool    g_running   = false;
-static volatile bool    g_starting  = false;
-static volatile bool    g_stop_req  = false;
-static bool             g_thread_created = false;
+static atomic_bool     g_running       = false;
+static atomic_bool     g_starting      = false;
+static atomic_bool     g_stop_req      = false;
+static bool            g_thread_created = false;
 
-/* Ring buffer — single producer (tracer thread), single consumer (poll). */
+/* Ring buffer — single producer (tracer thread), single consumer (poll).
+ * head/tail use C11 atomic with release/acquire ordering so that the
+ * pattern is correct even on weakly-ordered CPUs (ARM in PS4/PS5). */
 static memdbg_tracer_event_t g_ring[TRACER_DAEMON_RING_SIZE];
-static volatile uint32_t     g_head = 0;  /* producer index */
-static volatile uint32_t     g_tail = 0;  /* consumer index */
-static volatile uint32_t     g_total_events = 0;
+static atomic_uint          g_head = 0;  /* producer index */
+static atomic_uint          g_tail = 0;  /* consumer index */
+static atomic_uint          g_total_events = 0;
 
-/* Status fields. */
-static volatile int32_t g_state        = MEMDBG_TRACER_STATE_IDLE;
-static volatile int32_t g_crash_signal = 0;
-static char             g_dump_path[256] = "";
-static uint64_t         g_start_time_ns  = 0;
-static int32_t          g_target_pid     = 0;
+/* Status fields.  Most are also covered by g_mtx; atomics provide an
+ * additional safety net for lock-free reads (e.g. g_stop_req in the
+ * tracer thread hot loop). */
+static atomic_int  g_state        = MEMDBG_TRACER_STATE_IDLE;
+static atomic_int  g_crash_signal = 0;
+static char        g_dump_path[256] = "";
+static uint64_t    g_start_time_ns  = 0;
+static int32_t     g_target_pid     = 0;
 
 /* ------------------------------------------------------------------ */
 /*  Timestamp                                                         */
@@ -62,27 +67,28 @@ static uint64_t now_ns(void) {
 /* ------------------------------------------------------------------ */
 
 static void ring_push(const memdbg_tracer_event_t *ev) {
-  uint32_t h = g_head;
+  uint32_t h = atomic_load_explicit(&g_head, memory_order_relaxed);
   g_ring[h & TRACER_DAEMON_RING_MASK] = *ev;
-  __sync_synchronize();
-  g_head = h + 1;
-  g_total_events++;
-  /* Advance tail if we wrapped. */
-  uint32_t t = g_tail;
-  if (g_head - t > TRACER_DAEMON_RING_SIZE) {
-    g_tail = g_head - TRACER_DAEMON_RING_SIZE;
+  atomic_store_explicit(&g_head, h + 1, memory_order_release);
+  atomic_fetch_add_explicit(&g_total_events, 1U, memory_order_relaxed);
+  /* Advance tail if we wrapped (consumer index read with acquire). */
+  uint32_t t = atomic_load_explicit(&g_tail, memory_order_acquire);
+  uint32_t new_head = atomic_load_explicit(&g_head, memory_order_relaxed);
+  if (new_head - t > TRACER_DAEMON_RING_SIZE) {
+    atomic_store_explicit(&g_tail, new_head - TRACER_DAEMON_RING_SIZE,
+                          memory_order_release);
   }
 }
 
 static uint32_t ring_pop(memdbg_tracer_event_t *out, uint32_t max_count) {
-  uint32_t t = g_tail;
-  uint32_t h = g_head;
+  uint32_t t = atomic_load_explicit(&g_tail, memory_order_relaxed);
+  uint32_t h = atomic_load_explicit(&g_head, memory_order_acquire);
   uint32_t avail = h - t;
   if (avail == 0 || max_count == 0) return 0;
   uint32_t n = avail < max_count ? avail : max_count;
   for (uint32_t i = 0; i < n; i++)
     out[i] = g_ring[(t + i) & TRACER_DAEMON_RING_MASK];
-  g_tail = t + n;
+  atomic_store_explicit(&g_tail, t + n, memory_order_release);
   return n;
 }
 
@@ -101,16 +107,16 @@ static void *tracer_thread_fn(void *arg) {
   /* 1. Attach using pal_debug */
   if (pal_debug_attach((int)pid) != 0) {
     pthread_mutex_lock(&g_mtx);
-    g_state = MEMDBG_TRACER_STATE_STOPPED;
-    g_running = false;
-    g_starting = false;
+    atomic_store(&g_state, MEMDBG_TRACER_STATE_STOPPED);
+    atomic_store(&g_running, false);
+    atomic_store(&g_starting, false);
     pthread_mutex_unlock(&g_mtx);
     return NULL;
   }
   attached = true;
 
   /* A detach can arrive while the attach request is still completing. */
-  if (g_stop_req) goto done;
+  if (atomic_load(&g_stop_req)) goto done;
 
   /* Try full syscall tracing if supported. */
   bool has_syscall = false;
