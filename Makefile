@@ -439,7 +439,8 @@ host-ubsan:
 	$(MAKE) clean
 	$(MAKE) host HOST_CC=clang \
 		HOST_CPPFLAGS="$(SAN_CPPFLAGS)" \
-		HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+		HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -O1 -g -fsanitize=undefined -fno-sanitize-recover=all" \
+		HOST_LDFLAGS="-fsanitize=undefined"
 	@echo "Built with UBSan. Run with: UBSAN_OPTIONS=halt_on_error=1 ./build/MemDBG-host"
 
 host-tsan:

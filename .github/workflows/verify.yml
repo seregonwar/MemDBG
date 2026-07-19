@@ -316,8 +316,13 @@ jobs:
 
       - name: Run ASan tests
         run: |
+          set -euo pipefail
           export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
-          make test || echo "::warning::Some ASan tests failed"
+          # Run unit tests — these must pass under ASan or the job fails.
+          make test-sjson test-memory test-thread-pool test-lz4 test-scan-partition
+          # E2E tests (need daemon); emit warning instead of hard-fail
+          # because port contention or timing can produce false positives.
+          make test-debugger-e2e || echo "::warning::ASan E2E test exited non-zero"
 
       - name: Build with UndefinedBehaviorSanitizer
         run: |
@@ -330,8 +335,10 @@ jobs:
 
       - name: Run UBSan tests
         run: |
+          set -euo pipefail
           export UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1
-          make test || echo "::warning::Some UBSan tests failed"
+          make test-sjson test-memory test-thread-pool test-lz4 test-scan-partition
+          make test-debugger-e2e || echo "::warning::UBSan E2E test exited non-zero"
 
       - name: Build with ThreadSanitizer
         run: |
@@ -344,8 +351,10 @@ jobs:
 
       - name: Run TSan tests
         run: |
+          set -euo pipefail
           export TSAN_OPTIONS=halt_on_error=1:abort_on_error=1:history_size=7
-          make test || echo "::warning::Some TSan tests failed"
+          make test-sjson test-thread-pool
+          make test-debugger-e2e || echo "::warning::TSan E2E test exited non-zero"
 
   static-analysis:
     name: Static analysis (clang-tidy)
