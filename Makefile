@@ -68,6 +68,15 @@ COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude -Isrc/core/daemon
 COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
 HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2
+# Console (PS4/PS5) builds share the host's strictness where the SDK allows.
+# -Werror is gated behind CONSOLE_WERROR=1 because console SDK headers
+# may trigger warnings outside of MemDBG's control.
+CONSOLE_CFLAGS := $(COMMON_CFLAGS) -Wconversion -Wshadow -Wformat=2
+ifneq ($(CONSOLE_WERROR),0)
+CONSOLE_WERROR_FLAG := -Werror
+else
+CONSOLE_WERROR_FLAG :=
+endif
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
@@ -375,19 +384,19 @@ $(PS5_LIB_TARGET): $(PS5_LIB_OBJECTS)
 
 $(BUILD_DIR)/ps4/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 $(CONSOLE_WERROR_FLAG) $(CONSOLE_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps4-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 -DMEMDBG_NO_MAIN=1 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	$(PS4_CC) $(COMMON_CPPFLAGS) -DPLATFORM_PS4=1 -DMEMDBG_NO_MAIN=1 $(CONSOLE_WERROR_FLAG) $(CONSOLE_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps5/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $(COMMON_CPPFLAGS) -I$(ZYDIS_DIR)/include -I$(ZYCORE_DIR)/include $(PS5_KEYSTONE_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_HAS_ZYDIS=1 -mavx2 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	$(PS5_CC) $(COMMON_CPPFLAGS) -I$(ZYDIS_DIR)/include -I$(ZYCORE_DIR)/include $(PS5_KEYSTONE_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_HAS_ZYDIS=1 -mavx2 $(CONSOLE_WERROR_FLAG) $(CONSOLE_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD_DIR)/ps5-lib/%.o: src/%.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(dir $@)
-	$(PS5_CC) $(COMMON_CPPFLAGS) -I$(ZYDIS_DIR)/include -I$(ZYCORE_DIR)/include $(PS5_KEYSTONE_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 -DMEMDBG_HAS_ZYDIS=1 -mavx2 $(COMMON_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	$(PS5_CC) $(COMMON_CPPFLAGS) -I$(ZYDIS_DIR)/include -I$(ZYCORE_DIR)/include $(PS5_KEYSTONE_CPPFLAGS) -DPLATFORM_PS5=1 -DMEMDBG_NO_MAIN=1 -DMEMDBG_HAS_ZYDIS=1 -mavx2 $(CONSOLE_WERROR_FLAG) $(CONSOLE_CFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 # Zydis disassembler objects (cross-compiled for PS5)
 $(BUILD_DIR)/ps5-zydis/%.o: $(ZYDIS_DIR)/src/%.c

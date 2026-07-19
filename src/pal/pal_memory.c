@@ -83,12 +83,10 @@ typedef struct {
 
 static fd_cache_entry_t g_fd_cache[MEMDBG_FD_CACHE_MAX];
 static pthread_mutex_t  g_fd_cache_mtx = PTHREAD_MUTEX_INITIALIZER;
-static bool             g_fd_cache_init = false;
+static pthread_once_t   g_fd_cache_once = PTHREAD_ONCE_INIT;
 
-static void fd_cache_ensure_init(void) {
-  if (g_fd_cache_init) return;
+static void fd_cache_init_once(void) {
   memset(g_fd_cache, 0, sizeof(g_fd_cache));
-  g_fd_cache_init = true;
 }
 
 /* Look up or create a cached fd for `pid`.  Returns -1 on error. */
@@ -97,7 +95,7 @@ static int fd_cache_get(int pid) {
   int slot = -1, empty_slot = -1;
   time_t oldest = now;
 
-  fd_cache_ensure_init();
+  pthread_once(&g_fd_cache_once, fd_cache_init_once);
   pthread_mutex_lock(&g_fd_cache_mtx);
 
   for (int i = 0; i < MEMDBG_FD_CACHE_MAX; ++i) {

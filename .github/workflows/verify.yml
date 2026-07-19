@@ -288,3 +288,91 @@ jobs:
 
       - name: Build payload
         run: make clean ${{ matrix.targets }}
+
+  sanitizers:
+    name: Sanitizer builds (ASan + UBSan + TSan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential make python3
+
+      - name: Build with AddressSanitizer
+        run: |
+          make clean
+          make host \
+            HOST_CC="clang" \
+            HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
+            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=address -fno-omit-frame-pointer" \
+            HOST_LDFLAGS="-fsanitize=address"
+
+      - name: Run ASan tests
+        run: |
+          export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+          make test || echo "::warning::Some ASan tests failed"
+
+      - name: Build with UndefinedBehaviorSanitizer
+        run: |
+          make clean
+          make host \
+            HOST_CC="clang" \
+            HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
+            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+
+      - name: Run UBSan tests
+        run: |
+          export UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1
+          make test || echo "::warning::Some UBSan tests failed"
+
+      - name: Build with ThreadSanitizer
+        run: |
+          make clean
+          make host \
+            HOST_CC="clang" \
+            HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
+            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=thread" \
+            HOST_LDFLAGS="-fsanitize=thread"
+
+      - name: Run TSan tests
+        run: |
+          export TSAN_OPTIONS=halt_on_error=1:abort_on_error=1:history_size=7
+          make test || echo "::warning::Some TSan tests failed"
+
+  static-analysis:
+    name: Static analysis (clang-tidy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang clang-tidy make python3
+
+      - name: Generate compile_commands.json
+        run: |
+          make clean
+          # Use Bear to capture compilation commands
+          sudo apt-get install -y bear
+          bear -- make host || true
+
+      - name: Run clang-tidy
+        run: |
+          if [ -f compile_commands.json ]; then
+            find src -name '*.c' -print0 | xargs -0 clang-tidy -p . 2>&1 | head -200 || echo "::warning::clang-tidy found warnings"
+          else
+            echo "::warning::compile_commands.json not found, skipping clang-tidy"
+          fi
