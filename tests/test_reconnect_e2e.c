@@ -37,7 +37,8 @@
 /* ---- Configuration ---- */
 
 #define IO_TIMEOUT_SEC 10
-#define RESTART_SLEEP_MS 800
+#define CONNECT_RETRY_MS 5000
+#define CONNECT_STEP_MS 200
 #define KILL_WAIT_MS 600
 #define RESP_BUF_SIZE (256U * 1024U)
 
@@ -75,6 +76,32 @@ static int tcp_connect(void) {
     perror("connect");
     close(fd);
     return -1;
+  }
+  return fd;
+}
+
+/* Retry tcp_connect() with staggered sleeps until `timeout_ms` elapses.
+ * Returns a connected fd or -1 on exhaustion. */
+static int tcp_connect_retry(uint32_t timeout_ms) {
+  uint32_t elapsed = 0;
+  int fd = -1;
+
+  while (elapsed < timeout_ms) {
+    fd = tcp_connect();
+    if (fd >= 0) {
+      printf("  connected after %u ms\n", elapsed);
+      return fd;
+    }
+
+    uint32_t delay = CONNECT_STEP_MS;
+    if (elapsed + delay > timeout_ms) delay = timeout_ms - elapsed;
+    if (delay > 0) sleep_ms(delay);
+    elapsed += delay;
+  }
+
+  fd = tcp_connect(); /* final attempt */
+  if (fd >= 0) {
+    printf("  connected after %u ms (final attempt)\n", elapsed);
   }
   return fd;
 }
@@ -151,8 +178,7 @@ static int spawn_daemon(void) {
     perror("execvp");
     _exit(1);
   }
-  /* Give the daemon time to bind the port. */
-  sleep_ms(RESTART_SLEEP_MS);
+  /* Daemon binds asynchronously — callers must use tcp_connect_retry(). */
   return 0;
 }
 
@@ -281,7 +307,7 @@ int main(int argc, char **argv) {
   /* ---- Test 3: Reconnect after restart ---- */
   printf("\n[3] Reconnect after restart\n");
 
-  fd = tcp_connect();
+  fd = tcp_connect_retry(CONNECT_RETRY_MS);
   if (fd < 0) {
     printf("FAIL: reconnect after restart\n");
     kill_daemon();
@@ -324,7 +350,7 @@ int main(int argc, char **argv) {
   }
   printf("  daemon restarted (2nd cycle)\n");
 
-  fd = tcp_connect();
+  fd = tcp_connect_retry(CONNECT_RETRY_MS);
   if (fd < 0) {
     printf("FAIL: reconnect after second restart\n");
     kill_daemon();
