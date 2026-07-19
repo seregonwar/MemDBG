@@ -103,7 +103,7 @@ static void draw_connection_section(AppState &state) {
     dump_opts.dialog_title = locale::tr("file_picker.select_dump_dir");
     dump_opts.folder_mode = true;
     dump_opts.placeholder = "dumps";
-    ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts);
+    ui::file_path_input(state.mem.dump_path, sizeof(state.mem.dump_path), dump_opts);
   }
 
   ui::end_panel();
@@ -442,7 +442,7 @@ static void draw_actions_section(AppState &state) {
     state.payload_platform = 0;
     state.payload_auto_inject = false;
     state.payload_auto_shutdown = false;
-    std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", "dumps");
+    std::snprintf(state.mem.dump_path, sizeof(state.mem.dump_path), "%s", "dumps");
     state.console_targets.clear();
     state.selected_target_index = 0;
     ensure_console_targets(state);

@@ -373,7 +373,7 @@ bool load_frontend_settings(AppState &state, std::string *error) {
     } else if (key == "udp_port") {
       state.udp_port = std::atoi(value.c_str());
     } else if (key == "dump_path" && !value.empty()) {
-      std::snprintf(state.dump_path, sizeof(state.dump_path), "%s", value.c_str());
+      std::snprintf(state.mem.dump_path, sizeof(state.mem.dump_path), "%s", value.c_str());
     } else if (key == "language") {
       state.language = static_cast<int>(locale::lang_from_code(value.c_str()));
     } else if (key == "taskmgr_prefetch_on_connect") {
@@ -460,7 +460,7 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "host=" << state.host << "\n";
   out << "debug_port=" << state.debug_port << "\n";
   out << "udp_port=" << state.udp_port << "\n";
-  out << "dump_path=" << state.dump_path << "\n";
+  out << "dump_path=" << state.mem.dump_path << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr.prefetch_on_connect ? 1 : 0) << "\n";
   out << "sandbox_enabled=" << (state.sandbox_enabled ? 1 : 0) << "\n";
@@ -493,7 +493,7 @@ static HelloInfo           s_temp_hello;
 static std::string         s_temp_error;
 
 void connect_console(AppState &state) {
-  if (state.connect_pending) return;  /* already connecting */
+  if (state.conn.connect_pending) return;  /* already connecting */
   if (s_connect_future.valid()) s_connect_future.wait();  /* drain previous async */
   ensure_console_targets(state);
   save_current_console_target(state);
@@ -501,9 +501,9 @@ void connect_console(AppState &state) {
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;
-  state.klog_connected = false;
-  state.klog_paused = false;
-  state.processes.clear(); state.maps.clear(); state.memory.clear();
+  state.klog.connected = false;
+  state.klog.paused = false;
+  state.processes.clear(); state.maps.clear(); state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
   state.scan.is_unknown_session = false;
@@ -512,7 +512,7 @@ void connect_console(AppState &state) {
   state.has_process_info = false;
   s_temp_client.set_socket_timeout_ms(static_cast<uint32_t>(std::max(1000, state.socket_timeout_ms)));
   s_temp_client.disconnect();
-  state.connect_pending = true;
+  state.conn.connect_pending = true;
 
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", ("Connecting to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
@@ -592,7 +592,7 @@ void request_maps_refresh_async(AppState &state) {
     set_status(state, locale::tr("app.maps_refresh_in_progress"));
     return;
   }
-  if (state.connect_pending || state.telemetry_pending || state.scan.async_pending) {
+  if (state.conn.connect_pending || state.telemetry_pending || state.scan.async_pending) {
     set_status(state, locale::tr("app.wait_active"));
     return;
   }
@@ -848,13 +848,13 @@ static void poll_taskmgr_prefetch(AppState &state) {
 
 /* Poll async connect result. Called at start of every frame. */
 static void poll_connect(AppState &state) {
-  if (!state.connect_pending) return;
+  if (!state.conn.connect_pending) return;
   if (!s_connect_future.valid()) return;
 
   auto status = s_connect_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.connect_pending = false;
+  state.conn.connect_pending = false;
   bool ok = false;
   try {
     ok = s_connect_future.get();
@@ -896,7 +896,7 @@ static void poll_connect(AppState &state) {
 
 /* Modal spinner drawn during async connect */
 static void draw_connect_spinner(AppState &state) {
-  if (!state.connect_pending) return;
+  if (!state.conn.connect_pending) return;
 
   const float scl = ui::dpi_scale();
   const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -944,7 +944,7 @@ static void draw_connect_spinner(AppState &state) {
 }
 
 void disconnect_console(AppState &state, const char *reason) {
-  state.connect_pending = false;  /* cancel any in-flight async connect */
+  state.conn.connect_pending = false;  /* cancel any in-flight async connect */
 
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
   if (state.scan.async_future.valid()) state.scan.async_future.wait();
@@ -952,7 +952,7 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
   if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
-  if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
+  if (state.conn.heartbeat_future.valid()) state.conn.heartbeat_future.wait();
   if (state.tracer.future.valid()) state.tracer.future.wait();
   if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
   if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
@@ -963,9 +963,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr.resource_pending = false;  /* cancel any in-flight task manager fetch */
   state.taskmgr.prefetch_pending = false;
-  state.heartbeat_pending = false;
-  state.heartbeat_error.clear();
-  state.next_heartbeat = 0.0;
+  state.conn.heartbeat_pending = false;
+  state.conn.heartbeat_error.clear();
+  state.conn.next_heartbeat = 0.0;
   const bool tracer_may_own_target = state.tracer.pending ||
       state.tracer.target_pid > 0 ||
       state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING;
@@ -987,9 +987,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;
-  state.klog_connected = false;
-  state.klog_paused = false;
-  state.processes.clear(); state.maps.clear(); state.memory.clear();
+  state.klog.connected = false;
+  state.klog.paused = false;
+  state.processes.clear(); state.maps.clear(); state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
   std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
@@ -1142,12 +1142,12 @@ static void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 2.0f);
   ImGui::BeginChild("SidebarStatus", ImVec2(0, 52.0f * scl), true, ImGuiWindowFlags_NoScrollbar);
   const bool connected = state.client.connected();
-  const ImVec4 status_color = state.connect_pending ? ui::colors().warning :
+  const ImVec4 status_color = state.conn.connect_pending ? ui::colors().warning :
                               connected ? ui::colors().success : ui::colors().dim;
   ui::status_dot(status_color);
   ImGui::SameLine();
   ImGui::BeginGroup();
-  ImGui::TextColored(status_color, "%s", state.connect_pending ? locale::tr("status.connecting") :
+  ImGui::TextColored(status_color, "%s", state.conn.connect_pending ? locale::tr("status.connecting") :
                                           connected ? locale::tr("status.connected") : locale::tr("status.offline"));
   ImGui::TextColored(ui::colors().dim, "%s:%d", state.host, state.debug_port);
   ImGui::EndGroup();
@@ -1238,7 +1238,7 @@ static void topbar_select_process(AppState &state, int row) {
   state.selected_pid = state.processes[row].pid;
   state.maps.clear();
   state.selected_map_row = -1;
-  state.memory.clear();
+  state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear();
   state.scan.snapshot_value_len = 0;
@@ -1376,7 +1376,7 @@ static void draw_console_target_combo(AppState &state, float width) {
   ensure_console_targets(state);
   const ConsoleTarget preview_target = current_console_target_from_fields(state);
   const std::string preview = console_target_label(preview_target);
-  const bool locked = state.client.connected() || state.connect_pending;
+  const bool locked = state.client.connected() || state.conn.connect_pending;
 
   topbar_align();
   const float frame_pad_y = std::max(0.0f, (topbar_control_h() - ImGui::GetFontSize()) * 0.5f);
@@ -1450,7 +1450,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   ImGui::EndDisabled();
 
   const bool connected = state.client.connected();
-  const ImVec4 session_color = state.connect_pending ? ui::colors().warning :
+  const ImVec4 session_color = state.conn.connect_pending ? ui::colors().warning :
                                connected ? ui::colors().success : ui::colors().danger;
   if (topbar_w > 1120.0f * scl) {
     ImGui::SameLine();
@@ -1517,7 +1517,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
     if (topbar_button("TopbarSettings", icons::kSettings, locale::tr("topbar.settings"), 130.0f * scl))
       state.screen = Screen::Settings;
     ImGui::SameLine();
-    if (state.connect_pending) {
+    if (state.conn.connect_pending) {
       ImGui::BeginDisabled();
       (void)topbar_button("TopbarConnecting", icons::kConnect, locale::tr("topbar.connecting"), 136.0f * scl, true);
       ImGui::EndDisabled();
@@ -1716,7 +1716,7 @@ static void poll_locale_repository(AppState &state) {
 }
 
 static void poll_session_health(AppState &state) {
-  if (state.has_hello && !state.client.connected() && !state.connect_pending) {
+  if (state.has_hello && !state.client.connected() && !state.conn.connect_pending) {
     const std::string error = state.client.last_error();
     const std::string message = error.empty()
                                     ? "Payload connection lost"
@@ -1725,31 +1725,31 @@ static void poll_session_health(AppState &state) {
     return;
   }
 
-  if (state.heartbeat_pending) {
-    if (!state.heartbeat_future.valid()) {
-      state.heartbeat_pending = false;
+  if (state.conn.heartbeat_pending) {
+    if (!state.conn.heartbeat_future.valid()) {
+      state.conn.heartbeat_pending = false;
       return;
     }
 
-    auto status = state.heartbeat_future.wait_for(std::chrono::milliseconds(0));
+    auto status = state.conn.heartbeat_future.wait_for(std::chrono::milliseconds(0));
     if (status != std::future_status::ready) {
       return;
     }
 
     bool ok = false;
     try {
-      ok = state.heartbeat_future.get();
+      ok = state.conn.heartbeat_future.get();
     } catch (const std::exception &ex) {
-      state.heartbeat_error = ex.what();
+      state.conn.heartbeat_error = ex.what();
     } catch (...) {
-      state.heartbeat_error = "Unknown heartbeat error";
+      state.conn.heartbeat_error = "Unknown heartbeat error";
     }
-    state.heartbeat_pending = false;
+    state.conn.heartbeat_pending = false;
 
     if (!ok) {
-      const std::string error = state.heartbeat_error.empty()
+      const std::string error = state.conn.heartbeat_error.empty()
                                     ? state.client.last_error()
-                                    : state.heartbeat_error;
+                                    : state.conn.heartbeat_error;
       const std::string message = error.empty()
                                       ? "Payload connection lost"
                                       : "Payload connection lost: " + error;
@@ -1757,11 +1757,11 @@ static void poll_session_health(AppState &state) {
       return;
     }
 
-    state.next_heartbeat = ImGui::GetTime() + 2.5;
+    state.conn.next_heartbeat = ImGui::GetTime() + 2.5;
     return;
   }
 
-  if (!state.client.connected() || state.connect_pending ||
+  if (!state.client.connected() || state.conn.connect_pending ||
       state.telemetry_pending || state.scan.async_pending ||
       state.map_refresh_pending || state.taskmgr.resource_pending ||
       state.taskmgr.prefetch_pending || state.plugin.refresh_pending ||
@@ -1770,20 +1770,20 @@ static void poll_session_health(AppState &state) {
   }
 
   const double now = ImGui::GetTime();
-  if (now < state.next_heartbeat) {
+  if (now < state.conn.next_heartbeat) {
     return;
   }
 
-  if (state.heartbeat_future.valid()) {
-    state.heartbeat_future.wait();
+  if (state.conn.heartbeat_future.valid()) {
+    state.conn.heartbeat_future.wait();
   }
-  state.heartbeat_pending = true;
-  state.heartbeat_error.clear();
-  state.heartbeat_future = std::async(std::launch::async, [&state]() -> bool {
+  state.conn.heartbeat_pending = true;
+  state.conn.heartbeat_error.clear();
+  state.conn.heartbeat_future = std::async(std::launch::async, [&state]() -> bool {
     if (state.client.ping()) {
       return true;
     }
-    state.heartbeat_error = state.client.last_error();
+    state.conn.heartbeat_error = state.client.last_error();
     return false;
   });
 }
@@ -1823,7 +1823,7 @@ static void handle_global_shortcuts(AppState &state) {
   if (ImGui::IsKeyPressed(ImGuiKey_F9)) state.screen = Screen::Trainer;
   if (ImGui::IsKeyPressed(ImGuiKey_F10)) state.screen = Screen::Logs;
   if (ImGui::IsKeyPressed(ImGuiKey_F11)) state.screen = Screen::Plugins;
-  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending) {
+  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.conn.connect_pending) {
     if (client_async_busy(state)) {
       set_status(state, locale::tr("app.wait_active"));
     } else if (state.client.connected()) {

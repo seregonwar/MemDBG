@@ -225,7 +225,7 @@ plugins::PluginRunContext build_run_context(const AppState &state) {
   context.connected = state.client.connected();
   context.selected_pid = state.selected_pid;
   context.selected_process_name = selected_process_name(state);
-  context.dump_path = state.dump_path;
+  context.dump_path = state.mem.dump_path;
   context.trainer_file_path = state.plugin.trainer_file_path;
   context.protocol_version = state.has_hello ? state.hello.protocol_version : 0U;
   context.capabilities = state.has_hello ? state.hello.capabilities : 0U;
@@ -973,9 +973,9 @@ void draw_plugins(AppState &state, ImVec2 avail) {
     opts.id = "##PluginBundleRoot";
     opts.dialog_title = "Select plugin bundle root folder";
     opts.folder_mode = true;
-    if (ui::file_path_input(state.plugin_bundle_root,
-                            sizeof(state.plugin_bundle_root), opts)) {
-      state.plugin_manager.set_bundle_root(state.plugin_bundle_root);
+    if (ui::file_path_input(state.mem.plugin_bundle_root,
+                            sizeof(state.mem.plugin_bundle_root), opts)) {
+      state.plugin_manager.set_bundle_root(state.mem.plugin_bundle_root);
       start_refresh(state);
     }
   }

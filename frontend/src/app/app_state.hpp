@@ -514,6 +514,64 @@ struct ScannerState {
   std::vector<AutoSearchCandidate> auto_search_temp_candidates;
 };
 
+/* ---- Connection state ----
+ * Extracted from the monolithic AppState to reduce God Object risk
+ * (external audit recommendation). */
+struct ConnectionState {
+  bool connect_pending = false;
+  bool connect_cancel_requested = false;
+  uint64_t connect_generation = 0;
+  bool heartbeat_pending = false;
+  bool debugger_attach_pending = false;
+  bool debugger_threads_pending = false;
+  std::future<bool> heartbeat_future;
+  std::string heartbeat_error;
+  double next_heartbeat = 0.0;
+  bool shutdown_started = false;
+};
+
+/* ---- Memory view state ----
+ * Extracted from the monolithic AppState to reduce God Object risk. */
+struct MemoryState {
+  char read_address[32] = "0x0";
+  int read_length = 256;
+  std::vector<uint8_t> memory;
+  std::vector<uint8_t> memory_previous;
+  uint64_t memory_base = 0;
+  uint64_t memory_previous_base = 0;
+  bool memory_overlay_changes = true;
+  bool memory_overlay_freed_allocs = true;
+  bool memory_auto_refresh = false;
+  float memory_auto_refresh_interval = 0.5f;
+  double next_memory_auto_refresh = 0.0;
+  char write_address[32] = "0x0";
+  char write_bytes[512] = "";
+  char dump_path[512] = "dumps";
+  char plugin_bundle_root[512] = "";
+  char alloc_address[32] = "0x0";
+  char alloc_size[32] = "0x100";
+  char alloc_events_text[4096] = "";
+  uint64_t allocation_event_counter = 0;
+  std::vector<AllocationRecord> allocations;
+  std::vector<std::string> allocation_findings;
+  std::vector<std::string> allocation_alerts;
+};
+
+/* ---- KLOG streaming state ----
+ * Extracted from the monolithic AppState to reduce God Object risk. */
+struct KlogState {
+  bool connected = false;
+  uint16_t port = 0;
+  std::deque<std::string> lines;
+  std::vector<uint8_t> raw;
+  int max_lines = 5000;
+  bool auto_scroll = true;
+  double last_poll = 0.0;
+  bool paused = false;
+  char search[128] = "";
+  size_t total_received = 0;
+};
+
 struct AppState {
   ClientPool pool;
   /* Backward-compatible reference: state.client.xxx() routes to pool.control().
@@ -583,31 +641,8 @@ struct AppState {
   int selected_map_row = -1;
   std::unordered_set<uint64_t> selected_map_starts;
 
-  char read_address[32] = "0x0";
-  int read_length = 256;
-  std::vector<uint8_t> memory;
-  std::vector<uint8_t> memory_previous;
-  uint64_t memory_base = 0;
-  uint64_t memory_previous_base = 0;
-  bool memory_overlay_changes = true;
-  bool memory_overlay_freed_allocs = true;
-
-  bool memory_auto_refresh = false;
-  float memory_auto_refresh_interval = 0.5f;
-  double next_memory_auto_refresh = 0.0;
-
-  char write_address[32] = "0x0";
-  char write_bytes[512] = "";
-  char dump_path[512] = "dumps";
-  char plugin_bundle_root[512] = "";
-
-  char alloc_address[32] = "0x0";
-  char alloc_size[32] = "0x100";
-  char alloc_events_text[4096] = "";
-  uint64_t allocation_event_counter = 0;
-  std::vector<AllocationRecord> allocations;
-  std::vector<std::string> allocation_findings;
-  std::vector<std::string> allocation_alerts;
+  /* ---- Memory view state (see MemoryState above) ---- */
+  MemoryState mem;
 
   int process_dump_max_mb = 128;
   std::string process_analysis_report;
@@ -702,18 +737,8 @@ struct AppState {
 
 
 
-  /* ---- Async connect ---- */
-  bool connect_pending = false;
-  bool connect_cancel_requested = false;
-  uint64_t connect_generation = 0;
-  bool heartbeat_pending = false;
-  /* Debugger workers own the shared client socket off the UI thread. */
-  bool debugger_attach_pending = false;
-  bool debugger_threads_pending = false;
-  std::future<bool> heartbeat_future;
-  std::string heartbeat_error;
-  double next_heartbeat = 0.0;
-  bool shutdown_started = false;
+  /* ---- Connection state (see ConnectionState above) ---- */
+  ConnectionState conn;
 
 
 
@@ -764,17 +789,8 @@ struct AppState {
   bool sandbox_native_modules = false;
   char sandbox_require_whitelist[512] = "";  // comma-separated module names
 
-  /* ---- KLOG streaming ---- */
-  bool klog_connected = false;
-  uint16_t klog_port = 0;
-  std::deque<std::string> klog_lines;    /* changed to deque for O(1) front-erase */
-  std::vector<uint8_t> klog_raw;       /* partial-line buffer */
-  int klog_max_lines = 5000;
-  bool klog_auto_scroll = true;
-  double klog_last_poll = 0.0;
-  bool klog_paused = false;            /* pause streaming without disconnecting */
-  char klog_search[128] = "";          /* search/filter text */
-  size_t klog_total_received = 0;      /* total lines ever received (for display) */
+  /* ---- KLOG state (see KlogState above) ---- */
+  KlogState klog;
 };
 
 /* ---- utility functions ---- */
@@ -1090,11 +1106,11 @@ inline void push_notification(AppState &state, const std::string &message, doubl
 }
 
 inline bool client_async_busy(const AppState &state) {
-  return state.connect_pending || state.payload_inject_pending ||
+  return state.conn.connect_pending || state.payload_inject_pending ||
          state.telemetry_pending ||
          state.scan.async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
-         state.debugger_attach_pending || state.debugger_threads_pending ||
+         state.conn.debugger_attach_pending || state.conn.debugger_threads_pending ||
          state.tracer.pending || state.tracer.status_pending ||
          state.tracer.events_pending ||
           state.elf.load_pending || state.json_dump_pending ||
@@ -1105,7 +1121,7 @@ inline bool client_async_busy(const AppState &state) {
 }
 
 inline bool connect_sequence_pending(const AppState &state) {
-  return state.connect_pending || state.payload_auto_inject_waiting ||
+  return state.conn.connect_pending || state.payload_auto_inject_waiting ||
          (state.payload_inject_pending && state.payload_connect_after_inject) ||
          state.payload_post_inject_connect ||
          state.payload_connect_retry_at > 0.0;

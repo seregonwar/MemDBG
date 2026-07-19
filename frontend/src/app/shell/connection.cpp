@@ -43,7 +43,7 @@ static std::filesystem::path selected_cached_payload(const AppState &state) {
 }
 
 void request_payload_inject(AppState &state, bool connect_after) {
-  if (state.payload_inject_pending || state.connect_pending) return;
+  if (state.payload_inject_pending || state.conn.connect_pending) return;
   normalize_ports(state);
   state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
   const std::filesystem::path payload_path = selected_cached_payload(state);
@@ -121,14 +121,14 @@ void poll_payload_lifecycle(AppState &state) {
 
   if (state.payload_connect_retry_at > 0.0 &&
       ImGui::GetTime() >= state.payload_connect_retry_at &&
-      !state.connect_pending && !state.client.connected()) {
+      !state.conn.connect_pending && !state.client.connected()) {
     state.payload_connect_retry_at = 0.0;
     connect_console(state);
   }
 }
 
 void connect_console(AppState &state) {
-  if (state.connect_pending) return;  /* already connecting */
+  if (state.conn.connect_pending) return;  /* already connecting */
   if (s_connect_future.valid()) {
     set_status(state, "Previous connection attempt is still completing");
     return;
@@ -147,9 +147,9 @@ void connect_console(AppState &state) {
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;
-  state.klog_connected = false;
-  state.klog_paused = false;
-  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.memory.clear();
+  state.klog.connected = false;
+  state.klog.paused = false;
+  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
   state.scan.is_unknown_session = false;
@@ -160,9 +160,9 @@ void connect_console(AppState &state) {
   s_temp_client.disconnect();
   s_temp_hello = {};
   s_temp_error.clear();
-  state.connect_pending = true;
-  state.connect_cancel_requested = false;
-  s_connect_generation = ++state.connect_generation;
+  state.conn.connect_pending = true;
+  state.conn.connect_cancel_requested = false;
+  s_connect_generation = ++state.conn.connect_generation;
 
   if (state.crash_logging_enabled) {
     state.crash_logger.log("connect", ("Connecting to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
@@ -190,9 +190,9 @@ void connect_console(AppState &state) {
 
 void cancel_connect(AppState &state) {
   if (!connect_sequence_pending(state)) return;
-  if (state.connect_pending && !state.connect_cancel_requested) {
-    state.connect_cancel_requested = true;
-    ++state.connect_generation;
+  if (state.conn.connect_pending && !state.conn.connect_cancel_requested) {
+    state.conn.connect_cancel_requested = true;
+    ++state.conn.connect_generation;
     s_temp_client.cancel_pending_io();
   }
   state.payload_auto_inject_probe = false;
@@ -201,7 +201,7 @@ void cancel_connect(AppState &state) {
   state.payload_connect_after_inject = false;
   state.payload_connect_retry_at = 0.0;
   state.payload_connect_retry_deadline = 0.0;
-  set_status(state, state.connect_pending ? "Cancelling connection..."
+  set_status(state, state.conn.connect_pending ? "Cancelling connection..."
                                           : "Automatic connection cancelled");
   if (state.crash_logging_enabled)
     state.crash_logger.log("connect", "Connection cancellation requested");
@@ -262,7 +262,7 @@ void request_maps_refresh_async(AppState &state) {
     set_status(state, "Memory maps refresh already in progress");
     return;
   }
-  if (state.connect_pending) {
+  if (state.conn.connect_pending) {
     set_status(state, "Wait for the connection to finish");
     return;
   }
@@ -736,13 +736,13 @@ void poll_taskmgr_prefetch(AppState &state) {
 
 /* Poll async connect result. Called at start of every frame. */
 void poll_connect(AppState &state) {
-  if (!state.connect_pending) return;
+  if (!state.conn.connect_pending) return;
   if (!s_connect_future.valid()) return;
 
   auto status = s_connect_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.connect_pending = false;
+  state.conn.connect_pending = false;
   bool ok = false;
   try {
     ok = s_connect_future.get();
@@ -752,10 +752,10 @@ void poll_connect(AppState &state) {
     s_temp_error = "Unknown connection error";
   }
 
-  const bool cancelled = state.connect_cancel_requested ||
-                         s_connect_generation != state.connect_generation;
-  state.connect_pending = false;
-  state.connect_cancel_requested = false;
+  const bool cancelled = state.conn.connect_cancel_requested ||
+                         s_connect_generation != state.conn.connect_generation;
+  state.conn.connect_pending = false;
+  state.conn.connect_cancel_requested = false;
   if (cancelled) {
     s_temp_client.disconnect();
     set_status(state, "Connection cancelled");
@@ -862,7 +862,7 @@ void poll_connect(AppState &state) {
 
 /* Modal spinner drawn during async connect */
 void draw_connect_spinner(AppState &state) {
-  if (!state.connect_pending) return;
+  if (!state.conn.connect_pending) return;
 
   const float scl = ui::dpi_scale();
   const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -882,7 +882,7 @@ void draw_connect_spinner(AppState &state) {
 
   ImGui::TextColored(
       ui::colors().primary2, "%s  %s", icons::kConnect,
-      state.connect_cancel_requested ? "Cancelling..." : locale::tr("connect.spinner"));
+      state.conn.connect_cancel_requested ? "Cancelling..." : locale::tr("connect.spinner"));
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "%s:%d", state.host, state.debug_port);
 
@@ -901,7 +901,7 @@ void draw_connect_spinner(AppState &state) {
 
   ImGui::Spacing();
   ImGui::SetCursorPosX(24.0f * scl);
-  ImGui::BeginDisabled(state.connect_cancel_requested);
+  ImGui::BeginDisabled(state.conn.connect_cancel_requested);
   if (ui::soft_button(locale::tr("common.cancel"), ImVec2(272.0f * scl, 32.0f * scl)))
     cancel_connect(state);
   ImGui::EndDisabled();
@@ -919,10 +919,10 @@ void draw_connect_spinner(AppState &state) {
 }
 
 void disconnect_console(AppState &state, const char *reason) {
-  if (state.connect_pending) cancel_connect(state);
+  if (state.conn.connect_pending) cancel_connect(state);
 
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
-  state.connect_pending = false;  /* cancel any in-flight async connect */
+  state.conn.connect_pending = false;  /* cancel any in-flight async connect */
 
   /* Interrupt scanner I/O before draining its future. */
   if (state.scan.async_future.valid()) {
@@ -939,7 +939,7 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
   if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
-  if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
+  if (state.conn.heartbeat_future.valid()) state.conn.heartbeat_future.wait();
   if (state.tracer.future.valid()) state.tracer.future.wait();
   if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
   if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
@@ -956,8 +956,8 @@ void disconnect_console(AppState &state, const char *reason) {
     s_temp_client.disconnect();
   }
 
-  state.connect_pending = false;
-  state.connect_cancel_requested = false;
+  state.conn.connect_pending = false;
+  state.conn.connect_cancel_requested = false;
   state.scan.async_pending = false;  /* cancel any in-flight async scan */
   state.map_dump_pending = false;
   state.map_dump_client.reset();
@@ -965,9 +965,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr.resource_pending = false;  /* cancel any in-flight task manager fetch */
   state.taskmgr.prefetch_pending = false;
-  state.heartbeat_pending = false;
-  state.heartbeat_error.clear();
-  state.next_heartbeat = 0.0;
+  state.conn.heartbeat_pending = false;
+  state.conn.heartbeat_error.clear();
+  state.conn.next_heartbeat = 0.0;
   const bool tracer_may_own_target = state.tracer.pending ||
       state.tracer.target_pid > 0 ||
       state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING;
@@ -994,9 +994,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;
-  state.klog_connected = false;
-  state.klog_paused = false;
-  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.memory.clear();
+  state.klog.connected = false;
+  state.klog.paused = false;
+  state.processes.clear(); state.maps.clear(); state.selected_map_starts.clear(); state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
   std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");

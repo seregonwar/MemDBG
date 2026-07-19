@@ -79,12 +79,12 @@ void draw_home(AppState &state, ImVec2 avail) {
 
   ui::begin_panel("HomeStatus", locale::tr("home.session"), ImVec2(col_w, mobile ? 0 : avail.y));
   ImGui::BeginGroup();
-  ui::status_dot(state.connect_pending ? ui::colors().warning :
+  ui::status_dot(state.conn.connect_pending ? ui::colors().warning :
                  connected ? ui::colors().success : ui::colors().dim);
   ImGui::SameLine();
-  ImGui::TextColored(state.connect_pending ? ui::colors().warning :
+  ImGui::TextColored(state.conn.connect_pending ? ui::colors().warning :
                      connected ? ui::colors().success : ui::colors().danger,
-                     "%s", state.connect_pending ? locale::tr("home.connecting_status") :
+                     "%s", state.conn.connect_pending ? locale::tr("home.connecting_status") :
                           connected ? locale::tr("home.connected_status") : locale::tr("home.not_connected"));
   ImGui::EndGroup();
 

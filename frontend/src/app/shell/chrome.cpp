@@ -289,7 +289,7 @@ void draw_sidebar(AppState &state, ImVec2 size) {
   ImGui::BeginChild("SidebarStatus", ImVec2(0, 72.0f * scl), true, ImGuiWindowFlags_NoScrollbar);
 
   const bool connected = state.client.connected();
-  const ImVec4 status_color = state.connect_pending ? ui::colors().warning :
+  const ImVec4 status_color = state.conn.connect_pending ? ui::colors().warning :
                               connected ? ui::colors().success : ui::colors().dim;
   const ImVec4 udp_color = state.udp_listener.running() ? ui::colors().success : ui::colors().dim;
 
@@ -302,7 +302,7 @@ void draw_sidebar(AppState &state, ImVec2 size) {
     ImGui::TableSetColumnIndex(0);
     ui::status_dot(status_color);
     ImGui::SameLine();
-    ImGui::TextColored(status_color, "%s", state.connect_pending ? locale::tr("status.connecting") :
+    ImGui::TextColored(status_color, "%s", state.conn.connect_pending ? locale::tr("status.connecting") :
                                             connected ? locale::tr("status.connected") : locale::tr("status.offline"));
 
     ImGui::TableSetColumnIndex(1);
@@ -477,7 +477,7 @@ void topbar_select_process(AppState &state, int row) {
   state.maps.clear();
   state.selected_map_row = -1;
   state.selected_map_starts.clear();
-  state.memory.clear();
+  state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear();
   state.scan.snapshot_value_len = 0;
