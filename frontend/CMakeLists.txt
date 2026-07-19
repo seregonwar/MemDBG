@@ -603,8 +603,11 @@ target_include_directories(memdbg_app_reconnect_test PRIVATE
 target_link_libraries(memdbg_app_reconnect_test PRIVATE memdbg_lua Threads::Threads)
 
 if(MSVC)
-  set_property(TARGET memdbg_app_reconnect_test PROPERTY
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  # Note: NOT using static CRT here because memdbg_lua is compiled with
+  # dynamic CRT (no MSVC_RUNTIME_LIBRARY override on the Lua library).
+  # Mixing /MT and /MD would cause LNK4098 conflicts and unresolved
+  # Lua CRT imports (feof, ferror, strerror, etc.).
+  target_link_libraries(memdbg_app_reconnect_test PRIVATE ws2_32)
 endif()
 # ---- memdbg_payload_fetcher_test ----
 
@@ -914,6 +917,7 @@ if(WIN32)
   target_compile_definitions(memdbg_app_reconnect_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_locale_manager_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_trainer_formats_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_action_journal_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_plugin_manager_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_lua_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_fuzz_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -951,7 +955,9 @@ if(MSVC)
   target_compile_options(memdbg_payload_sender_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_release_check_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_client_test PRIVATE /W4 /WX)
-  target_compile_options(memdbg_trainer_formats_test PRIVATE /W4 /WX /utf-8)
+  # simdjson third-party header emits C4100 (unreferenced formal parameter)
+  # on MSVC. Suppress it since we cannot fix third-party code.
+  target_compile_options(memdbg_trainer_formats_test PRIVATE /W4 /WX /utf-8 /wd4100)
   target_compile_options(memdbg_locale_manager_test PRIVATE /W4 /WX /utf-8)
   target_compile_options(memdbg_plugin_manager_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_sandbox_lua_test PRIVATE /W4 /WX)
