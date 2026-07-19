@@ -148,6 +148,12 @@ test-pal-ebadf: tests/test_pal_memory_ebadf.c $(GENERATED_VERSION_HEADER)
 	@echo "--- Running PAL EBADF retry test ---"
 	$(BUILD_DIR)/test_pal_memory_ebadf
 
+test-pal-memory-console: tests/test_pal_memory_console.c tests/include/ps5/kernel.h tests/include/ps5/mdbg.h $(GENERATED_VERSION_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Itests/include $(HOST_CFLAGS) -DMEMDBG_PAL_CONSOLE=1 -DMEMDBG_PAL_PS5=1 tests/test_pal_memory_console.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_pal_memory_console
+	@echo "--- Running PAL memory console fallback test ---"
+	$(BUILD_DIR)/test_pal_memory_console
+
 test-process-map-metadata: $(BUILD_DIR)/host/pal/pal_process.o tests/test_process_map_metadata.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_map_metadata.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_process_map_metadata
