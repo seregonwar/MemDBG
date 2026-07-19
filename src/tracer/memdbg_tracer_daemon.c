@@ -130,16 +130,16 @@ static void *tracer_thread_fn(void *arg) {
   if (!has_syscall && pal_debug_continue((int)pid) != 0) {
     goto done;
   }
-  if (g_stop_req) goto done;
+  if (atomic_load(&g_stop_req)) goto done;
 
   pthread_mutex_lock(&g_mtx);
-  g_state = MEMDBG_TRACER_STATE_RUNNING;
-  g_running = true;
-  g_starting = false;
+  atomic_store(&g_state, MEMDBG_TRACER_STATE_RUNNING);
+  atomic_store(&g_running, true);
+  atomic_store(&g_starting, false);
   g_start_time_ns = now_ns();
   pthread_mutex_unlock(&g_mtx);
 
-  while (!g_stop_req) {
+  while (!atomic_load(&g_stop_req)) {
     int status = 0;
     int r = pal_debug_wait((int)pid, &status, false);
     if (r == -1) {
@@ -161,12 +161,12 @@ static void *tracer_thread_fn(void *arg) {
 
       pthread_mutex_lock(&g_mtx);
       if (WIFSIGNALED(status)) {
-        g_state = MEMDBG_TRACER_STATE_CRASHED;
-        g_crash_signal = sig;
+        atomic_store(&g_state, MEMDBG_TRACER_STATE_CRASHED);
+        atomic_store(&g_crash_signal, sig);
       } else {
-        g_state = MEMDBG_TRACER_STATE_EXITED;
+        atomic_store(&g_state, MEMDBG_TRACER_STATE_EXITED);
       }
-      g_running = false;
+      atomic_store(&g_running, false);
       pthread_mutex_unlock(&g_mtx);
       goto done;
     }
@@ -247,9 +247,9 @@ static void *tracer_thread_fn(void *arg) {
         write_crash_dump((int)pid, sig);
 
         pthread_mutex_lock(&g_mtx);
-        g_state = MEMDBG_TRACER_STATE_CRASHED;
-        g_crash_signal = sig;
-        g_running = false;
+        atomic_store(&g_state, MEMDBG_TRACER_STATE_CRASHED);
+        atomic_store(&g_crash_signal, sig);
+        atomic_store(&g_running, false);
         pthread_mutex_unlock(&g_mtx);
         goto done;
       }
@@ -274,12 +274,13 @@ static void *tracer_thread_fn(void *arg) {
 done:
   if (attached) (void)pal_debug_detach((int)pid);
   pthread_mutex_lock(&g_mtx);
-  if (g_state != MEMDBG_TRACER_STATE_CRASHED &&
-      g_state != MEMDBG_TRACER_STATE_EXITED) {
-    g_state = MEMDBG_TRACER_STATE_STOPPED;
+  int32_t cur = atomic_load(&g_state);
+  if (cur != MEMDBG_TRACER_STATE_CRASHED &&
+      cur != MEMDBG_TRACER_STATE_EXITED) {
+    atomic_store(&g_state, MEMDBG_TRACER_STATE_STOPPED);
   }
-  g_running = false;
-  g_starting = false;
+  atomic_store(&g_running, false);
+  atomic_store(&g_starting, false);
   pthread_mutex_unlock(&g_mtx);
   return NULL;
 }
@@ -287,11 +288,14 @@ done:
 /* Helper: write a simple crash dump file. */
 static void write_crash_dump(int pid, int signal) {
   char path[256];
-  if (g_dump_path[0]) {
+  /* Read g_dump_path under mutex to avoid racing with start(). */
+  pthread_mutex_lock(&g_mtx);
+  bool has_path = (g_dump_path[0] != '\0');
+  if (has_path)
     snprintf(path, sizeof(path), "%s", g_dump_path);
-  } else {
+  pthread_mutex_unlock(&g_mtx);
+  if (!has_path)
     snprintf(path, sizeof(path), "crash_%d.json", pid);
-  }
 
   /* Push the dump path into g_dump_path so the status response is useful. */
   pthread_mutex_lock(&g_mtx);
@@ -301,12 +305,13 @@ static void write_crash_dump(int pid, int signal) {
   FILE *fp = fopen(path, "w");
   if (!fp) return;
 
+  uint32_t ev_total = atomic_load(&g_total_events);
   fprintf(fp, "{\n");
   fprintf(fp, "  \"version\": 1,\n");
   fprintf(fp, "  \"timestamp_ns\": %llu,\n", (unsigned long long)now_ns());
   fprintf(fp, "  \"process\": { \"pid\": %d },\n", pid);
   fprintf(fp, "  \"crash\": { \"signal\": %d },\n", signal);
-  fprintf(fp, "  \"events_total\": %u\n", (unsigned)g_total_events);
+  fprintf(fp, "  \"events_total\": %u\n", (unsigned)ev_total);
   fprintf(fp, "}\n");
   fclose(fp);
 }
@@ -324,7 +329,7 @@ memdbg_status_t memdbg_tracer_daemon_start(int32_t pid, const char *dump_path) {
   if (!pal_debug_supported()) return MEMDBG_ERR_UNSUPPORTED;
 
   pthread_mutex_lock(&g_mtx);
-  if (g_running || g_starting) {
+  if (atomic_load(&g_running) || atomic_load(&g_starting)) {
     pthread_mutex_unlock(&g_mtx);
     return MEMDBG_ERR_STATE;
   }
@@ -340,27 +345,28 @@ memdbg_status_t memdbg_tracer_daemon_start(int32_t pid, const char *dump_path) {
   }
 
   pthread_mutex_lock(&g_mtx);
-  /* Reset state. */
-  g_head = 0;
-  g_tail = 0;
-  g_total_events = 0;
-  g_stop_req = false;
-  g_state = MEMDBG_TRACER_STATE_STARTING;
-  g_crash_signal = 0;
+  /* Reset state — use atomic_store for variables that are also read
+   * without the mutex (g_stop_req, g_state). */
+  atomic_store(&g_head, 0);
+  atomic_store(&g_tail, 0);
+  atomic_store(&g_total_events, 0);
+  atomic_store(&g_stop_req, false);
+  atomic_store(&g_state, MEMDBG_TRACER_STATE_STARTING);
+  atomic_store(&g_crash_signal, 0);
   if (dump_path && dump_path[0])
     snprintf(g_dump_path, sizeof(g_dump_path), "%s", dump_path);
   else
     g_dump_path[0] = '\0';
   g_target_pid = pid;
-  g_starting = true;
+  atomic_store(&g_starting, true);
   pthread_mutex_unlock(&g_mtx);
 
   /* Spawn the tracer thread. */
   if (pthread_create(&g_thread, NULL, tracer_thread_fn, NULL) != 0) {
     pthread_mutex_lock(&g_mtx);
-    g_running = false;
-    g_starting = false;
-    g_state = MEMDBG_TRACER_STATE_STOPPED;
+    atomic_store(&g_running, false);
+    atomic_store(&g_starting, false);
+    atomic_store(&g_state, MEMDBG_TRACER_STATE_STOPPED);
     pthread_mutex_unlock(&g_mtx);
     return MEMDBG_ERR_NOMEM;
   }
@@ -374,14 +380,13 @@ memdbg_status_t memdbg_tracer_daemon_start(int32_t pid, const char *dump_path) {
 
 void memdbg_tracer_daemon_stop(void) {
   pthread_mutex_lock(&g_mtx);
-  const bool wake_target = g_running;
+  const bool wake_target = atomic_load(&g_running);
   const bool join_thread = g_thread_created;
   const int32_t target_pid = g_target_pid;
-  g_stop_req = true;
+  atomic_store(&g_stop_req, true);
   pthread_mutex_unlock(&g_mtx);
 
   if (wake_target) {
-    /* Signal the target process to wake up the tracer thread. */
     if (target_pid > 0) {
       (void)kill((pid_t)target_pid, SIGSTOP);
     }
@@ -392,16 +397,18 @@ void memdbg_tracer_daemon_stop(void) {
 
   pthread_mutex_lock(&g_mtx);
   g_thread_created = false;
-  g_starting = false;
-  g_running = false;
-  g_state = MEMDBG_TRACER_STATE_STOPPED;
+  atomic_store(&g_starting, false);
+  atomic_store(&g_running, false);
+  atomic_store(&g_state, MEMDBG_TRACER_STATE_STOPPED);
   g_target_pid = 0;
   pthread_mutex_unlock(&g_mtx);
 }
 
 bool memdbg_tracer_daemon_is_running(void) {
+  /* g_running is atomic; the mutex is not strictly needed for the
+   * read itself but is kept for consistency with surrounding state. */
   pthread_mutex_lock(&g_mtx);
-  bool r = g_running;
+  bool r = atomic_load(&g_running);
   pthread_mutex_unlock(&g_mtx);
   return r;
 }
@@ -414,9 +421,9 @@ uint32_t memdbg_tracer_daemon_poll_events(memdbg_tracer_event_t *out,
 void memdbg_tracer_daemon_status(memdbg_tracer_status_response_t *out) {
   memset(out, 0, sizeof(*out));
   pthread_mutex_lock(&g_mtx);
-  out->state = g_state;
-  out->events_total = g_total_events;
-  out->crash_signal = g_crash_signal;
+  out->state = (int32_t)atomic_load(&g_state);
+  out->events_total = atomic_load(&g_total_events);
+  out->crash_signal = (int32_t)atomic_load(&g_crash_signal);
   out->start_time_ns = g_start_time_ns;
   out->elapsed_ns = g_start_time_ns ? (now_ns() - g_start_time_ns) : 0;
   snprintf(out->dump_path, sizeof(out->dump_path), "%s",
