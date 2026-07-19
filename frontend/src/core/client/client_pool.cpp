@@ -67,7 +67,11 @@ void ClientPool::connect_additional_roles_async(const std::string &host,
     if (client) client->cancel_pending_io();
 
   /* A completed std::thread remains joinable. Reap it before assigning a
-   * replacement, otherwise std::thread::operator= terminates the process. */
+   * replacement, otherwise std::thread::operator= terminates the process.
+   *
+   * The old thread was already invalidated (generation bumped, I/O
+   * cancelled, sockets disconnected in invalidate_roles / begin_reconnect),
+   * so it should exit quickly — this join is bounded. */
   if (role_thread_.joinable()) role_thread_.join();
 
   std::shared_ptr<Client> old_memory;
@@ -244,11 +248,22 @@ std::shared_ptr<Client> ClientPool::poll_lease() const {
 }
 
 void ClientPool::invalidate_roles() {
-  /* Drop memory/scan/poll without touching control. */
+  /* Drop memory/scan/poll without touching control.
+   *
+   * We do NOT join the role_thread here — the maintenance thread may
+   * be blocked in a 10-second condition wait or a network timeout.
+   * Joining it would freeze the UI on every reconnect cycle.
+   *
+   * Instead we bump the generation counter (which makes the thread's
+   * current() check fail), cancel all pending I/O (which unblocks
+   * any in-progress socket operations), and disconnect the role
+   * sockets.  The thread will notice the generation change on its
+   * next wake-up and exit cleanly.  We'll reap it later in
+   * disconnect_all() or when a new role connection is started. */
   role_generation_.fetch_add(1U);
   roles_cv_.notify_all();
-  if (role_thread_.joinable()) role_thread_.join();
   cancel_all_pending_io();
+
   std::lock_guard<std::mutex> lock(roles_mutex_);
   if (memory_) { memory_->disconnect(); memory_.reset(); }
   if (scan_)   { scan_->disconnect();   scan_.reset();   }

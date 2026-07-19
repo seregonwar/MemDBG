@@ -121,6 +121,10 @@ void begin_reconnect(AppState &state, const std::string &reason) {
   state.conn.reconnect.stale = true;
   state.conn.reconnect.phase = ConnectionPhase::WaitingForWake;
 
+  /* Reset any in-progress restore so it starts fresh on the next
+   * successful reconnect (prevents stale stage/future leakage). */
+  state.restore = RestoreState{};
+
   set_status(state, reason + " — reconnecting automatically...");
 }
 
@@ -223,40 +227,114 @@ void poll_session_health(AppState &state) {
   });
 }
 
-/* ---- Restore session after reconnect ---- */
+/* ---- Restore session after reconnect (async state machine) ---- */
 
 void poll_restore_session(AppState &state) {
   if (state.conn.reconnect.phase != ConnectionPhase::Restoring) return;
   if (!state.client.connected() || !state.has_hello) return;
 
-  /* Force a fresh process list on first Restoring frame.
-   * Don't rely on taskmgr prefetch (gated by prefetch_on_connect setting)
-   * or the old list (PIDs may have changed across rest mode). */
-  if (!state.restore_list_requested) {
-    state.restore_list_requested = true;
-    /* Blocking call, but process_list is fast and this runs once per reconnect. */
-    if (!state.client.process_list(state.processes)) {
-      set_status(state, "Failed to refresh process list after reconnect");
-      state.conn.reconnect.phase = ConnectionPhase::Online;
-      state.conn.reconnect.stale = true;  /* keep stale — user must reselect */
-      return;
-    }
+  auto &r = state.restore;
+
+  switch (r.stage) {
+  /* ------------------------------------------------------------
+   * Stage 0 — Idle: launch async process list fetch.
+   * ------------------------------------------------------------ */
+  case RestoreStage::Idle: {
+    r.process_epoch = state.conn.reconnect.epoch;
+    r.temp_processes.clear();
+    r.process_error.clear();
+    r.map_triggered = false;
+    r.matched_row = -1;
+    r.matched_pid = 0;
+    r.error.clear();
+
+    auto client = state.pool.memory_lease();
+    r.process_future = std::async(std::launch::async,
+        [client = std::move(client),
+         &temp = r.temp_processes,
+         &error = r.process_error]() -> bool {
+          if (!client->process_list(temp)) {
+            error = client->last_error();
+            return false;
+          }
+          return true;
+        });
+    r.stage = RestoreStage::RefreshingProcesses;
+    return;
   }
 
-  /* Wait for the taskmgr prefetch (process list refresh) to complete
-   * if it was started by start_taskmgr_prefetch() after connect success. */
-  if (state.taskmgr.prefetch_pending) return;
+  /* ------------------------------------------------------------
+   * Stage 1 — RefreshingProcesses: poll the future, then match.
+   * ------------------------------------------------------------ */
+  case RestoreStage::RefreshingProcesses: {
+    if (r.process_future.wait_for(std::chrono::milliseconds(0)) !=
+        std::future_status::ready)
+      return;
 
-  /* Process list is now available. Try to rematch the target process
-   * by logical identity (name / title_id) rather than by old PID. */
-  const auto &tid = state.conn.reconnect.target_identity;
-  if (tid.valid() && !state.processes.empty()) {
+    bool ok = false;
+    try {
+      ok = r.process_future.get();
+    } catch (const std::exception &ex) {
+      r.process_error = ex.what();
+    } catch (...) {
+      r.process_error = "Process list fetch crashed";
+    }
+
+    /* Reject stale results from a previous connection epoch. */
+    if (r.process_epoch != state.conn.reconnect.epoch) {
+      r.stage = RestoreStage::Idle;
+      return;
+    }
+
+    if (!ok) {
+      r.error = r.process_error.empty()
+          ? "Failed to refresh process list after reconnect"
+          : r.process_error;
+      r.stage = RestoreStage::Failed;
+      return;
+    }
+
+    state.processes = std::move(r.temp_processes);
+    r.stage = RestoreStage::MatchingTarget;
+    /* deliberate fall-through to match immediately */
+    [[fallthrough]];
+  }
+
+  /* ------------------------------------------------------------
+   * Stage 2 — MatchingTarget: rematch TargetIdentity by logical
+   *           fields: content_id → title_id → executable_path →
+   *           process name.  No automatic fallback if multiple
+   *           candidates match — the most specific field wins.
+   * ------------------------------------------------------------ */
+  case RestoreStage::MatchingTarget: {
+    const auto &tid = state.conn.reconnect.target_identity;
+
+    if (!tid.valid() || state.processes.empty()) {
+      /* No target identity saved — transport is ready, user must select. */
+      set_status(state, "Reconnected — select a process");
+      state.conn.reconnect.phase = ConnectionPhase::Online;
+      state.conn.reconnect.stale = true;
+      r.stage = RestoreStage::Idle;
+      return;
+    }
+
     int matched_row = -1;
 
-    /* Best match: title_id (most stable across rest mode) */
-    if (!tid.title_id.empty()) {
+    /* 1. content_id (most stable — unique per title + content revision) */
+    if (!tid.content_id.empty()) {
       for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
-        /* title_id is available via ProcessInfo — check cached resources */
+        auto it = state.taskmgr.resources.find(state.processes[i].pid);
+        if (it != state.taskmgr.resources.end() && it->second.has_info &&
+            it->second.info.content_id == tid.content_id) {
+          matched_row = i;
+          break;
+        }
+      }
+    }
+
+    /* 2. title_id (stable across rest mode for the same game) */
+    if (matched_row < 0 && !tid.title_id.empty()) {
+      for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
         auto it = state.taskmgr.resources.find(state.processes[i].pid);
         if (it != state.taskmgr.resources.end() && it->second.has_info &&
             it->second.info.title_id == tid.title_id) {
@@ -266,7 +344,20 @@ void poll_restore_session(AppState &state) {
       }
     }
 
-    /* Fallback: match by process name */
+    /* 3. executable_path */
+    if (matched_row < 0 && !tid.executable_path.empty()) {
+      for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
+        auto it = state.taskmgr.resources.find(state.processes[i].pid);
+        if (it != state.taskmgr.resources.end() && it->second.has_info &&
+            it->second.info.path == tid.executable_path) {
+          matched_row = i;
+          break;
+        }
+      }
+    }
+
+    /* 4. Fallback: process name (always available from ProcessEntry).
+     *    This is the least specific match but works without ProcessInfo. */
     if (matched_row < 0 && !tid.name.empty()) {
       for (int i = 0; i < static_cast<int>(state.processes.size()); ++i) {
         if (state.processes[i].name == tid.name) {
@@ -276,38 +367,146 @@ void poll_restore_session(AppState &state) {
       }
     }
 
-    if (matched_row >= 0) {
-      state.selected_process_row = matched_row;
-      state.selected_pid = state.processes[matched_row].pid;
-      state.has_process_info = false;
-
-      /* Trigger async maps refresh for the new PID */
-      request_maps_refresh_async(state);
-
-      char buf[128];
-      std::snprintf(buf, sizeof(buf),
-                    "Session restored — rematched process %s (PID %d)",
-                    state.processes[matched_row].name.c_str(),
-                    state.selected_pid);
-      set_status(state, buf);
-      push_notification(state, buf, 4.0);
-    } else {
-      /* Target not found — keep stale flag, notify user */
+    if (matched_row < 0) {
+      /* Target process terminated during rest mode —
+       * transport is OK but the old target is gone. */
       state.selected_pid = 0;
       state.selected_process_row = -1;
-      set_status(state, "Reconnected but target process not found — reselect manually");
-      push_notification(state,
-          "Target process '" + (tid.name.empty() ? tid.title_id : tid.name) +
-          "' no longer running", 6.0);
+      r.error = "Target process '" +
+          (tid.name.empty() ? tid.title_id : tid.name) +
+          "' no longer running";
+      r.stage = RestoreStage::Failed;
+      return;
     }
+
+    r.matched_row = matched_row;
+    r.matched_pid = state.processes[matched_row].pid;
+    state.selected_process_row = matched_row;
+    state.selected_pid = r.matched_pid;
+    state.has_process_info = false;
+
+    r.stage = RestoreStage::RefreshingMaps;
+    /* fall through to launch maps */
+    [[fallthrough]];
   }
 
-  /* Restore complete — mark session as live. */
-  state.restore_list_requested = false;
-  state.conn.reconnect.phase = ConnectionPhase::Online;
-  state.conn.reconnect.stale = false;
-  state.conn.reconnect.attempt = 0;
-  state.conn.reconnect.reason.clear();
+  /* ------------------------------------------------------------
+   * Stage 3 — RefreshingMaps: launch async maps refresh, then
+   *           poll until it completes.
+   * ------------------------------------------------------------ */
+  case RestoreStage::RefreshingMaps: {
+    if (!r.map_triggered) {
+      r.map_triggered = true;
+      request_maps_refresh_async(state);
+      return;
+    }
+
+    /* Still waiting for the maps future to complete. */
+    if (state.map_refresh_pending) return;
+
+    /* Maps request completed.  Check for transport-level failure. */
+    if (!state.map_refresh_error.empty()) {
+      r.error = "Maps refresh failed: " + state.map_refresh_error;
+      r.stage = RestoreStage::Failed;
+      return;
+    }
+
+    /* Verify PID didn't change while we were waiting. */
+    if (state.selected_pid != r.matched_pid) {
+      r.error = "Selected process changed during maps refresh";
+      r.stage = RestoreStage::Failed;
+      return;
+    }
+
+    if (state.maps.empty()) {
+      r.error = "Maps refresh returned empty — process may have terminated";
+      r.stage = RestoreStage::Failed;
+      return;
+    }
+
+    r.stage = RestoreStage::VerifyingTarget;
+    [[fallthrough]];
+  }
+
+  /* ------------------------------------------------------------
+   * Stage 4 — VerifyingTarget: if a module name + offset were
+   *           saved, validate the offset is within the new map
+   *           bounds.  Future work: compare original bytes.
+   * ------------------------------------------------------------ */
+  case RestoreStage::VerifyingTarget: {
+    const auto &tid = state.conn.reconnect.target_identity;
+
+    if (!tid.selected_module_name.empty()) {
+      const MapEntry *module = nullptr;
+      for (const auto &m : state.maps) {
+        if (m.name == tid.selected_module_name) {
+          module = &m;
+          break;
+        }
+      }
+
+      if (module == nullptr) {
+        r.error = "Module '" + tid.selected_module_name +
+            "' not found in new maps — addresses may have shifted";
+        r.stage = RestoreStage::Failed;
+        return;
+      }
+
+      if (tid.selected_module_offset > 0 &&
+          tid.selected_module_offset >= (module->end - module->start)) {
+        r.error = "Module '" + tid.selected_module_name +
+            "' offset 0x" + hex_u64(tid.selected_module_offset) +
+            " is outside new map bounds";
+        r.stage = RestoreStage::Failed;
+        return;
+      }
+    }
+
+    r.stage = RestoreStage::Complete;
+    [[fallthrough]];
+  }
+
+  /* ------------------------------------------------------------
+   * Stage 5 — Complete: session is fully restored.
+   * ------------------------------------------------------------ */
+  case RestoreStage::Complete: {
+    state.conn.reconnect.phase = ConnectionPhase::Online;
+    state.conn.reconnect.stale = false;
+    state.conn.reconnect.attempt = 0;
+    state.conn.reconnect.reason.clear();
+
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+                  "Session restored — %s (PID %d)",
+                  state.processes[r.matched_row].name.c_str(),
+                  r.matched_pid);
+    set_status(state, buf);
+    push_notification(state, buf, 4.0);
+
+    r.stage = RestoreStage::Idle;  /* ready for next cycle */
+    return;
+  }
+
+  /* ------------------------------------------------------------
+   * Stage 6 — Failed: transport is online but target could not
+   *           be restored.  Keep stale=true so remote_ready()
+   *           blocks writes until the user selects a process.
+   * ------------------------------------------------------------ */
+  case RestoreStage::Failed: {
+    state.conn.reconnect.phase = ConnectionPhase::Online;
+    state.conn.reconnect.stale = true;
+    state.conn.reconnect.attempt = 0;
+    state.conn.reconnect.reason.clear();
+
+    if (!r.error.empty()) {
+      set_status(state, r.error);
+      push_notification(state, r.error, 6.0);
+    }
+
+    r.stage = RestoreStage::Idle;  /* ready for next cycle */
+    return;
+  }
+  }
 }
 
 /* ---- Screen dispatch ---- */

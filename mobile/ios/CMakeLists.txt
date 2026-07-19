@@ -176,6 +176,7 @@ set(MOBILE_SOURCES
   main.ios.mm
   AppDelegate.mm
   ViewController.mm
+  ImGuiIOSKeyboardBridge.mm
 
   # Shared frontend sources (re-using the desktop UI via draw_app()).
   ${FRONTEND_ROOT}/src/app/shell/memdbg_app.cpp

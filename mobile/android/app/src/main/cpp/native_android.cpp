@@ -10,6 +10,7 @@
 
 #include <jni.h>
 #include <android/log.h>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -43,6 +44,39 @@ bool g_use_mobile_layout = true;
 
 std::mutex g_touch_mutex;
 std::deque<TouchEvent> g_touch_queue;
+
+// ---- Keyboard queue (UI thread → render thread) ----------------------------
+
+struct KeyboardEvent {
+  enum Type { Char, Backspace, Enter } type;
+  unsigned int codepoint;  // valid for Char type only
+};
+
+std::mutex g_keyboard_mutex;
+std::deque<KeyboardEvent> g_keyboard_queue;
+
+static std::atomic<bool> g_want_keyboard{false};
+
+static void flush_keyboard_events() {
+  std::deque<KeyboardEvent> local;
+  {
+    std::lock_guard<std::mutex> lock(g_keyboard_mutex);
+    local.swap(g_keyboard_queue);
+  }
+  if (local.empty()) return;
+  ImGuiIO &io = ImGui::GetIO();
+  for (const KeyboardEvent &ev : local) {
+    if (ev.type == KeyboardEvent::Char) {
+      io.AddInputCharacter(ev.codepoint);
+    } else if (ev.type == KeyboardEvent::Backspace) {
+      io.AddKeyEvent(ImGuiKey_Backspace, true);
+      io.AddKeyEvent(ImGuiKey_Backspace, false);
+    } else if (ev.type == KeyboardEvent::Enter) {
+      io.AddKeyEvent(ImGuiKey_Enter, true);
+      io.AddKeyEvent(ImGuiKey_Enter, false);
+    }
+  }
+}
 
 // MotionEvent action codes (mirror android.view.MotionEvent).
 constexpr int ACTION_DOWN = 0;
@@ -140,6 +174,10 @@ Java_io_github_seregonwar_memdbg_mobile_MemDBGJNI_nativeDrawFrame(
   io.DeltaTime = 1.0f / 60.0f;
 
   flush_touch_events();
+  flush_keyboard_events();
+
+  // Update keyboard state for Java side to poll
+  g_want_keyboard.store(io.WantTextInput, std::memory_order_relaxed);
 
   ImGui_ImplOpenGL3_NewFrame();
   ImGui::NewFrame();
@@ -167,6 +205,57 @@ Java_io_github_seregonwar_memdbg_mobile_MemDBGJNI_nativeOnTouch(
     std::lock_guard<std::mutex> lock(g_touch_mutex);
     g_touch_queue.push_back(ev);
     if (g_touch_queue.size() > 256) g_touch_queue.pop_front();
+  }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_github_seregonwar_memdbg_mobile_MemDBGJNI_nativePollKeyboard(
+    JNIEnv *env, jclass clazz) {
+  (void)env;
+  (void)clazz;
+  return g_want_keyboard.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_io_github_seregonwar_memdbg_mobile_MemDBGJNI_nativeAddKeyboardChar(
+    JNIEnv *env, jclass clazz, jchar codepoint) {
+  (void)env;
+  (void)clazz;
+  KeyboardEvent ev;
+  ev.type = KeyboardEvent::Char;
+  ev.codepoint = static_cast<unsigned int>(codepoint);
+  {
+    std::lock_guard<std::mutex> lock(g_keyboard_mutex);
+    g_keyboard_queue.push_back(ev);
+    if (g_keyboard_queue.size() > 256) g_keyboard_queue.pop_front();
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_io_github_seregonwar_memdbg_mobile_MemDBGJNI_nativeSendKeyboardBackspace(
+    JNIEnv *env, jclass clazz) {
+  (void)env;
+  (void)clazz;
+  KeyboardEvent ev;
+  ev.type = KeyboardEvent::Backspace;
+  ev.codepoint = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_keyboard_mutex);
+    g_keyboard_queue.push_back(ev);
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_io_github_seregonwar_memdbg_mobile_MemDBGJNI_nativeSendKeyboardEnter(
+    JNIEnv *env, jclass clazz) {
+  (void)env;
+  (void)clazz;
+  KeyboardEvent ev;
+  ev.type = KeyboardEvent::Enter;
+  ev.codepoint = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_keyboard_mutex);
+    g_keyboard_queue.push_back(ev);
   }
 }
 

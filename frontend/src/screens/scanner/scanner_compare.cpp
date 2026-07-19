@@ -119,6 +119,9 @@ void poll_structure_compare(AppState &state) {
     state.structure_compare_error = "Unknown structure comparison error";
   }
 
+  /* Reject stale results from a previous connection epoch. */
+  if (state.structure_compare_epoch != state.conn.reconnect.epoch) return;
+
   std::lock_guard<std::mutex> lock(state.structure_compare_mtx);
   if (!ok) {
     const std::string error = state.structure_compare_error.empty()
@@ -180,6 +183,7 @@ void start_structure_compare(AppState &state) {
   auto &temp_fields = state.structure_compare_temp_fields;
   auto &error_out = state.structure_compare_error;
   state.structure_compare_pending = true;
+  state.structure_compare_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.structure_compare_start_time = ImGui::GetTime();
   std::snprintf(state.structure_compare_status, sizeof(state.structure_compare_status),
                 "Reading player and enemy structures...");

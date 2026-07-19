@@ -56,7 +56,16 @@ void request_payload_inject(AppState &state, bool connect_after) {
     push_notification(state, message, 6.0);
     return;
   }
-  if (s_payload_inject_future.valid()) s_payload_inject_future.wait();
+  if (s_payload_inject_future.valid()) {
+    /* Drain a completed future without blocking.  If it's still
+     * running, skip the new request instead of waiting. */
+    if (s_payload_inject_future.wait_for(std::chrono::milliseconds(0)) ==
+        std::future_status::ready) {
+      try { s_payload_inject_future.get(); } catch (...) {}
+    } else {
+      return;  /* previous injection still in-flight, don't stack */
+    }
+  }
 
   const std::string host = state.host;
   const uint16_t port = static_cast<uint16_t>(state.payload_port);
@@ -424,7 +433,15 @@ void request_maps_refresh_async(AppState &state) {
   }
 
   if (state.map_refresh_future.valid()) {
-    state.map_refresh_future.wait();
+    /* Drain a completed future without blocking.  If a previous
+     * refresh is still running, skip the request. */
+    if (state.map_refresh_future.wait_for(std::chrono::milliseconds(0)) ==
+        std::future_status::ready) {
+      try { state.map_refresh_future.get(); } catch (...) {}
+    } else {
+      set_status(state, "Memory maps refresh already in progress");
+      return;
+    }
   }
 
   state.map_refresh_pid = state.selected_pid;
@@ -519,6 +536,7 @@ void request_tracer_attach_async(AppState &state) {
 
   state.tracer.pending = true;
   state.tracer.detach_requested = false;
+  state.tracer.epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.tracer.status = {};
   state.tracer.events.clear();
   state.tracer.was_crashed = false;
@@ -554,6 +572,7 @@ void request_tracer_detach_async(AppState &state) {
   state.tracer.pending = true;
   state.tracer.detach_pending = true;
   state.tracer.detach_requested = false;
+  state.tracer.epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.tracer.error.clear();
   state.tracer.temp_error.clear();
   set_status(state, "Detaching tracer and resuming target...");
@@ -581,6 +600,9 @@ void poll_tracer(AppState &state) {
       } catch (...) {
         state.tracer.temp_error = "Unknown tracer operation error";
       }
+
+      /* Reject stale results from a previous connection epoch. */
+      if (state.tracer.epoch != state.conn.reconnect.epoch) return;
 
       if (!ok) {
         state.tracer.error = state.tracer.temp_error.empty()
@@ -760,7 +782,13 @@ static void start_taskmgr_prefetch(AppState &state) {
   if (!state.taskmgr.prefetch_on_connect || state.taskmgr.prefetch_pending) return;
   if (!state.client.connected() || !state.has_hello) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_PROCESS_LIST)) return;
-  if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
+  if (state.taskmgr.prefetch_future.valid()) {
+    /* Drain without blocking — if still in-flight, skip. */
+    if (state.taskmgr.prefetch_future.wait_for(std::chrono::milliseconds(0)) ==
+        std::future_status::ready) {
+      try { state.taskmgr.prefetch_future.get(); } catch (...) {}
+    }
+  }
 
   state.taskmgr.prefetch_pending = true;
   state.taskmgr.prefetch_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
@@ -1004,7 +1032,10 @@ void poll_connect(AppState &state) {
   state.conn.heartbeat_failures = 0;
   state.conn.heartbeat_error.clear();
 
-  /* On reconnect, mark remote state as stale but don't clear UI data. */
+  /* On reconnect, mark remote state as stale but don't clear UI data.
+   * The fresh-connect code below is gated by an else — if we don't have
+   * a real else, the Restoring phase would be immediately overwritten
+   * by Online, bypassing poll_restore_session() entirely. */
   if (state.conn.reconnect.phase == ConnectionPhase::Reconnecting) {
     state.conn.reconnect.attempt = 0;
     state.conn.reconnect.stale = true;
@@ -1046,47 +1077,51 @@ void poll_connect(AppState &state) {
     state.tracer.temp_events.clear();
 
     /* Transition to Restoring — poll_restore_session() will refresh the
-     * process list, rematch the target by identity, and then set Online. */
+     * process list, rematch the target by identity, and then set Online.
+     * Don't clear taskmgr.resources — poll_restore_session needs the
+     * cached ProcessInfo data to match targets by title_id/content_id.
+     * Reset the restore state machine to Idle so a partially-completed
+     * restore from a previous cycle doesn't pollute this one. */
+    state.restore = RestoreState{};
     state.conn.reconnect.phase = ConnectionPhase::Restoring;
     ++state.conn.reconnect.epoch;
     state.taskmgr.next_resource_fetch = ImGui::GetTime() + 1.0;
     set_status(state, "Reconnected — verifying remote state...");
-    /* Fall through to start_taskmgr_prefetch below to get a fresh process list. */
+  } else {
+    /* Fresh connect: full initialization. */
+    state.conn.reconnect.phase = ConnectionPhase::Online;
+    state.saved_daemon_instance_id = s_temp_hello.daemon_instance_id;
+    state.taskmgr.resources.clear();
+    state.taskmgr.fmem_by_name.clear();
+    state.taskmgr.last_log_received = 0U;
+    state.taskmgr.prefetch_processes.clear();
+    state.taskmgr.prefetch_resources.clear();
+    state.taskmgr.prefetch_error.clear();
+    std::string udp_error;
+    std::string message = payload_start_verified
+        ? "Payload injected and verified on " + std::string(state.host) + ":" +
+              std::to_string(state.debug_port)
+        : "Connected to console " + std::string(state.host) + ":" +
+              std::to_string(state.debug_port);
+    if (!ensure_udp_listener(state, udp_error)) message += " (UDP: " + udp_error + ")";
+
+    if (state.crash_logging_enabled)
+      state.crash_logger.log("connect", ("Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
+
+    state.action_journal.record("connected", ("{\"host\":\"" + ActionJournal::json_escape(state.host) + "\",\"port\":" + std::to_string(state.debug_port) + ",\"version\":\"" + ActionJournal::json_escape(state.hello.version) + "\"}").c_str());
+    if (payload_start_verified)
+      state.action_journal.record("payload_verified", ("{\"host\":\"" +
+          ActionJournal::json_escape(state.host) + "\",\"port\":" +
+          std::to_string(state.debug_port) + "}").c_str());
+
+    set_status(state, message);
+    push_notification(state, payload_start_verified
+        ? "Payload injected and verified: connected to " + std::string(state.host) +
+              ":" + std::to_string(state.debug_port)
+        : "Connected to " + std::string(state.host) + ":" +
+              std::to_string(state.debug_port));
+    start_taskmgr_prefetch(state);
   }
-
-  /* Fresh connect: full initialization. */
-  state.conn.reconnect.phase = ConnectionPhase::Online;
-  state.saved_daemon_instance_id = s_temp_hello.daemon_instance_id;
-  state.taskmgr.resources.clear();
-  state.taskmgr.fmem_by_name.clear();
-  state.taskmgr.last_log_received = 0U;
-  state.taskmgr.prefetch_processes.clear();
-  state.taskmgr.prefetch_resources.clear();
-  state.taskmgr.prefetch_error.clear();
-  std::string udp_error;
-  std::string message = payload_start_verified
-      ? "Payload injected and verified on " + std::string(state.host) + ":" +
-            std::to_string(state.debug_port)
-      : "Connected to console " + std::string(state.host) + ":" +
-            std::to_string(state.debug_port);
-  if (!ensure_udp_listener(state, udp_error)) message += " (UDP: " + udp_error + ")";
-
-  if (state.crash_logging_enabled)
-    state.crash_logger.log("connect", ("Connected to " + std::string(state.host) + ":" + std::to_string(state.debug_port)).c_str());
-
-  state.action_journal.record("connected", ("{\"host\":\"" + ActionJournal::json_escape(state.host) + "\",\"port\":" + std::to_string(state.debug_port) + ",\"version\":\"" + ActionJournal::json_escape(state.hello.version) + "\"}").c_str());
-  if (payload_start_verified)
-    state.action_journal.record("payload_verified", ("{\"host\":\"" +
-        ActionJournal::json_escape(state.host) + "\",\"port\":" +
-        std::to_string(state.debug_port) + "}").c_str());
-
-  set_status(state, message);
-  push_notification(state, payload_start_verified
-      ? "Payload injected and verified: connected to " + std::string(state.host) +
-            ":" + std::to_string(state.debug_port)
-      : "Connected to " + std::string(state.host) + ":" +
-            std::to_string(state.debug_port));
-  start_taskmgr_prefetch(state);
 }
 
 /* Modal spinner drawn during async connect */
