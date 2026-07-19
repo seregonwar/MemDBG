@@ -393,20 +393,45 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     pal_network_fini();
 
     /* Backoff before retrying — give the kernel time to restore the
-     * network stack after a suspend/resume cycle. */
-    for (unsigned int attempt = 0U;
-         attempt < 30U && !memdbg_daemon_should_stop(); ++attempt) {
+     * network stack after a suspend/resume cycle.
+     *
+     * Retry indefinitely with exponential backoff (500 ms → 1 s → 2 s →
+     * 4 s → 8 s → 10 s → 10 s …) until the listener is successfully
+     * recreated or the daemon receives a stop signal.  The payload must
+     * not terminate simply because the network isn't available yet — rest
+     * mode can keep the network stack down for an arbitrary duration. */
+    static const unsigned int kBackoffMs[] = {500, 1000, 2000, 4000, 8000, 10000};
+    static const unsigned int kBackoffLen =
+        (unsigned int)(sizeof(kBackoffMs) / sizeof(kBackoffMs[0]));
+    unsigned int attempt = 0U;
+    while (!memdbg_daemon_should_stop()) {
+      /* Try immediately on the first attempt (attempt == 0), then sleep
+       * with backoff before subsequent attempts. */
       if (pal_network_init() == 0) {
-        if (open_debug_listener(&cfg, &listen_fd) == MEMDBG_OK)
+        if (open_debug_listener(&cfg, &listen_fd) == MEMDBG_OK) {
+          memdbg_log_write(MEMDBG_LOG_INFO,
+                           "acceptor: listener recreated after %u attempts",
+                           attempt + 1U);
           break;
+        }
         pal_network_fini();
       }
-      memdbg_sleep_ms(500U);
+      ++attempt;
+      if (memdbg_daemon_should_stop()) break;
+
+      /* Sleep with exponential backoff before the next attempt.
+       * attempt == 1 (first failure) → 500 ms, attempt == 2 → 1 s, … */
+      unsigned int idx = (attempt - 1U) < kBackoffLen
+                             ? (attempt - 1U)
+                             : kBackoffLen - 1U;
+      memdbg_sleep_ms(kBackoffMs[idx]);
     }
 
-    if (listen_fd == PAL_INVALID_SOCKET || memdbg_daemon_should_stop()) {
+    if (memdbg_daemon_should_stop()) break;
+    if (listen_fd == PAL_INVALID_SOCKET) {
       memdbg_log_write(MEMDBG_LOG_ERROR,
-                       "acceptor: failed to recreate listener after rest mode");
+                       "acceptor: failed to recreate listener after %u attempts",
+                       attempt);
       break;
     }
 
