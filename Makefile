@@ -142,6 +142,12 @@ test-memory: $(BUILD_DIR)/host/debug/memory/memdbg_memory.o tests/test_memory.c
 	@echo "--- Running Memory primitive test ---"
 	$(BUILD_DIR)/test_memory
 
+test-pal-ebadf: tests/test_pal_memory_ebadf.c $(GENERATED_VERSION_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) -D__linux__ tests/test_pal_memory_ebadf.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_pal_memory_ebadf
+	@echo "--- Running PAL EBADF retry test ---"
+	$(BUILD_DIR)/test_pal_memory_ebadf
+
 test-process-map-metadata: $(BUILD_DIR)/host/pal/pal_process.o tests/test_process_map_metadata.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_process_map_metadata.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_process_map_metadata
@@ -335,7 +341,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts fuzz-corpus
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts fuzz-corpus
 
 # ---- Fuzz harnesses (pure, socket‑free parsers) ----
 
