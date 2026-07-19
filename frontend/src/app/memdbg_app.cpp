@@ -504,10 +504,10 @@ void connect_console(AppState &state) {
   state.klog_connected = false;
   state.klog_paused = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
-  state.scan_is_unknown_session = false;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "No scan session");
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
+  state.scan.is_unknown_session = false;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
   s_temp_client.set_socket_timeout_ms(static_cast<uint32_t>(std::max(1000, state.socket_timeout_ms)));
@@ -592,7 +592,7 @@ void request_maps_refresh_async(AppState &state) {
     set_status(state, locale::tr("app.maps_refresh_in_progress"));
     return;
   }
-  if (state.connect_pending || state.telemetry_pending || state.scan_async_pending) {
+  if (state.connect_pending || state.telemetry_pending || state.scan.async_pending) {
     set_status(state, locale::tr("app.wait_active"));
     return;
   }
@@ -947,7 +947,7 @@ void disconnect_console(AppState &state, const char *reason) {
   state.connect_pending = false;  /* cancel any in-flight async connect */
 
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
-  if (state.scan_async_future.valid()) state.scan_async_future.wait();
+  if (state.scan.async_future.valid()) state.scan.async_future.wait();
   if (state.telemetry_future.valid()) state.telemetry_future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
@@ -958,7 +958,7 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
   if (s_connect_future.valid()) s_connect_future.wait();
 
-  state.scan_async_pending = false;  /* cancel any in-flight async scan */
+  state.scan.async_pending = false;  /* cancel any in-flight async scan */
   state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr.resource_pending = false;  /* cancel any in-flight task manager fetch */
@@ -990,9 +990,9 @@ void disconnect_console(AppState &state, const char *reason) {
   state.klog_connected = false;
   state.klog_paused = false;
   state.processes.clear(); state.maps.clear(); state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear(); state.scan_snapshot_value_len = 0;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "No scan session");
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear(); state.scan.snapshot_value_len = 0;
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
   state.telemetry_available = false;
@@ -1239,12 +1239,12 @@ static void topbar_select_process(AppState &state, int row) {
   state.maps.clear();
   state.selected_map_row = -1;
   state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear();
-  state.scan_snapshot_value_len = 0;
-  state.scan_is_unknown_session = false;
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear();
+  state.scan.snapshot_value_len = 0;
+  state.scan.is_unknown_session = false;
   state.has_process_info = false;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "Process changed");
   char spid_buf[256]; std::snprintf(spid_buf, sizeof(spid_buf), locale::tr("app.selected_pid"), state.selected_pid, state.processes[row].name.c_str()); set_status(state, spid_buf);
 }
 
@@ -1463,7 +1463,7 @@ static void draw_top_bar(AppState &state, ImVec2 size) {
   }
   if (topbar_w > 1370.0f * scl) {
     ImGui::SameLine();
-    topbar_chip("TopbarHits", locale::tr("topbar.chip_hits"), std::to_string(state.scan_result.count).c_str(), ui::colors().primary2, 104.0f * scl);
+    topbar_chip("TopbarHits", locale::tr("topbar.chip_hits"), std::to_string(state.scan.result.count).c_str(), ui::colors().primary2, 104.0f * scl);
   }
   if (topbar_w > 1480.0f * scl) {
     ImGui::SameLine();
@@ -1762,7 +1762,7 @@ static void poll_session_health(AppState &state) {
   }
 
   if (!state.client.connected() || state.connect_pending ||
-      state.telemetry_pending || state.scan_async_pending ||
+      state.telemetry_pending || state.scan.async_pending ||
       state.map_refresh_pending || state.taskmgr.resource_pending ||
       state.taskmgr.prefetch_pending || state.plugin.refresh_pending ||
       state.plugin.run_pending) {

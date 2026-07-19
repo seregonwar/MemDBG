@@ -478,12 +478,12 @@ void topbar_select_process(AppState &state, int row) {
   state.selected_map_row = -1;
   state.selected_map_starts.clear();
   state.memory.clear();
-  state.scan_result = ScanResult{};
-  state.scan_snapshot.clear();
-  state.scan_snapshot_value_len = 0;
-  state.scan_is_unknown_session = false;
+  state.scan.result = ScanResult{};
+  state.scan.snapshot.clear();
+  state.scan.snapshot_value_len = 0;
+  state.scan.is_unknown_session = false;
   state.has_process_info = false;
-  std::snprintf(state.scan_session_status, sizeof(state.scan_session_status), "Process changed");
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "Process changed");
   set_status(state, "Selected PID " + std::to_string(state.selected_pid) + " (" + state.processes[row].name + ")");
   state.action_journal.record("process_select", ("{\"pid\":" + std::to_string(state.selected_pid) + ",\"name\":\"" + ActionJournal::json_escape(state.processes[row].name) + "\"}").c_str());
 }

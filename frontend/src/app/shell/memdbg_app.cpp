@@ -750,11 +750,11 @@ void shutdown_app_shared(AppState &state) {
   state.shutdown_started = true;
   save_frontend_settings(state);
 
-  if (state.scan_async_future.valid()) {
-    state.scan_async_cancel_requested.store(true);
+  if (state.scan.async_future.valid()) {
+    state.scan.async_cancel_requested.store(true);
     state.client.cancel_pending_io();
-    state.scan_async_future.wait();
-    state.scan_async_pending = false;
+    state.scan.async_future.wait();
+    state.scan.async_pending = false;
   }
   if (state.map_dump_future.valid()) {
     state.map_dump_cancel_requested.store(true);

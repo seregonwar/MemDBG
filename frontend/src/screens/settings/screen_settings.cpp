@@ -196,8 +196,8 @@ static void draw_preferences_section(AppState &state) {
   ImGui::TextColored(ui::colors().muted, "%s", locale::tr("scanner.max_results"));
   ImGui::Spacing();
   ImGui::SetNextItemWidth(200.0f * scl);
-  ImGui::InputInt("##SettingsScanMaxResults", &state.scan_max_results, 100, 1000);
-  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+  ImGui::InputInt("##SettingsScanMaxResults", &state.scan.max_results, 100, 1000);
+  state.scan.max_results = std::clamp(state.scan.max_results, 1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
   ImGui::SameLine();
   ImGui::TextColored(ui::colors().dim, "(1 – %u)",

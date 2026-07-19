@@ -129,7 +129,7 @@ static ProcessMapSummary summarize_maps(const std::vector<MapEntry> &maps) {
 static void start_resource_fetch(AppState &state, int32_t pid) {
   if (pid <= 0 || !state.client.connected()) return;
   if (state.taskmgr.resource_pending || state.connect_pending ||
-      state.telemetry_pending || state.scan_async_pending ||
+      state.telemetry_pending || state.scan.async_pending ||
       state.map_refresh_pending || state.taskmgr.prefetch_pending) {
     return;
   }
@@ -259,7 +259,7 @@ static bool resource_needs_fetch(const AppState &state, int32_t pid) {
 static void start_batch_info_fetch(AppState &state) {
   if (!state.client.connected() || state.processes.empty()) return;
   if (state.taskmgr.resource_pending || state.connect_pending ||
-      state.telemetry_pending || state.scan_async_pending ||
+      state.telemetry_pending || state.scan.async_pending ||
       state.map_refresh_pending || state.taskmgr.prefetch_pending) {
     return;
   }

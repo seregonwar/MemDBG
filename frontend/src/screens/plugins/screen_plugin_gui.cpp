@@ -116,7 +116,7 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
       doc["paths"]["config"] = config_dir.string();
 
       doc["state"]["map_count"] = state.maps.size();
-      doc["state"]["scan_hit_count"] = state.scan_result.addresses.size();
+      doc["state"]["scan_hit_count"] = state.scan.result.addresses.size();
       doc["state"]["trainer_entry_count"] = state.plugin.cheats.size();
 
       std::ofstream out(context_path, std::ios::binary | std::ios::trunc);

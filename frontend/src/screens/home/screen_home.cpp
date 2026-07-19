@@ -146,7 +146,7 @@ void draw_home(AppState &state, ImVec2 avail) {
   if (action_tile("Settings", icons::kSettings, locale::tr("home.tile_settings"), locale::tr("home.tile_settings_meta"), true))
     state.screen = Screen::Settings;
   ImGui::Separator();
-  detail_row(locale::tr("home.scan_hits"), std::to_string(state.scan_result.count).c_str(), ui::colors().muted);
+  detail_row(locale::tr("home.scan_hits"), std::to_string(state.scan.result.count).c_str(), ui::colors().muted);
   detail_row(locale::tr("home.maps"), std::to_string(state.maps.size()).c_str(), ui::colors().muted);
   detail_row(locale::tr("home.trainer_entries"), std::to_string(state.plugin.cheats.size()).c_str(), ui::colors().muted);
   ui::end_panel();

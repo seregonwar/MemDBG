@@ -99,46 +99,46 @@ static CheatEntry &upsert_scanner_cheat(AppState &state, uint64_t address,
 static void request_scanner_value_editor(AppState &state, uint64_t address,
                                          int type,
                                          const std::vector<uint8_t> &current) {
-  state.scanner_value_editor_address = address;
-  state.scanner_value_editor_type = type;
-  state.scanner_value_editor_original = current;
+  state.scan.value_editor_address = address;
+  state.scan.value_editor_type = type;
+  state.scan.value_editor_original = current;
   const std::string value = scanner_value_text(type, current);
-  std::snprintf(state.scanner_value_editor_text,
-                sizeof(state.scanner_value_editor_text), "%s", value.c_str());
-  state.scanner_value_editor_lock = false;
-  state.scanner_value_editor_add_trainer = true;
-  state.scanner_value_editor_request_open = true;
+  std::snprintf(state.scan.value_editor_text,
+                sizeof(state.scan.value_editor_text), "%s", value.c_str());
+  state.scan.value_editor_lock = false;
+  state.scan.value_editor_add_trainer = true;
+  state.scan.value_editor_request_open = true;
 }
 
 static void draw_scanner_value_editor(AppState &state) {
-  if (state.scanner_value_editor_request_open) {
+  if (state.scan.value_editor_request_open) {
     ImGui::OpenPopup("##ScannerValueEditor");
-    state.scanner_value_editor_request_open = false;
-    state.scanner_value_editor_open = true;
+    state.scan.value_editor_request_open = false;
+    state.scan.value_editor_open = true;
   }
-  bool open = state.scanner_value_editor_open;
+  bool open = state.scan.value_editor_open;
   if (!ImGui::BeginPopupModal("##ScannerValueEditor", &open,
                               ImGuiWindowFlags_AlwaysAutoResize)) {
-    state.scanner_value_editor_open = open;
+    state.scan.value_editor_open = open;
     return;
   }
 
   ImGui::TextColored(ui::colors().primary2, "%s",
                      locale::tr("scanner.edit_result"));
   ImGui::Text("%s: %s", locale::tr("scanner.address_col"),
-              hex_u64(state.scanner_value_editor_address).c_str());
+              hex_u64(state.scan.value_editor_address).c_str());
   ImGui::Text("%s: %s", locale::tr("scanner.results_type"),
-              value_type_name(state.scanner_value_editor_type));
+              value_type_name(state.scan.value_editor_type));
   ImGui::SetNextItemWidth(380.0f * ui::dpi_scale());
   ImGui::InputText(locale::tr("scanner.value"),
-                   state.scanner_value_editor_text,
-                   sizeof(state.scanner_value_editor_text));
+                   state.scan.value_editor_text,
+                   sizeof(state.scan.value_editor_text));
   ImGui::Checkbox(locale::tr("scanner.add_runtime_trainer"),
-                  &state.scanner_value_editor_add_trainer);
+                  &state.scan.value_editor_add_trainer);
   ImGui::Checkbox(locale::tr("scanner.lock_written_value"),
-                  &state.scanner_value_editor_lock);
-  if (state.scanner_value_editor_lock)
-    state.scanner_value_editor_add_trainer = true;
+                  &state.scan.value_editor_lock);
+  if (state.scan.value_editor_lock)
+    state.scan.value_editor_add_trainer = true;
   ImGui::TextColored(ui::colors().warning, "%s",
                      locale::tr("scanner.runtime_address_warning"));
   ImGui::Spacing();
@@ -148,33 +148,33 @@ static void draw_scanner_value_editor(AppState &state) {
   if (ui::primary_button(locale::tr("memory.write_memory"),
                          ImVec2(150.0f * ui::dpi_scale(), 34.0f))) {
     std::vector<uint8_t> bytes;
-    if (!build_value_bytes(state.scanner_value_editor_type,
-                           state.scanner_value_editor_text, bytes)) {
+    if (!build_value_bytes(state.scan.value_editor_type,
+                           state.scan.value_editor_text, bytes)) {
       set_status(state, locale::tr("scanner.invalid_value"));
     } else {
       auto client = state.pool.memory_lease();
       uint32_t written = 0U;
       if (!client || !client->memory_write(
-              state.selected_pid, state.scanner_value_editor_address,
+              state.selected_pid, state.scan.value_editor_address,
               bytes, written) || written != bytes.size()) {
         set_status(state, client ? client->last_error()
                                  : locale::tr("scanner.write_failed"));
       } else {
-        if (state.scanner_value_editor_add_trainer) {
+        if (state.scan.value_editor_add_trainer) {
           (void)upsert_scanner_cheat(
-              state, state.scanner_value_editor_address,
-              state.scanner_value_editor_type, bytes,
-              state.scanner_value_editor_text,
-              state.scanner_value_editor_lock,
-              &state.scanner_value_editor_original);
+              state, state.scan.value_editor_address,
+              state.scan.value_editor_type, bytes,
+              state.scan.value_editor_text,
+              state.scan.value_editor_lock,
+              &state.scan.value_editor_original);
         }
         char message[256];
         std::snprintf(message, sizeof(message),
                       locale::tr("scanner.wrote_result"), written,
-                      hex_u64(state.scanner_value_editor_address).c_str());
+                      hex_u64(state.scan.value_editor_address).c_str());
         set_status(state, message);
         push_notification(state, message);
-        state.scanner_value_editor_open = false;
+        state.scan.value_editor_open = false;
         ImGui::CloseCurrentPopup();
       }
     }
@@ -183,11 +183,11 @@ static void draw_scanner_value_editor(AppState &state) {
   ImGui::SameLine();
   if (ui::soft_button(locale::tr("common.cancel"),
                       ImVec2(120.0f * ui::dpi_scale(), 34.0f))) {
-    state.scanner_value_editor_open = false;
+    state.scan.value_editor_open = false;
     ImGui::CloseCurrentPopup();
   }
   ImGui::EndPopup();
-  state.scanner_value_editor_open = open && state.scanner_value_editor_open;
+  state.scan.value_editor_open = open && state.scan.value_editor_open;
 }
 
 /* ---- Structure Compare helper (shared between Exact scan panel and standalone tab) ---- */
@@ -384,17 +384,17 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::TextColored(ui::colors().muted, "%s", selected_process_name(state).c_str());
   ImGui::Spacing();
 
-  ImGui::Combo(locale::tr("scanner.value_type"), &state.scan_type, type_names, IM_ARRAYSIZE(type_names));
-  ImGui::InputText(locale::tr("scanner.value"), state.scan_value, sizeof(state.scan_value));
-  ImGui::InputInt(locale::tr("scanner.alignment"), &state.scan_alignment);
-  ImGui::InputInt(locale::tr("scanner.max_results"), &state.scan_max_results, 100, 1000);
-  state.scan_alignment = std::max(state.scan_alignment, 1);
-  state.scan_max_results = std::clamp(state.scan_max_results, 1,
+  ImGui::Combo(locale::tr("scanner.value_type"), &state.scan.type, type_names, IM_ARRAYSIZE(type_names));
+  ImGui::InputText(locale::tr("scanner.value"), state.scan.value, sizeof(state.scan.value));
+  ImGui::InputInt(locale::tr("scanner.alignment"), &state.scan.alignment);
+  ImGui::InputInt(locale::tr("scanner.max_results"), &state.scan.max_results, 100, 1000);
+  state.scan.alignment = std::max(state.scan.alignment, 1);
+  state.scan.max_results = std::clamp(state.scan.max_results, 1,
       static_cast<int>(MEMDBG_SCAN_MAX_RESULTS_PER_RESPONSE));
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ImGui::InputText(locale::tr("scanner.start"), state.scan_start, sizeof(state.scan_start));
-  ImGui::InputText(locale::tr("scanner.length"), state.scan_length, sizeof(state.scan_length));
+  ImGui::InputText(locale::tr("scanner.start"), state.scan.start, sizeof(state.scan.start));
+  ImGui::InputText(locale::tr("scanner.length"), state.scan.length, sizeof(state.scan.length));
   bool can_launch_range = !client_async_busy(state) && state.client.connected() &&
                           state.selected_pid > 0 &&
                           payload_supports(state, MEMDBG_CAP_SCAN_EXACT);
@@ -414,8 +414,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                      state.selected_map_starts.size());
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  ImGui::InputText(locale::tr("scanner.end_filter"), state.scan_end, sizeof(state.scan_end));
-  ImGui::Checkbox(locale::tr("scanner.readable_only"), &state.scan_readable_only);
+  ImGui::InputText(locale::tr("scanner.end_filter"), state.scan.end, sizeof(state.scan.end));
+  ImGui::Checkbox(locale::tr("scanner.readable_only"), &state.scan.readable_only);
   bool can_launch_process = !client_async_busy(state) && state.client.connected() &&
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_PROCESS_EXACT);
@@ -427,7 +427,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::TextColored(ui::colors().warning, "%s", locale::tr("scanner.unknown_value"));
   ImGui::TextWrapped("%s", locale::tr("scanner.unknown_desc"));
   ImGui::Checkbox("Exclude zero values (prefilter)",
-                  &state.scan_unknown_nonzero_prefilter);
+                  &state.scan.unknown_nonzero_prefilter);
   bool can_launch_unknown = !client_async_busy(state) && state.client.connected() &&
                             state.selected_pid > 0 &&
                             payload_supports(state, MEMDBG_CAP_SCAN_UNKNOWN);
@@ -436,60 +436,60 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::EndDisabled();
 
   /* Progress bar for async scans */
-  if (state.scan_async_pending)
-    ui::draw_scan_progress(state.scan_async_label, icons::kSearch,
-                           ImGui::GetTime() - state.scan_async_start_time,
+  if (state.scan.async_pending)
+    ui::draw_scan_progress(state.scan.async_label, icons::kSearch,
+                           ImGui::GetTime() - state.scan.async_start_time,
                            ImGui::GetContentRegionAvail().x);
-  if (state.scan_async_pending &&
-      state.scan_async_units_total.load() != 0U) {
-    const uint64_t done = state.scan_async_units_done.load();
-    const uint64_t total = state.scan_async_units_total.load();
+  if (state.scan.async_pending &&
+      state.scan.async_units_total.load() != 0U) {
+    const uint64_t done = state.scan.async_units_done.load();
+    const uint64_t total = state.scan.async_units_total.load();
     const float fraction = std::min(
         1.0f, static_cast<float>(done) / static_cast<float>(total));
     ImGui::ProgressBar(fraction,
                        ImVec2(ImGui::GetContentRegionAvail().x, 12.0f), "");
-    const char *progress_format = state.scan_async_units_are_maps.load()
+    const char *progress_format = state.scan.async_units_are_maps.load()
         ? locale::tr("scanner.maps_progress")
         : locale::tr("scanner.units_progress");
     ImGui::TextColored(ui::colors().dim, progress_format,
         static_cast<unsigned long long>(done),
         static_cast<unsigned long long>(total));
   }
-  if (state.scan_async_pending) {
-    const uint32_t maps_total = state.scan_async_maps_total.load();
+  if (state.scan.async_pending) {
+    const uint32_t maps_total = state.scan.async_maps_total.load();
     if (maps_total != 0U)
       ImGui::TextColored(ui::colors().dim, locale::tr("scanner.maps_progress"),
-          static_cast<unsigned long long>(state.scan_async_maps_done.load()),
+          static_cast<unsigned long long>(state.scan.async_maps_done.load()),
           static_cast<unsigned long long>(maps_total));
     ImGui::TextColored(ui::colors().dim, locale::tr("scanner.results_found"),
-        static_cast<unsigned long long>(state.scan_async_results_found.load()));
-    const uint32_t workers_total = state.scan_async_workers_total.load();
+        static_cast<unsigned long long>(state.scan.async_results_found.load()));
+    const uint32_t workers_total = state.scan.async_workers_total.load();
     if (workers_total != 0U)
       ImGui::SameLine(), ImGui::TextColored(
           ui::colors().dim, locale::tr("scanner.workers_active"),
-          state.scan_async_workers_active.load(), workers_total);
+          state.scan.async_workers_active.load(), workers_total);
   }
-  if (state.scan_async_pending && state.scan_async_cancellable) {
-    ImGui::BeginDisabled(state.scan_async_cancel_requested.load());
+  if (state.scan.async_pending && state.scan.async_cancellable) {
+    ImGui::BeginDisabled(state.scan.async_cancel_requested.load());
     if (ui::danger_button(locale::tr("scanner.stop"), ui::full_button(36))) {
-      state.scan_async_cancel_requested.store(true);
+      state.scan.async_cancel_requested.store(true);
       set_status(state, locale::tr("scanner.stopping"));
     }
     ImGui::EndDisabled();
   }
 
   ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-  const char *session_label = state.scan_is_unknown_session ? locale::tr("scanner.unknown_session") : locale::tr("scanner.next_scan");
-  ImGui::TextColored(state.scan_is_unknown_session ? ui::colors().warning : ui::colors().muted, "%s", session_label);
-  ImGui::TextWrapped("%s", state.scan_session_status);
-  if (state.scan_is_unknown_session && !state.scan_snapshot.empty())
+  const char *session_label = state.scan.is_unknown_session ? locale::tr("scanner.unknown_session") : locale::tr("scanner.next_scan");
+  ImGui::TextColored(state.scan.is_unknown_session ? ui::colors().warning : ui::colors().muted, "%s", session_label);
+  ImGui::TextWrapped("%s", state.scan.session_status);
+  if (state.scan.is_unknown_session && !state.scan.snapshot.empty())
     ImGui::TextColored(ui::colors().dim, locale::tr("scanner.tracking_n"),
-                       state.scan_snapshot.size(), state.scan_snapshot_value_len);
+                       state.scan.snapshot.size(), state.scan.snapshot_value_len);
   ImGui::Spacing();
 
   bool can_refine = state.client.connected() && state.selected_pid > 0 &&
                     payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
-                    !state.scan_snapshot.empty() && !client_async_busy(state);
+                    !state.scan.snapshot.empty() && !client_async_busy(state);
   const float half_w = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
   ImGui::BeginDisabled(!can_refine);
   if (ui::soft_button(locale::tr("scanner.exact_value"), ui::full_button(38))) refine_scan(state, RefineMode::ExactValue);
@@ -502,13 +502,13 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::EndDisabled();
   bool can_refresh = state.client.connected() &&
                      payload_supports(state, MEMDBG_CAP_MEMORY_READ) &&
-                     !state.scan_snapshot.empty() && !client_async_busy(state);
+                     !state.scan.snapshot.empty() && !client_async_busy(state);
   ImGui::BeginDisabled(!can_refresh);
   std::string next_label = std::string(icons::kRefresh) + "  " +
-      std::string(state.scan_is_unknown_session ? locale::tr("scanner.next_scan_refresh_all") : locale::tr("scanner.refresh_baseline"));
+      std::string(state.scan.is_unknown_session ? locale::tr("scanner.next_scan_refresh_all") : locale::tr("scanner.refresh_baseline"));
   if (ui::soft_button(next_label.c_str(), ui::full_button(38))) {
     capture_scan_snapshot(state);
-    set_status(state, state.scan_session_status);
+    set_status(state, state.scan.session_status);
   }
   ImGui::EndDisabled();
 
@@ -516,18 +516,18 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
   ImGui::Separator();
   ImGui::Spacing();
-  ImGui::Checkbox(locale::tr("scanner.smart_auto"), &state.auto_search_enabled);
-  if (state.auto_search_enabled) {
+  ImGui::Checkbox(locale::tr("scanner.smart_auto"), &state.scan.auto_search_enabled);
+  if (state.scan.auto_search_enabled) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(140.0f);
     const char *target_names[] = {locale::tr("scanner.target_health"), locale::tr("scanner.target_ammo"), locale::tr("scanner.target_resources")};
-    if (ImGui::Combo("##autotarget", &state.auto_search_target,
+    if (ImGui::Combo("##autotarget", &state.scan.auto_search_target,
                      target_names, IM_ARRAYSIZE(target_names)))
-      state.auto_search_has_baseline = false;
+      state.scan.auto_search_has_baseline = false;
 
     /* Hint text — warn about critical instructions like "don't reload" */
     AutoSearchTarget hint_tgt =
-        static_cast<AutoSearchTarget>(state.auto_search_target);
+        static_cast<AutoSearchTarget>(state.scan.auto_search_target);
     ImVec4 hint_color = hint_tgt == AutoSearchTarget::Ammo
                             ? ui::colors().warning
                             : ui::colors().dim;
@@ -544,51 +544,51 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     ImGui::EndDisabled();
 
     /* Next Scan: re-read and score candidates */
-    bool can_next = state.auto_search_has_baseline && can_launch_unknown &&
-                    !state.scan_snapshot.empty();
+    bool can_next = state.scan.auto_search_has_baseline && can_launch_unknown &&
+                    !state.scan.snapshot.empty();
     ImGui::BeginDisabled(!can_next);    char ns_buf[128];
-    std::snprintf(ns_buf, sizeof(ns_buf), locale::tr("scanner.next_scan_pass"), state.auto_search_pass + 1);
+    std::snprintf(ns_buf, sizeof(ns_buf), locale::tr("scanner.next_scan_pass"), state.scan.auto_search_pass + 1);
     std::string auto_next_label = std::string(icons::kRefresh) + "  " + ns_buf;
     if (ui::primary_button(auto_next_label.c_str(), ui::full_button(38))) {
       /* Re-read baseline addresses and score them on the async worker.
        * We reuse the refine_scan Changed path but with scoring layered on top. */
-      AutoSearchTarget tgt = static_cast<AutoSearchTarget>(state.auto_search_target);
-      state.scan_async_label = "Auto-search pass " +
-                               std::to_string(state.auto_search_pass + 1);
-      state.scan_async_start_time = ImGui::GetTime();
-      state.scan_async_pending = true;
-      state.scan_async_cancellable = true;
-      state.scan_async_cancel_requested.store(false);
-      state.scan_async_owner = Screen::Scanner;
+      AutoSearchTarget tgt = static_cast<AutoSearchTarget>(state.scan.auto_search_target);
+      state.scan.async_label = "Auto-search pass " +
+                               std::to_string(state.scan.auto_search_pass + 1);
+      state.scan.async_start_time = ImGui::GetTime();
+      state.scan.async_pending = true;
+      state.scan.async_cancellable = true;
+      state.scan.async_cancel_requested.store(false);
+      state.scan.async_owner = Screen::Scanner;
 
       const int32_t pid = state.selected_pid;
-      const uint32_t val_len = state.scan_snapshot_value_len;
-      const int snap_type = state.scan_snapshot_type;
+      const uint32_t val_len = state.scan.snapshot_value_len;
+      const int snap_type = state.scan.snapshot_type;
       auto client = state.pool.scan_lease();
-      const auto snap = state.scan_snapshot;
-      const ScanResult original_result = state.scan_result;
+      const auto snap = state.scan.snapshot;
+      const ScanResult original_result = state.scan.result;
       const bool has_batch = (state.hello.capabilities & MEMDBG_CAP_BATCH_READ) != 0U;
-      state.scan_async_units_done.store(0U);
-      state.scan_async_units_total.store(has_batch
+      state.scan.async_units_done.store(0U);
+      state.scan.async_units_total.store(has_batch
           ? (snap.size() + MEMDBG_BATCH_READ_MAX_ITEMS - 1U) /
                 MEMDBG_BATCH_READ_MAX_ITEMS
           : snap.size());
-      auto &temp_result = state.scan_async_temp_result;
-      auto &temp_snapshot = state.scan_async_temp_snapshot;
-      auto &temp_snap_val_len = state.scan_async_temp_snapshot_value_len;
-      auto &temp_snap_type = state.scan_async_temp_snapshot_type;
-      auto &temp_is_unknown = state.scan_async_temp_is_unknown;
-      auto &temp_status = state.scan_async_temp_session_status;
-      auto &temp_candidates = state.auto_search_temp_candidates;
+      auto &temp_result = state.scan.async_temp_result;
+      auto &temp_snapshot = state.scan.async_temp_snapshot;
+      auto &temp_snap_val_len = state.scan.async_temp_snapshot_value_len;
+      auto &temp_snap_type = state.scan.async_temp_snapshot_type;
+      auto &temp_is_unknown = state.scan.async_temp_is_unknown;
+      auto &temp_status = state.scan.async_temp_session_status;
+      auto &temp_candidates = state.scan.auto_search_temp_candidates;
 
-      state.scan_async_future = std::async(std::launch::async,
+      state.scan.async_future = std::async(std::launch::async,
         [client, pid, val_len, snap_type, tgt, has_batch,
          snap, &temp_result, &temp_snapshot, &temp_snap_val_len,
          &temp_snap_type, &temp_is_unknown, &temp_status,
          &temp_candidates, original_result,
-         &cancel_requested = state.scan_async_cancel_requested,
-         &units_done = state.scan_async_units_done,
-         &mtx = state.scan_async_mtx]() -> bool {
+         &cancel_requested = state.scan.async_cancel_requested,
+         &units_done = state.scan.async_units_done,
+         &mtx = state.scan.async_mtx]() -> bool {
           /* Re-read all baseline addresses */
           const auto &old_snap = snap;
           std::vector<ScanSnapshotEntry> current_snap;
@@ -723,20 +723,20 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     }
     ImGui::EndDisabled();
 
-    if (state.auto_search_has_baseline && !state.scan_snapshot.empty())
+    if (state.scan.auto_search_has_baseline && !state.scan.snapshot.empty())
       ImGui::TextColored(ui::colors().dim, locale::tr("scanner.baseline_n_values"),
-                         state.scan_snapshot.size());
-    if (state.auto_search_pass > 0)
+                         state.scan.snapshot.size());
+    if (state.scan.auto_search_pass > 0)
       ImGui::TextColored(ui::colors().success, locale::tr("scanner.pass_n_complete"),
-                         state.auto_search_pass);
+                         state.scan.auto_search_pass);
 
     /* Reset button */
-    if (state.auto_search_has_baseline) {
+    if (state.scan.auto_search_has_baseline) {
       ImGui::SameLine();
       if (ImGui::SmallButton(locale::tr("scanner.reset"))) {
-        state.auto_search_has_baseline = false;
-        state.auto_search_pass = 0;
-        state.auto_search_candidates.clear();
+        state.scan.auto_search_has_baseline = false;
+        state.scan.auto_search_pass = 0;
+        state.scan.auto_search_candidates.clear();
         set_status(state, locale::tr("scanner.auto_search_reset"));
       }
       if (ImGui::IsItemHovered())
@@ -744,7 +744,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     }
 
     /* Display scored candidates if available */
-    if (!state.auto_search_candidates.empty()) {
+    if (!state.scan.auto_search_candidates.empty()) {
       ImGui::Spacing();
       ImGui::TextColored(ui::colors().primary2, "%s", locale::tr("scanner.top_candidates"));
       ImGui::Spacing();
@@ -758,8 +758,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
         ImGui::TableSetupColumn(locale::tr("scanner.reason_col"));
         ImGui::TableHeadersRow();
         for (size_t i = 0U;
-             i < state.auto_search_candidates.size() && i < 20U; ++i) {
-          const auto &c = state.auto_search_candidates[i];
+             i < state.scan.auto_search_candidates.size() && i < 20U; ++i) {
+          const auto &c = state.scan.auto_search_candidates[i];
           ImGui::TableNextRow();
           ImGui::TableSetColumnIndex(0);
           /* Color-code score: green > 0.7, yellow > 0.4, dim otherwise */
@@ -808,8 +808,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
                         "Capture an auto-search baseline?",
                         "This runs an unknown-value scan and keeps a baseline snapshot. Use a narrow window if the target has caused read faults before.",
                         &skip_auto_baseline_confirm, true)) {
-    state.auto_search_has_baseline = false;
-    state.auto_search_pass = 0;
+    state.scan.auto_search_has_baseline = false;
+    state.scan.auto_search_pass = 0;
     scan_unknown_process(state);
   }
 
@@ -825,16 +825,16 @@ void draw_scanner(AppState &state, ImVec2 avail) {
 
   ImGui::SameLine();
   ui::begin_panel("ScannerResults", locale::tr("scanner.results_title"), ImVec2(0, avail.y));
-  ImGui::Text(locale::tr("scanner.results_count"), state.scan_result.count,
-              state.scan_result.truncated ? locale::tr("scanner.truncated") : "");
-  ImGui::Text("%s %s", locale::tr("scanner.results_type"), value_type_name(state.scan_type));
-  ImGui::Text(locale::tr("scanner.scanned_mib"), static_cast<double>(state.scan_result.bytes_scanned)/(1024.0*1024.0));
-  ImGui::Text(locale::tr("scanner.speed"), bytes_per_second(state.scan_result.bytes_scanned, state.scan_result.elapsed_ns).c_str());
+  ImGui::Text(locale::tr("scanner.results_count"), state.scan.result.count,
+              state.scan.result.truncated ? locale::tr("scanner.truncated") : "");
+  ImGui::Text("%s %s", locale::tr("scanner.results_type"), value_type_name(state.scan.type));
+  ImGui::Text(locale::tr("scanner.scanned_mib"), static_cast<double>(state.scan.result.bytes_scanned)/(1024.0*1024.0));
+  ImGui::Text(locale::tr("scanner.speed"), bytes_per_second(state.scan.result.bytes_scanned, state.scan.result.elapsed_ns).c_str());
   ImGui::Text(locale::tr("scanner.reads_regions_errors"),
-              state.scan_result.read_calls, state.scan_result.regions_scanned, state.scan_result.read_errors);
-  ImGui::Text(locale::tr("scanner.session_captured"), state.scan_snapshot.size());
+              state.scan.result.read_calls, state.scan.result.regions_scanned, state.scan.result.read_errors);
+  ImGui::Text(locale::tr("scanner.session_captured"), state.scan.snapshot.size());
   /* BATCH_READ status badge */
-  if (!state.scan_snapshot.empty()) {
+  if (!state.scan.snapshot.empty()) {
     ImGui::SameLine();
     if (has_batch_read(state)) {
       ImGui::TextColored(ui::colors().success, "  %s", icons::kGauge);
@@ -849,23 +849,23 @@ void draw_scanner(AppState &state, ImVec2 avail) {
   /* Copy All logic shared between button and keyboard shortcut */
   auto copy_all = [&](const char *suffix = nullptr) {
     std::string all;
-    all.reserve(state.scan_result.addresses.size() * 18U);
-    for (uint64_t addr : state.scan_result.addresses)
+    all.reserve(state.scan.result.addresses.size() * 18U);
+    for (uint64_t addr : state.scan.result.addresses)
       all += hex_u64(addr) + "\n";
     ImGui::SetClipboardText(all.c_str());
     char copy_buf[128];
-    std::snprintf(copy_buf, sizeof(copy_buf), locale::tr("notify.copied_n_addresses"), state.scan_result.addresses.size());
+    std::snprintf(copy_buf, sizeof(copy_buf), locale::tr("notify.copied_n_addresses"), state.scan.result.addresses.size());
     set_status(state, copy_buf);
     push_notification(state, copy_buf + (suffix ? std::string(suffix) : std::string("")));
   };
 
-  if (!state.scan_result.addresses.empty()) {
+  if (!state.scan.result.addresses.empty()) {
     if (ui::soft_button((std::string(icons::kCopy) + "  " + locale::tr("scanner.copy_all")).c_str(),
                         ImVec2(200, 30)))
       copy_all();
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip(locale::tr("scanner.copy_all_tooltip"),
-                        state.scan_result.count);
+                        state.scan.result.count);
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
       copy_all(" (Ctrl+C)");
   }
@@ -883,14 +883,14 @@ void draw_scanner(AppState &state, ImVec2 avail) {
     /* Two-pointer lookup: both scan_result.addresses and scan_snapshot are sorted
        and built in the same order (snapshot may skip read errors). */
     size_t snap_idx = 0U;
-    for (int i = 0; i < static_cast<int>(state.scan_result.addresses.size()); ++i) {
-      uint64_t addr = state.scan_result.addresses[i];
-      while (snap_idx < state.scan_snapshot.size() &&
-             state.scan_snapshot[snap_idx].address < addr) snap_idx++;
+    for (int i = 0; i < static_cast<int>(state.scan.result.addresses.size()); ++i) {
+      uint64_t addr = state.scan.result.addresses[i];
+      while (snap_idx < state.scan.snapshot.size() &&
+             state.scan.snapshot[snap_idx].address < addr) snap_idx++;
       const ScanSnapshotEntry *snap =
-          snap_idx < state.scan_snapshot.size() &&
-                  state.scan_snapshot[snap_idx].address == addr
-              ? &state.scan_snapshot[snap_idx]
+          snap_idx < state.scan.snapshot.size() &&
+                  state.scan.snapshot[snap_idx].address == addr
+              ? &state.scan.snapshot[snap_idx]
               : nullptr;
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
@@ -903,7 +903,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       ImGui::TableSetColumnIndex(1);
       if (snap != nullptr) {
         ImGui::TextUnformatted(
-            scanner_value_text(state.scan_snapshot_type, snap->bytes).c_str());
+            scanner_value_text(state.scan.snapshot_type, snap->bytes).c_str());
       } else {
         ImGui::TextColored(ui::colors().dim, "%s", locale::tr("scanner.n_a"));
       }
@@ -918,13 +918,13 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       ImGui::SameLine();
       ImGui::BeginDisabled(snap == nullptr || client_async_busy(state));
       if (ImGui::SmallButton(locale::tr("scanner.edit")) && snap != nullptr)
-        request_scanner_value_editor(state, addr, state.scan_snapshot_type,
+        request_scanner_value_editor(state, addr, state.scan.snapshot_type,
                                      snap->bytes);
       ImGui::SameLine();
       if (ImGui::SmallButton(locale::tr("scanner.lock")) && snap != nullptr) {
         (void)upsert_scanner_cheat(
-            state, addr, state.scan_snapshot_type, snap->bytes,
-            scanner_value_text(state.scan_snapshot_type, snap->bytes), true,
+            state, addr, state.scan.snapshot_type, snap->bytes,
+            scanner_value_text(state.scan.snapshot_type, snap->bytes), true,
             nullptr);
         set_status(state, locale::tr("scanner.runtime_lock_added"));
         push_notification(state, locale::tr("scanner.runtime_lock_added"));
@@ -932,8 +932,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       ImGui::SameLine();
       if (ImGui::SmallButton(locale::tr("scanner.trainer")) && snap != nullptr) {
         (void)upsert_scanner_cheat(
-            state, addr, state.scan_snapshot_type, snap->bytes,
-            scanner_value_text(state.scan_snapshot_type, snap->bytes), false,
+            state, addr, state.scan.snapshot_type, snap->bytes,
+            scanner_value_text(state.scan.snapshot_type, snap->bytes), false,
             nullptr);
         set_status(state, locale::tr("scanner.runtime_trainer_added"));
         push_notification(state, locale::tr("scanner.runtime_trainer_added"));

@@ -259,7 +259,7 @@ void draw_telemetry(AppState &state, ImVec2 avail) {
     }
   }
   ImGui::EndDisabled();
-  if (state.scan_async_pending) {
+  if (state.scan.async_pending) {
     ImGui::TextColored(ui::colors().warning,
                        "%s", locale::tr("telemetry.paused_scan"));
   }
