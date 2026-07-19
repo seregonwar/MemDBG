@@ -105,7 +105,7 @@ void draw_plugin_gui(AppState &state, ImVec2 avail) {
       doc["console"]["target_debug_port"] = state.debug_port;
       doc["process"]["pid"] = state.selected_pid;
       doc["process"]["name"] = selected_process_name(state);
-      doc["paths"]["dump"] = state.dump_path;
+      doc["paths"]["dump"] = state.mem.dump_path;
       doc["paths"]["trainer"] = state.plugin.trainer_file_path;
       doc["paths"]["plugin"] = std::filesystem::path(entry_path).parent_path().string();
 

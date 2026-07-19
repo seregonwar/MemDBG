@@ -252,9 +252,9 @@ void draw_pointer_scanner(AppState &state, ImVec2 avail) {
       ImGui::TableSetColumnIndex(1);
       std::string label = hex_u64(addr) + "##ptr" + std::to_string(i);
       if (ImGui::Selectable(label.c_str())) {
-        std::snprintf(state.read_address, sizeof(state.read_address), "%s",
+        std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s",
                       hex_u64(addr).c_str());
-        std::snprintf(state.write_address, sizeof(state.write_address), "%s",
+        std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s",
                       hex_u64(addr).c_str());
         state.screen = Screen::Memory;
       }

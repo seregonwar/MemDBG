@@ -79,7 +79,7 @@ void poll_locale_repository(AppState &state) {
 }
 
 void poll_session_health(AppState &state) {
-  if (state.has_hello && !state.client.connected() && !state.connect_pending) {
+  if (state.has_hello && !state.client.connected() && !state.conn.connect_pending) {
     const std::string error = state.client.last_error();
     const std::string message = error.empty()
                                     ? "Payload connection lost"
@@ -88,31 +88,31 @@ void poll_session_health(AppState &state) {
     return;
   }
 
-  if (state.heartbeat_pending) {
-    if (!state.heartbeat_future.valid()) {
-      state.heartbeat_pending = false;
+  if (state.conn.heartbeat_pending) {
+    if (!state.conn.heartbeat_future.valid()) {
+      state.conn.heartbeat_pending = false;
       return;
     }
 
-    auto status = state.heartbeat_future.wait_for(std::chrono::milliseconds(0));
+    auto status = state.conn.heartbeat_future.wait_for(std::chrono::milliseconds(0));
     if (status != std::future_status::ready) {
       return;
     }
 
     bool ok = false;
     try {
-      ok = state.heartbeat_future.get();
+      ok = state.conn.heartbeat_future.get();
     } catch (const std::exception &ex) {
-      state.heartbeat_error = ex.what();
+      state.conn.heartbeat_error = ex.what();
     } catch (...) {
-      state.heartbeat_error = "Unknown heartbeat error";
+      state.conn.heartbeat_error = "Unknown heartbeat error";
     }
-    state.heartbeat_pending = false;
+    state.conn.heartbeat_pending = false;
 
     if (!ok) {
-      const std::string error = state.heartbeat_error.empty()
+      const std::string error = state.conn.heartbeat_error.empty()
                                     ? state.client.last_error()
-                                    : state.heartbeat_error;
+                                    : state.conn.heartbeat_error;
       const std::string message = error.empty()
                                       ? "Payload connection lost"
                                       : "Payload connection lost: " + error;
@@ -120,11 +120,11 @@ void poll_session_health(AppState &state) {
       return;
     }
 
-    state.next_heartbeat = ImGui::GetTime() + 2.5;
+    state.conn.next_heartbeat = ImGui::GetTime() + 2.5;
     return;
   }
 
-  if (!state.client.connected() || state.connect_pending ||
+  if (!state.client.connected() || state.conn.connect_pending ||
       state.telemetry_pending || state.scan.async_pending ||
       state.map_refresh_pending || state.taskmgr.resource_pending ||
       state.taskmgr.prefetch_pending || state.plugin.refresh_pending ||
@@ -133,20 +133,20 @@ void poll_session_health(AppState &state) {
   }
 
   const double now = ImGui::GetTime();
-  if (now < state.next_heartbeat) {
+  if (now < state.conn.next_heartbeat) {
     return;
   }
 
-  if (state.heartbeat_future.valid()) {
-    state.heartbeat_future.wait();
+  if (state.conn.heartbeat_future.valid()) {
+    state.conn.heartbeat_future.wait();
   }
-  state.heartbeat_pending = true;
-  state.heartbeat_error.clear();
-  state.heartbeat_future = std::async(std::launch::async, [&state]() -> bool {
+  state.conn.heartbeat_pending = true;
+  state.conn.heartbeat_error.clear();
+  state.conn.heartbeat_future = std::async(std::launch::async, [&state]() -> bool {
     if (state.client.ping()) {
       return true;
     }
-    state.heartbeat_error = state.client.last_error();
+    state.conn.heartbeat_error = state.client.last_error();
     return false;
   });
 }
@@ -198,7 +198,7 @@ void handle_global_shortcuts(AppState &state) {
   if (ImGui::IsKeyPressed(ImGuiKey_F9)) state.screen = Screen::Trainer;
   if (ImGui::IsKeyPressed(ImGuiKey_F10)) state.screen = Screen::Logs;
   if (ImGui::IsKeyPressed(ImGuiKey_F11)) state.screen = Screen::Plugins;
-  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.connect_pending && state.screen != Screen::Lua) {
+  if (ImGui::IsKeyPressed(ImGuiKey_F5) && !state.conn.connect_pending && state.screen != Screen::Lua) {
     if (client_async_busy(state)) {
       set_status(state, "Wait for the active operation to finish");
     } else if (state.client.connected()) {

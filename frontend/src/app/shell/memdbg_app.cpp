@@ -612,7 +612,7 @@ void init_app_shared(AppState &state, float dpi_scale) {
   ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
   state.plugin_manager.set_bundle_root(s_executable_dir);
-  std::snprintf(state.plugin_bundle_root, sizeof(state.plugin_bundle_root),
+  std::snprintf(state.mem.plugin_bundle_root, sizeof(state.mem.plugin_bundle_root),
                 "%s", s_executable_dir.string().c_str());
   {
     std::string plugin_error;
@@ -746,8 +746,8 @@ void init_app_shared(AppState &state, float dpi_scale) {
 }
 
 void shutdown_app_shared(AppState &state) {
-  if (state.shutdown_started) return;
-  state.shutdown_started = true;
+  if (state.conn.shutdown_started) return;
+  state.conn.shutdown_started = true;
   save_frontend_settings(state);
 
   if (state.scan.async_future.valid()) {

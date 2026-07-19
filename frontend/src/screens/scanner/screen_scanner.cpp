@@ -301,8 +301,8 @@ static void draw_structure_compare_section(AppState &state) {
             if (parse_u64(state.structure_player_base, player_base) &&
                 player_base <= std::numeric_limits<uint64_t>::max() - field.offset) {
               const std::string address = hex_u64(player_base + field.offset);
-              std::snprintf(state.read_address, sizeof(state.read_address), "%s", address.c_str());
-              std::snprintf(state.write_address, sizeof(state.write_address), "%s", address.c_str());
+              std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s", address.c_str());
+              std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s", address.c_str());
               state.screen = Screen::Memory;
             }
           }
@@ -770,9 +770,9 @@ void draw_scanner(AppState &state, ImVec2 avail) {
           std::string addr_label = hex_u64(c.address) + "##ac" +
                                    std::to_string(i);
           if (ImGui::Selectable(addr_label.c_str())) {
-            std::snprintf(state.read_address, sizeof(state.read_address),
+            std::snprintf(state.mem.read_address, sizeof(state.mem.read_address),
                           "%s", hex_u64(c.address).c_str());
-            std::snprintf(state.write_address, sizeof(state.write_address),
+            std::snprintf(state.mem.write_address, sizeof(state.mem.write_address),
                           "%s", hex_u64(c.address).c_str());
             state.screen = Screen::Memory;
           }
@@ -896,8 +896,8 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       ImGui::TableSetColumnIndex(0);
       std::string label = hex_u64(addr) + "##scan" + std::to_string(i);
       if (ImGui::Selectable(label.c_str())) {
-        std::snprintf(state.read_address, sizeof(state.read_address), "%s", hex_u64(addr).c_str());
-        std::snprintf(state.write_address, sizeof(state.write_address), "%s", hex_u64(addr).c_str());
+        std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s", hex_u64(addr).c_str());
+        std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s", hex_u64(addr).c_str());
         state.screen = Screen::Memory;
       }
       ImGui::TableSetColumnIndex(1);

@@ -913,7 +913,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
                             ImGuiTableFlags_PadOuterX)) {
     ImGui::TableNextColumn();
     if (ui::soft_button(locale::tr("trainer.use_memory_addr"), ImVec2(-1, 36.0f * scl)))
-      std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s", state.write_address);
+      std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s", state.mem.write_address);
     ImGui::TableNextColumn();
     ImGui::BeginDisabled(state.scan.result.addresses.empty());
     if (ui::soft_button(locale::tr("trainer.use_first_hit"), ImVec2(-1, 36.0f * scl)))

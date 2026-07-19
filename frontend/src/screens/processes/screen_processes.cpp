@@ -195,11 +195,11 @@ static void dump_selected_map(AppState &state) {
     /* Update dump_path so subsequent dumps default here */
     std::filesystem::path parent = out_path.parent_path();
     if (!parent.empty())
-      std::snprintf(state.dump_path, sizeof(state.dump_path), "%s",
+      std::snprintf(state.mem.dump_path, sizeof(state.mem.dump_path), "%s",
                     parent.string().c_str());
   } else {
     /* No native picker (console) or user cancelled — use configured path */
-    std::filesystem::path configured = trim_copy(state.dump_path);
+    std::filesystem::path configured = trim_copy(state.mem.dump_path);
     if (configured.empty()) configured = "dumps";
     const bool looks_like_file = configured.has_extension();
     if (looks_like_file) out_path = configured;
@@ -248,7 +248,7 @@ static void dump_filtered_maps(AppState &state) {
   if (state.map_dump_pending) return;
 
   state.process_dump_max_mb = std::clamp(state.process_dump_max_mb, 1, 4096);
-  std::filesystem::path base_dir = trim_copy(state.dump_path);
+  std::filesystem::path base_dir = trim_copy(state.mem.dump_path);
   if (base_dir.empty()) base_dir = "dumps";
   if (base_dir.has_extension()) base_dir = base_dir.parent_path();
   if (base_dir.empty()) base_dir = ".";
@@ -425,7 +425,7 @@ static void select_process(AppState &state, int row) {
   state.maps.clear();
   state.selected_map_row = -1;
   state.selected_map_starts.clear();
-  state.memory.clear();
+  state.mem.memory.clear();
   state.scan.result = ScanResult{};
   state.scan.snapshot.clear();
   state.scan.snapshot_value_len = 0;
@@ -449,7 +449,7 @@ static void ensure_process_info(AppState &state) {
   }
   /* Process metadata shares the read-oriented memory lane.  Unrelated scan,
    * telemetry, and plugin work can continue on their own role connections. */
-  if (state.connect_pending || state.map_refresh_pending ||
+  if (state.conn.connect_pending || state.map_refresh_pending ||
       state.json_dump_pending)
     return;
   auto client = state.pool.memory_lease();
@@ -461,8 +461,8 @@ static void select_map(AppState &state, int row) {
   if (row < 0 || row >= static_cast<int>(state.maps.size())) return;
   const auto &map = state.maps[row];
   state.selected_map_row = row;
-  std::snprintf(state.read_address, sizeof(state.read_address), "%s", hex_u64(map.start).c_str());
-  std::snprintf(state.write_address, sizeof(state.write_address), "%s", hex_u64(map.start).c_str());
+  std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s", hex_u64(map.start).c_str());
+  std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s", hex_u64(map.start).c_str());
   std::snprintf(state.scan.start, sizeof(state.scan.start), "%s", hex_u64(map.start).c_str());
   std::snprintf(state.scan.length, sizeof(state.scan.length), "%s", hex_u64(map.end - map.start).c_str());
   char map_buf[128];
@@ -732,7 +732,7 @@ static void draw_json_dump_dialog(AppState &state) {
   /* Dump button */
   const bool connected = state.client.connected();
   const bool has_pid = state.selected_pid > 0;
-  const bool busy = state.connect_pending || state.map_refresh_pending;
+  const bool busy = state.conn.connect_pending || state.map_refresh_pending;
   const bool can_dump = connected && has_pid && !state.json_dump_pending && !busy;
 
   if (!connected) {
@@ -1086,7 +1086,7 @@ static void load_elf_file(AppState &state, const std::string &path) {
 
 static void request_elf_load(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (state.elf.load_pending || state.connect_pending) return;
+  if (state.elf.load_pending || state.conn.connect_pending) return;
 
   const char *fpath = state.elf.load_path;
   if (fpath[0] == '\0') {
@@ -1141,7 +1141,7 @@ static void request_elf_load(AppState &state) {
 
 static void request_elf_hijack(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (state.elf.load_pending || state.connect_pending) return;
+  if (state.elf.load_pending || state.conn.connect_pending) return;
 
   const char *fpath = state.elf.load_path;
   if (fpath[0] == '\0') {
@@ -1442,7 +1442,7 @@ static void draw_elf_section(AppState &state) {
     ImGui::Spacing();
     const bool connected = state.client.connected();
     const bool has_pid = state.selected_pid > 0;
-    const bool busy = state.connect_pending || state.elf.load_pending;
+    const bool busy = state.conn.connect_pending || state.elf.load_pending;
     const bool can_act = connected && has_pid && !busy && state.elf.load_path[0] != '\0';
 
     ImGui::BeginDisabled(!can_act);
@@ -1596,7 +1596,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
     /* Button row: Refresh + Tree toggle + JSON Dump */
-    ImGui::BeginDisabled(state.connect_pending || state.elf.load_pending);
+    ImGui::BeginDisabled(state.conn.connect_pending || state.elf.load_pending);
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(150, 34))) refresh_processes(state);
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1634,7 +1634,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
         ImGui::TextWrapped(locale::tr("processes.path"), state.selected_process_info.path.c_str());
     }
     ImGui::BeginDisabled(!state.client.connected() || state.selected_pid <= 0 ||
-                         state.connect_pending || state.map_refresh_pending ||
+                         state.conn.connect_pending || state.map_refresh_pending ||
                          state.json_dump_pending || state.map_dump_pending);
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_maps")).c_str(), ImVec2(150, 34))) refresh_maps(state);
     ImGui::SameLine();
@@ -1694,7 +1694,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
       dump_opts.dialog_title = locale::tr("file_picker.select_dump_dir");
       dump_opts.folder_mode = true;
       dump_opts.placeholder = "dumps";
-      if (ui::file_path_input(state.dump_path, sizeof(state.dump_path), dump_opts)) {
+      if (ui::file_path_input(state.mem.dump_path, sizeof(state.mem.dump_path), dump_opts)) {
         std::string err;
         (void)save_frontend_settings(state, &err);
       }

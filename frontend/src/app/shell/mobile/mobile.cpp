@@ -147,9 +147,9 @@ static void mobile_select_map(AppState &state, int row) {
   if (row < 0 || row >= static_cast<int>(state.maps.size())) return;
   const MapEntry &map = state.maps[row];
   state.selected_map_row = row;
-  std::snprintf(state.read_address, sizeof(state.read_address), "%s",
+  std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s",
                 hex_u64(map.start).c_str());
-  std::snprintf(state.write_address, sizeof(state.write_address), "%s",
+  std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s",
                 hex_u64(map.start).c_str());
   std::snprintf(state.scan.start, sizeof(state.scan.start), "%s",
                 hex_u64(map.start).c_str());
@@ -168,7 +168,7 @@ static plugins::PluginRunContext mobile_build_plugin_context(
   context.connected = state.client.connected();
   context.selected_pid = state.selected_pid;
   context.selected_process_name = selected_process_name(state);
-  context.dump_path = state.dump_path;
+  context.dump_path = state.mem.dump_path;
   context.trainer_file_path = state.plugin.trainer_file_path;
   context.protocol_version = state.has_hello ? state.hello.protocol_version : 0U;
   context.capabilities = state.has_hello ? state.hello.capabilities : 0U;
@@ -309,12 +309,12 @@ static void draw_mobile_network(AppState &state, ImVec2 size) {
                     ImGuiWindowFlags_AlwaysVerticalScrollbar);
   ImGui::TextColored(palette.primary2, "%s", "Console");
   ImGui::SameLine();
-  ui::status_dot(state.connect_pending ? palette.warning :
+  ui::status_dot(state.conn.connect_pending ? palette.warning :
                  connected ? palette.success : palette.dim);
   ImGui::SameLine();
   ImGui::TextColored(connected ? palette.success :
-                     state.connect_pending ? palette.warning : palette.danger,
-                     "%s", state.connect_pending ? "Connecting" :
+                     state.conn.connect_pending ? palette.warning : palette.danger,
+                     "%s", state.conn.connect_pending ? "Connecting" :
                           connected ? "Connected" : "Offline");
 
   ImGui::Spacing();
@@ -1589,9 +1589,9 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
       const std::string addr = hex_u64(address);
       if (ImGui::Selectable(addr.c_str(), false,
                             ImGuiSelectableFlags_AllowDoubleClick)) {
-        std::snprintf(state.read_address, sizeof(state.read_address), "%s",
+        std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s",
                       addr.c_str());
-        std::snprintf(state.write_address, sizeof(state.write_address), "%s",
+        std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s",
                       addr.c_str());
         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
           state.screen = Screen::Memory;
@@ -1604,9 +1604,9 @@ static void draw_mobile_scanner(AppState &state, ImVec2 size) {
               : "value not captured");
       ImGui::SameLine(ImGui::GetWindowWidth() - 86.0f * scl);
       if (ImGui::SmallButton("Use")) {
-        std::snprintf(state.read_address, sizeof(state.read_address), "%s",
+        std::snprintf(state.mem.read_address, sizeof(state.mem.read_address), "%s",
                       addr.c_str());
-        std::snprintf(state.write_address, sizeof(state.write_address), "%s",
+        std::snprintf(state.mem.write_address, sizeof(state.mem.write_address), "%s",
                       addr.c_str());
         std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
                       addr.c_str());
@@ -1842,7 +1842,7 @@ static void draw_mobile_trainer(AppState &state, ImVec2 size) {
   ImGui::BeginDisabled(!has_pid);
   if (mobile_action_button("Use memory address", false)) {
     std::snprintf(state.plugin.cheat_address, sizeof(state.plugin.cheat_address), "%s",
-                  state.write_address);
+                  state.mem.write_address);
   }
   ImGui::BeginDisabled(state.scan.result.addresses.empty());
   if (mobile_action_button("Use first scan hit", false)) {
@@ -2281,12 +2281,12 @@ static void draw_mobile_session(AppState &state, ImVec2 size) {
 
   ImGui::TextColored(palette.primary2, "%s", "Session");
   ImGui::SameLine();
-  ui::status_dot(state.connect_pending ? palette.warning :
+  ui::status_dot(state.conn.connect_pending ? palette.warning :
                  connected ? palette.success : palette.dim);
   ImGui::SameLine();
-  ImGui::TextColored(state.connect_pending ? palette.warning :
+  ImGui::TextColored(state.conn.connect_pending ? palette.warning :
                      connected ? palette.success : palette.danger,
-                     "%s", state.connect_pending ? "Connecting" :
+                     "%s", state.conn.connect_pending ? "Connecting" :
                           connected ? "Connected" : "Not connected");
 
   ImGui::Spacing();
@@ -2385,11 +2385,11 @@ static void draw_mobile_session(AppState &state, ImVec2 size) {
   ImGui::SetCursorPosY((bar_h - ImGui::GetFontSize()) * 0.5f);
   ImGui::TextColored(ui::colors().primary2, "%s", "MemDBG");
   ImGui::SameLine();
-  ui::status_dot(state.connect_pending ? ui::colors().warning :
+  ui::status_dot(state.conn.connect_pending ? ui::colors().warning :
                  connected ? ui::colors().success : ui::colors().dim);
   ImGui::SameLine();
   ImGui::TextColored(ui::colors().muted, "%s",
-                     state.connect_pending ? "Connecting" :
+                     state.conn.connect_pending ? "Connecting" :
                      connected ? "Online" : "Offline");
 
   const float btn_h = std::max(34.0f * scl, bar_h - 12.0f * scl);
