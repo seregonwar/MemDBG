@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(MEMDBG_HAS_KEYSTONE)
+#if MEMDBG_HAS_KEYSTONE
 #include <keystone/keystone.h>
 #endif
 
@@ -42,7 +42,7 @@ int memdbg_asm_encode(int fd, const uint8_t *body, uint32_t body_len) {
   memcpy(source, body + sizeof(*req), text_len);
   source[text_len] = '\0';
 
-#if defined(MEMDBG_HAS_KEYSTONE)
+#if MEMDBG_HAS_KEYSTONE
   ks_engine *ks = NULL;
   ks_err err = ks_open(KS_ARCH_X86, KS_MODE_64, &ks);
   if (err != KS_ERR_OK || !ks) {
