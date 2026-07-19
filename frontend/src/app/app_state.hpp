@@ -528,6 +528,22 @@ enum class ConnectionPhase {
   Restoring,
 };
 
+/* ---- Target identity persisted across reconnect cycles ----
+ * PID is ephemeral (changes on rest-mode wake).  This struct stores
+ * the logical identity of the target process so the frontend can
+ * rematch it after a reconnection. */
+struct TargetIdentity {
+  std::string name;
+  std::string title_id;
+  std::string content_id;
+  std::string executable_path;
+  std::string selected_module_name;
+  std::uint64_t selected_module_offset = 0;
+
+  bool valid() const { return !name.empty() || !title_id.empty(); }
+  void clear() { *this = TargetIdentity{}; }
+};
+
 /* ---- Connection state ----
  * Extracted from the monolithic AppState to reduce God Object risk
  * (external audit recommendation). */
@@ -556,6 +572,7 @@ struct ConnectionState {
     std::chrono::steady_clock::time_point next_attempt_at{};
     std::chrono::steady_clock::time_point started_at{};
     std::string reason;
+    TargetIdentity target_identity;            /* saved before disconnect for rematch after reconnect */
   } reconnect;
 };
 
@@ -821,6 +838,10 @@ struct AppState {
   bool sandbox_network = false;
   bool sandbox_native_modules = false;
   char sandbox_require_whitelist[512] = "";  // comma-separated module names
+
+  /* Restore-session tracker: set true after polling process list during
+   * the Restoring phase, cleared when phase leaves Restoring. */
+  bool restore_list_requested = false;
 
   /* ---- KLOG state (see KlogState above) ---- */
   KlogState klog;

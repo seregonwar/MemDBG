@@ -1031,15 +1031,27 @@ void poll_connect(AppState &state) {
     }
     state.saved_daemon_instance_id = new_instance;
 
-    state.conn.reconnect.phase = ConnectionPhase::Online;
+    /* Always invalidate debugger & tracer on reconnect — attachments,
+     * breakpoints, and watchpoints are tied to the old PID/connection. */
+    reset_debugger_state(state);
+    state.tracer.pending = false;
+    state.tracer.detach_pending = false;
+    state.tracer.detach_requested = false;
+    state.tracer.status_pending = false;
+    state.tracer.events_pending = false;
+    state.tracer.target_pid = 0;
+    state.tracer.status = {};
+    state.tracer.status_text[0] = '\0';
+    state.tracer.error.clear();
+    state.tracer.temp_events.clear();
+
+    /* Transition to Restoring — poll_restore_session() will refresh the
+     * process list, rematch the target by identity, and then set Online. */
+    state.conn.reconnect.phase = ConnectionPhase::Restoring;
     ++state.conn.reconnect.epoch;
-    state.taskmgr.next_resource_fetch = ImGui::GetTime() + 1.0;  /* resume auto-fetch after reconnect */
-    std::string msg = payload_restarted
-        ? "Reconnected to " + std::string(state.host) + " (payload restarted)"
-        : "Reconnected to " + std::string(state.host);
-    set_status(state, msg);
-    push_notification(state, msg, 4.0);
-    return;
+    state.taskmgr.next_resource_fetch = ImGui::GetTime() + 1.0;
+    set_status(state, "Reconnected — verifying remote state...");
+    /* Fall through to start_taskmgr_prefetch below to get a fresh process list. */
   }
 
   /* Fresh connect: full initialization. */

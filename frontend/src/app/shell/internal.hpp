@@ -68,6 +68,7 @@ void poll_locale_repository(AppState &state);
 void poll_session_health(AppState &state);
 void begin_reconnect(AppState &state, const std::string &reason);
 void poll_reconnect(AppState &state);
+void poll_restore_session(AppState &state);
 void update_payload_version_check(AppState &state);
 void draw_screen(AppState &state, ImVec2 avail);
 void handle_global_shortcuts(AppState &state);

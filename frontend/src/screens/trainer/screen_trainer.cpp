@@ -630,6 +630,11 @@ static bool has_batch_write(const AppState &state) {
 
 void apply_locked_cheats(AppState &state) {
   if (!state.client.connected()||state.plugin.cheats.empty()) return;
+  /* Suspend trainer writes after reconnect until session is fully verified.
+   * Writing to old PIDs or addresses after rest mode can corrupt memory. */
+  if (state.conn.reconnect.phase != ConnectionPhase::Online ||
+      state.conn.reconnect.stale)
+    return;
   if (client_async_busy(state)) return;
   const double now = ImGui::GetTime();
   const double interval = std::max(0.10f, state.plugin.cheat_lock_interval);

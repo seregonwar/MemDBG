@@ -270,6 +270,7 @@ void draw_app(AppState &state) {
    * poll_reconnect attempts the actual reconnection when backoff expires. */
   poll_session_health(state);
   poll_reconnect(state);
+  poll_restore_session(state);
 
   poll_taskmgr_prefetch(state);
   poll_telemetry(state);
