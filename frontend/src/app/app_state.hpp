@@ -253,6 +253,98 @@ struct AutoSearchCandidate {
   }
 };
 
+/* ---- ELF Load/Hijack state ----
+ * Extracted from the monolithic AppState to reduce God Object risk
+ * (external audit recommendation, ~2026-07). */
+struct ElfState {
+  struct Segment {
+    std::string name;     /* "PT_LOAD", "PT_DYNAMIC", etc. */
+    uint64_t vaddr = 0;
+    uint64_t memsz = 0;
+    uint64_t filesz = 0;
+    uint64_t p_offset = 0;  /* file offset of the segment */
+    uint32_t p_type = 0;    /* PT_LOAD=1, PT_DYNAMIC=2, PT_GNU_RELRO=0x6474E552 */
+    uint32_t flags = 0;     /* PF_R=4, PF_W=2, PF_X=1 */
+  };
+  struct Meta {
+    int elf_class = 0;    /* 1=32-bit, 2=64-bit */
+    uint16_t elf_type = 0;    /* ET_EXEC=2, ET_DYN=3 */
+    uint16_t elf_machine = 0; /* EM_X86_64=62, EM_AARCH64=183 */
+    uint64_t entry_point = 0;
+    std::vector<Segment> segments;
+  };
+  Meta meta;
+  bool meta_valid = false;
+
+  char load_path[512] = "";
+  char target_region[48] = "";
+  bool jump_entry = false;
+  uint32_t match_flags = 0U;  /* MEMDBG_MATCH_EXACT | MEMDBG_MATCH_CASE_SENSITIVE */
+
+  /* Drag & drop: files dropped onto the window from the OS */
+  std::vector<std::string> dropped_files;
+  /* Recent ELF files (last 5), shown in a dropdown for quick re-selection. */
+  static constexpr size_t kMaxRecent = 5;
+  std::vector<std::string> recent_files;
+  /* True while the user is dragging files over the window (macOS GLFW 3.3+).
+   * Used by the ELF section to show a drop-target highlight. */
+  bool drop_hover_active = false;
+
+  /* Auto-scroll: when target_region is populated by double-click,
+   * set this flag to scroll the MapsPanel to the ELF section. */
+  bool scroll_to_section = false;
+  /* Animated highlight timestamp for the Target Region input field. */
+  double target_highlight_time = -1.0;
+
+  /* Async ELF load / hijack */
+  struct Outcome {
+    bool ok = false;
+    bool accepted = false;
+    Client::ProcessElfLoadResult load_result{};
+    std::string error;
+  };
+  bool load_pending = false;
+  std::future<Outcome> load_future;
+  std::shared_ptr<Client> load_client;
+  bool load_cancel_requested = false;
+  std::string load_op;          /* "Load ELF" or "Hijack" */
+  double load_start_time = 0.0;
+  Client::ProcessElfLoadResult load_result;
+  bool hijack_accepted = false;
+  std::string load_error;
+};
+
+/* ---- Tracer state ----
+ * Extracted from the monolithic AppState to reduce God Object risk
+ * (external audit recommendation, ~2026-07). */
+struct TracerState {
+  bool pending = false;
+  bool detach_pending = false;
+  bool detach_requested = false;
+  std::future<bool> future;
+  std::string error;
+  std::string temp_error;
+  bool status_pending = false;
+  std::future<bool> status_future;
+  Client::TracerStatus temp_status;
+  std::string status_error;
+  bool events_pending = false;
+  std::future<bool> events_future;
+  std::vector<Client::TracerEvent> temp_events;
+  std::string events_error;
+  std::vector<Client::TracerEvent> events;
+  Client::TracerStatus status;
+  double last_poll = 0.0;
+  double next_poll = 0.0;
+  double next_event_poll = 0.0;
+  int32_t target_pid = 0;
+  char pid_input[16] = "";
+  char status_text[64] = "";
+  bool was_crashed = false;
+  std::string crash_dump_path;
+  double crash_notification_time = 0.0;
+};
+
 struct AppState {
   ClientPool pool;
   /* Backward-compatible reference: state.client.xxx() routes to pool.control().
@@ -604,90 +696,12 @@ struct AppState {
   std::shared_ptr<plugins::GuiBridge> plugin_gui_bridge;
   std::string plugin_gui_active_id;
   bool plugin_gui_starting = false;
-  std::string plugin_gui_error;    /* ---- ELF metadata (parsed from file) ---- */
-    struct ElfSegment {
-        std::string name;     /* "PT_LOAD", "PT_DYNAMIC", etc. */
-        uint64_t vaddr = 0;
-        uint64_t memsz = 0;
-        uint64_t filesz = 0;
-        uint64_t p_offset = 0;  /* file offset of the segment */
-        uint32_t p_type = 0;    /* PT_LOAD=1, PT_DYNAMIC=2, PT_GNU_RELRO=0x6474E552 */
-        uint32_t flags = 0;     /* PF_R=4, PF_W=2, PF_X=1 */
-    };
-    struct ElfMeta {
-        int elf_class = 0;    /* 1=32-bit, 2=64-bit */
-        uint16_t elf_type = 0;    /* ET_EXEC=2, ET_DYN=3 */
-        uint16_t elf_machine = 0; /* EM_X86_64=62, EM_AARCH64=183 */
-        uint64_t entry_point = 0;
-        std::vector<ElfSegment> segments;
-    };
-    ElfMeta elf_meta;
-    bool elf_meta_valid = false;
+  std::string plugin_gui_error;
 
-    /* ---- ELF Load / Hijack ---- */
-    char elf_load_path[512] = "";
-    char elf_target_region[48] = "";
-    bool elf_jump_entry = false;
-    uint32_t elf_match_flags = 0U;  /* MEMDBG_MATCH_EXACT | MEMDBG_MATCH_CASE_SENSITIVE */
-
-    /* Drag & drop: files dropped onto the window from the OS */
-    std::vector<std::string> dropped_files;
-    /* Recent ELF files (last 5), shown in a dropdown for quick re-selection. */
-    static constexpr size_t kMaxRecentElf = 5;
-    std::vector<std::string> elf_recent_files;
-    /* True while the user is dragging files over the window (macOS GLFW 3.3+).
-     * Used by the ELF section to show a drop-target highlight. */
-    bool drop_hover_active = false;
-
-    /* Auto-scroll: when target_region is populated by double-click,
-     * set this flag to scroll the MapsPanel to the ELF section. */
-    bool elf_scroll_to_section = false;
-    /* Animated highlight timestamp for the Target Region input field. */
-    double elf_target_highlight_time = -1.0;
-
-  /* Async ELF load / hijack */
-  struct ElfAsyncOutcome {
-    bool ok = false;
-    bool accepted = false;
-    Client::ProcessElfLoadResult load_result{};
-    std::string error;
-  };
-  bool elf_load_pending = false;
-  std::future<ElfAsyncOutcome> elf_load_future;
-  std::shared_ptr<Client> elf_load_client;
-  bool elf_load_cancel_requested = false;
-  std::string elf_load_op;          /* "Load ELF" or "Hijack" */
-  double elf_load_start_time = 0.0;
-  Client::ProcessElfLoadResult elf_load_result;
-  bool elf_hijack_accepted = false;
-  std::string elf_load_error;
-
-  /* ---- Tracer ---- */
-  bool tracer_pending = false;
-  bool tracer_detach_pending = false;
-  bool tracer_detach_requested = false;
-  std::future<bool> tracer_future;
-  std::string tracer_error;
-  std::string tracer_temp_error;
-  bool tracer_status_pending = false;
-  std::future<bool> tracer_status_future;
-  Client::TracerStatus tracer_temp_status;
-  std::string tracer_status_error;
-  bool tracer_events_pending = false;
-  std::future<bool> tracer_events_future;
-  std::vector<Client::TracerEvent> tracer_temp_events;
-  std::string tracer_events_error;
-  std::vector<Client::TracerEvent> tracer_events;
-  Client::TracerStatus tracer_status;
-  double tracer_last_poll = 0.0;
-  double tracer_next_poll = 0.0;
-  double tracer_next_event_poll = 0.0;
-  int32_t tracer_target_pid = 0;
-  char tracer_pid_input[16] = "";
-  char tracer_status_text[64] = "";
-  bool tracer_was_crashed = false;
-  std::string tracer_crash_dump_path;
-  double tracer_crash_notification_time = 0.0;
+  /* ---- ELF Load/Hijack state (see ElfState above) ---- */
+  ElfState elf;
+  /* ---- Tracer state (see TracerState above) ---- */
+  TracerState tracer;
 
   /* ---- Lua Engine ---- */
   plugins::LuaEngine lua_engine;
@@ -1040,9 +1054,9 @@ inline bool client_async_busy(const AppState &state) {
          state.scan_async_pending || state.map_refresh_pending ||
          state.structure_compare_pending ||
          state.debugger_attach_pending || state.debugger_threads_pending ||
-         state.tracer_pending || state.tracer_status_pending ||
-         state.tracer_events_pending ||
-          state.elf_load_pending || state.json_dump_pending ||
+         state.tracer.pending || state.tracer.status_pending ||
+         state.tracer.events_pending ||
+          state.elf.load_pending || state.json_dump_pending ||
          state.map_dump_pending ||
          state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||

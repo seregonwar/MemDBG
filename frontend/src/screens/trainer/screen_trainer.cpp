@@ -864,8 +864,8 @@ void draw_trainer(AppState &state, ImVec2 avail) {
 
   /* Builder tab (tab 0) - original layout */
   /* Process trainer files dropped from the OS onto the window */
-  if (!state.dropped_files.empty()) {
-    for (const auto &path : state.dropped_files) {
+  if (!state.elf.dropped_files.empty()) {
+    for (const auto &path : state.elf.dropped_files) {
       std::string lower = path;
       std::transform(lower.begin(), lower.end(), lower.begin(),
                      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -890,7 +890,7 @@ void draw_trainer(AppState &state, ImVec2 avail) {
         break;  /* only consume the first matching file */
       }
     }
-    state.dropped_files.clear();
+    state.elf.dropped_files.clear();
   }
 
   const bool stacked = content_avail.x < 900.0f * scl;

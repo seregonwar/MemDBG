@@ -953,9 +953,9 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
   if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
-  if (state.tracer_future.valid()) state.tracer_future.wait();
-  if (state.tracer_status_future.valid()) state.tracer_status_future.wait();
-  if (state.tracer_events_future.valid()) state.tracer_events_future.wait();
+  if (state.tracer.future.valid()) state.tracer.future.wait();
+  if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
+  if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
   if (s_connect_future.valid()) s_connect_future.wait();
 
   state.scan_async_pending = false;  /* cancel any in-flight async scan */
@@ -966,24 +966,24 @@ void disconnect_console(AppState &state, const char *reason) {
   state.heartbeat_pending = false;
   state.heartbeat_error.clear();
   state.next_heartbeat = 0.0;
-  const bool tracer_may_own_target = state.tracer_pending ||
-      state.tracer_target_pid > 0 ||
-      state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING;
+  const bool tracer_may_own_target = state.tracer.pending ||
+      state.tracer.target_pid > 0 ||
+      state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING;
   if (state.client.connected() && state.has_hello && tracer_may_own_target &&
       (state.hello.capabilities & MEMDBG_CAP_TRACER)) {
     /* Do not leave a traced process stopped when the frontend disconnects. */
     (void)state.client.tracer_detach();
   }
-  state.tracer_pending = false;
-  state.tracer_detach_pending = false;
-  state.tracer_detach_requested = false;
-  state.tracer_status_pending = false;
-  state.tracer_events_pending = false;
-  state.tracer_target_pid = 0;
-  state.tracer_status = {};
-  state.tracer_status_text[0] = '\0';
-  state.tracer_error.clear();
-  state.tracer_temp_events.clear();
+  state.tracer.pending = false;
+  state.tracer.detach_pending = false;
+  state.tracer.detach_requested = false;
+  state.tracer.status_pending = false;
+  state.tracer.events_pending = false;
+  state.tracer.target_pid = 0;
+  state.tracer.status = {};
+  state.tracer.status_text[0] = '\0';
+  state.tracer.error.clear();
+  state.tracer.temp_events.clear();
   state.pool.disconnect();
   state.pool_active = false;
   state.has_hello = false;

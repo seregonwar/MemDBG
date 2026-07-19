@@ -205,8 +205,8 @@ void draw_tracer(AppState &state, ImVec2 avail) {
   static int tracer_tab = 0; // 0=events, 1=syscall reference
 
   /* Auto-populate PID from the global process selection. */
-  if (state.selected_pid > 0 && state.tracer_pid_input[0] == '\0')
-    std::snprintf(state.tracer_pid_input, sizeof(state.tracer_pid_input),
+  if (state.selected_pid > 0 && state.tracer.pid_input[0] == '\0')
+    std::snprintf(state.tracer.pid_input, sizeof(state.tracer.pid_input),
                   "%d", state.selected_pid);
 
   ui::begin_panel("TracerPanel", locale::tr("tracer.title"), avail);
@@ -235,26 +235,26 @@ void draw_tracer(AppState &state, ImVec2 avail) {
     ImGui::BeginGroup();
     ImGui::Text("%s %s", icons::kOnline, locale::tr("tracer.status"));
     ImGui::SameLine();
-    const char *status_icon = state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING ? u8"\uf04b"   /* play  */
-                            : state.tracer_status.state == MEMDBG_TRACER_STATE_CRASHED ? u8"\uf071"   /* warning */
-                            : state.tracer_status.state == MEMDBG_TRACER_STATE_IDLE   ? u8"\uf04d"   /* stop */
+    const char *status_icon = state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING ? u8"\uf04b"   /* play  */
+                            : state.tracer.status.state == MEMDBG_TRACER_STATE_CRASHED ? u8"\uf071"   /* warning */
+                            : state.tracer.status.state == MEMDBG_TRACER_STATE_IDLE   ? u8"\uf04d"   /* stop */
                             : u8"\uf023";                                                              /* lock */
     ImGui::TextColored(
-        state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING ? ImVec4(0.2f, 0.9f, 0.2f, 1) :
-        state.tracer_status.state == MEMDBG_TRACER_STATE_CRASHED ? ImVec4(1, 0.3f, 0.3f, 1) :
+        state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING ? ImVec4(0.2f, 0.9f, 0.2f, 1) :
+        state.tracer.status.state == MEMDBG_TRACER_STATE_CRASHED ? ImVec4(1, 0.3f, 0.3f, 1) :
         ImVec4(0.7f, 0.7f, 0.7f, 1),
         "%s  %s", status_icon,
-        state.tracer_status_text[0] ? state.tracer_status_text : "Idle");
-    if (state.tracer_status.state != MEMDBG_TRACER_STATE_IDLE) {
+        state.tracer.status_text[0] ? state.tracer.status_text : "Idle");
+    if (state.tracer.status.state != MEMDBG_TRACER_STATE_IDLE) {
       ImGui::SameLine();
       ImGui::TextDisabled("(%s)", locale::tr("tracer.events_total"));
       ImGui::SameLine();
-      ImGui::Text("%u", state.tracer_status.events_total);
+      ImGui::Text("%u", state.tracer.status.events_total);
     }
-    if (state.tracer_status.state == MEMDBG_TRACER_STATE_CRASHED && !state.tracer_crash_dump_path.empty()) {
+    if (state.tracer.status.state == MEMDBG_TRACER_STATE_CRASHED && !state.tracer.crash_dump_path.empty()) {
       ImGui::SameLine();
       ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), " %s %s: %s",
-                         u8"\uf071", locale::tr("tracer.dump"), state.tracer_crash_dump_path.c_str());
+                         u8"\uf071", locale::tr("tracer.dump"), state.tracer.crash_dump_path.c_str());
     }
     ImGui::EndGroup();
   }
@@ -262,8 +262,8 @@ void draw_tracer(AppState &state, ImVec2 avail) {
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().warning, "%s",
                      "Tracer owns the target while active. Detach resumes it before using Debugger.");
-  if (!state.tracer_error.empty())
-    ImGui::TextColored(ui::colors().danger, "%s", state.tracer_error.c_str());
+  if (!state.tracer.error.empty())
+    ImGui::TextColored(ui::colors().danger, "%s", state.tracer.error.c_str());
 
   /* ── Controls ── */
   {
@@ -271,12 +271,12 @@ void draw_tracer(AppState &state, ImVec2 avail) {
     ImGui::Text("%s", locale::tr("tracer.pid"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100);
-    ImGui::InputText("##pid_input", state.tracer_pid_input, sizeof(state.tracer_pid_input),
+    ImGui::InputText("##pid_input", state.tracer.pid_input, sizeof(state.tracer.pid_input),
                      ImGuiInputTextFlags_CharsDecimal);
     ImGui::SameLine();
     if (ui::soft_button(locale::tr("tracer.use_global_pid"), ImVec2(0, 0))) {
       if (state.selected_pid > 0)
-        std::snprintf(state.tracer_pid_input, sizeof(state.tracer_pid_input),
+        std::snprintf(state.tracer.pid_input, sizeof(state.tracer.pid_input),
                       "%d", state.selected_pid);
       else
         set_status(state, locale::tr("tracer.select_pid_global"));
@@ -285,18 +285,18 @@ void draw_tracer(AppState &state, ImVec2 avail) {
       ImGui::SetTooltip("PID %d from topbar", state.selected_pid);
 
     ImGui::SameLine();
-    bool is_idle  = (state.tracer_status.state == MEMDBG_TRACER_STATE_IDLE ||
-                     state.tracer_status.state == MEMDBG_TRACER_STATE_STOPPED ||
-                     state.tracer_status.state == MEMDBG_TRACER_STATE_EXITED);
-    const bool attaching = state.tracer_pending && !state.tracer_detach_pending;
-    const bool detaching = state.tracer_detach_pending;
+    bool is_idle  = (state.tracer.status.state == MEMDBG_TRACER_STATE_IDLE ||
+                     state.tracer.status.state == MEMDBG_TRACER_STATE_STOPPED ||
+                     state.tracer.status.state == MEMDBG_TRACER_STATE_EXITED);
+    const bool attaching = state.tracer.pending && !state.tracer.detach_pending;
+    const bool detaching = state.tracer.detach_pending;
 
     if (is_idle && !attaching && !detaching) {
       ImGui::BeginDisabled(client_async_busy(state));
       if (ui::primary_button(locale::tr("tracer.attach"), ImVec2(140, 0))) {
-        int pid = atoi(state.tracer_pid_input);
+        int pid = atoi(state.tracer.pid_input);
         if (pid > 0) {
-          state.tracer_target_pid = pid;
+          state.tracer.target_pid = pid;
           request_tracer_attach_async(state);
         } else {
           set_status(state, locale::tr("tracer.select_pid"));
@@ -340,7 +340,7 @@ void draw_tracer(AppState &state, ImVec2 avail) {
       ImGui::TableHeadersRow();
 
       /* Show most recent events at the bottom — scroll down. */
-      size_t total = state.tracer_events.size();
+      size_t total = state.tracer.events.size();
       size_t start = (total > 500) ? total - 500 : 0;
 
       /* Track if we need to scroll to bottom. */
@@ -349,7 +349,7 @@ void draw_tracer(AppState &state, ImVec2 avail) {
         at_bottom = true;
 
       for (size_t i = start; i < total; i++) {
-        const auto &ev = state.tracer_events[i];
+        const auto &ev = state.tracer.events[i];
         ImGui::TableNextRow();
 
         /* # */
@@ -428,10 +428,10 @@ void draw_tracer(AppState &state, ImVec2 avail) {
 
   /* ── Summary bar ── */
   {
-    size_t entry_count = state.tracer_events.size();
+    size_t entry_count = state.tracer.events.size();
     size_t crash_count = 0;
     for (size_t i = 0; i < entry_count; i++)
-      if (state.tracer_events[i].event_type == MEMDBG_TRACER_EVENT_CRASH)
+      if (state.tracer.events[i].event_type == MEMDBG_TRACER_EVENT_CRASH)
         crash_count++;
     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1),
                        "%s %zu %s  |  %s %zu %s",

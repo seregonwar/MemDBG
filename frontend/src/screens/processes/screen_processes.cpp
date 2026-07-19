@@ -962,7 +962,7 @@ static const char *elf_phdr_type_name(uint32_t p_type) {
   }
 }
 
-static bool parse_elf_header(const std::vector<uint8_t> &data, AppState::ElfMeta &meta) {
+static bool parse_elf_header(const std::vector<uint8_t> &data, ElfState::Meta &meta) {
   meta = {};
   if (data.size() < 52U) return false;
 
@@ -993,7 +993,7 @@ static bool parse_elf_header(const std::vector<uint8_t> &data, AppState::ElfMeta
       Elf64_Phdr phdr;
       std::memcpy(&phdr, data.data() + offset, sizeof(phdr));
       if (phdr.p_type == PT_NULL) continue;
-      AppState::ElfSegment seg;
+      ElfState::Segment seg;
       seg.name    = elf_phdr_type_name(phdr.p_type);
       seg.vaddr   = phdr.p_vaddr;
       seg.memsz   = phdr.p_memsz;
@@ -1021,7 +1021,7 @@ static bool parse_elf_header(const std::vector<uint8_t> &data, AppState::ElfMeta
       Elf32_Phdr phdr;
       std::memcpy(&phdr, data.data() + offset, sizeof(phdr));
       if (phdr.p_type == PT_NULL) continue;
-      AppState::ElfSegment seg;
+      ElfState::Segment seg;
       seg.name    = elf_phdr_type_name(phdr.p_type);
       seg.vaddr   = phdr.p_vaddr;
       seg.memsz   = phdr.p_memsz;
@@ -1038,9 +1038,9 @@ static bool parse_elf_header(const std::vector<uint8_t> &data, AppState::ElfMeta
 }
 
 static void load_elf_file(AppState &state, const std::string &path) {
-  std::snprintf(state.elf_load_path, sizeof(state.elf_load_path), "%s", path.c_str());
-  state.elf_meta_valid = false;
-  state.elf_meta = {};
+  std::snprintf(state.elf.load_path, sizeof(state.elf.load_path), "%s", path.c_str());
+  state.elf.meta_valid = false;
+  state.elf.meta = {};
 
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -1059,7 +1059,7 @@ static void load_elf_file(AppState &state, const std::string &path) {
     return;
   }
 
-  if (!parse_elf_header(data, state.elf_meta)) {
+  if (!parse_elf_header(data, state.elf.meta)) {
     char magic_buf[64];
     if (data.size() >= 4U)
       std::snprintf(magic_buf, sizeof(magic_buf),
@@ -1070,13 +1070,13 @@ static void load_elf_file(AppState &state, const std::string &path) {
     set_status(state, magic_buf);
     return;
   }
-  state.elf_meta_valid = true;
+  state.elf.meta_valid = true;
 
   /* Add to recent files (deduplicate, keep most recent 5) */
-  auto &recent = state.elf_recent_files;
+  auto &recent = state.elf.recent_files;
   recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
   recent.insert(recent.begin(), path);
-  if (recent.size() > AppState::kMaxRecentElf) recent.resize(AppState::kMaxRecentElf);
+  if (recent.size() > ElfState::kMaxRecent) recent.resize(ElfState::kMaxRecent);
 
   char elf_buf[256];
   std::snprintf(elf_buf, sizeof(elf_buf), locale::tr("processes.elf_dropped"),
@@ -1086,9 +1086,9 @@ static void load_elf_file(AppState &state, const std::string &path) {
 
 static void request_elf_load(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (state.elf_load_pending || state.connect_pending) return;
+  if (state.elf.load_pending || state.connect_pending) return;
 
-  const char *fpath = state.elf_load_path;
+  const char *fpath = state.elf.load_path;
   if (fpath[0] == '\0') {
     set_status(state, locale::tr("processes.elf_select"));
     return;
@@ -1106,26 +1106,26 @@ static void request_elf_load(AppState &state) {
     set_status(state, locale::tr("processes.elf_cannot_open")); return;
   }
 
-  state.elf_load_pending = true;
-  state.elf_load_error.clear();
-  state.elf_load_op = "Load ELF";
-  state.elf_load_start_time = ImGui::GetTime();
-  state.elf_hijack_accepted = false;
-  state.elf_load_result = {};
-  state.elf_load_cancel_requested = false;
+  state.elf.load_pending = true;
+  state.elf.load_error.clear();
+  state.elf.load_op = "Load ELF";
+  state.elf.load_start_time = ImGui::GetTime();
+  state.elf.hijack_accepted = false;
+  state.elf.load_result = {};
+  state.elf.load_cancel_requested = false;
 
   const int32_t pid = state.selected_pid;
-  const uint32_t flags = state.elf_jump_entry ? 1U : 0U;
-  const uint32_t match_flags = state.elf_match_flags;
-  const std::string target_region = state.elf_target_region;
-  state.elf_load_client = state.pool.control_lease();
-  auto client = state.elf_load_client;
+  const uint32_t flags = state.elf.jump_entry ? 1U : 0U;
+  const uint32_t match_flags = state.elf.match_flags;
+  const std::string target_region = state.elf.target_region;
+  state.elf.load_client = state.pool.control_lease();
+  auto client = state.elf.load_client;
 
   state.action_journal.record("elf_load", ("{\"pid\":" + std::to_string(pid) + ",\"path\":\"" + ActionJournal::json_escape(fpath) + "\"}").c_str());
 
-  state.elf_load_future = std::async(std::launch::async,
+  state.elf.load_future = std::async(std::launch::async,
       [client = std::move(client), pid, flags, match_flags, target_region,
-       elf_data = std::move(elf_data)]() -> AppState::ElfAsyncOutcome {
+       elf_data = std::move(elf_data)]() -> ElfState::Outcome {
         try {
           Client::ProcessElfLoadResult result;
           if (!client->process_elf_load(pid, elf_data, flags, target_region,
@@ -1141,9 +1141,9 @@ static void request_elf_load(AppState &state) {
 
 static void request_elf_hijack(AppState &state) {
   if (!state.client.connected() || state.selected_pid <= 0) return;
-  if (state.elf_load_pending || state.connect_pending) return;
+  if (state.elf.load_pending || state.connect_pending) return;
 
-  const char *fpath = state.elf_load_path;
+  const char *fpath = state.elf.load_path;
   if (fpath[0] == '\0') {
     set_status(state, locale::tr("processes.elf_select"));
     return;
@@ -1161,25 +1161,25 @@ static void request_elf_hijack(AppState &state) {
     set_status(state, locale::tr("processes.elf_cannot_open")); return;
   }
 
-  state.elf_load_pending = true;
-  state.elf_load_error.clear();
-  state.elf_load_op = "Hijack";
-  state.elf_load_start_time = ImGui::GetTime();
-  state.elf_hijack_accepted = false;
-  state.elf_load_result = {};
-  state.elf_load_cancel_requested = false;
+  state.elf.load_pending = true;
+  state.elf.load_error.clear();
+  state.elf.load_op = "Hijack";
+  state.elf.load_start_time = ImGui::GetTime();
+  state.elf.hijack_accepted = false;
+  state.elf.load_result = {};
+  state.elf.load_cancel_requested = false;
 
   const int32_t pid = state.selected_pid;
-  const uint32_t match_flags = state.elf_match_flags;
-  const std::string target_region = state.elf_target_region;
-  state.elf_load_client = state.pool.control_lease();
-  auto client = state.elf_load_client;
+  const uint32_t match_flags = state.elf.match_flags;
+  const std::string target_region = state.elf.target_region;
+  state.elf.load_client = state.pool.control_lease();
+  auto client = state.elf.load_client;
 
   state.action_journal.record("elf_hijack", ("{\"pid\":" + std::to_string(pid) + ",\"path\":\"" + ActionJournal::json_escape(fpath) + "\"}").c_str());
 
-  state.elf_load_future = std::async(std::launch::async,
+  state.elf.load_future = std::async(std::launch::async,
       [client = std::move(client), pid, match_flags, target_region,
-       elf_data = std::move(elf_data)]() -> AppState::ElfAsyncOutcome {
+       elf_data = std::move(elf_data)]() -> ElfState::Outcome {
         try {
           bool accepted = false;
           constexpr uint32_t flags = 3U; /* spawn thread + resume target */
@@ -1195,72 +1195,72 @@ static void request_elf_hijack(AppState &state) {
 }
 
 static void poll_elf_load(AppState &state) {
-  if (!state.elf_load_pending) return;
-  if (!state.elf_load_future.valid()) {
-    state.elf_load_pending = false;
+  if (!state.elf.load_pending) return;
+  if (!state.elf.load_future.valid()) {
+    state.elf.load_pending = false;
     return;
   }
-  auto status = state.elf_load_future.wait_for(std::chrono::milliseconds(0));
+  auto status = state.elf.load_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) {
-    double elapsed = ImGui::GetTime() - state.elf_load_start_time;
-    if (elapsed > 120.0 && !state.elf_load_cancel_requested) {
-      state.elf_load_cancel_requested = true;
-      if (state.elf_load_client)
-        state.elf_load_client->cancel_pending_io();
-      state.elf_load_error = "ELF operation timed out after 120s";
-      set_status(state, state.elf_load_error);
+    double elapsed = ImGui::GetTime() - state.elf.load_start_time;
+    if (elapsed > 120.0 && !state.elf.load_cancel_requested) {
+      state.elf.load_cancel_requested = true;
+      if (state.elf.load_client)
+        state.elf.load_client->cancel_pending_io();
+      state.elf.load_error = "ELF operation timed out after 120s";
+      set_status(state, state.elf.load_error);
     }
     return;
   }
-  state.elf_load_pending = false;
-  state.elf_load_client.reset();
-  AppState::ElfAsyncOutcome outcome;
+  state.elf.load_pending = false;
+  state.elf.load_client.reset();
+  ElfState::Outcome outcome;
   try {
-    outcome = state.elf_load_future.get();
+    outcome = state.elf.load_future.get();
   } catch (const std::exception &ex) {
     outcome.error = ex.what();
   } catch (...) {
     outcome.error = locale::tr("processes.elf_unknown_error");
   }
   const bool ok = outcome.ok;
-  if (!outcome.error.empty() && !state.elf_load_cancel_requested)
-    state.elf_load_error = std::move(outcome.error);
-  state.elf_load_result = outcome.load_result;
+  if (!outcome.error.empty() && !state.elf.load_cancel_requested)
+    state.elf.load_error = std::move(outcome.error);
+  state.elf.load_result = outcome.load_result;
 
-  if (!ok && !state.elf_load_error.empty()) {
+  if (!ok && !state.elf.load_error.empty()) {
     char ef_buf[512];
     std::snprintf(ef_buf, sizeof(ef_buf), locale::tr("processes.elf_failed"),
-                  state.elf_load_op.c_str(), state.elf_load_error.c_str());
+                  state.elf.load_op.c_str(), state.elf.load_error.c_str());
     set_status(state, ef_buf);
     return;
   }
 
-  if (state.elf_load_op == "Hijack") {
+  if (state.elf.load_op == "Hijack") {
     if (ok && outcome.accepted) {
-      state.elf_hijack_accepted = true;
+      state.elf.hijack_accepted = true;
       set_status(state, locale::tr("processes.elf_hijack_started"));
       push_notification(state, locale::tr("processes.elf_hijack_started"), 4.0);
     } else {
-      state.elf_hijack_accepted = false;
-      state.elf_load_error = state.elf_load_error.empty()
+      state.elf.hijack_accepted = false;
+      state.elf.load_error = state.elf.load_error.empty()
           ? locale::tr("processes.elf_hijack_rejected")
-          : state.elf_load_error;
-      set_status(state, state.elf_load_error);
+          : state.elf.load_error;
+      set_status(state, state.elf.load_error);
     }
   } else {
     if (ok) {
       char el_buf[256];
       std::snprintf(el_buf, sizeof(el_buf), locale::tr("processes.elf_loaded_at"),
-                    hex_u64(state.elf_load_result.load_base).c_str(),
-                    hex_u64(state.elf_load_result.entry_address).c_str());
+                    hex_u64(state.elf.load_result.load_base).c_str(),
+                    hex_u64(state.elf.load_result.entry_address).c_str());
       set_status(state, el_buf);
       push_notification(state, el_buf, 5.0);
     } else {
-      if (state.elf_load_error.empty())
-        state.elf_load_error = locale::tr("processes.elf_unknown_error");
+      if (state.elf.load_error.empty())
+        state.elf.load_error = locale::tr("processes.elf_unknown_error");
       char ef_buf[512];
       std::snprintf(ef_buf, sizeof(ef_buf), locale::tr("processes.elf_failed"),
-                    state.elf_load_op.c_str(), state.elf_load_error.c_str());
+                    state.elf.load_op.c_str(), state.elf.load_error.c_str());
       set_status(state, ef_buf);
     }
   }
@@ -1276,19 +1276,19 @@ static void draw_elf_section(AppState &state) {
   const char *header_label = locale::tr("processes.elf_header");
   if (ImGui::TreeNodeEx(header_label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
     /* File selection row */
-    if (!state.elf_recent_files.empty()) {
+    if (!state.elf.recent_files.empty()) {
       ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_recent"));
       ImGui::SameLine();
       ImGui::SetNextItemWidth(200.0f * scl);
       static int recent_sel = -1;
-      if (ImGui::BeginCombo("##ElfRecent", recent_sel >= 0 && recent_sel < static_cast<int>(state.elf_recent_files.size())
-          ? std::filesystem::path(state.elf_recent_files[recent_sel]).filename().string().c_str()
+      if (ImGui::BeginCombo("##ElfRecent", recent_sel >= 0 && recent_sel < static_cast<int>(state.elf.recent_files.size())
+          ? std::filesystem::path(state.elf.recent_files[recent_sel]).filename().string().c_str()
           : locale::tr("processes.elf_select"))) {
-        for (int i = 0; i < static_cast<int>(state.elf_recent_files.size()); ++i) {
+        for (int i = 0; i < static_cast<int>(state.elf.recent_files.size()); ++i) {
           bool is_sel = (recent_sel == i);
-          if (ImGui::Selectable(state.elf_recent_files[i].c_str(), is_sel)) {
+          if (ImGui::Selectable(state.elf.recent_files[i].c_str(), is_sel)) {
             recent_sel = i;
-            load_elf_file(state, state.elf_recent_files[i]);
+            load_elf_file(state, state.elf.recent_files[i]);
           }
           if (is_sel) ImGui::SetItemDefaultFocus();
         }
@@ -1302,19 +1302,19 @@ static void draw_elf_section(AppState &state) {
       if (!picked.empty()) load_elf_file(state, picked);
     }
 
-    if (state.elf_load_path[0] != '\0') {
+    if (state.elf.load_path[0] != '\0') {
       ImGui::SameLine();
       ImGui::TextColored(ui::colors().primary2, "%s",
-                         std::filesystem::path(state.elf_load_path).filename().string().c_str());
+                         std::filesystem::path(state.elf.load_path).filename().string().c_str());
     } else {
       ImGui::SameLine();
       ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_no_file"));
     }
 
     /* ELF metadata */
-    if (state.elf_meta_valid) {
+    if (state.elf.meta_valid) {
       ImGui::Spacing();
-      const auto &meta = state.elf_meta;
+      const auto &meta = state.elf.meta;
       const char *elf_type_str = meta.elf_type == 2 ? "ET_EXEC" : meta.elf_type == 3 ? "ET_DYN" : "??";
       const char *machine_str = "??";
       switch (meta.elf_machine) {
@@ -1399,42 +1399,42 @@ static void draw_elf_section(AppState &state) {
     /* Target region input */
     ImGui::SetNextItemWidth(300.0f * scl);
     ImGui::InputTextWithHint("##ElfTargetRegion", locale::tr("processes.elf_target_region_tip"),
-                             state.elf_target_region, sizeof(state.elf_target_region));
+                             state.elf.target_region, sizeof(state.elf.target_region));
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", locale::tr("processes.elf_target_region_tip"));
     ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_target_region"));
 
     /* Jump to entry */
-    ImGui::Checkbox(locale::tr("processes.elf_jump_entry"), &state.elf_jump_entry);
+    ImGui::Checkbox(locale::tr("processes.elf_jump_entry"), &state.elf.jump_entry);
 
     /* Match flags */
     ImGui::SameLine();
     ImGui::TextColored(ui::colors().dim, "%s", locale::tr("processes.elf_match_flags"));
     ImGui::SameLine();
-    bool exact = (state.elf_match_flags & MEMDBG_MATCH_EXACT) != 0U;
+    bool exact = (state.elf.match_flags & MEMDBG_MATCH_EXACT) != 0U;
     if (ImGui::Checkbox(locale::tr("processes.elf_match_exact"), &exact)) {
-      if (exact) state.elf_match_flags |= MEMDBG_MATCH_EXACT;
-      else       state.elf_match_flags &= ~MEMDBG_MATCH_EXACT;
+      if (exact) state.elf.match_flags |= MEMDBG_MATCH_EXACT;
+      else       state.elf.match_flags &= ~MEMDBG_MATCH_EXACT;
     }
     ImGui::SameLine();
-    bool case_sens = (state.elf_match_flags & MEMDBG_MATCH_CASE_SENSITIVE) != 0U;
+    bool case_sens = (state.elf.match_flags & MEMDBG_MATCH_CASE_SENSITIVE) != 0U;
     if (ImGui::Checkbox(locale::tr("processes.elf_match_case_sensitive"), &case_sens)) {
-      if (case_sens) state.elf_match_flags |= MEMDBG_MATCH_CASE_SENSITIVE;
-      else           state.elf_match_flags &= ~MEMDBG_MATCH_CASE_SENSITIVE;
+      if (case_sens) state.elf.match_flags |= MEMDBG_MATCH_CASE_SENSITIVE;
+      else           state.elf.match_flags &= ~MEMDBG_MATCH_CASE_SENSITIVE;
     }
     ImGui::SameLine();
-    bool regex = (state.elf_match_flags & MEMDBG_MATCH_REGEX) != 0U;
+    bool regex = (state.elf.match_flags & MEMDBG_MATCH_REGEX) != 0U;
     if (ImGui::Checkbox(locale::tr("processes.elf_match_regex"), &regex)) {
-      if (regex) state.elf_match_flags |= MEMDBG_MATCH_REGEX;
-      else       state.elf_match_flags &= ~MEMDBG_MATCH_REGEX;
+      if (regex) state.elf.match_flags |= MEMDBG_MATCH_REGEX;
+      else       state.elf.match_flags &= ~MEMDBG_MATCH_REGEX;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("processes.elf_match_regex_tip"));
     ImGui::SameLine();
-    bool fullpath = (state.elf_match_flags & MEMDBG_MATCH_FULLPATH) != 0U;
+    bool fullpath = (state.elf.match_flags & MEMDBG_MATCH_FULLPATH) != 0U;
     if (ImGui::Checkbox(locale::tr("processes.elf_match_fullpath"), &fullpath)) {
-      if (fullpath) state.elf_match_flags |= MEMDBG_MATCH_FULLPATH;
-      else          state.elf_match_flags &= ~MEMDBG_MATCH_FULLPATH;
+      if (fullpath) state.elf.match_flags |= MEMDBG_MATCH_FULLPATH;
+      else          state.elf.match_flags &= ~MEMDBG_MATCH_FULLPATH;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", locale::tr("processes.elf_match_fullpath_tip"));
 
@@ -1442,8 +1442,8 @@ static void draw_elf_section(AppState &state) {
     ImGui::Spacing();
     const bool connected = state.client.connected();
     const bool has_pid = state.selected_pid > 0;
-    const bool busy = state.connect_pending || state.elf_load_pending;
-    const bool can_act = connected && has_pid && !busy && state.elf_load_path[0] != '\0';
+    const bool busy = state.connect_pending || state.elf.load_pending;
+    const bool can_act = connected && has_pid && !busy && state.elf.load_path[0] != '\0';
 
     ImGui::BeginDisabled(!can_act);
     if (ui::primary_button(locale::tr("processes.elf_load"), ImVec2(130.0f * scl, 32.0f * scl)))
@@ -1453,9 +1453,9 @@ static void draw_elf_section(AppState &state) {
       ImGui::OpenPopup("ConfirmElfHijack");
     ImGui::EndDisabled();
 
-    if (state.elf_load_pending)
+    if (state.elf.load_pending)
       ImGui::TextColored(ui::colors().warning, locale::tr("processes.elf_load_progress"),
-                         state.elf_load_op.c_str(), ImGui::GetTime() - state.elf_load_start_time);
+                         state.elf.load_op.c_str(), ImGui::GetTime() - state.elf.load_start_time);
 
     /* Hijack confirmation modal */
     static bool skip_elf_hijack_confirm = false;
@@ -1596,7 +1596,7 @@ void draw_processes(AppState &state, ImVec2 avail) {
     ui::draw_empty_state(locale::tr("processes.connect_first"), locale::tr("processes.connect_first_desc"));
   } else {
     /* Button row: Refresh + Tree toggle + JSON Dump */
-    ImGui::BeginDisabled(state.connect_pending || state.elf_load_pending);
+    ImGui::BeginDisabled(state.connect_pending || state.elf.load_pending);
     if (ui::soft_button((std::string(icons::kRefresh) + "  " + locale::tr("processes.refresh_processes")).c_str(), ImVec2(150, 34))) refresh_processes(state);
     ImGui::EndDisabled();
     ImGui::SameLine();

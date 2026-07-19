@@ -359,104 +359,104 @@ void poll_map_refresh(AppState &state) {
 /* ---- Tracer ---- */
 
 void request_tracer_attach_async(AppState &state) {
-  if (state.tracer_pending || state.tracer_detach_pending) return;
+  if (state.tracer.pending || state.tracer.detach_pending) return;
   if (!state.client.connected()) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_TRACER)) return;
   if (client_async_busy(state)) return;
 
-  int32_t pid = state.tracer_target_pid;
+  int32_t pid = state.tracer.target_pid;
   if (pid <= 0) return;
 
-  state.tracer_pending = true;
-  state.tracer_detach_requested = false;
-  state.tracer_status = {};
-  state.tracer_events.clear();
-  state.tracer_was_crashed = false;
-  state.tracer_crash_dump_path.clear();
-  state.tracer_error.clear();
-  state.tracer_temp_error.clear();
-  state.tracer_status_text[0] = '\0';
+  state.tracer.pending = true;
+  state.tracer.detach_requested = false;
+  state.tracer.status = {};
+  state.tracer.events.clear();
+  state.tracer.was_crashed = false;
+  state.tracer.crash_dump_path.clear();
+  state.tracer.error.clear();
+  state.tracer.temp_error.clear();
+  state.tracer.status_text[0] = '\0';
 
-  state.tracer_future = std::async(std::launch::async, [&state, pid]() -> bool {
+  state.tracer.future = std::async(std::launch::async, [&state, pid]() -> bool {
     const bool ok = state.client.tracer_attach(pid);
-    if (!ok) state.tracer_temp_error = state.client.last_error();
+    if (!ok) state.tracer.temp_error = state.client.last_error();
     return ok;
   });
 }
 
 void request_tracer_detach_async(AppState &state) {
-  if (state.tracer_detach_pending) return;
-  if (state.tracer_pending) {
+  if (state.tracer.detach_pending) return;
+  if (state.tracer.pending) {
     /* The attach request owns the Client socket.  Send detach immediately
      * after it has completed rather than replacing its future (which would
      * synchronously wait and freeze the UI). */
-    state.tracer_detach_requested = true;
+    state.tracer.detach_requested = true;
     set_status(state, "Cancelling tracer attach...");
     return;
   }
   if (!state.client.connected()) {
-    state.tracer_status = {};
-    state.tracer_status_text[0] = '\0';
-    state.tracer_target_pid = 0;
+    state.tracer.status = {};
+    state.tracer.status_text[0] = '\0';
+    state.tracer.target_pid = 0;
     return;
   }
 
-  state.tracer_pending = true;
-  state.tracer_detach_pending = true;
-  state.tracer_detach_requested = false;
-  state.tracer_error.clear();
-  state.tracer_temp_error.clear();
+  state.tracer.pending = true;
+  state.tracer.detach_pending = true;
+  state.tracer.detach_requested = false;
+  state.tracer.error.clear();
+  state.tracer.temp_error.clear();
   set_status(state, "Detaching tracer and resuming target...");
-  state.tracer_future = std::async(std::launch::async, [&state]() -> bool {
+  state.tracer.future = std::async(std::launch::async, [&state]() -> bool {
     const bool ok = state.client.tracer_detach();
-    if (!ok) state.tracer_temp_error = state.client.last_error();
+    if (!ok) state.tracer.temp_error = state.client.last_error();
     return ok;
   });
 }
 
 void poll_tracer(AppState &state) {
   /* Complete an attach or detach without blocking the render thread. */
-  if (state.tracer_pending && state.tracer_future.valid()) {
+  if (state.tracer.pending && state.tracer.future.valid()) {
     const auto future_status =
-        state.tracer_future.wait_for(std::chrono::milliseconds(0));
+        state.tracer.future.wait_for(std::chrono::milliseconds(0));
     if (future_status == std::future_status::ready) {
-      const bool was_detach = state.tracer_detach_pending;
+      const bool was_detach = state.tracer.detach_pending;
       bool ok = false;
-      state.tracer_pending = false;
-      state.tracer_detach_pending = false;
+      state.tracer.pending = false;
+      state.tracer.detach_pending = false;
       try {
-        ok = state.tracer_future.get();
+        ok = state.tracer.future.get();
       } catch (const std::exception &ex) {
-        state.tracer_temp_error = ex.what();
+        state.tracer.temp_error = ex.what();
       } catch (...) {
-        state.tracer_temp_error = "Unknown tracer operation error";
+        state.tracer.temp_error = "Unknown tracer operation error";
       }
 
       if (!ok) {
-        state.tracer_error = state.tracer_temp_error.empty()
+        state.tracer.error = state.tracer.temp_error.empty()
             ? "Tracer operation failed"
-            : state.tracer_temp_error;
-        set_status(state, "Tracer: " + state.tracer_error);
-        push_notification(state, "Tracer: " + state.tracer_error, 6.0);
+            : state.tracer.temp_error;
+        set_status(state, "Tracer: " + state.tracer.error);
+        push_notification(state, "Tracer: " + state.tracer.error, 6.0);
       } else if (was_detach) {
-        state.tracer_status = {};
-        state.tracer_status.state = MEMDBG_TRACER_STATE_STOPPED;
-        std::snprintf(state.tracer_status_text,
-                      sizeof(state.tracer_status_text), "%s", "Stopped");
-        state.tracer_target_pid = 0;
-        state.tracer_next_poll = 0.0;
-    state.tracer_next_event_poll = 0.0;
+        state.tracer.status = {};
+        state.tracer.status.state = MEMDBG_TRACER_STATE_STOPPED;
+        std::snprintf(state.tracer.status_text,
+                      sizeof(state.tracer.status_text), "%s", "Stopped");
+        state.tracer.target_pid = 0;
+        state.tracer.next_poll = 0.0;
+    state.tracer.next_event_poll = 0.0;
     set_status(state, "Tracer detached; target resumed");
-    state.action_journal.record("tracer_detach", ("{\"pid\":" + std::to_string(state.tracer_target_pid) + "}").c_str());
+    state.action_journal.record("tracer_detach", ("{\"pid\":" + std::to_string(state.tracer.target_pid) + "}").c_str());
       } else {
-        std::snprintf(state.tracer_status_text,
-                      sizeof(state.tracer_status_text), "%s", "Starting...");
-        state.tracer_next_poll = 0.0;
-        state.tracer_next_event_poll = 0.0;
-        state.action_journal.record("tracer_attach", ("{\"pid\":" + std::to_string(state.tracer_target_pid) + "}").c_str());
+        std::snprintf(state.tracer.status_text,
+                      sizeof(state.tracer.status_text), "%s", "Starting...");
+        state.tracer.next_poll = 0.0;
+        state.tracer.next_event_poll = 0.0;
+        state.action_journal.record("tracer_attach", ("{\"pid\":" + std::to_string(state.tracer.target_pid) + "}").c_str());
 
-      if (!was_detach && state.tracer_detach_requested) {
-        state.tracer_detach_requested = false;
+      if (!was_detach && state.tracer.detach_requested) {
+        state.tracer.detach_requested = false;
         request_tracer_detach_async(state);
       }
       }
@@ -464,107 +464,107 @@ void poll_tracer(AppState &state) {
   }
 
   /* The attach/detach request owns the shared protocol client. */
-  if (state.tracer_pending) return;
+  if (state.tracer.pending) return;
   if (!state.client.connected()) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_TRACER)) return;
 
-  if (state.tracer_status_pending && state.tracer_status_future.valid() &&
-      state.tracer_status_future.wait_for(std::chrono::milliseconds(0)) ==
+  if (state.tracer.status_pending && state.tracer.status_future.valid() &&
+      state.tracer.status_future.wait_for(std::chrono::milliseconds(0)) ==
           std::future_status::ready) {
     bool ok = false;
     try {
-      ok = state.tracer_status_future.get();
+      ok = state.tracer.status_future.get();
     } catch (const std::exception &ex) {
-      state.tracer_status_error = ex.what();
+      state.tracer.status_error = ex.what();
     } catch (...) {
-      state.tracer_status_error = "Unknown tracer status error";
+      state.tracer.status_error = "Unknown tracer status error";
     }
-    state.tracer_status_pending = false;
+    state.tracer.status_pending = false;
     if (ok) {
-      Client::TracerStatus new_st = state.tracer_temp_status;
+      Client::TracerStatus new_st = state.tracer.temp_status;
       /* Check for state transition to crashed. */
-      if (state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING &&
+      if (state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING &&
           new_st.state == MEMDBG_TRACER_STATE_CRASHED) {
-        state.tracer_was_crashed = true;
-        state.tracer_crash_dump_path = new_st.dump_path;
-        state.tracer_crash_notification_time = ImGui::GetTime();
+        state.tracer.was_crashed = true;
+        state.tracer.crash_dump_path = new_st.dump_path;
+        state.tracer.crash_notification_time = ImGui::GetTime();
         push_notification(state,
             "Process crashed! Signal " + std::to_string(new_st.crash_signal) +
             ". Dump: " + new_st.dump_path, 10.0);
       }
-      state.tracer_status = std::move(new_st);
-      std::snprintf(state.tracer_status_text,
-                    sizeof(state.tracer_status_text), "%s",
-                    state.tracer_status.state == MEMDBG_TRACER_STATE_IDLE     ? "Idle" :
-                    state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING  ? "Running" :
-                    state.tracer_status.state == MEMDBG_TRACER_STATE_CRASHED  ? "Crashed" :
-                    state.tracer_status.state == MEMDBG_TRACER_STATE_EXITED   ? "Exited" :
-                    state.tracer_status.state == MEMDBG_TRACER_STATE_STOPPED  ? "Stopped" :
-                    state.tracer_status.state == MEMDBG_TRACER_STATE_STARTING ? "Starting..." : "?");
-    } else if (!state.tracer_status_error.empty()) {
-      state.tracer_error = state.tracer_status_error;
+      state.tracer.status = std::move(new_st);
+      std::snprintf(state.tracer.status_text,
+                    sizeof(state.tracer.status_text), "%s",
+                    state.tracer.status.state == MEMDBG_TRACER_STATE_IDLE     ? "Idle" :
+                    state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING  ? "Running" :
+                    state.tracer.status.state == MEMDBG_TRACER_STATE_CRASHED  ? "Crashed" :
+                    state.tracer.status.state == MEMDBG_TRACER_STATE_EXITED   ? "Exited" :
+                    state.tracer.status.state == MEMDBG_TRACER_STATE_STOPPED  ? "Stopped" :
+                    state.tracer.status.state == MEMDBG_TRACER_STATE_STARTING ? "Starting..." : "?");
+    } else if (!state.tracer.status_error.empty()) {
+      state.tracer.error = state.tracer.status_error;
     }
   }
 
-  if (state.tracer_events_pending && state.tracer_events_future.valid() &&
-      state.tracer_events_future.wait_for(std::chrono::milliseconds(0)) ==
+  if (state.tracer.events_pending && state.tracer.events_future.valid() &&
+      state.tracer.events_future.wait_for(std::chrono::milliseconds(0)) ==
           std::future_status::ready) {
     bool ok = false;
     try {
-      ok = state.tracer_events_future.get();
+      ok = state.tracer.events_future.get();
     } catch (const std::exception &ex) {
-      state.tracer_events_error = ex.what();
+      state.tracer.events_error = ex.what();
     } catch (...) {
-      state.tracer_events_error = "Unknown tracer event poll error";
+      state.tracer.events_error = "Unknown tracer event poll error";
     }
-    state.tracer_events_pending = false;
+    state.tracer.events_pending = false;
     if (ok) {
-      state.tracer_events.insert(state.tracer_events.end(),
-                                  state.tracer_temp_events.begin(),
-                                  state.tracer_temp_events.end());
+      state.tracer.events.insert(state.tracer.events.end(),
+                                  state.tracer.temp_events.begin(),
+                                  state.tracer.temp_events.end());
       /* Keep max ~5000 events in memory. */
-      if (state.tracer_events.size() > 5000)
-        state.tracer_events.erase(state.tracer_events.begin(),
-                                  state.tracer_events.begin() + (state.tracer_events.size() - 5000));
-    } else if (!state.tracer_events_error.empty()) {
-      state.tracer_error = state.tracer_events_error;
+      if (state.tracer.events.size() > 5000)
+        state.tracer.events.erase(state.tracer.events.begin(),
+                                  state.tracer.events.begin() + (state.tracer.events.size() - 5000));
+    } else if (!state.tracer.events_error.empty()) {
+      state.tracer.error = state.tracer.events_error;
     }
   }
 
   /* Skip polling when no tracer session was ever started. */
-  if (state.tracer_target_pid <= 0) return;
+  if (state.tracer.target_pid <= 0) return;
 
   const double now = ImGui::GetTime();
-  if (!state.tracer_status_pending && !state.tracer_events_pending &&
-      now >= state.tracer_next_poll) {
-    state.tracer_next_poll = now + 0.5;
-    state.tracer_status_pending = true;
-    state.tracer_status_error.clear();
-    state.tracer_status_future = std::async(std::launch::async, [&state]() -> bool {
+  if (!state.tracer.status_pending && !state.tracer.events_pending &&
+      now >= state.tracer.next_poll) {
+    state.tracer.next_poll = now + 0.5;
+    state.tracer.status_pending = true;
+    state.tracer.status_error.clear();
+    state.tracer.status_future = std::async(std::launch::async, [&state]() -> bool {
       Client::TracerStatus status;
       const bool ok = state.client.tracer_status(status);
       if (ok)
-        state.tracer_temp_status = std::move(status);
+        state.tracer.temp_status = std::move(status);
       else
-        state.tracer_status_error = state.client.last_error();
+        state.tracer.status_error = state.client.last_error();
       return ok;
     });
     return;
   }
 
-  if (state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING &&
-      !state.tracer_status_pending && !state.tracer_events_pending &&
-      now >= state.tracer_next_event_poll) {
-    state.tracer_next_event_poll = now + 0.1;
-    state.tracer_events_pending = true;
-    state.tracer_events_error.clear();
-    state.tracer_events_future = std::async(std::launch::async, [&state]() -> bool {
+  if (state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING &&
+      !state.tracer.status_pending && !state.tracer.events_pending &&
+      now >= state.tracer.next_event_poll) {
+    state.tracer.next_event_poll = now + 0.1;
+    state.tracer.events_pending = true;
+    state.tracer.events_error.clear();
+    state.tracer.events_future = std::async(std::launch::async, [&state]() -> bool {
       std::vector<Client::TracerEvent> events;
       const bool ok = state.client.tracer_poll(events);
       if (ok)
-        state.tracer_temp_events = std::move(events);
+        state.tracer.temp_events = std::move(events);
       else
-        state.tracer_events_error = state.client.last_error();
+        state.tracer.events_error = state.client.last_error();
       return ok;
     });
   }
@@ -940,9 +940,9 @@ void disconnect_console(AppState &state, const char *reason) {
   if (state.taskmgr_resource_future.valid()) state.taskmgr_resource_future.wait();
   if (state.taskmgr_prefetch_future.valid()) state.taskmgr_prefetch_future.wait();
   if (state.heartbeat_future.valid()) state.heartbeat_future.wait();
-  if (state.tracer_future.valid()) state.tracer_future.wait();
-  if (state.tracer_status_future.valid()) state.tracer_status_future.wait();
-  if (state.tracer_events_future.valid()) state.tracer_events_future.wait();
+  if (state.tracer.future.valid()) state.tracer.future.wait();
+  if (state.tracer.status_future.valid()) state.tracer.status_future.wait();
+  if (state.tracer.events_future.valid()) state.tracer.events_future.wait();
   if (s_connect_future.valid()) {
     s_connect_future.wait();
     try {
@@ -968,24 +968,24 @@ void disconnect_console(AppState &state, const char *reason) {
   state.heartbeat_pending = false;
   state.heartbeat_error.clear();
   state.next_heartbeat = 0.0;
-  const bool tracer_may_own_target = state.tracer_pending ||
-      state.tracer_target_pid > 0 ||
-      state.tracer_status.state == MEMDBG_TRACER_STATE_RUNNING;
+  const bool tracer_may_own_target = state.tracer.pending ||
+      state.tracer.target_pid > 0 ||
+      state.tracer.status.state == MEMDBG_TRACER_STATE_RUNNING;
   if (state.client.connected() && state.has_hello && tracer_may_own_target &&
       (state.hello.capabilities & MEMDBG_CAP_TRACER)) {
     /* Do not leave a traced process stopped when the frontend disconnects. */
     (void)state.client.tracer_detach();
   }
-  state.tracer_pending = false;
-  state.tracer_detach_pending = false;
-  state.tracer_detach_requested = false;
-  state.tracer_status_pending = false;
-  state.tracer_events_pending = false;
-  state.tracer_target_pid = 0;
-  state.tracer_status = {};
-  state.tracer_status_text[0] = '\0';
-  state.tracer_error.clear();
-  state.tracer_temp_events.clear();
+  state.tracer.pending = false;
+  state.tracer.detach_pending = false;
+  state.tracer.detach_requested = false;
+  state.tracer.status_pending = false;
+  state.tracer.events_pending = false;
+  state.tracer.target_pid = 0;
+  state.tracer.status = {};
+  state.tracer.status_text[0] = '\0';
+  state.tracer.error.clear();
+  state.tracer.temp_events.clear();
   if (state.plugin_gui_bridge) {
     state.plugin_gui_bridge->stop();
     state.plugin_gui_starting = false;
