@@ -371,6 +371,7 @@ struct TaskMgrState {
   std::vector<ProcessInfo> batch_temp_infos;
   std::vector<int32_t> batch_temp_failed_pids;
   bool prefetch_pending = false;
+  uint64_t prefetch_epoch = 0;          /* captured at request time; stale if != conn.reconnect.epoch */
   std::future<bool> prefetch_future;
   std::vector<ProcessEntry> prefetch_processes;
   std::unordered_map<int32_t, TaskProcessResource> prefetch_resources;
@@ -651,6 +652,7 @@ struct AppState {
   int32_t last_debugger_pid = 0;   /* default PID to pre-fill on debugger attach */
   HelloInfo hello;
   bool has_hello = false;
+  uint64_t saved_daemon_instance_id = 0;  /* from previous connection; used to detect payload restart vs survival after rest mode */
 
   /* Sidebar section expand/collapse (MAIN, TOOLS, MONITORING, SYSTEM) */
   bool sidebar_sections_expanded[4] = {true, true, true, true};
@@ -738,6 +740,7 @@ struct AppState {
 
   /* ---- Async map refresh ---- */
   bool map_refresh_pending = false;
+  uint64_t map_refresh_epoch = 0;      /* captured at request time; stale if != conn.reconnect.epoch */
   std::future<bool> map_refresh_future;
   int32_t map_refresh_pid = 0;
   double map_refresh_start_time = 0.0;
@@ -756,6 +759,7 @@ struct AppState {
 
   /* ---- Async telemetry ---- */
   bool telemetry_pending = false;
+  uint64_t telemetry_epoch = 0;        /* captured at request time; stale if != conn.reconnect.epoch */
   std::future<bool> telemetry_future;
   Client::TelemetrySnapshot telemetry_temp_snap;
   std::string telemetry_temp_error;

@@ -329,6 +329,7 @@ void request_telemetry_async(AppState &state) {
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
 
   state.telemetry_pending = true;
+  state.telemetry_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   auto client = state.pool.poll_lease();
   state.telemetry_future = std::async(std::launch::async, [&state, client]() -> bool {
     Client::TelemetrySnapshot snap;
@@ -358,6 +359,9 @@ void poll_telemetry(AppState &state) {
   } catch (...) {
     state.telemetry_temp_error = "Unknown telemetry error";
   }
+
+  /* Reject stale results from a previous connection epoch. */
+  if (state.telemetry_epoch != state.conn.reconnect.epoch) return;
 
   if (!ok) {
     if (state.crash_logging_enabled)
@@ -401,6 +405,7 @@ void request_maps_refresh_async(AppState &state) {
   state.map_refresh_pid = state.selected_pid;
   state.map_refresh_start_time = ImGui::GetTime();
   state.map_refresh_pending = true;
+  state.map_refresh_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.map_refresh_temp_maps.clear();
   state.map_refresh_error.clear();
   set_status(state, "Refreshing memory maps...");
@@ -438,6 +443,12 @@ void poll_map_refresh(AppState &state) {
     state.map_refresh_error = ex.what();
   } catch (...) {
     state.map_refresh_error = "Unknown maps refresh error";
+  }
+
+  /* Reject stale results from a previous connection epoch. */
+  if (state.map_refresh_epoch != state.conn.reconnect.epoch) {
+    state.map_refresh_temp_maps.clear();
+    return;
   }
 
   if (state.map_refresh_pid != state.selected_pid) {
@@ -727,6 +738,7 @@ static void start_taskmgr_prefetch(AppState &state) {
   if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
 
   state.taskmgr.prefetch_pending = true;
+  state.taskmgr.prefetch_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.taskmgr.prefetch_processes.clear();
   state.taskmgr.prefetch_resources.clear();
   state.taskmgr.prefetch_error.clear();
@@ -832,6 +844,13 @@ void poll_taskmgr_prefetch(AppState &state) {
     state.taskmgr.prefetch_error = ex.what();
   } catch (...) {
     state.taskmgr.prefetch_error = "Unknown task manager prefetch error";
+  }
+
+  /* Reject stale results from a previous connection epoch. */
+  if (state.taskmgr.prefetch_epoch != state.conn.reconnect.epoch) {
+    state.taskmgr.prefetch_processes.clear();
+    state.taskmgr.prefetch_resources.clear();
+    return;
   }
 
   if (ok) {
@@ -965,9 +984,34 @@ void poll_connect(AppState &state) {
     state.conn.reconnect.attempt = 0;
     state.conn.reconnect.stale = true;
     state.conn.reconnect.reason.clear();
+
+    const uint64_t old_instance = state.saved_daemon_instance_id;
+    const uint64_t new_instance = s_temp_hello.daemon_instance_id;
+    const bool payload_restarted =
+        old_instance != 0 && new_instance != 0 && old_instance != new_instance;
+
+    if (payload_restarted) {
+      /* Payload was terminated during rest mode — invalidate all remote state.
+       * Clear process/map lists too since old PIDs point to zombie processes. */
+      state.processes.clear();
+      state.maps.clear();
+      state.selected_pid = 0;
+      state.selected_process_row = -1;
+      state.selected_map_row = -1;
+      state.selected_map_starts.clear();
+      state.has_process_info = false;
+      state.telemetry_available = false;
+      reset_debugger_state(state);
+      push_notification(state, "Payload restarted during rest mode — remote state cleared", 6.0);
+    }
+    state.saved_daemon_instance_id = new_instance;
+
     state.conn.reconnect.phase = ConnectionPhase::Online;
     ++state.conn.reconnect.epoch;
-    std::string msg = "Reconnected to " + std::string(state.host);
+    state.taskmgr.next_resource_fetch = ImGui::GetTime() + 1.0;  /* resume auto-fetch after reconnect */
+    std::string msg = payload_restarted
+        ? "Reconnected to " + std::string(state.host) + " (payload restarted)"
+        : "Reconnected to " + std::string(state.host);
     set_status(state, msg);
     push_notification(state, msg, 4.0);
     return;
@@ -975,6 +1019,7 @@ void poll_connect(AppState &state) {
 
   /* Fresh connect: full initialization. */
   state.conn.reconnect.phase = ConnectionPhase::Online;
+  state.saved_daemon_instance_id = s_temp_hello.daemon_instance_id;
   state.taskmgr.resources.clear();
   state.taskmgr.fmem_by_name.clear();
   state.taskmgr.last_log_received = 0U;
