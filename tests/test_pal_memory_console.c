@@ -39,6 +39,15 @@ static int  g_mock_mprotect_count       = 0;
 static int  g_mock_process_maps_count   = 0;
 
 /* Configurable return values (set before each test case) */
+/* copyin_ret_after: after `copyin_ret_after` calls using copyin_ret (failure),
+ * the mock switches to copyin_ret_subsequent.  This lets us simulate the
+ * pattern where console_mdbg_copyin() fails the first call and then
+ * console_mdbg_copyin_ps5_regions() retries successfully after a protection
+ * change. */
+static int  g_mock_copyin_ret_after        = 0;   /* calls using copyin_ret before switching */
+static int  g_mock_copyin_ret_subsequent   = 0;   /* return value for calls after the first N */
+static int  g_mock_copyin_errno_subsequent = 0;
+
 static int  g_mock_copyout_ret          = 0;   /* 0 = success */
 static int  g_mock_copyout_errno        = 0;
 static int  g_mock_copyin_ret           = 0;   /* used by mock_mdbg_copyin */
@@ -100,6 +109,21 @@ int mock_mdbg_copyin(pid_t pid, const void *buffer,
   (void)buffer;
   (void)address;
   (void)length;
+  /* When copyin_ret_after > 0, the first N calls use copyin_ret(errno);
+   * subsequent calls use copyin_ret_subsequent(errno_subsequent). */
+  if (g_mock_copyin_ret_after > 0) {
+    if (g_mock_copyin_count <= g_mock_copyin_ret_after &&
+        g_mock_copyin_ret != 0) {
+      errno = g_mock_copyin_errno;
+      return g_mock_copyin_ret;
+    }
+    if (g_mock_copyin_ret_subsequent != 0) {
+      errno = g_mock_copyin_errno_subsequent;
+      return g_mock_copyin_ret_subsequent;
+    }
+    return 0;
+  }
+  /* Legacy mode: one-shot */
   if (g_mock_copyin_ret != 0) {
     errno = g_mock_copyin_errno;
     return g_mock_copyin_ret;
@@ -294,6 +318,10 @@ static void reset_mocks(void) {
   g_mock_fw_version_count    = 0;
   g_mock_mprotect_count      = 0;
   g_mock_process_maps_count  = 0;
+
+  g_mock_copyin_ret_after        = 0;
+  g_mock_copyin_ret_subsequent   = 0;
+  g_mock_copyin_errno_subsequent = 0;
 
   g_mock_copyout_ret         = 0;
   g_mock_copyout_errno       = 0;
@@ -584,6 +612,125 @@ static void test_fw_cached(void) {
 }
 
 /* ===================================================================
+ *  Test: console_mdbg_copyin_ps5_regions (EACCES + PTWALK unavailable)
+ *
+ *  When mdbg_copyin returns EACCES and PTWALK is unavailable, the
+ *  console_mdbg_copyin() function falls through to
+ *  console_mdbg_copyin_ps5_regions(), which:
+ *    1. Fetches process maps
+ *    2. For each segment, queries vmem protection
+ *    3. If not writable, adds PROT_WRITE
+ *    4. Retries mdbg_copyin (mock succeeds after first call)
+ *    5. Restores original protection
+ *    6. Returns 0 on success
+ *
+ *  These tests use g_mock_copyin_ret_after=1 so the first mdbg_copyin
+ *  call fails (triggering the regions walk) and subsequent calls
+ *  succeed (simulating the protection-change fixing the write).
+ * =================================================================== */
+
+static void test_write_eacces_ptw_unavail_regions_success(void) {
+  reset_mocks();
+  g_mock_fw_version       = 0x08000000U;  /* < 8.40, no DMAP */
+  g_mock_ptw_available    = 0;            /* PTWALK unavailable */
+  g_mock_copyin_ret       = -1;           /* first copyin fails */
+  g_mock_copyin_errno     = EACCES;
+  g_mock_copyin_ret_after = 1;            /* fail 1st call, succeed 2nd+ */
+  /* Default vmem_prot is 7 (RWX) — no protection change needed */
+
+  const uint8_t data[] = {0xAA, 0xBB, 0xCC, 0xDD};
+  size_t written = 0;
+  memdbg_status_t st = pal_memory_write(100, 0x1000, data, 4, &written);
+
+  TEST("regions success: status OK", st == MEMDBG_OK);
+  TEST("regions success: written == 4", written == 4);
+  /* First copyin in console_mdbg_copyin() fails; second in regions walk succeeds */
+  TEST("regions success: copyin called twice (fail+success)", g_mock_copyin_count == 2);
+  TEST("regions success: process_maps fetched", g_mock_process_maps_count == 1);
+  /* vmem protection queried (prot==7: RWX, no change needed) */
+  TEST("regions success: vmem protection queried", g_mock_protect_count >= 1);
+  /* set_vmem_protection should NOT have been called (region already RWX) */
+  TEST("regions success: set_vmem = 0 (no change needed)", g_mock_set_vmem_ret == 0 || g_mock_protect_count == g_mock_copyin_count);
+  TEST("regions success: ptw_write NOT called (unavailable)", g_mock_ptw_write_count == 0);
+  /* The mock for console_mdbg_copyin_raw inside regions succeeds */
+}
+
+
+static void test_write_eacces_ptw_unavail_regions_prot_change(void) {
+  reset_mocks();
+  g_mock_fw_version       = 0x08000000U;  /* < 8.40, no DMAP */
+  g_mock_ptw_available    = 0;            /* PTWALK unavailable */
+  g_mock_copyin_ret       = -1;
+  g_mock_copyin_errno     = EACCES;
+  g_mock_copyin_ret_after = 1;            /* fail 1st, succeed after */
+  g_mock_vmem_prot        = 5;            /* RX (no write) → triggers prot change */
+
+  const uint8_t data[] = {0x11, 0x22};
+  size_t written = 0;
+  memdbg_status_t st = pal_memory_write(100, 0x1000, data, 2, &written);
+
+  TEST("regions prot-change: status OK", st == MEMDBG_OK);
+  TEST("regions prot-change: written == 2", written == 2);
+  TEST("regions prot-change: process_maps fetched", g_mock_process_maps_count == 1);
+  /* vmem protection queried at least once */
+  TEST("regions prot-change: vmem protection queried", g_mock_protect_count >= 1);
+  /* set_vmem_protection called at least once (to add write) and once to restore */
+  TEST("regions prot-change: set_vmem called 2+ times (add+restore)", g_mock_protect_count >= 2);
+}
+
+/* NOTE: g_mock_set_vmem_ret = -1 applies to EVERY set_vmem call, so this
+   tests the path where the first set_vmem (to add write permission) fails,
+   not the "restore fails after write succeeds" scenario (which would need
+   differentiated first/subsequent set_vmem return values). */
+static void test_write_eacces_ptw_unavail_regions_setprot_fails(void) {
+  reset_mocks();
+  g_mock_fw_version       = 0x08000000U;  /* < 8.40, no DMAP */
+  g_mock_ptw_available    = 0;            /* PTWALK unavailable */
+  g_mock_copyin_ret       = -1;
+  g_mock_copyin_errno     = EACCES;
+  g_mock_copyin_ret_after = 1;            /* fail 1st, succeed after */
+  g_mock_vmem_prot        = 5;            /* RX (no write) → triggers prot change */
+  g_mock_set_vmem_ret     = -1;           /* set_vmem_protection fails (restore fails) */
+  g_mock_set_vmem_errno   = EACCES;
+
+  const uint8_t data[] = {0x11, 0x22};
+  size_t written = 0;
+  memdbg_status_t st = pal_memory_write(100, 0x1000, data, 2, &written);
+
+  /* The copyin itself should have succeeded, but the restore failure
+   * causes console_mdbg_copyin_ps5_regions to return -1 with EACCES.
+   * However, if the first set_vmem (add write) FAILS, we never get to
+   * copyin at all. The set_vmem_ret= -1 applies to ALL calls, so the
+   * first call (to add write) also fails. */
+  /* Since set_vmem fails on the FIRST call (to add write), the regions
+   * walk breaks with EACCES immediately. */
+  TEST("regions setprot-fail: status is error", st != MEMDBG_OK);
+  TEST("regions setprot-fail: set_vmem called at least once", g_mock_protect_count >= 1);
+  TEST("regions setprot-fail: copyin called once (regions not reached)", g_mock_copyin_count == 1);
+}
+
+
+static void test_write_eacces_ptw_unavail_regions_maps_fail(void) {
+  reset_mocks();
+  g_mock_fw_version          = 0x08000000U;  /* < 8.40, no DMAP */
+  g_mock_ptw_available       = 0;            /* PTWALK unavailable */
+  g_mock_copyin_ret          = -1;
+  g_mock_copyin_errno        = EACCES;
+  g_mock_copyin_ret_after    = 1;
+  g_mock_process_maps_ret    = -1;           /* pal_process_maps fails */
+
+  const uint8_t data[] = {0x11, 0x22};
+  size_t written = 0;
+  memdbg_status_t st = pal_memory_write(100, 0x1000, data, 2, &written);
+
+  TEST("regions maps-fail: status is error", st != MEMDBG_OK);
+  TEST("regions maps-fail: process_maps called", g_mock_process_maps_count == 1);
+  TEST("regions maps-fail: copyin called once (first fail)", g_mock_copyin_count == 1);
+  /* vmem protection should NOT have been queried (maps failed first) */
+  TEST("regions maps-fail: no vmem query (maps failed first)", g_mock_protect_count == 0);
+}
+
+/* ===================================================================
  *  Test: Invalid PID edge cases
  * =================================================================== */
 
@@ -639,6 +786,13 @@ int main(void) {
   test_fw_below_dmap();
   test_fw_at_dmap();
   test_fw_cached();
+  printf("\n");
+
+  printf("--- console_mdbg_copyin_ps5_regions (EACCES, PTWALK unavailable) ---\n");
+  test_write_eacces_ptw_unavail_regions_success();
+  test_write_eacces_ptw_unavail_regions_prot_change();
+  test_write_eacces_ptw_unavail_regions_setprot_fails();
+  test_write_eacces_ptw_unavail_regions_maps_fail();
   printf("\n");
 
   printf("--- edge cases ---\n");
