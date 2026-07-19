@@ -106,7 +106,7 @@ ALL_DEPFILES := $(HOST_OBJECTS:.o=.d) $(PS4_OBJECTS:.o=.d) \
 # compiled against different layouts and trip the stack protector at runtime.
 -include $(ALL_DEPFILES)
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine check-locales check-headers tracer-tool FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine check-locales check-headers tracer-tool fuzz-protocol-header fuzz-lz4 fuzz-sjson fuzz-process-maps fuzz-corpus FORCE
 
 all: host
 
@@ -335,7 +335,55 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts fuzz-corpus
+
+# ---- Fuzz harnesses (pure, socket‑free parsers) ----
+
+fuzz-protocol-header: tests/fuzz_protocol_header.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/fuzz_protocol_header.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/fuzz_protocol_header
+	@echo "--- Built fuzz_protocol_header ---"
+
+fuzz-lz4: src/util/lz4.c tests/fuzz_lz4.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/fuzz_lz4.c src/util/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/fuzz_lz4
+	@echo "--- Built fuzz_lz4 ---"
+
+fuzz-sjson: tests/fuzz_sjson.c include/memdbg/sjson.h
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/fuzz_sjson.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/fuzz_sjson
+	@echo "--- Built fuzz_sjson ---"
+
+fuzz-process-maps: tests/fuzz_process_maps.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/fuzz_process_maps.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/fuzz_process_maps
+	@echo "--- Built fuzz_process_maps ---"
+
+# Run initial corpus through all fuzz targets
+fuzz-corpus: fuzz-protocol-header fuzz-lz4 fuzz-sjson fuzz-process-maps
+	@echo "--- Running initial fuzz corpus ---"
+	@for fuzzer in fuzz_protocol_header fuzz_lz4 fuzz_sjson fuzz_process_maps; do \
+	  echo "  [$$fuzzer] corpus..."; \
+	  for corpus in tests/corpus/*; do \
+	    if [ -f "$$corpus" ]; then \
+	      $(BUILD_DIR)/$$fuzzer "$$corpus" 2>&1 || { echo "  FAIL: $$fuzzer on $$corpus"; exit 1; }; \
+	    fi; \
+	  done; \
+	done;
+	@echo "--- All fuzz corpus tests PASSED ---"
+	@echo ""
+	@echo "Fuzz targets built. Run manually:"
+	@echo "  # Single file:"
+	@echo "    ./build/fuzz_protocol_header <file>"
+	@echo "    ./build/fuzz_lz4 <file>"
+	@echo "    ./build/fuzz_sjson <file>"
+	@echo "    ./build/fuzz_process_maps <file>"
+	@echo ""
+	@echo "  # Via stdin:"
+	@echo "    cat <file> | ./build/fuzz_protocol_header"
+	@echo ""
+	@echo "  # With AFL/libFuzzer (after clang -fsanitize=fuzzer):"
+	@echo "    afl-fuzz -i tests/corpus -o findings -- ./build/fuzz_protocol_header @@"
 
 payload-ps4: $(PS4_TARGET)
 payload-ps5: $(PS5_TARGET)
