@@ -318,7 +318,10 @@ jobs:
         run: |
           set -euo pipefail
           export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
-          # Run unit tests — these must pass under ASan or the job fails.
+          export HOST_CC=clang
+          export HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=address -fno-omit-frame-pointer"
+          export HOST_LDFLAGS="-fsanitize=address"
           make test-sjson test-memory test-thread-pool test-lz4 test-scan-partition
           # E2E tests (need daemon); emit warning instead of hard-fail
           # because port contention or timing can produce false positives.
@@ -337,6 +340,10 @@ jobs:
         run: |
           set -euo pipefail
           export UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1
+          export HOST_CC=clang
+          export HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+          export HOST_LDFLAGS="-fsanitize=undefined"
           make test-sjson test-memory test-thread-pool test-lz4 test-scan-partition
           make test-debugger-e2e || echo "::warning::UBSan E2E test exited non-zero"
 
@@ -353,7 +360,11 @@ jobs:
         run: |
           set -euo pipefail
           export TSAN_OPTIONS=halt_on_error=1:abort_on_error=1:history_size=7
-          make test-sjson test-thread-pool
+          export HOST_CC=clang
+          export HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=thread"
+          export HOST_LDFLAGS="-fsanitize=thread"
+          make test-sjson test-memory test-thread-pool test-scan-partition
           make test-debugger-e2e || echo "::warning::TSan E2E test exited non-zero"
 
   static-analysis:
