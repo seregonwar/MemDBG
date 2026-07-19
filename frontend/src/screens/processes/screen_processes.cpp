@@ -645,6 +645,7 @@ static void request_json_dump_async(AppState &state) {
   if (state.json_dump_pending || state.map_refresh_pending) return;
 
   state.json_dump_pending = true;
+  state.json_dump_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.json_dump_error.clear();
   state.json_dump_output.clear();
   state.json_dump_cancel_requested = false;
@@ -694,6 +695,9 @@ static void poll_json_dump(AppState &state) {
   state.json_dump_pending = false;
   state.json_dump_client.reset();
   auto [ok, output, error] = state.json_dump_future.get();
+
+  /* Reject stale results from a previous connection epoch. */
+  if (state.json_dump_epoch != state.conn.reconnect.epoch) return;
   if (ok) {
     state.json_dump_output = std::move(output);
     state.json_dump_error.clear();
@@ -1115,6 +1119,7 @@ static void request_elf_load(AppState &state) {
   state.elf.load_error.clear();
   state.elf.load_op = "Load ELF";
   state.elf.load_start_time = ImGui::GetTime();
+  state.elf.load_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.elf.hijack_accepted = false;
   state.elf.load_result = {};
   state.elf.load_cancel_requested = false;
@@ -1170,6 +1175,7 @@ static void request_elf_hijack(AppState &state) {
   state.elf.load_error.clear();
   state.elf.load_op = "Hijack";
   state.elf.load_start_time = ImGui::GetTime();
+  state.elf.load_epoch = state.conn.reconnect.epoch;  /* captured for stale rejection */
   state.elf.hijack_accepted = false;
   state.elf.load_result = {};
   state.elf.load_cancel_requested = false;
@@ -1227,6 +1233,9 @@ static void poll_elf_load(AppState &state) {
   } catch (...) {
     outcome.error = locale::tr("processes.elf_unknown_error");
   }
+
+  /* Reject stale results from a previous connection epoch. */
+  if (state.elf.load_epoch != state.conn.reconnect.epoch) return;
   const bool ok = outcome.ok;
   if (!outcome.error.empty() && !state.elf.load_cancel_requested)
     state.elf.load_error = std::move(outcome.error);

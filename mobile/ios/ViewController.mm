@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #import "ViewController.h"
+#import "ImGuiIOSKeyboardBridge.h"
 
 #include "imgui.h"
 #include "imgui_impl_metal.h"
@@ -60,6 +61,10 @@
 
   _state = std::make_unique<memdbg::frontend::AppState>();
   memdbg::frontend::init_app_shared(*_state, _dpiScale);
+
+  // Install iOS keyboard bridge so InputText fields can summon the software keyboard
+  ImGuiInstallIOSKeyboardBridge(self.view);
+
   _imguiInitialized = YES;
 }
 
@@ -76,6 +81,9 @@
 
 - (void)drawInMTKView:(MTKView *)view {
   if (!_imguiInitialized) return;
+
+  // Sync iOS software keyboard with ImGui's WantTextInput flag
+  ImGuiUpdateIOSKeyboardBridge();
 
   ImGuiIO &io = ImGui::GetIO();
   io.DisplaySize = ImVec2(view.bounds.size.width, view.bounds.size.height);

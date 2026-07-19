@@ -1,3 +1,6 @@
 [submodule "external/zydis"]
 	path = external/zydis
 	url = https://github.com/zyantific/zydis.git
+[submodule "external/keystone"]
+	path = external/keystone
+	url = https://github.com/keystone-engine/keystone.git

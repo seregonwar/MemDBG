@@ -78,3 +78,5 @@ docs/x_project_article.md
 /mobile/android/captures
 *.tmp
 /build-sandbox-asan
+/research
+vr_toolkit.py

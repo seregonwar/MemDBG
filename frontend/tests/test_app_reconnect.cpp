@@ -124,17 +124,17 @@ static void test_connection_phase_transitions() {
        state.conn.reconnect.phase == ConnectionPhase::Restoring);
 
   state.conn.reconnect.stale = true;
-  state.restore_list_requested = true;
+  state.restore.stage = RestoreStage::Idle;
 
   state.conn.reconnect.phase = ConnectionPhase::Online;
   state.conn.reconnect.stale = false;
-  state.restore_list_requested = false;
+  state.restore.stage = RestoreStage::Idle;
   TEST("phase can transition back to Online after restore",
        state.conn.reconnect.phase == ConnectionPhase::Online);
   TEST("stale cleared after successful restore",
        !state.conn.reconnect.stale);
-  TEST("restore_list_requested cleared",
-       !state.restore_list_requested);
+  TEST("restore stage reset after cycle",
+       state.restore.stage == RestoreStage::Idle);
 
   /* Manual disconnect: any phase → Disconnected */
   state.conn.reconnect.phase = ConnectionPhase::Online;
@@ -502,20 +502,22 @@ static void test_full_reconnect_cycle() {
   TEST("phase 4: phase is Restoring",
        state.conn.reconnect.phase == ConnectionPhase::Restoring);
 
-  /* Phase 5: restore_list_requested flow */
-  state.restore_list_requested = true;
-  TEST("phase 5: restore_list_requested set", state.restore_list_requested);
+  /* Phase 5: restore flow — RestoreStage entries */
+  state.restore.stage = RestoreStage::Idle;
+  TEST("phase 5: restore stage starts at Idle",
+       state.restore.stage == RestoreStage::Idle);
 
   /* Simulate process_list success, rematch, maps refresh */
   state.selected_pid = 1234; // same game, PID unchanged in this simulation
-  state.restore_list_requested = false;
+  state.restore.stage = RestoreStage::Idle;
   state.conn.reconnect.phase = ConnectionPhase::Online;
   state.conn.reconnect.stale = false;
   state.conn.reconnect.attempt = 0;
   TEST("phase 5: Online after restore",
        state.conn.reconnect.phase == ConnectionPhase::Online);
   TEST("phase 5: stale cleared", !state.conn.reconnect.stale);
-  TEST("phase 5: restore_list_requested cleared", !state.restore_list_requested);
+  TEST("phase 5: restore stage reset",
+       state.restore.stage == RestoreStage::Idle);
 
   /* Phase 6: Second disconnect cycle, payload restarted */
   ++state.conn.reconnect.epoch; // epoch 4
@@ -541,18 +543,94 @@ static void test_full_reconnect_cycle() {
   state.saved_daemon_instance_id = new_instance;
   state.conn.reconnect.phase = ConnectionPhase::Restoring;
   ++state.conn.reconnect.epoch; // epoch 5
-  state.restore_list_requested = true;
+  state.restore.stage = RestoreStage::Idle;
 
   /* Simulate restore with target not found (game terminated) */
   state.conn.reconnect.target_identity.name = "old_game.elf";
-  /* No match found — keep stale, notify user */
+  /* No match found — selected_pid stays 0, keep stale */
   state.selected_pid = 0;
-  state.restore_list_requested = false;
+  state.restore.stage = RestoreStage::Idle;
   state.conn.reconnect.phase = ConnectionPhase::Online;
-  state.conn.reconnect.stale = true;  /* still stale — user must reselect */
+  state.conn.reconnect.stale = (state.selected_pid <= 0);  /* remains stale */
   TEST("phase 6: Online but stale when target not found",
        state.conn.reconnect.phase == ConnectionPhase::Online &&
        state.conn.reconnect.stale);
+}
+
+/* ---- Critical regression: reconnect does NOT immediately become Online ---- */
+
+static void test_reconnect_does_not_immediately_become_online() {
+  std::printf("\n--- reconnect does NOT immediately become Online ---\n");
+
+  AppState state;
+
+  /* Simulate a successful reconnect: phase is Reconnecting before
+   * poll_connect() finishes the HELLO exchange. */
+  state.conn.reconnect.phase = ConnectionPhase::Reconnecting;
+  state.conn.reconnect.stale = true;
+  const bool was_reconnect =
+      state.conn.reconnect.phase == ConnectionPhase::Reconnecting;
+
+  /* Recreate the post-connect branch logic exactly. */
+  if (was_reconnect) {
+    state.conn.reconnect.phase = ConnectionPhase::Restoring;
+    ++state.conn.reconnect.epoch;
+    state.conn.reconnect.stale = true;
+  } else {
+    state.conn.reconnect.phase = ConnectionPhase::Online;
+    state.conn.reconnect.stale = false;
+  }
+
+  TEST("reconnect success enters Restoring, NOT Online",
+       state.conn.reconnect.phase == ConnectionPhase::Restoring);
+  TEST("stale remains true during Restoring",
+       state.conn.reconnect.stale);
+  TEST("epoch was bumped after reconnect success",
+       state.conn.reconnect.epoch > 0ULL);
+
+  /* Fresh connect still goes directly to Online. */
+  AppState fresh;
+  fresh.conn.reconnect.phase = ConnectionPhase::Connecting;
+  const bool was_fresh_reconnect =
+      fresh.conn.reconnect.phase == ConnectionPhase::Reconnecting;
+
+  if (was_fresh_reconnect) {
+    fresh.conn.reconnect.phase = ConnectionPhase::Restoring;
+    fresh.conn.reconnect.stale = true;
+  } else {
+    fresh.conn.reconnect.phase = ConnectionPhase::Online;
+    fresh.conn.reconnect.stale = false;
+  }
+
+  TEST("fresh connect enters Online immediately",
+       fresh.conn.reconnect.phase == ConnectionPhase::Online);
+  TEST("fresh connect has stale=false",
+       !fresh.conn.reconnect.stale);
+}
+
+/* ---- Target not found keeps stale=true ---- */
+
+static void test_target_missing_remains_stale() {
+  std::printf("\n--- target missing remains stale ---\n");
+
+  AppState state;
+
+  /* Simulate poll_restore_session after reconnect when
+   * the game process was terminated during rest mode. */
+  state.selected_pid = 0;  /* no match found */
+  state.conn.reconnect.phase = ConnectionPhase::Online;
+  state.conn.reconnect.stale = (state.selected_pid <= 0);
+
+  TEST("stale=true when selected_pid is 0 (no target)",
+       state.conn.reconnect.stale);
+  TEST("remote_ready is false when Online but stale",
+       !remote_ready(state));
+
+  /* When a process IS matched, stale becomes false. */
+  state.selected_pid = 5678;
+  state.conn.reconnect.stale = (state.selected_pid <= 0);
+  TEST("stale=false when selected_pid > 0 (target matched)",
+       !state.conn.reconnect.stale);
 }
 
 /* ---- connect_sequence_pending ---- */
@@ -640,6 +718,8 @@ int main() {
   test_connect_intent_phase_coupling();
   test_trainer_suspension();
   test_full_reconnect_cycle();
+  test_reconnect_does_not_immediately_become_online();
+  test_target_missing_remains_stale();
   test_connect_sequence_pending();
   test_client_async_busy();
 

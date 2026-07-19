@@ -95,4 +95,14 @@ class MemDBGGLSurfaceView @JvmOverloads constructor(
         MemDBGJNI.nativeOnTouch(action, event.x, event.y)
         return true
     }
+
+    /**
+     * Called by MemDBGRenderer after each frame.
+     * Delegates to MainActivity to synchronize soft keyboard visibility
+     * with ImGui's WantTextInput.  Mirrors ImGuiUpdateIOSKeyboardBridge()
+     * on iOS.
+     */
+    fun syncKeyboardState() {
+        (context as? MainActivity)?.syncKeyboardState()
+    }
 }

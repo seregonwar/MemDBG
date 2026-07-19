@@ -21,5 +21,9 @@ object MemDBGJNI {
     @JvmStatic external fun nativeSetSafeArea(left: Float, top: Float, right: Float, bottom: Float)
     @JvmStatic external fun nativeDrawFrame()
     @JvmStatic external fun nativeOnTouch(action: Int, xPx: Float, yPx: Float)
+    @JvmStatic external fun nativePollKeyboard(): Boolean
+    @JvmStatic external fun nativeAddKeyboardChar(codepoint: Char)
+    @JvmStatic external fun nativeSendKeyboardBackspace()
+    @JvmStatic external fun nativeSendKeyboardEnter()
     @JvmStatic external fun nativeOnDestroy()
 }

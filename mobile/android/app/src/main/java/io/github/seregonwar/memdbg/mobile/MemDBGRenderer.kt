@@ -24,5 +24,7 @@ class MemDBGRenderer(private val view: MemDBGGLSurfaceView) : GLSurfaceView.Rend
     override fun onDrawFrame(gl: GL10?) {
         view.applyPendingSafeArea()
         MemDBGJNI.nativeDrawFrame()
+        // Sync soft keyboard visibility with ImGui's WantTextInput
+        view.syncKeyboardState()
     }
 }

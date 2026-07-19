@@ -305,6 +305,7 @@ struct ElfState {
   };
   bool load_pending = false;
   std::future<Outcome> load_future;
+  uint64_t load_epoch = 0;  /* captured at request time; stale if != conn.reconnect.epoch */
   std::shared_ptr<Client> load_client;
   bool load_cancel_requested = false;
   std::string load_op;          /* "Load ELF" or "Hijack" */
@@ -322,6 +323,7 @@ struct TracerState {
   bool detach_pending = false;
   bool detach_requested = false;
   std::future<bool> future;
+  uint64_t epoch = 0;  /* captured at request time; stale if != conn.reconnect.epoch */
   std::string error;
   std::string temp_error;
   bool status_pending = false;
@@ -544,6 +546,41 @@ struct TargetIdentity {
   void clear() { *this = TargetIdentity{}; }
 };
 
+/* ---- Async session restore after reconnect (rest mode resilience) ---- */
+
+enum class RestoreStage {
+  Idle,                /* waiting for Restoring phase */
+  RefreshingProcesses, /* async process_list in flight */
+  MatchingTarget,      /* rematching TargetIdentity against new PIDs */
+  RefreshingMaps,      /* async maps refresh in flight */
+  VerifyingTarget,     /* module name + offset sanity check */
+  Complete,            /* restore succeeded, transition to Online */
+  Failed,              /* restore failed, stay Online but stale */
+};
+
+struct RestoreState {
+  RestoreStage stage{RestoreStage::Idle};
+
+  /* --- process list fetch --- */
+  std::future<bool> process_future;
+  std::vector<ProcessEntry> temp_processes;
+  std::string process_error;
+  uint64_t process_epoch = 0;  /* reject stale results */
+
+  /* --- maps ---
+   * Maps are stored in AppState::maps and delivered by the existing
+   * poll_map_refresh() helper.  We track completion via the
+   * map_refresh_pending flag on AppState. */
+  bool map_triggered = false;  /* true after request_maps_refresh_async() */
+
+  /* --- matching results --- */
+  int matched_row = -1;
+  int32_t matched_pid = 0;
+
+  /* --- general error --- */
+  std::string error;
+};
+
 /* ---- Connection state ----
  * Extracted from the monolithic AppState to reduce God Object risk
  * (external audit recommendation). */
@@ -715,6 +752,7 @@ struct AppState {
   bool json_dump_include_preview = true;
   std::string json_dump_output;
   bool json_dump_pending = false;
+  uint64_t json_dump_epoch = 0;        /* captured at request time; stale if != conn.reconnect.epoch */
   std::future<std::tuple<bool, std::string, std::string>> json_dump_future;
   std::shared_ptr<Client> json_dump_client;
   bool json_dump_cancel_requested = false;
@@ -742,6 +780,7 @@ struct AppState {
   bool structure_compare_show_all = false;
   bool structure_compare_has_enemy_b = false;
   bool structure_compare_pending = false;
+  uint64_t structure_compare_epoch = 0;  /* captured at request time; stale if != conn.reconnect.epoch */
   double structure_compare_start_time = 0.0;
   std::future<bool> structure_compare_future;
   std::mutex structure_compare_mtx;
@@ -839,9 +878,9 @@ struct AppState {
   bool sandbox_native_modules = false;
   char sandbox_require_whitelist[512] = "";  // comma-separated module names
 
-  /* Restore-session tracker: set true after polling process list during
-   * the Restoring phase, cleared when phase leaves Restoring. */
-  bool restore_list_requested = false;
+  /* Restore-session state machine: drives the async Restoring phase
+   * after reconnect (rest mode resilience).  See RestoreState above. */
+  RestoreState restore;
 
   /* ---- KLOG state (see KlogState above) ---- */
   KlogState klog;
