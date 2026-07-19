@@ -345,6 +345,38 @@ struct TracerState {
   double crash_notification_time = 0.0;
 };
 
+/* ---- Task Manager state ----
+ * Extracted from the monolithic AppState to reduce God Object risk
+ * (external audit recommendation, ~2026-07). */
+struct TaskMgrState {
+  bool prefetch_on_connect = false;
+  int selected_row = -1;
+  int32_t selected_pid = 0;
+  bool detail_open = false;
+  ProcessMapSummary map_summary;
+  ProcessInfo process_info;
+  bool has_process_info = false;
+  double next_telemetry = 0.0;
+  std::unordered_map<int32_t, TaskProcessResource> resources;
+  std::unordered_map<std::string, TaskFmemSample> fmem_by_name;
+  uint64_t last_log_received = 0;
+  bool resource_pending = false;
+  std::future<bool> resource_future;
+  int32_t resource_pid = 0;
+  TaskProcessResource resource_temp;
+  std::string resource_error;
+  double next_resource_fetch = 0.0;
+  /* Batch process_info temporary storage filled by async worker, merged
+   * into resources by poll_resource_fetch on the UI thread. */
+  std::vector<ProcessInfo> batch_temp_infos;
+  std::vector<int32_t> batch_temp_failed_pids;
+  bool prefetch_pending = false;
+  std::future<bool> prefetch_future;
+  std::vector<ProcessEntry> prefetch_processes;
+  std::unordered_map<int32_t, TaskProcessResource> prefetch_resources;
+  std::string prefetch_error;
+};
+
 struct AppState {
   ClientPool pool;
   /* Backward-compatible reference: state.client.xxx() routes to pool.control().
@@ -355,7 +387,6 @@ struct AppState {
   ActionJournal action_journal;
   CrashLogger crash_logger;
   bool crash_logging_enabled = true;
-  bool taskmgr_prefetch_on_connect = false;
   uint64_t crash_udp_last_received = 0;
   bool crash_detected_on_startup = false;
   bool crash_report_dialog_open = false;
@@ -617,32 +648,8 @@ struct AppState {
   std::vector<AutoSearchCandidate> auto_search_candidates;  /* top scored results */
   std::vector<AutoSearchCandidate> auto_search_temp_candidates;  /* async temp */
 
-  /* ---- Task Manager ---- */
-  int taskmgr_selected_row = -1;
-  int32_t taskmgr_selected_pid = 0;
-  bool taskmgr_detail_open = false;
-  ProcessMapSummary taskmgr_map_summary;
-  ProcessInfo taskmgr_process_info;
-  bool taskmgr_has_process_info = false;
-  double taskmgr_next_telemetry = 0.0;
-  std::unordered_map<int32_t, TaskProcessResource> taskmgr_resources;
-  std::unordered_map<std::string, TaskFmemSample> taskmgr_fmem_by_name;
-  uint64_t taskmgr_last_log_received = 0;
-  bool taskmgr_resource_pending = false;
-  std::future<bool> taskmgr_resource_future;
-  int32_t taskmgr_resource_pid = 0;
-  TaskProcessResource taskmgr_resource_temp;
-  std::string taskmgr_resource_error;
-  double taskmgr_next_resource_fetch = 0.0;
-  /* Batch process_info temporary storage â€” filled by async worker, merged
-   * into taskmgr_resources by poll_resource_fetch on the UI thread. */
-  std::vector<ProcessInfo> taskmgr_batch_temp_infos;
-  std::vector<int32_t> taskmgr_batch_temp_failed_pids;
-  bool taskmgr_prefetch_pending = false;
-  std::future<bool> taskmgr_prefetch_future;
-  std::vector<ProcessEntry> taskmgr_prefetch_processes;
-  std::unordered_map<int32_t, TaskProcessResource> taskmgr_prefetch_resources;
-  std::string taskmgr_prefetch_error;
+  /* ---- Task Manager state (see TaskMgrState above) ---- */
+  TaskMgrState taskmgr;
 
   /* ---- Notifications ---- */
   static constexpr size_t kMaxNotifications = 8;
@@ -1058,7 +1065,7 @@ inline bool client_async_busy(const AppState &state) {
          state.tracer.events_pending ||
           state.elf.load_pending || state.json_dump_pending ||
          state.map_dump_pending ||
-         state.taskmgr_resource_pending || state.taskmgr_prefetch_pending ||
+         state.taskmgr.resource_pending || state.taskmgr.prefetch_pending ||
          state.plugin_refresh_pending || state.plugin_run_pending ||
          state.plugin_gui_starting;
 }
