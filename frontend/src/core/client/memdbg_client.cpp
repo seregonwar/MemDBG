@@ -19,6 +19,10 @@
 #include <limits>
 #include <sstream>
 
+#if !defined(_WIN32)
+#include <netinet/tcp.h>
+#endif
+
 extern "C" {
 int lz4_decompress_safe(const char *src, char *dst, int compressed_size, int dst_capacity);
 }
@@ -64,6 +68,29 @@ static bool maybe_decompress(const std::vector<uint8_t> &response,
 namespace memdbg::frontend {
 
 namespace {
+
+/* Enable TCP keepalive with aggressive timing for fast dead-peer detection.
+ * OS defaults are typically 2+ hours; we tune to 30s idle / 10s interval /
+ * 3 probes so a genuinely dead peer (rest mode, kernel panic) is detected
+ * within ~60 seconds.  Complements the application-level heartbeat. */
+static void socket_set_keepalive(platform::socket_handle_t fd) {
+  int keepalive = 1;
+  (void)::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive,
+                     sizeof(keepalive));
+#if !defined(_WIN32)
+#if defined(TCP_KEEPIDLE)  /* Linux */
+  int idle = 30;
+  int intvl = 10;
+  int cnt = 3;
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+#elif defined(TCP_KEEPALIVE)  /* macOS / FreeBSD / PS4 / PS5 */
+  int idle = 30;
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+#endif
+#endif
+}
 
 constexpr size_t kLegacyThreadEntryV1Size = sizeof(int32_t) + 24U;
 constexpr size_t kLegacyThreadEntryV2Size = sizeof(int32_t) + sizeof(uint32_t) + 24U;
@@ -308,6 +335,7 @@ bool Client::connect_to(const std::string &host, uint16_t port,
   (void)platform::socket_set_send_timeout(fd, socket_timeout_ms_);
   (void)platform::socket_set_nodelay(fd);
   (void)platform::socket_set_nosigpipe(fd);
+  socket_set_keepalive(fd);
 
   clear_error();
   return true;
@@ -403,7 +431,10 @@ void Client::take_fd(platform::socket_handle_t fd) {
   cancel_requested_.store(false);
   compressed_maps_support_.store(-1);
   fd_.store(fd);
-  if (platform::socket_valid(fd)) (void)platform::socket_set_nodelay(fd);
+  if (platform::socket_valid(fd)) {
+    (void)platform::socket_set_nodelay(fd);
+    socket_set_keepalive(fd);
+  }
   clear_error();
 }
 
@@ -1303,6 +1334,7 @@ bool Client::klog_connect(const std::string &host, uint16_t &klog_port) {
 
   (void)platform::socket_set_recv_timeout(klog_fd_, 100U); /* 100ms for background thread */
   (void)platform::socket_set_nosigpipe(klog_fd_);
+  socket_set_keepalive(klog_fd_);
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
