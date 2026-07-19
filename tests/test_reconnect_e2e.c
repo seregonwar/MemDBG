@@ -278,13 +278,14 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int fd = tcp_connect();
+  /* Daemon binds asynchronously — use retry loop (same as reconnect tests).
+   * Single-shot tcp_connect() is unreliable in CI under load. */
+  int fd = tcp_connect_retry(CONNECT_RETRY_MS);
   if (fd < 0) {
     printf("FAIL: initial connect\n");
     kill_daemon();
     return 1;
   }
-  printf("  connected\n");
 
   uint64_t instance_id_1 = 0;
   if (test_hello_instance_id(fd, &instance_id_1) != 0) failures++;
