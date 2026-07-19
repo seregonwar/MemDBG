@@ -1555,6 +1555,29 @@ _Static_assert(MEMDBG_SCAN_JOB_RUNNING == 1U, "scan job running state changed");
 _Static_assert(MEMDBG_SCAN_JOB_COMPLETED == 2U, "scan job completed state changed");
 _Static_assert(MEMDBG_SCAN_JOB_CANCELLED == 3U, "scan job cancelled state changed");
 _Static_assert(MEMDBG_SCAN_JOB_FAILED == 4U, "scan job failed state changed");
+#endif /* #if defined(__cplusplus) */
+
+#if !defined(__cplusplus)
+/* C11 wire-format assertions — parallel to the C++ static_assert block above.
+   Ensures the wire layout is verified during C daemon/payload builds too. */
+_Static_assert(sizeof(memdbg_packet_header_t) == 16U, "packet header wire size changed (C)");
+_Static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire size changed (C)");
+_Static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed (C)");
+_Static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed (C)");
+_Static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed (C)");
+_Static_assert(sizeof(memdbg_process_info_response_t) == 260U, "process info response wire size changed (C)");
+_Static_assert(sizeof(memdbg_map_entry_t) == 88U, "map entry wire size changed (C)");
+_Static_assert(sizeof(memdbg_memory_request_t) == 16U, "memory request wire size changed (C)");
+_Static_assert(sizeof(memdbg_debug_regs_t) == 176U, "debug regs wire size changed (C)");
+_Static_assert(sizeof(memdbg_debug_dbregs_t) == 128U, "debug dbregs wire size changed (C)");
+_Static_assert(sizeof(memdbg_debug_thread_entry_t) == 100U, "debug thread entry wire size changed");
+_Static_assert(sizeof(memdbg_debug_fpregs_t) == 1032U, "debug fpregs wire size changed");
+_Static_assert(sizeof(memdbg_batch_process_info_response_t) == 8U, "batch process info response wire size changed");
+_Static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire size changed");
+_Static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
+_Static_assert(sizeof(memdbg_extended_caps_response_t) == 4U, "extended caps response prefix wire size changed");
+_Static_assert(MEMDBG_HELLO_V1_SIZE == 44U, "HELLO V1 size changed");
+_Static_assert(MEMDBG_HELLO_V2_SIZE == 64U, "HELLO V2 size changed");
 #endif
 
 #if defined(_MSC_VER)
