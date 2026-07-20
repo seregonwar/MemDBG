@@ -75,6 +75,11 @@ uint64_t monotonic_seconds(void);
 memdbg_status_t memdbg_legacy_start(const memdbg_config_t *cfg);
 void            memdbg_legacy_stop(void);
 
+/* ---- Privilege / auth checks (defined in features.c) ---- */
+
+/* Returns non-zero if the payload has been jailbroken (authenticated). */
+extern int memdbg_is_privileged(void);
+
 /* ---- Shared globals (defined in memdbg.c) ---- */
 
 extern atomic_uint g_active_connections;

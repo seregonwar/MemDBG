@@ -132,20 +132,46 @@ memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
                                 size_t length, size_t *read_out) {
   if (read_out != NULL) *read_out = 0U;
 
+  /* First attempt: cached fd. */
   int fd = fd_cache_get(pid);
   if (fd < 0)
     return errno == EACCES ? MEMDBG_ERR_PERMISSION : MEMDBG_ERR_IO;
   ssize_t n = pal_file_pread_all(fd, buffer, length, (off_t)address);
-  if (n < 0) {
-    int saved = errno;
-    /* Invalidate cache entry on persistent error. */
-    if (saved != EINTR && saved != EAGAIN)
-      pal_memory_fd_cache_flush(pid);
-    errno = saved;
-    return saved == EACCES ? MEMDBG_ERR_PERMISSION : MEMDBG_ERR_IO;
+  if (n >= 0) {
+    if (read_out != NULL) *read_out = (size_t)n;
+    return MEMDBG_OK;
   }
-  if (read_out != NULL) *read_out = (size_t)n;
-  return MEMDBG_OK;
+
+  int saved = errno;
+
+  /* If the cached fd was closed by a concurrent flush (TOCTOU race),
+   * invalidate the stale cache entry, open a fresh fd outside the
+   * cache, and retry exactly once.  All other errors are terminal. */
+  if (saved == EBADF) {
+    pal_memory_fd_cache_flush(pid);
+    char path[64];
+    if (snprintf(path, sizeof(path), "/proc/%d/mem", pid) >= 0) {
+      fd = pal_file_open(path, O_RDONLY, 0);
+      if (fd >= 0) {
+        n = pal_file_pread_all(fd, buffer, length, (off_t)address);
+        if (n >= 0) {
+          (void)pal_file_close(fd);
+          if (read_out != NULL) *read_out = (size_t)n;
+          return MEMDBG_OK;
+        }
+        saved = errno;
+        (void)pal_file_close(fd);
+      }
+    }
+  } else if (saved != EINTR && saved != EAGAIN) {
+    /* Non-retryable error (e.g. EACCES, EIO): invalidate cache entry so
+     * the next call reopens /proc/pid/mem rather than reusing the stale
+     * fd.  EINTR / EAGAIN are transient and the cached fd remains valid. */
+    pal_memory_fd_cache_flush(pid);
+  }
+
+  errno = saved;
+  return saved == EACCES ? MEMDBG_ERR_PERMISSION : MEMDBG_ERR_IO;
 }
 
 memdbg_status_t pal_memory_write(int pid, uint64_t address,
@@ -207,7 +233,22 @@ size_t pal_memory_batch_item(pal_memory_batch_t *batch, uint64_t address,
                              void *buffer, size_t length) {
   if (batch == NULL || batch->fd < 0 || buffer == NULL || length == 0U) return 0U;
   ssize_t n = pal_file_pread_all(batch->fd, buffer, length, (off_t)address);
-  return n > 0 ? (size_t)n : 0U;
+  if (n > 0) return (size_t)n;
+
+  /* If the cached fd was closed by a concurrent flush (TOCTOU race),
+   * fall back to a direct open + pread for this item. */
+  if (n < 0 && errno == EBADF && batch->cached_fd && batch->pid > 0) {
+    char path[64];
+    if (snprintf(path, sizeof(path), "/proc/%d/mem", batch->pid) >= 0) {
+      int fd = pal_file_open(path, O_RDONLY, 0);
+      if (fd >= 0) {
+        ssize_t m = pal_file_pread_all(fd, buffer, length, (off_t)address);
+        (void)pal_file_close(fd);
+        if (m > 0) return (size_t)m;
+      }
+    }
+  }
+  return 0U;
 }
 
 void pal_memory_batch_end(pal_memory_batch_t *batch) {

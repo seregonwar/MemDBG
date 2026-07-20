@@ -105,7 +105,7 @@ static void fuzz_run(memdbg::sandbox::SandboxEngine &engine,
   // Check for policy escapes (dangerous patterns should be blocked)
   std::string lower_err = r.error;
   std::transform(lower_err.begin(), lower_err.end(), lower_err.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+                 [](unsigned char c) -> char { return static_cast<char>(std::tolower(c)); });
 
   // Only count true escapes (kPolicy violations that shouldn't happen, or kInternal)
   if (r.exit_reason == memdbg::sandbox::SandboxExitReason::kInternal) {

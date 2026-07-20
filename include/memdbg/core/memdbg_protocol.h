@@ -1246,32 +1246,338 @@ typedef struct MEMDBG_PACKED memdbg_process_dump_request {
    }
  */
 
+/* ---- Wire-format size assertions ----
+ *
+ * Every fixed-size packed structure that crosses the wire must be guarded by
+ * a static_assert so that an inadvertent layout change (e.g. reordered
+ * fields, added padding, different pointer width) is caught at compile time.
+ *
+ * Tables marked "request" or "response" are fixed-size prefixes; the actual
+ * body may be followed by a variable-length payload (ELF data, scan results,
+ * inline strings, etc.) whose bounds are checked dynamically.
+ */
+
 #if defined(__cplusplus)
-static_assert(sizeof(memdbg_packet_header_t) == 16U,
-              "memdbg packet header wire size changed");
-static_assert(sizeof(memdbg_hello_request_t) == 16U,
-              "hello request wire size changed");
-static_assert(sizeof(memdbg_scan_exact_request_t) == 52U,
-              "exact scan request wire size changed");
-static_assert(sizeof(memdbg_scan_process_exact_request_t) == 56U,
-              "legacy process scan request wire size changed");
-static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U,
-              "unknown scan request wire size changed");
-static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U,
-              "unknown scan request wire offsets changed");
+/* Wire framing */
+static_assert(sizeof(memdbg_packet_header_t) == 16U, "packet header wire size changed");
+static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire size changed");
+
+/* Session / discovery */
+static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed");
+static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed");
+static_assert(sizeof(memdbg_discovery_ping_t) == 8U, "discovery ping wire size changed");
+static_assert(sizeof(memdbg_discovery_response_t) == 48U, "discovery response wire size changed");
+
+/* Process */
+static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed");
+static_assert(sizeof(memdbg_process_maps_request_t) == 4U, "process maps request wire size changed");
+static_assert(sizeof(memdbg_process_info_request_t) == 4U, "process info request wire size changed");
+static_assert(sizeof(memdbg_process_info_response_t) == 260U, "process info response wire size changed");
+static_assert(sizeof(memdbg_foreground_app_response_t) == 148U, "foreground app response wire size changed");
+
+/* Memory maps */
+static_assert(sizeof(memdbg_map_entry_t) == 88U, "map entry wire size changed");
+
+/* Memory R/W */
+static_assert(sizeof(memdbg_memory_request_t) == 16U, "memory request wire size changed");
+
+/* Scan requests (variable-length values follow the fixed portion) */
+static_assert(sizeof(memdbg_scan_exact_request_t) == 52U, "exact scan request wire size changed");
+static_assert(sizeof(memdbg_scan_process_exact_request_t) == 56U, "legacy process scan request wire size changed");
+static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U, "unknown scan request wire size changed");
+static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U, "unknown scan request wire offsets changed");
+static_assert(sizeof(memdbg_scan_response_prefix_t) == 40U, "scan response prefix wire size changed");
+static_assert(sizeof(memdbg_scan_aob_request_t) == 32U, "AOB scan request wire size changed");
+static_assert(sizeof(memdbg_scan_process_aob_request_t) == 40U, "process AOB scan request wire size changed");
+static_assert(sizeof(memdbg_scan_aob_response_prefix_t) == 32U, "AOB scan response prefix wire size changed");
+static_assert(sizeof(memdbg_scan_pointer_request_t) == 44U, "pointer scan request wire size changed");
+static_assert(sizeof(memdbg_pointer_chain_entry_t) == 16U, "pointer chain entry wire size changed");
+static_assert(sizeof(memdbg_scan_process_exact_tracked_request_t) == 64U, "tracked scan request wire size changed");
+static_assert(sizeof(memdbg_scan_job_request_t) == 8U, "scan job request wire size changed");
+static_assert(sizeof(memdbg_scan_job_status_response_t) == 56U, "scan job status response wire size changed");
+static_assert(sizeof(memdbg_scan_result_entry_t) == 8U, "scan result entry wire size changed");
+
+/* Process control */
+static_assert(sizeof(memdbg_process_control_request_t) == 8U, "process control request wire size changed");
+static_assert(sizeof(memdbg_process_protect_request_t) == 24U, "process protect request wire size changed");
+static_assert(sizeof(memdbg_process_protect_response_t) == 8U, "process protect response wire size changed");
+static_assert(sizeof(memdbg_process_alloc_request_t) == 32U, "process alloc request wire size changed");
+static_assert(sizeof(memdbg_process_alloc_response_t) == 16U, "process alloc response wire size changed");
+static_assert(sizeof(memdbg_process_free_request_t) == 24U, "process free request wire size changed");
+static_assert(sizeof(memdbg_process_call_request_t) == 64U, "process call request wire size changed");
+static_assert(sizeof(memdbg_process_call_response_t) == 8U, "process call response wire size changed");
+static_assert(sizeof(memdbg_process_elf_load_request_t) == 64U, "ELF load request wire size changed");
+static_assert(sizeof(memdbg_process_elf_load_response_t) == 16U, "ELF load response wire size changed");
+static_assert(sizeof(memdbg_process_stack_request_t) == 40U, "stack walk request wire size changed");
+static_assert(sizeof(memdbg_process_stack_response_prefix_t) == 16U, "stack response prefix wire size changed");
+static_assert(sizeof(memdbg_process_stack_frame_t) == 56U, "stack frame entry wire size changed");
+static_assert(sizeof(memdbg_process_dump_request_t) == 8U, "process dump request wire size changed");
+
+/* Hijack */
+static_assert(sizeof(memdbg_process_hijack_request_t) == 64U, "hijack request wire size changed");
+static_assert(sizeof(memdbg_process_hijack_response_t) == 8U, "hijack response wire size changed");
+
+/* Kernel */
+static_assert(sizeof(memdbg_kernel_base_response_t) == 16U, "kernel base response wire size changed");
+static_assert(sizeof(memdbg_kernel_memory_request_t) == 16U, "kernel memory request wire size changed");
+
+/* Console */
+static_assert(sizeof(memdbg_console_text_request_t) == 8U, "console text request wire size changed");
+
+/* Batch I/O */
+static_assert(sizeof(memdbg_batch_process_info_request_t) == 8U, "batch process info request wire size changed");
+static_assert(sizeof(memdbg_batch_read_item_t) == 16U, "batch read item wire size changed");
+static_assert(sizeof(memdbg_batch_read_request_t) == 12U, "batch read request wire size changed");
+static_assert(sizeof(memdbg_batch_read_result_entry_t) == 16U, "batch read result entry wire size changed");
+static_assert(sizeof(memdbg_batch_write_item_t) == 16U, "batch write item wire size changed");
+static_assert(sizeof(memdbg_batch_write_request_t) == 12U, "batch write request wire size changed");
+static_assert(sizeof(memdbg_batch_write_result_entry_t) == 16U, "batch write result entry wire size changed");
+static_assert(sizeof(memdbg_batch_write_adv_request_t) == 16U, "batch write adv request wire size changed");
+
+/* Telemetry */
+static_assert(sizeof(memdbg_telemetry_response_t) == 60U, "telemetry response wire size changed");
+
+/* Debugger */
+static_assert(sizeof(memdbg_thread_stop_info_t) == 48U, "thread stop info wire size changed");
+static_assert(sizeof(memdbg_debug_attach_request_t) == 8U, "debug attach request wire size changed");
+static_assert(sizeof(memdbg_debug_thread_request_t) == 8U, "debug thread request wire size changed");
+static_assert(sizeof(memdbg_debug_threads_response_prefix_t) == 8U, "debug threads response prefix wire size changed");
+static_assert(sizeof(memdbg_debug_regs_t) == 176U, "debug regs wire size changed");
+static_assert(sizeof(memdbg_debug_dbregs_t) == 128U, "debug dbregs wire size changed");
+static_assert(sizeof(memdbg_debug_fsgsbase_t) == 16U, "debug fsgsbase wire size changed");
+static_assert(sizeof(memdbg_debug_breakpoint_request_t) == 16U, "debug breakpoint request wire size changed");
+static_assert(sizeof(memdbg_debug_breakpoint_cond_request_t) == 32U, "debug breakpoint cond request wire size changed");
+static_assert(sizeof(memdbg_debug_watchpoint_request_t) == 16U, "debug watchpoint request wire size changed");
+static_assert(sizeof(memdbg_debug_poll_response_t) == 8U, "debug poll response wire size changed");
+static_assert(sizeof(memdbg_debug_breakpoint_list_entry_t) == 32U, "debug breakpoint list entry wire size changed");
+static_assert(sizeof(memdbg_debug_breakpoint_list_prefix_t) == 8U, "debug breakpoint list prefix wire size changed");
+static_assert(sizeof(memdbg_debug_watchpoint_list_entry_t) == 24U, "debug watchpoint list entry wire size changed");
+static_assert(sizeof(memdbg_debug_watchpoint_list_prefix_t) == 8U, "debug watchpoint list prefix wire size changed");
+static_assert(sizeof(memdbg_debug_clear_all_response_t) == 8U, "debug clear-all response wire size changed");
+
+/* Tracer */
+static_assert(sizeof(memdbg_tracer_attach_request_t) == 4U, "tracer attach request wire size changed");
+static_assert(sizeof(memdbg_tracer_event_t) == 88U, "tracer event wire size changed");
+static_assert(sizeof(memdbg_tracer_poll_response_prefix_t) == 8U, "tracer poll response prefix wire size changed");
+static_assert(sizeof(memdbg_tracer_status_response_t) == 288U, "tracer status response wire size changed");
+
+/* Klog */
+static_assert(sizeof(memdbg_klog_connect_request_t) == 4U, "klog connect request wire size changed");
+
+/* Assembler / disassembler */
+static_assert(sizeof(memdbg_asm_encode_request_t) == 16U, "asm encode request wire size changed");
+static_assert(sizeof(memdbg_asm_encode_ok_t) == 8U, "asm encode ok wire size changed");
+static_assert(sizeof(memdbg_asm_encode_err_t) == 8U, "asm encode err wire size changed");
+static_assert(sizeof(memdbg_disasm_request_t) == 24U, "disasm request wire size changed");
+static_assert(sizeof(memdbg_disasm_entry_t) == 32U, "disasm entry wire size changed");
+static_assert(sizeof(memdbg_xrefs_to_request_t) == 32U, "xrefs to request wire size changed");
+
+/* Quickscan */
+static_assert(sizeof(memdbg_quickscan_caps_response_t) == 16U, "quickscan caps response wire size changed");
+static_assert(sizeof(memdbg_quickscan_start_request_t) == 40U, "quickscan start request wire size changed");
+static_assert(sizeof(memdbg_quickscan_fetch_request_t) == 12U, "quickscan fetch request wire size changed");
+static_assert(sizeof(memdbg_quickscan_config_request_t) == 8U, "quickscan config request wire size changed");
+static_assert(sizeof(memdbg_quickscan_regions_request_t) == 16U, "quickscan regions request wire size changed");
+static_assert(sizeof(memdbg_quickscan_region_info_t) == 32U, "quickscan region info wire size changed");
+static_assert(sizeof(memdbg_quickscan_resident_header_t) == 12U, "quickscan resident header wire size changed");
+static_assert(sizeof(memdbg_quickscan_snapshot_summary_t) == 12U, "quickscan snapshot summary wire size changed");
+static_assert(sizeof(memdbg_quickscan_snapshot_plan_t) == 16U, "quickscan snapshot plan wire size changed");
+static_assert(sizeof(memdbg_quickscan_segment_t) == 16U, "quickscan segment wire size changed");
+
+/* PTWalk */
+static_assert(sizeof(memdbg_ptwalk_discover_response_t) == 20U, "ptwalk discover response wire size changed");
+static_assert(sizeof(memdbg_ptwalk_augment_request_t) == 8U, "ptwalk augment request wire size changed");
+static_assert(sizeof(memdbg_ptwalk_io_request_t) == 24U, "ptwalk IO request wire size changed");
+static_assert(sizeof(memdbg_ptwalk_probe_request_t) == 16U, "ptwalk probe request wire size changed");
+static_assert(sizeof(memdbg_ptwalk_probe_response_t) == 32U, "ptwalk probe response wire size changed");
+
+/* Extended capabilities */
+static_assert(sizeof(memdbg_extended_caps_response_t) == 4U, "extended caps response wire size changed");
+
+/* Auth */
+static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire size changed");
+
+/* Arena */
+static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
+
+/* Scan job state enum validity */
+static_assert(MEMDBG_SCAN_JOB_PENDING == 0U, "scan job pending state changed");
+static_assert(MEMDBG_SCAN_JOB_RUNNING == 1U, "scan job running state changed");
+static_assert(MEMDBG_SCAN_JOB_COMPLETED == 2U, "scan job completed state changed");
+static_assert(MEMDBG_SCAN_JOB_CANCELLED == 3U, "scan job cancelled state changed");
+static_assert(MEMDBG_SCAN_JOB_FAILED == 4U, "scan job failed state changed");
 #elif !defined(_MSC_VER)
-_Static_assert(sizeof(memdbg_packet_header_t) == 16U,
-               "memdbg packet header wire size changed");
-_Static_assert(sizeof(memdbg_hello_request_t) == 16U,
-               "hello request wire size changed");
-_Static_assert(sizeof(memdbg_scan_exact_request_t) == 52U,
-               "exact scan request wire size changed");
-_Static_assert(sizeof(memdbg_scan_process_exact_request_t) == 56U,
-               "legacy process scan request wire size changed");
-_Static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U,
-               "unknown scan request wire size changed");
-_Static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U,
-               "unknown scan request wire offsets changed");
+/* Wire framing */
+_Static_assert(sizeof(memdbg_packet_header_t) == 16U, "packet header wire size changed");
+_Static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire size changed");
+
+/* Session / discovery */
+_Static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed");
+_Static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed");
+_Static_assert(sizeof(memdbg_discovery_ping_t) == 8U, "discovery ping wire size changed");
+_Static_assert(sizeof(memdbg_discovery_response_t) == 48U, "discovery response wire size changed");
+
+/* Process */
+_Static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed");
+_Static_assert(sizeof(memdbg_process_maps_request_t) == 4U, "process maps request wire size changed");
+_Static_assert(sizeof(memdbg_process_info_request_t) == 4U, "process info request wire size changed");
+_Static_assert(sizeof(memdbg_process_info_response_t) == 260U, "process info response wire size changed");
+_Static_assert(sizeof(memdbg_foreground_app_response_t) == 148U, "foreground app response wire size changed");
+
+/* Memory maps */
+_Static_assert(sizeof(memdbg_map_entry_t) == 88U, "map entry wire size changed");
+
+/* Memory R/W */
+_Static_assert(sizeof(memdbg_memory_request_t) == 16U, "memory request wire size changed");
+
+/* Scan requests (variable-length values follow the fixed portion) */
+_Static_assert(sizeof(memdbg_scan_exact_request_t) == 52U, "exact scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_process_exact_request_t) == 56U, "legacy process scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_unknown_request_t) == 64U, "unknown scan request wire size changed");
+_Static_assert(offsetof(memdbg_scan_unknown_request_t, max_bytes) == 56U, "unknown scan request wire offsets changed");
+_Static_assert(sizeof(memdbg_scan_response_prefix_t) == 40U, "scan response prefix wire size changed");
+_Static_assert(sizeof(memdbg_scan_aob_request_t) == 32U, "AOB scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_process_aob_request_t) == 40U, "process AOB scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_aob_response_prefix_t) == 32U, "AOB scan response prefix wire size changed");
+_Static_assert(sizeof(memdbg_scan_pointer_request_t) == 44U, "pointer scan request wire size changed");
+_Static_assert(sizeof(memdbg_pointer_chain_entry_t) == 16U, "pointer chain entry wire size changed");
+_Static_assert(sizeof(memdbg_scan_process_exact_tracked_request_t) == 64U, "tracked scan request wire size changed");
+_Static_assert(sizeof(memdbg_scan_job_request_t) == 8U, "scan job request wire size changed");
+_Static_assert(sizeof(memdbg_scan_job_status_response_t) == 56U, "scan job status response wire size changed");
+_Static_assert(sizeof(memdbg_scan_result_entry_t) == 8U, "scan result entry wire size changed");
+
+/* Process control */
+_Static_assert(sizeof(memdbg_process_control_request_t) == 8U, "process control request wire size changed");
+_Static_assert(sizeof(memdbg_process_protect_request_t) == 24U, "process protect request wire size changed");
+_Static_assert(sizeof(memdbg_process_protect_response_t) == 8U, "process protect response wire size changed");
+_Static_assert(sizeof(memdbg_process_alloc_request_t) == 32U, "process alloc request wire size changed");
+_Static_assert(sizeof(memdbg_process_alloc_response_t) == 16U, "process alloc response wire size changed");
+_Static_assert(sizeof(memdbg_process_free_request_t) == 24U, "process free request wire size changed");
+_Static_assert(sizeof(memdbg_process_call_request_t) == 64U, "process call request wire size changed");
+_Static_assert(sizeof(memdbg_process_call_response_t) == 8U, "process call response wire size changed");
+_Static_assert(sizeof(memdbg_process_elf_load_request_t) == 64U, "ELF load request wire size changed");
+_Static_assert(sizeof(memdbg_process_elf_load_response_t) == 16U, "ELF load response wire size changed");
+_Static_assert(sizeof(memdbg_process_stack_request_t) == 40U, "stack walk request wire size changed");
+_Static_assert(sizeof(memdbg_process_stack_response_prefix_t) == 16U, "stack response prefix wire size changed");
+_Static_assert(sizeof(memdbg_process_stack_frame_t) == 56U, "stack frame entry wire size changed");
+_Static_assert(sizeof(memdbg_process_dump_request_t) == 8U, "process dump request wire size changed");
+
+/* Hijack */
+_Static_assert(sizeof(memdbg_process_hijack_request_t) == 64U, "hijack request wire size changed");
+_Static_assert(sizeof(memdbg_process_hijack_response_t) == 8U, "hijack response wire size changed");
+
+/* Kernel */
+_Static_assert(sizeof(memdbg_kernel_base_response_t) == 16U, "kernel base response wire size changed");
+_Static_assert(sizeof(memdbg_kernel_memory_request_t) == 16U, "kernel memory request wire size changed");
+
+/* Console */
+_Static_assert(sizeof(memdbg_console_text_request_t) == 8U, "console text request wire size changed");
+
+/* Batch I/O */
+_Static_assert(sizeof(memdbg_batch_process_info_request_t) == 8U, "batch process info request wire size changed");
+_Static_assert(sizeof(memdbg_batch_read_item_t) == 16U, "batch read item wire size changed");
+_Static_assert(sizeof(memdbg_batch_read_request_t) == 12U, "batch read request wire size changed");
+_Static_assert(sizeof(memdbg_batch_read_result_entry_t) == 16U, "batch read result entry wire size changed");
+_Static_assert(sizeof(memdbg_batch_write_item_t) == 16U, "batch write item wire size changed");
+_Static_assert(sizeof(memdbg_batch_write_request_t) == 12U, "batch write request wire size changed");
+_Static_assert(sizeof(memdbg_batch_write_result_entry_t) == 16U, "batch write result entry wire size changed");
+_Static_assert(sizeof(memdbg_batch_write_adv_request_t) == 16U, "batch write adv request wire size changed");
+
+/* Telemetry */
+_Static_assert(sizeof(memdbg_telemetry_response_t) == 60U, "telemetry response wire size changed");
+
+/* Debugger */
+_Static_assert(sizeof(memdbg_thread_stop_info_t) == 48U, "thread stop info wire size changed");
+_Static_assert(sizeof(memdbg_debug_attach_request_t) == 8U, "debug attach request wire size changed");
+_Static_assert(sizeof(memdbg_debug_thread_request_t) == 8U, "debug thread request wire size changed");
+_Static_assert(sizeof(memdbg_debug_threads_response_prefix_t) == 8U, "debug threads response prefix wire size changed");
+_Static_assert(sizeof(memdbg_debug_regs_t) == 176U, "debug regs wire size changed");
+_Static_assert(sizeof(memdbg_debug_dbregs_t) == 128U, "debug dbregs wire size changed");
+_Static_assert(sizeof(memdbg_debug_fsgsbase_t) == 16U, "debug fsgsbase wire size changed");
+_Static_assert(sizeof(memdbg_debug_breakpoint_request_t) == 16U, "debug breakpoint request wire size changed");
+_Static_assert(sizeof(memdbg_debug_breakpoint_cond_request_t) == 32U, "debug breakpoint cond request wire size changed");
+_Static_assert(sizeof(memdbg_debug_watchpoint_request_t) == 16U, "debug watchpoint request wire size changed");
+_Static_assert(sizeof(memdbg_debug_poll_response_t) == 8U, "debug poll response wire size changed");
+_Static_assert(sizeof(memdbg_debug_breakpoint_list_entry_t) == 32U, "debug breakpoint list entry wire size changed");
+_Static_assert(sizeof(memdbg_debug_breakpoint_list_prefix_t) == 8U, "debug breakpoint list prefix wire size changed");
+_Static_assert(sizeof(memdbg_debug_watchpoint_list_entry_t) == 24U, "debug watchpoint list entry wire size changed");
+_Static_assert(sizeof(memdbg_debug_watchpoint_list_prefix_t) == 8U, "debug watchpoint list prefix wire size changed");
+_Static_assert(sizeof(memdbg_debug_clear_all_response_t) == 8U, "debug clear-all response wire size changed");
+
+/* Tracer */
+_Static_assert(sizeof(memdbg_tracer_attach_request_t) == 4U, "tracer attach request wire size changed");
+_Static_assert(sizeof(memdbg_tracer_event_t) == 88U, "tracer event wire size changed");
+_Static_assert(sizeof(memdbg_tracer_poll_response_prefix_t) == 8U, "tracer poll response prefix wire size changed");
+_Static_assert(sizeof(memdbg_tracer_status_response_t) == 288U, "tracer status response wire size changed");
+
+/* Klog */
+_Static_assert(sizeof(memdbg_klog_connect_request_t) == 4U, "klog connect request wire size changed");
+
+/* Assembler / disassembler */
+_Static_assert(sizeof(memdbg_asm_encode_request_t) == 16U, "asm encode request wire size changed");
+_Static_assert(sizeof(memdbg_asm_encode_ok_t) == 8U, "asm encode ok wire size changed");
+_Static_assert(sizeof(memdbg_asm_encode_err_t) == 8U, "asm encode err wire size changed");
+_Static_assert(sizeof(memdbg_disasm_request_t) == 24U, "disasm request wire size changed");
+_Static_assert(sizeof(memdbg_disasm_entry_t) == 32U, "disasm entry wire size changed");
+_Static_assert(sizeof(memdbg_xrefs_to_request_t) == 32U, "xrefs to request wire size changed");
+
+/* Quickscan */
+_Static_assert(sizeof(memdbg_quickscan_caps_response_t) == 16U, "quickscan caps response wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_start_request_t) == 40U, "quickscan start request wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_fetch_request_t) == 12U, "quickscan fetch request wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_config_request_t) == 8U, "quickscan config request wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_regions_request_t) == 16U, "quickscan regions request wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_region_info_t) == 32U, "quickscan region info wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_resident_header_t) == 12U, "quickscan resident header wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_snapshot_summary_t) == 12U, "quickscan snapshot summary wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_snapshot_plan_t) == 16U, "quickscan snapshot plan wire size changed");
+_Static_assert(sizeof(memdbg_quickscan_segment_t) == 16U, "quickscan segment wire size changed");
+
+/* PTWalk */
+_Static_assert(sizeof(memdbg_ptwalk_discover_response_t) == 20U, "ptwalk discover response wire size changed");
+_Static_assert(sizeof(memdbg_ptwalk_augment_request_t) == 8U, "ptwalk augment request wire size changed");
+_Static_assert(sizeof(memdbg_ptwalk_io_request_t) == 24U, "ptwalk IO request wire size changed");
+_Static_assert(sizeof(memdbg_ptwalk_probe_request_t) == 16U, "ptwalk probe request wire size changed");
+_Static_assert(sizeof(memdbg_ptwalk_probe_response_t) == 32U, "ptwalk probe response wire size changed");
+
+/* Extended capabilities */
+_Static_assert(sizeof(memdbg_extended_caps_response_t) == 4U, "extended caps response wire size changed");
+
+/* Auth */
+_Static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire size changed");
+
+/* Arena */
+_Static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
+
+/* Scan job state enum validity */
+_Static_assert(MEMDBG_SCAN_JOB_PENDING == 0U, "scan job pending state changed");
+_Static_assert(MEMDBG_SCAN_JOB_RUNNING == 1U, "scan job running state changed");
+_Static_assert(MEMDBG_SCAN_JOB_COMPLETED == 2U, "scan job completed state changed");
+_Static_assert(MEMDBG_SCAN_JOB_CANCELLED == 3U, "scan job cancelled state changed");
+_Static_assert(MEMDBG_SCAN_JOB_FAILED == 4U, "scan job failed state changed");
+#endif /* #if defined(__cplusplus) */
+
+#if !defined(__cplusplus)
+/* C11 wire-format assertions — parallel to the C++ static_assert block above.
+   Ensures the wire layout is verified during C daemon/payload builds too. */
+_Static_assert(sizeof(memdbg_packet_header_t) == 16U, "packet header wire size changed (C)");
+_Static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire size changed (C)");
+_Static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed (C)");
+_Static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed (C)");
+_Static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed (C)");
+_Static_assert(sizeof(memdbg_process_info_response_t) == 260U, "process info response wire size changed (C)");
+_Static_assert(sizeof(memdbg_map_entry_t) == 88U, "map entry wire size changed (C)");
+_Static_assert(sizeof(memdbg_memory_request_t) == 16U, "memory request wire size changed (C)");
+_Static_assert(sizeof(memdbg_debug_regs_t) == 176U, "debug regs wire size changed (C)");
+_Static_assert(sizeof(memdbg_debug_dbregs_t) == 128U, "debug dbregs wire size changed (C)");
+_Static_assert(sizeof(memdbg_debug_thread_entry_t) == 100U, "debug thread entry wire size changed");
+_Static_assert(sizeof(memdbg_debug_fpregs_t) == 1032U, "debug fpregs wire size changed");
+_Static_assert(sizeof(memdbg_batch_process_info_response_t) == 8U, "batch process info response wire size changed");
+_Static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire size changed");
+_Static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
+_Static_assert(sizeof(memdbg_extended_caps_response_t) == 4U, "extended caps response prefix wire size changed");
+_Static_assert(MEMDBG_HELLO_V1_SIZE == 44U, "HELLO V1 size changed");
+_Static_assert(MEMDBG_HELLO_V2_SIZE == 64U, "HELLO V2 size changed");
 #endif
 
 #if defined(_MSC_VER)

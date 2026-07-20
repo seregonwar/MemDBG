@@ -25,6 +25,9 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+/* Include for audit logging constants and function */
+#include "memdbg/core/memdbg_log.h"
+
 // External declarations for feature helpers
 
 extern int memdbg_privilege_jailbreak_self(void);
@@ -43,23 +46,38 @@ static int g_auth_privileged = 0;
 
 memdbg_status_t memdbg_auth_handle(const memdbg_auth_key_request_t *req) {
   if (!req || req->magic != MEMDBG_AUTH_KEY_MAGIC) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "auth: rejected (bad magic byte)");
     return MEMDBG_ERR_PERMISSION;
   }
 
   (void)pthread_mutex_lock(&g_auth_mutex);
   if (g_auth_privileged) {
     (void)pthread_mutex_unlock(&g_auth_mutex);
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "auth: already privileged (duplicate AUTH_KEY)");
     return MEMDBG_OK;
   }
   if (memdbg_privilege_operation_begin() != 0) {
     (void)pthread_mutex_unlock(&g_auth_mutex);
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "auth: privilege operation begin failed");
     return MEMDBG_ERR_STATE;
   }
   int rc = memdbg_privilege_jailbreak_self();
   int end_rc = memdbg_privilege_operation_end();
-  if (rc == 0 && end_rc == 0) g_auth_privileged = 1;
+  int ok = (rc == 0 && end_rc == 0);
+  if (ok) {
+    g_auth_privileged = 1;
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "auth: privilege escalation succeeded (payload escaped sandbox)");
+  } else {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "auth: privilege escalation failed (rc=%d end_rc=%d)",
+                     rc, end_rc);
+  }
   (void)pthread_mutex_unlock(&g_auth_mutex);
-  return rc == 0 && end_rc == 0 ? MEMDBG_OK : MEMDBG_ERR_PERMISSION;
+  return ok ? MEMDBG_OK : MEMDBG_ERR_PERMISSION;
 }
 
 int memdbg_is_privileged(void) {

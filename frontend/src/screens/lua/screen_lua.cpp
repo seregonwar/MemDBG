@@ -290,7 +290,6 @@ void draw_lua(AppState &state, ImVec2 avail) {
        "lua.api.log_label"},
     };
 
-    const float scl = ui::dpi_scale();
     const float copy_btn_w = 105.0f * scl;
 
     for (const auto &entry : api_entries) {
