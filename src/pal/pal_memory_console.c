@@ -173,12 +173,18 @@ static int console_mdbg_copyin_ps5_regions(pid_t pid, intptr_t address,
 #endif
 
 #if defined(MEMDBG_PAL_PS5)
-static int s_fw_needs_dmap = -1;
+#include <stdatomic.h>
+static atomic_int s_fw_needs_dmap = ATOMIC_VAR_INIT(-1);
 
 static int console_fw_needs_dmap(void) {
-  if (s_fw_needs_dmap < 0)
-    s_fw_needs_dmap = ((kernel_get_fw_version() & 0xffff0000u) >= 0x08400000u) ? 1 : 0;
-  return s_fw_needs_dmap;
+  int cached = atomic_load_explicit(&s_fw_needs_dmap, memory_order_acquire);
+  if (cached >= 0) return cached;
+  /* Both threads compute the same deterministic value (FW version check),
+   * so atomic_store without CAS is sufficient: whichever thread writes
+   * first produces the same result, and TSan sees no race. */
+  int desired = ((kernel_get_fw_version() & 0xffff0000u) >= 0x08400000u) ? 1 : 0;
+  atomic_store_explicit(&s_fw_needs_dmap, desired, memory_order_release);
+  return desired;
 }
 #endif
 

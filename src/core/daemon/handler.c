@@ -43,12 +43,24 @@ static void *request_buffer_acquire(void **reusable, size_t *capacity,
   return *reusable;
 }
 
+/* ---- Pre-auth command budget ----
+ *
+ * Before a valid HELLO is received, each connection may send at most
+ * MEMDBG_PRE_AUTH_CMD_BUDGET commands.  This prevents unauthenticated peers
+ * from consuming arbitrary dispatch and I/O resources without first
+ * establishing a protocol session.  HELLO, PING and AUTH_KEY are counted
+ * but permitted; GOOBYE is not counted; all other commands count toward the
+ * budget.  Once a valid HELLO is processed, the budget is unlimited.
+ */
+#define MEMDBG_PRE_AUTH_CMD_BUDGET 32U
+
 /* ---- Handle a single client connection ---- */
 
 void handle_client(socket_t fd, const memdbg_config_t *cfg) {
   void *reusable_body = NULL;
   size_t reusable_capacity = 0U;
   uint32_t hello_session_cookie = 0U;
+  uint32_t pre_auth_budget = MEMDBG_PRE_AUTH_CMD_BUDGET;
   (void)pal_socket_set_nonblocking(fd, false);
   (void)pal_socket_configure(fd);
   /* pal_socket_configure intentionally leaves timeouts unset for accepted
@@ -123,6 +135,34 @@ void handle_client(socket_t fd, const memdbg_config_t *cfg) {
     }
 
     /*
+     * Pre-auth command budget: before HELLO is negotiated, each connection
+     * may send only a limited number of commands.  Once a valid HELLO has
+     * been processed (indicated by a non-zero session cookie), the budget
+     * is lifted.  This prevents unauthenticated resource consumption.
+     */
+    if (hello_session_cookie == 0U) {
+      switch ((memdbg_command_t)req.command) {
+      case MEMDBG_CMD_HELLO:
+      case MEMDBG_CMD_PING:
+      case MEMDBG_CMD_AUTH_KEY:
+      case MEMDBG_CMD_GOODBYE:
+        break;
+      default:
+        if (pre_auth_budget == 0U) {
+          memdbg_log_write(MEMDBG_LOG_WARN,
+                           "pre-auth command budget exhausted; dropping connection");
+          (void)send_response(fd, &req, MEMDBG_ERR_PERMISSION, NULL, 0U);
+          /* Skip dispatch and tear down the connection immediately.
+           * Sending a response and then also dispatching the command would
+           * risk a double-write to the TCP stream. */
+          goto pre_auth_budget_exhausted;
+        }
+        --pre_auth_budget;
+        break;
+      }
+    }
+
+    /*
      * Do not serialize the whole protocol behind the credential mutex.
      * Operations which temporarily alter credentials (notably ptrace attach)
      * acquire that lock in the privilege layer itself.  Keeping it here made
@@ -159,7 +199,12 @@ void handle_client(socket_t fd, const memdbg_config_t *cfg) {
                      "debugger: detaching because the last client disconnected");
     (void)memdbg_debugger_detach();
   }
+  goto cleanup_connection;
 
+pre_auth_budget_exhausted:
+  /* Skip the debugger detach check — connection was terminated pre-auth. */
+
+cleanup_connection:
   free(reusable_body);
   flashscan_release_client(fd);
   acceptor_unregister_hello_session(hello_session_cookie);

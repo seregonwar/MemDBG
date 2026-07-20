@@ -347,6 +347,7 @@ SandboxResult PythonSandbox::run(const std::filesystem::path &entry,
   const auto started = Clock::now();
 
 #if defined(_WIN32)
+  (void)temp_dir;
   std::string command = "cd /d " + shell_quote(root.string()) + " && " +
       shell_quote(python_exe_) + " -I -s -B " + shell_quote(entry.string());
   if (!context_path.empty()) command += " " + shell_quote(context_path.string());

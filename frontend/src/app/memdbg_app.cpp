@@ -537,52 +537,52 @@ static std::string         s_temp_error;
 /* ---- Async telemetry ---- */
 
 void request_telemetry_async(AppState &state) {
-  if (state.telemetry_pending) return;
+  if (state.telemetry.pending) return;
   if (state.map_refresh_pending) return;
   if (!state.client.connected()) return;
   if (!(state.hello.capabilities & MEMDBG_CAP_PERF_TELEMETRY)) return;
 
-  state.telemetry_pending = true;
+  state.telemetry.pending = true;
   auto client = state.pool.poll_lease();
-  state.telemetry_future = std::async(std::launch::async, [&state, client]() -> bool {
+  state.telemetry.future = std::async(std::launch::async, [&state, client]() -> bool {
     Client::TelemetrySnapshot snap;
     if (!client->telemetry(snap)) {
-      state.telemetry_temp_error = client->last_error();
+      state.telemetry.temp_error = client->last_error();
       return false;
     }
-    state.telemetry_temp_snap = snap;
-    state.telemetry_temp_error.clear();
+    state.telemetry.temp_snap = snap;
+    state.telemetry.temp_error.clear();
     return true;
   });
 }
 
 static void poll_telemetry(AppState &state) {
-  if (!state.telemetry_pending) return;
-  if (!state.telemetry_future.valid()) return;
+  if (!state.telemetry.pending) return;
+  if (!state.telemetry.future.valid()) return;
 
-  auto status = state.telemetry_future.wait_for(std::chrono::milliseconds(0));
+  auto status = state.telemetry.future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
 
-  state.telemetry_pending = false;
+  state.telemetry.pending = false;
   bool ok = false;
   try {
-    ok = state.telemetry_future.get();
+    ok = state.telemetry.future.get();
   } catch (const std::exception &ex) {
-    state.telemetry_temp_error = ex.what();
+    state.telemetry.temp_error = ex.what();
   } catch (...) {
-    state.telemetry_temp_error = "Unknown telemetry error";
+    state.telemetry.temp_error = "Unknown telemetry error";
   }
 
   if (!ok) {
     if (state.crash_logging_enabled)
-      state.crash_logger.log("error", ("Telemetry failed: " + state.telemetry_temp_error).c_str());
-    char tel_buf[256]; std::snprintf(tel_buf, sizeof(tel_buf), locale::tr("app.telemetry_error"), state.telemetry_temp_error.c_str()); set_status(state, tel_buf);
-    state.telemetry_available = false;
+      state.crash_logger.log("error", ("Telemetry failed: " + state.telemetry.temp_error).c_str());
+    char tel_buf[256]; std::snprintf(tel_buf, sizeof(tel_buf), locale::tr("app.telemetry_error"), state.telemetry.temp_error.c_str()); set_status(state, tel_buf);
+    state.telemetry.available = false;
     return;
   }
 
-  state.telemetry_snap = state.telemetry_temp_snap;
-  state.telemetry_available = true;
+  state.telemetry.snap = state.telemetry.temp_snap;
+  state.telemetry.available = true;
 }
 
 void request_maps_refresh_async(AppState &state) {
@@ -590,7 +590,7 @@ void request_maps_refresh_async(AppState &state) {
     set_status(state, locale::tr("app.maps_refresh_in_progress"));
     return;
   }
-  if (state.conn.connect_pending || state.telemetry_pending || state.scan.async_pending) {
+  if (state.conn.connect_pending || state.telemetry.pending || state.scan.async_pending) {
     set_status(state, locale::tr("app.wait_active"));
     return;
   }
@@ -946,7 +946,7 @@ void disconnect_console(AppState &state, const char *reason) {
 
   /* Drain async futures before clearing flags (std::future blocks on destructor). */
   if (state.scan.async_future.valid()) state.scan.async_future.wait();
-  if (state.telemetry_future.valid()) state.telemetry_future.wait();
+  if (state.telemetry.future.valid()) state.telemetry.future.wait();
   if (state.map_refresh_future.valid()) state.map_refresh_future.wait();
   if (state.taskmgr.resource_future.valid()) state.taskmgr.resource_future.wait();
   if (state.taskmgr.prefetch_future.valid()) state.taskmgr.prefetch_future.wait();
@@ -957,7 +957,7 @@ void disconnect_console(AppState &state, const char *reason) {
   if (s_connect_future.valid()) s_connect_future.wait();
 
   state.scan.async_pending = false;  /* cancel any in-flight async scan */
-  state.telemetry_pending = false;  /* cancel any in-flight telemetry poll */
+  state.telemetry.pending = false;  /* cancel any in-flight telemetry poll */
   state.map_refresh_pending = false;  /* cancel any in-flight map refresh */
   state.taskmgr.resource_pending = false;  /* cancel any in-flight task manager fetch */
   state.taskmgr.prefetch_pending = false;
@@ -993,8 +993,8 @@ void disconnect_console(AppState &state, const char *reason) {
   std::snprintf(state.scan.session_status, sizeof(state.scan.session_status), "No scan session");
   state.selected_pid = 0; state.selected_process_row = -1; state.selected_map_row = -1;
   state.has_process_info = false;
-  state.telemetry_available = false;
-  state.next_telemetry_poll = 0.0;
+  state.telemetry.available = false;
+  state.telemetry.next_poll = 0.0;
   state.taskmgr.resources.clear();
   state.taskmgr.fmem_by_name.clear();
   state.taskmgr.prefetch_processes.clear();
@@ -1760,7 +1760,7 @@ static void poll_session_health(AppState &state) {
   }
 
   if (!state.client.connected() || state.conn.connect_pending ||
-      state.telemetry_pending || state.scan.async_pending ||
+      state.telemetry.pending || state.scan.async_pending ||
       state.map_refresh_pending || state.taskmgr.resource_pending ||
       state.taskmgr.prefetch_pending || state.plugin.refresh_pending ||
       state.plugin.run_pending) {

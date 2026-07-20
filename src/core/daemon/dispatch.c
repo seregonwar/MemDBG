@@ -10,6 +10,7 @@
 
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
+#include "memdbg/core/memdbg_log.h"
 
 #include "memdbg/debug/memdbg_disasm.h"
 #include "memdbg/debug/memdbg_assembler.h"
@@ -171,11 +172,37 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_PROCESS_DUMP:
     return handle_process_dump(fd, req, body, req->length);
   case MEMDBG_CMD_KERNEL_BASE:        return handle_kernel_base(fd, req);
-  case MEMDBG_CMD_KERNEL_READ:        return handle_kernel_read(fd, req, body, req->length);
-  case MEMDBG_CMD_KERNEL_WRITE:       return handle_kernel_write(fd, req, body, req->length);
+  case MEMDBG_CMD_KERNEL_READ:
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__) || \
+    defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+    if (!memdbg_is_privileged()) {
+      memdbg_log_write(MEMDBG_LOG_WARN, "kernel_read: rejected (not authenticated)");
+      return MEMDBG_ERR_PERMISSION;
+    }
+#endif
+    return handle_kernel_read(fd, req, body, req->length);
+  case MEMDBG_CMD_KERNEL_WRITE:
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__) || \
+    defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+    if (!memdbg_is_privileged()) {
+      memdbg_log_write(MEMDBG_LOG_WARN, "kernel_write: rejected (not authenticated)");
+      return MEMDBG_ERR_PERMISSION;
+    }
+#endif
+    return handle_kernel_write(fd, req, body, req->length);
   case MEMDBG_CMD_CONSOLE_NOTIFY:     return handle_console_notify(fd, req, body, req->length);
   case MEMDBG_CMD_CONSOLE_PRINT:      return handle_console_print(fd, req, body, req->length);
-  case MEMDBG_CMD_CONSOLE_REBOOT:     return handle_console_reboot(fd, req);
+  case MEMDBG_CMD_CONSOLE_REBOOT: {
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__) || \
+    defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+    if (!memdbg_is_privileged()) {
+      memdbg_log_write(MEMDBG_LOG_WARN, "console_reboot: rejected (not authenticated)");
+      return MEMDBG_ERR_PERMISSION;
+    }
+#endif
+    memdbg_log_write(MEMDBG_LOG_INFO, "console_reboot: remote reboot requested");
+    return handle_console_reboot(fd, req);
+  }
   case MEMDBG_CMD_DEBUG_ATTACH:
     memdbg_tracer_daemon_stop();
     return handle_debug_attach(fd, req, body, req->length, send_response);
@@ -209,10 +236,21 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
   case MEMDBG_CMD_TRACER_POLL:         return handle_tracer_poll(fd, req, send_response);
   case MEMDBG_CMD_TRACER_STATUS:       return handle_tracer_status(fd, req, send_response);
   case MEMDBG_CMD_TELEMETRY:          return handle_telemetry(fd, req);
-  case MEMDBG_CMD_SHUTDOWN:
+  case MEMDBG_CMD_SHUTDOWN: {
+    /* Require auth on console platforms where privilege escalation is available.
+       On host, auth cannot succeed, so this check only applies on real payloads. */
+#if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__) || \
+    defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+    if (!memdbg_is_privileged()) {
+      memdbg_log_write(MEMDBG_LOG_WARN, "shutdown: rejected (not authenticated)");
+      return MEMDBG_ERR_PERMISSION;
+    }
+#endif
+    memdbg_log_write(MEMDBG_LOG_INFO, "shutdown: remote termination requested");
     pal_notification_send("MemDBG remote termination");
     memdbg_daemon_request_stop();
     return send_response(fd, req, MEMDBG_OK, NULL, 0U) == 0 ? MEMDBG_OK : MEMDBG_ERR_NET;
+  }
 
   /* ---- Assembler / disassembler ----
    *
@@ -441,6 +479,9 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
     if (req->length != sizeof(memdbg_auth_key_request_t)) return MEMDBG_ERR_PROTOCOL;
     const memdbg_auth_key_request_t *ak = (const memdbg_auth_key_request_t *)body;
     memdbg_status_t status = memdbg_auth_handle(ak);
+    memdbg_log_write(status == MEMDBG_OK ? MEMDBG_LOG_INFO : MEMDBG_LOG_WARN,
+                     "auth_key: %s",
+                     status == MEMDBG_OK ? "success" : "failed");
     return send_response(fd, req, status, NULL, 0U) == 0
                ? MEMDBG_OK : MEMDBG_ERR_NET;
   }

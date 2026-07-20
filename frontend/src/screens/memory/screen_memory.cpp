@@ -428,7 +428,7 @@ static bool should_scan_map_for_gadgets(const AppState &state, int map_index) {
     return false;
   const auto &map = state.maps[map_index];
   if (map.end <= map.start) return false;
-  if (state.gadget_exec_only && (map.protection & 4U) == 0U) return false;
+  if (state.gadget_heap.exec_only && (map.protection & 4U) == 0U) return false;
   return (map.protection & 1U) != 0U;
 }
 
@@ -440,8 +440,8 @@ static void scan_map_for_gadgets(AppState &state, int map_index) {
   std::vector<uint8_t> tail;
 
   while (cursor < map.end &&
-         state.gadget_results.size() <
-             static_cast<size_t>(std::max(1, state.gadget_max_results))) {
+         state.gadget_heap.results.size() <
+             static_cast<size_t>(std::max(1, state.gadget_heap.max_results))) {
     uint64_t remaining = map.end - cursor;
     uint32_t length = remaining > kChunk ? static_cast<uint32_t>(kChunk)
                                          : static_cast<uint32_t>(remaining);
@@ -467,9 +467,9 @@ static void scan_map_for_gadgets(AppState &state, int map_index) {
         match.name = pattern.name;
         match.bytes = bytes_hex(pattern.bytes);
         match.map_name = map.name;
-        state.gadget_results.push_back(std::move(match));
-        if (state.gadget_results.size() >=
-            static_cast<size_t>(std::max(1, state.gadget_max_results)))
+        state.gadget_heap.results.push_back(std::move(match));
+        if (state.gadget_heap.results.size() >=
+            static_cast<size_t>(std::max(1, state.gadget_heap.max_results)))
           return;
       }
     }
@@ -483,12 +483,12 @@ static void scan_map_for_gadgets(AppState &state, int map_index) {
 }
 
 static void find_gadgets(AppState &state) {
-  state.gadget_results.clear();
+  state.gadget_heap.results.clear();
   if (!state.client.connected()) { set_status(state, locale::tr("memory.connect_first")); return; }
   if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
-  state.gadget_max_results = std::clamp(state.gadget_max_results, 1, 4096);
+  state.gadget_heap.max_results = std::clamp(state.gadget_heap.max_results, 1, 4096);
 
-  if (state.gadget_selected_map_only) {
+  if (state.gadget_heap.selected_map_only) {
     if (state.selected_map_row < 0) { set_status(state, locale::tr("memory.select_map_first")); return; }
     if (should_scan_map_for_gadgets(state, state.selected_map_row))
       scan_map_for_gadgets(state, state.selected_map_row);
@@ -496,12 +496,12 @@ static void find_gadgets(AppState &state) {
     for (int i = 0; i < static_cast<int>(state.maps.size()); ++i) {
       if (!should_scan_map_for_gadgets(state, i)) continue;
       scan_map_for_gadgets(state, i);
-      if (state.gadget_results.size() >= static_cast<size_t>(state.gadget_max_results))
+      if (state.gadget_heap.results.size() >= static_cast<size_t>(state.gadget_heap.max_results))
         break;
     }
   }
   char gb_buf[128];
-  std::snprintf(gb_buf, sizeof(gb_buf), locale::tr("memory.exploit.found_n_gadgets"), state.gadget_results.size());
+  std::snprintf(gb_buf, sizeof(gb_buf), locale::tr("memory.exploit.found_n_gadgets"), state.gadget_heap.results.size());
   set_status(state, gb_buf);
 }
 
@@ -538,16 +538,16 @@ static double shannon_entropy(const std::vector<uint8_t> &bytes,
 }
 
 static void analyze_heap_spray(AppState &state) {
-  state.heap_findings.clear();
+  state.gadget_heap.findings.clear();
   if (!state.client.connected()) { set_status(state, locale::tr("memory.connect_first")); return; }
   if (state.selected_pid <= 0) { set_status(state, locale::tr("memory.select_process_first")); return; }
-  state.heap_sample_kb = std::clamp(state.heap_sample_kb, 4, 4096);
-  state.heap_max_maps = std::clamp(state.heap_max_maps, 1, 256);
+  state.gadget_heap.sample_kb = std::clamp(state.gadget_heap.sample_kb, 4, 4096);
+  state.gadget_heap.max_maps = std::clamp(state.gadget_heap.max_maps, 1, 256);
 
   int scanned = 0;
-  uint32_t sample_len = static_cast<uint32_t>(state.heap_sample_kb) * 1024U;
+  uint32_t sample_len = static_cast<uint32_t>(state.gadget_heap.sample_kb) * 1024U;
   for (const auto &map : state.maps) {
-    if (scanned >= state.heap_max_maps) break;
+    if (scanned >= state.gadget_heap.max_maps) break;
     if (map.end <= map.start) continue;
     if ((map.protection & 3U) != 3U || (map.protection & 4U) != 0U) continue;
     if (map_is_system_like(map)) continue;
@@ -575,30 +575,30 @@ static void analyze_heap_spray(AppState &state) {
       if (dominant_ratio > 0.60) detail << "dominant byte ";
       if (longest_run >= 256U) detail << "long run ";
       finding.detail = detail.str();
-      state.heap_findings.push_back(std::move(finding));
+      state.gadget_heap.findings.push_back(std::move(finding));
     }
   }
   char heap_buf[128];
-  std::snprintf(heap_buf, sizeof(heap_buf), locale::tr("memory.heap_analysis"), state.heap_findings.size());
+  std::snprintf(heap_buf, sizeof(heap_buf), locale::tr("memory.heap_analysis"), state.gadget_heap.findings.size());
   set_status(state, heap_buf);
 }
 
 static const GadgetMatch *find_gadget(const AppState &state, const char *name) {
-  for (const auto &gadget : state.gadget_results)
+  for (const auto &gadget : state.gadget_heap.results)
     if (gadget.name == name) return &gadget;
   return nullptr;
 }
 
 static void draw_exploit_tools(AppState &state) {
-  ImGui::Checkbox(locale::tr("memory.exploit.selected_map"), &state.gadget_selected_map_only);
+  ImGui::Checkbox(locale::tr("memory.exploit.selected_map"), &state.gadget_heap.selected_map_only);
   ImGui::SameLine();
-  ImGui::Checkbox(locale::tr("memory.exploit.exec_only"), &state.gadget_exec_only);
-  ImGui::InputInt(locale::tr("memory.exploit.max_gadgets"), &state.gadget_max_results);
-  state.gadget_max_results = std::clamp(state.gadget_max_results, 1, 4096);
+  ImGui::Checkbox(locale::tr("memory.exploit.exec_only"), &state.gadget_heap.exec_only);
+  ImGui::InputInt(locale::tr("memory.exploit.max_gadgets"), &state.gadget_heap.max_results);
+  state.gadget_heap.max_results = std::clamp(state.gadget_heap.max_results, 1, 4096);
   ImGui::BeginDisabled(client_async_busy(state));
   if (ui::primary_button((std::string(icons::kSearch) + "  " + locale::tr("memory.exploit.find_gadgets")).c_str(),
                          ui::full_button(36))) {
-    if (state.gadget_selected_map_only)
+    if (state.gadget_heap.selected_map_only)
       find_gadgets(state);
     else
       ImGui::OpenPopup("ConfirmFindGadgets");
@@ -633,7 +633,7 @@ static void draw_exploit_tools(AppState &state) {
     ImGui::TableSetupColumn(locale::tr("memory.exploit.gadget_bytes_col"), ImGuiTableColumnFlags_WidthFixed, 120);
     ImGui::TableSetupColumn(locale::tr("memory.exploit.gadget_map_col"));
     ImGui::TableHeadersRow();
-    for (const auto &gadget : state.gadget_results) {
+    for (const auto &gadget : state.gadget_heap.results) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
       ImGui::TextUnformatted(hex_u64(gadget.address).c_str());
@@ -648,8 +648,8 @@ static void draw_exploit_tools(AppState &state) {
   }
 
   ImGui::Separator();
-  ImGui::InputInt(locale::tr("memory.exploit.sample_kb"), &state.heap_sample_kb);
-  ImGui::InputInt(locale::tr("memory.exploit.max_maps"), &state.heap_max_maps);
+  ImGui::InputInt(locale::tr("memory.exploit.sample_kb"), &state.gadget_heap.sample_kb);
+  ImGui::InputInt(locale::tr("memory.exploit.max_maps"), &state.gadget_heap.max_maps);
   ImGui::BeginDisabled(client_async_busy(state));
   if (ui::soft_button((std::string(icons::kBug) + "  " + locale::tr("memory.exploit.analyze_heap")).c_str(),
                       ui::full_button(36))) {
@@ -666,7 +666,7 @@ static void draw_exploit_tools(AppState &state) {
     ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_dominant_col"), ImGuiTableColumnFlags_WidthFixed, 82);
     ImGui::TableSetupColumn(locale::tr("memory.exploit.heap_finding_col"));
     ImGui::TableHeadersRow();
-    for (const auto &finding : state.heap_findings) {
+    for (const auto &finding : state.gadget_heap.findings) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
       ImGui::TextUnformatted(hex_u64(finding.start).c_str());

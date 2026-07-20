@@ -75,19 +75,24 @@ namespace {
  * within ~60 seconds.  Complements the application-level heartbeat. */
 static void socket_set_keepalive(platform::socket_handle_t fd) {
   int keepalive = 1;
-  (void)::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive,
+  (void)::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE,
+                     reinterpret_cast<const char *>(&keepalive),
                      sizeof(keepalive));
 #if !defined(_WIN32)
 #if defined(TCP_KEEPIDLE)  /* Linux */
   int idle = 30;
   int intvl = 10;
   int cnt = 3;
-  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
-  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
-  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,
+                     reinterpret_cast<const char *>(&idle), sizeof(idle));
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL,
+                     reinterpret_cast<const char *>(&intvl), sizeof(intvl));
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,
+                     reinterpret_cast<const char *>(&cnt), sizeof(cnt));
 #elif defined(TCP_KEEPALIVE)  /* macOS / FreeBSD / PS4 / PS5 */
   int idle = 30;
-  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+  (void)::setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE,
+                     reinterpret_cast<const char *>(&idle), sizeof(idle));
 #endif
 #endif
 }

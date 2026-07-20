@@ -172,8 +172,6 @@ jobs:
           run_frontend_test() {
             local name="$1"
 
-            # Read matches into an array to avoid 'find | head' SIGPIPE
-            # races that can produce spurious exit code 127 with pipefail.
             local paths=()
             while IFS= read -r p; do
               paths+=("$p")
@@ -191,15 +189,12 @@ jobs:
               printf '    %s\n' "${paths[@]}" >&2
             fi
 
-            # ── Diagnostics ──
             echo "==> $name: $exe"
             ls -la "$exe" || true
             if command -v file &>/dev/null; then
               file "$exe" || true
             fi
 
-            # Unix execute-bit check; skip on Windows (Git Bash / MSYS
-            # doesn't set +x on .exe files).
             if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* ]]; then
               if ! [ -x "$exe" ]; then
                 echo "==> ERROR: $exe is NOT executable" >&2
@@ -220,8 +215,6 @@ jobs:
             "$exe" || {
               rc=$?
               echo "==> $name exited with code $rc" >&2
-              # 127 usually means missing DLL / dynamic-link error;
-              # surface a helpful hint on Windows.
               if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && [ "$rc" -eq 127 ]; then
                 echo "==> Hint: exit 127 on Windows often means a required DLL is missing." >&2
                 echo "==> Try running: dumpbin /dependents $exe" >&2
@@ -240,7 +233,6 @@ jobs:
           run_frontend_test memdbg_locale_manager_test
           run_frontend_test memdbg_plugin_manager_test
 
-          # ── Sandbox security regression tests ──
           run_frontend_test memdbg_sandbox_lua_test
           run_frontend_test memdbg_sandbox_fuzz_test
           run_frontend_test memdbg_sandbox_limits_test
@@ -307,45 +299,169 @@ jobs:
 
       - name: Build with AddressSanitizer
         run: |
+          set -euo pipefail
+          export SAN_CC=clang
+          export SAN_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export SAN_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=address -fno-omit-frame-pointer"
+          export SAN_LDFLAGS="-fsanitize=address"
           make clean
-          make host \
-            HOST_CC="clang" \
-            HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
-            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=address -fno-omit-frame-pointer" \
-            HOST_LDFLAGS="-fsanitize=address"
+          make host HOST_CC="$SAN_CC" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_CFLAGS="$SAN_CFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Run ASan tests
         run: |
+          set -euo pipefail
           export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
-          make test || echo "::warning::Some ASan tests failed"
+          export SAN_CC=clang
+          export SAN_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export SAN_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=address -fno-omit-frame-pointer"
+          export SAN_LDFLAGS="-fsanitize=address"
+          make test-sjson HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-memory HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-thread-pool HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-lz4 HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-scan-partition HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-debugger-e2e HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS" || echo "::warning::ASan E2E test exited non-zero"
+          # Run the fuzz corpus under ASan — catches memory errors in the MDBG
+          # protocol header, LZ4, sJSON, and process maps response parsers.
+          make fuzz-corpus HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Build with UndefinedBehaviorSanitizer
         run: |
+          set -euo pipefail
+          export SAN_CC=clang
+          export SAN_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export SAN_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+          export SAN_LDFLAGS="-fsanitize=undefined"
           make clean
-          make host \
-            HOST_CC="clang" \
-            HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
-            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all" \
-            HOST_LDFLAGS="-fsanitize=undefined"
+          make host HOST_CC="$SAN_CC" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_CFLAGS="$SAN_CFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Run UBSan tests
         run: |
+          set -euo pipefail
           export UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1
-          make test || echo "::warning::Some UBSan tests failed"
+          export SAN_CC=clang
+          export SAN_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export SAN_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=undefined -fno-sanitize-recover=all"
+          export SAN_LDFLAGS="-fsanitize=undefined"
+          make test-sjson HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-memory HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-thread-pool HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-lz4 HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-scan-partition HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-debugger-e2e HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS" || echo "::warning::UBSan E2E test exited non-zero"
+          # Run the fuzz corpus under UBSan — catches undefined behaviour in
+          # the MDBG protocol header, LZ4, sJSON, and process maps parsers.
+          make fuzz-corpus HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Build with ThreadSanitizer
         run: |
+          set -euo pipefail
+          export SAN_CC=clang
+          export SAN_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export SAN_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=thread"
+          export SAN_LDFLAGS="-fsanitize=thread"
           make clean
-          make host \
-            HOST_CC="clang" \
-            HOST_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L" \
-            HOST_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=thread" \
-            HOST_LDFLAGS="-fsanitize=thread"
+          make host HOST_CC="$SAN_CC" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_CFLAGS="$SAN_CFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
 
       - name: Run TSan tests
         run: |
+          set -euo pipefail
           export TSAN_OPTIONS=halt_on_error=1:abort_on_error=1:history_size=7
-          make test || echo "::warning::Some TSan tests failed"
+          export SAN_CC=clang
+          export SAN_CPPFLAGS="-Ibuild/generated/include -Iinclude -Isrc/core/daemon -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L"
+          export SAN_CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O1 -g -fsanitize=thread"
+          export SAN_LDFLAGS="-fsanitize=thread"
+          make test-sjson HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-memory HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-thread-pool HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-scan-partition HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+          make test-debugger-e2e HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS" || echo "::warning::TSan E2E test exited non-zero"
+          # Run the fuzz corpus under TSan — catches data races in the MDBG
+          # protocol header, LZ4, sJSON, and process maps parsers.
+          make fuzz-corpus HOST_CC="$SAN_CC" HOST_CFLAGS="$SAN_CFLAGS" HOST_CPPFLAGS="$SAN_CPPFLAGS" HOST_LDFLAGS="$SAN_LDFLAGS"
+
+  msvc:
+    name: MSVC compilation check
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/frontend/_deps
+          key: msvc-deps-${{ hashFiles('frontend/CMakeLists.txt') }}
+          restore-keys: msvc-deps-
+
+      - name: Configure frontend with MSVC
+        shell: bash
+        run: cmake -S frontend -B build/frontend -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build client test target (memdbg_client.cpp, platform.cpp, lz4.c)
+        shell: bash
+        run: |
+          # Build the smallest test target that exercises the core client code.
+          # memdbg_client_test compiles memdbg_client.cpp, client_pool.cpp,
+          # protocol_broker.cpp, platform.cpp, and lz4.c — the exact files
+          # that previously failed with MSVC setsockopt type errors.
+          cmake --build build/frontend --config Release --target memdbg_client_test
+
+      - name: Build supplementary test targets
+        shell: bash
+        run: |
+          # Build additional targets to catch MSVC issues in other shared files.
+          # These are small standalone/test executables (no GUI dependencies).
+          cmake --build build/frontend --config Release --target memdbg_action_journal_test
+          cmake --build build/frontend --config Release --target memdbg_locale_manager_test
+          cmake --build build/frontend --config Release --target memdbg_payload_sender_test
+          cmake --build build/frontend --config Release --target memdbg_release_check_test
+          cmake --build build/frontend --config Release --target memdbg_structure_compare_test
+          # memdbg_app_reconnect_test exercises memdbg_client.cpp with a richer
+          # include path and links against Lua — different translation-unit
+          # exposure that surfaces additional MSVC issues.
+          cmake --build build/frontend --config Release --target memdbg_app_reconnect_test
+
+      - name: Build probe executables
+        shell: bash
+        run: |
+          # memdbg_probe and memdbg_performance_probe compile memdbg_client.cpp
+          # with different include paths — good coverage.
+          cmake --build build/frontend --config Release --target memdbg_probe
+          cmake --build build/frontend --config Release --target memdbg_performance_probe
+
+      - name: Verify /WX flag propagation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Checking /WX in generated MSBuild project files ==="
+          matches=$(find build/frontend -name '*.vcxproj' -exec grep -l '/WX' {} + 2>/dev/null | sort -u || true)
+          if [ -n "$matches" ]; then
+            echo "$matches"
+            count=$(echo "$matches" | wc -l)
+            echo "Found /WX in $count project file(s)"
+            echo "=== Checking test targets specifically ==="
+            test_matches=$(find build/frontend -name '*memdbg_*_test.vcxproj' -exec grep -l '/WX' {} + 2>/dev/null || true)
+            all_tests=$(find build/frontend -name '*memdbg_*_test.vcxproj' 2>/dev/null | sort -u || true)
+            if [ -n "$all_tests" ]; then
+              test_count=$(echo "$all_tests" | wc -l)
+              wx_test_count=$(echo "$test_matches" | wc -l)
+              echo "$wx_test_count of $test_count test project files contain /WX"
+              if [ "$wx_test_count" -lt "$test_count" ]; then
+                echo "::warning::Not all test targets have /WX. Missing targets:"
+                for f in $all_tests; do
+                  if ! grep -q '/WX' "$f" 2>/dev/null; then
+                    echo "  MISSING: $(basename "$f")"
+                  fi
+                done
+              fi
+            fi
+          else
+            echo "::warning::No /WX found in any vcxproj file — check CMakeLists.txt MSVC config"
+          fi
 
   static-analysis:
     name: Static analysis (clang-tidy)
@@ -366,7 +482,6 @@ jobs:
       - name: Generate compile_commands.json
         run: |
           make clean
-          # Use Bear to capture compilation commands
           sudo apt-get install -y bear
           bear -- make host || true
 
