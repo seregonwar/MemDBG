@@ -7,3 +7,4 @@
 | Scan has no results | Value, type, or range mismatch. | Try another type, narrow maps, use AOB or unknown scan. |
 | No UDP logs | UDP channel broken. | Port 9023, firewall, broadcast, same network segment. |
 | Frontend crashes on start | OpenGL or font issue. | Check `memdbg_crash.log`, verify GPU drivers. |
+| `MemDBG is already running` | Stale PID file or live daemon on PS4/GoldHEN. | See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md). |
