@@ -37,8 +37,12 @@ int fixture_make_temp_dir(char *out, size_t out_size);
 void fixture_cleanup_dir(const char *data_root);
 
 /* ---- PID file helpers ---- */
+#define FIXTURE_INSTANCE_ID 0xDEADBEEFCAFEBABEULL
+
 int fixture_pid_file_path(const char *data_root, char *out, size_t out_size);
 int fixture_write_pid_file(const char *data_root, int pid);
+int fixture_write_pid_file_with_token(const char *data_root, int pid,
+                                      uint64_t token);
 void fixture_remove_pid_file(const char *data_root);
 int fixture_pid_file_exists(const char *data_root);
 

@@ -155,7 +155,8 @@ static void test_same_process_reinjection(void) {
 
   cfg.debug_port = listener.port;
 
-  if (fixture_write_pid_file(tmp, (int)getpid()) != 0) {
+  if (fixture_write_pid_file_with_token(tmp, (int)getpid(),
+                                        FIXTURE_INSTANCE_ID) != 0) {
     printf("  FAIL  could not write pid file\n");
     ++g_fixture_failed;
     fixture_stop_listener(&listener);
@@ -167,6 +168,49 @@ static void test_same_process_reinjection(void) {
                memdbg_instance_is_current_process(&cfg));
   FIXTURE_TEST("stop_previous refuses to terminate live same-process instance",
                memdbg_instance_stop_previous(&cfg) == MEMDBG_ERR_STATE);
+
+  fixture_stop_listener(&listener);
+  fixture_cleanup_dir(tmp);
+}
+
+static void test_token_mismatch(void) {
+  memdbg_config_t cfg;
+  char tmp[1024];
+  fixture_listener_t listener = { .listen_fd = -1, .port = 0 };
+
+  printf("\n--- PID matches but instance token does not ---\n");
+  if (fixture_make_temp_dir(tmp, sizeof(tmp)) != 0) {
+    printf("  FAIL  could not create temp dir\n");
+    ++g_fixture_failed;
+    return;
+  }
+
+  memdbg_config_defaults(&cfg);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
+
+  if (fixture_start_memdbg_listener(&listener) != 0) {
+    printf("  FAIL  could not start fake MemDBG listener\n");
+    ++g_fixture_failed;
+    fixture_cleanup_dir(tmp);
+    return;
+  }
+
+  cfg.debug_port = listener.port;
+
+  if (fixture_write_pid_file_with_token(tmp, (int)getpid(),
+                                        0xBADBADBADBADBADBULL) != 0) {
+    printf("  FAIL  could not write pid file\n");
+    ++g_fixture_failed;
+    fixture_stop_listener(&listener);
+    fixture_cleanup_dir(tmp);
+    return;
+  }
+
+  FIXTURE_TEST("is_current_process false when token mismatches",
+               !memdbg_instance_is_current_process(&cfg));
+  FIXTURE_TEST("stop_previous removes stale pid file on token mismatch",
+               memdbg_instance_stop_previous(&cfg) == MEMDBG_OK &&
+                   !fixture_pid_file_exists(tmp));
 
   fixture_stop_listener(&listener);
   fixture_cleanup_dir(tmp);
@@ -219,6 +263,7 @@ int main(void) {
   test_stale_current_pid_no_listener();
   test_stale_current_pid_plain_listener();
   test_same_process_reinjection();
+  test_token_mismatch();
   test_stale_other_pid();
 
   pal_network_fini();

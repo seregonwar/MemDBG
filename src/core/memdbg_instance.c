@@ -17,12 +17,44 @@
 #include "memdbg/pal/pal_network.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
+    defined(__NetBSD__) || defined(__OpenBSD__)
+#define MEMDBG_HAVE_FLOCK 1
+#include <sys/file.h>
+#endif
+
+/* ---- Instance ID ---- */
+
+static uint64_t g_daemon_instance_id = 0U;
+static uint64_t g_daemon_start_ns = 0U;
+
+uint64_t memdbg_daemon_instance_id(void) {
+  if (g_daemon_instance_id == 0U) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+      g_daemon_start_ns = (uint64_t)ts.tv_sec * 1000000000ULL +
+                          (uint64_t)ts.tv_nsec;
+    uint64_t seed = g_daemon_start_ns ^
+                    (uint64_t)(uintptr_t)&g_daemon_instance_id ^
+                    (uint64_t)getpid();
+    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    g_daemon_instance_id = seed ? seed : 1ULL;
+  }
+  return g_daemon_instance_id;
+}
+
+uint64_t memdbg_daemon_start_ns(void) {
+  (void)memdbg_daemon_instance_id();
+  return g_daemon_start_ns;
+}
 
 /* ---- PID file path helper ---- */
 
@@ -41,32 +73,98 @@ static int build_pid_path(const memdbg_config_t *cfg,
   return 0;
 }
 
-/* ---- Read PID from file ---- */
+/* ---- Best-effort advisory lock on the PID file ---- */
 
-static int read_pid_file(const char *path) {
-  FILE *fp;
-  char buf[64];
+static void lock_pid_file(int fd, bool exclusive) {
+#ifdef MEMDBG_HAVE_FLOCK
+  int op = exclusive ? LOCK_EX : LOCK_SH;
+  int rc;
+  if (fd < 0) return;
+  do {
+    rc = flock(fd, op);
+  } while (rc < 0 && errno == EINTR);
+  if (rc < 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "instance: flock failed (fd=%d): %s",
+                     fd, strerror(errno));
+  }
+#else
+  (void)fd;
+  (void)exclusive;
+  /* No flock on this platform — continue without locking. */
+#endif
+}
+
+static void unlock_pid_file(int fd) {
+#ifdef MEMDBG_HAVE_FLOCK
+  if (fd < 0) return;
+  (void)flock(fd, LOCK_UN);
+#else
+  (void)fd;
+#endif
+}
+
+/* ---- Read PID + optional instance token from an already-opened file ---- */
+
+static int read_pid_file_fp(FILE *fp, uint64_t *out_token) {
+  char buf[128];
   char *end;
   long pid;
+  uint64_t token = 0U;
+
+  if (fp == NULL) return -1;
+
+  if (fgets(buf, sizeof(buf), fp) == NULL) {
+    return -1;
+  }
+
+  errno = 0;
+  pid = strtol(buf, &end, 10);
+  if (end == buf || (*end != '\0' && *end != '\n' && *end != '\r' &&
+                     *end != ' ' && *end != '\t') ||
+      pid <= 0L || pid > (long)INT32_MAX || errno != 0) {
+    return -1;                 /* corrupt file — ignore */
+  }
+
+  /* Optional instance token (hex) follows the PID.  Old files that only
+   * contain the PID are treated as having token == 0. */
+  if (*end == ' ' || *end == '\t') {
+    const char *tok_start = end + 1;
+    while (*tok_start == ' ' || *tok_start == '\t') ++tok_start;
+    if (*tok_start != '\0' && *tok_start != '\n' && *tok_start != '\r') {
+      char *tok_end = NULL;
+      unsigned long long parsed = strtoull(tok_start, &tok_end, 16);
+      if (tok_end != tok_start &&
+          (*tok_end == '\0' || *tok_end == '\n' || *tok_end == '\r' ||
+           *tok_end == ' ' || *tok_end == '\t')) {
+        token = (uint64_t)parsed;
+      }
+    }
+  }
+
+  if (out_token != NULL) *out_token = token;
+  return (int)pid;
+}
+
+/* ---- Read PID + optional instance token from file ---- */
+
+static int read_pid_file(const char *path, uint64_t *out_token) {
+  FILE *fp;
+  int fd;
+  int pid;
 
   if (path == NULL || path[0] == '\0') return -1;
 
   fp = fopen(path, "r");
   if (fp == NULL) return -1;   /* file doesn't exist — not an error */
 
-  if (fgets(buf, sizeof(buf), fp) == NULL) {
-    (void)fclose(fp);
-    return -1;
-  }
+  fd = fileno(fp);
+  lock_pid_file(fd, false);
+  pid = read_pid_file_fp(fp, out_token);
+  unlock_pid_file(fd);
   (void)fclose(fp);
 
-  errno = 0;
-  pid = strtol(buf, &end, 10);
-  if (end == buf || (*end != '\0' && *end != '\n' && *end != '\r') ||
-      pid <= 0L || pid > (long)INT32_MAX || errno != 0) {
-    return -1;                 /* corrupt file — ignore */
-  }
-  return (int)pid;
+  return pid;
 }
 
 /* ---- Check whether a process exists (kill(pid, 0)) ---- */
@@ -134,7 +232,8 @@ static const char *instance_control_host(const memdbg_config_t *cfg) {
  *      later reuses that PID for a fresh payload launch, the PID file alone
  *      is not enough to conclude MemDBG is already running in this process. */
 
-static bool is_daemon_responsive(const memdbg_config_t *cfg) {
+static bool is_daemon_responsive(const memdbg_config_t *cfg,
+                                 uint64_t expected_token) {
   socket_t fd = PAL_INVALID_SOCKET;
   memdbg_packet_header_t request;
   memdbg_response_header_t response;
@@ -172,7 +271,15 @@ static bool is_daemon_responsive(const memdbg_config_t *cfg) {
           (ssize_t)sizeof(hello) &&
       hello.protocol_version == MEMDBG_PROTOCOL_VERSION &&
       hello.feature_level == MEMDBG_PROTOCOL_FEATURE_LEVEL) {
-    responsive = true;
+    /* If the PID file carried an token, the daemon we are talking to must
+     * identify itself with the same instance ID.  A mismatch means the PID
+     * was reused by a fresh payload and the file is stale. */
+    if (expected_token != 0ULL &&
+        hello.daemon_instance_id != expected_token) {
+      responsive = false;
+    } else {
+      responsive = true;
+    }
   }
 
   (void)pal_socket_close(fd);
@@ -294,15 +401,20 @@ static bool terminate_process(int pid) {
 
 bool memdbg_instance_is_current_process(const memdbg_config_t *cfg) {
   char path[MEMDBG_PATH_MAX];
+  int pid;
+  uint64_t token = 0U;
 
   if (cfg == NULL || build_pid_path(cfg, path, sizeof(path)) != 0)
     return false;
-  if (read_pid_file(path) != (int)getpid()) return false;
+  pid = read_pid_file(path, &token);
+  if (pid != (int)getpid()) return false;
 
   /* The PID file matches our PID, but that can happen because of PID reuse
    * after a stale file was left behind.  Only claim this process is the
-   * current instance if the daemon is actually responsive on its port. */
-  return is_daemon_responsive(cfg);
+   * current instance if the daemon is actually responsive on its port and,
+   * when the PID file carries an instance token, the daemon reports the
+   * same token. */
+  return is_daemon_responsive(cfg, token);
 }
 
 memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
@@ -319,9 +431,10 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
    * case killing or cooperatively shutting down the PID would also tear down
    * the already healthy instance.  Treat the existing daemon as authoritative
    * and let the second entry point return without touching its sockets. */
-  prev_pid = read_pid_file(path);
+  uint64_t prev_token = 0U;
+  prev_pid = read_pid_file(path, &prev_token);
   if (prev_pid == getpid()) {
-    if (is_daemon_responsive(cfg)) {
+    if (is_daemon_responsive(cfg, prev_token)) {
       memdbg_log_write(MEMDBG_LOG_INFO,
                        "instance: MemDBG is already running in pid %d",
                        prev_pid);
@@ -343,7 +456,7 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
   if (!confirmed_live_payload)
     confirmed_live_payload = request_previous_legacy_shutdown(cfg);
 
-  prev_pid = read_pid_file(path);
+  prev_pid = read_pid_file(path, NULL);
   if (prev_pid <= 0) return MEMDBG_OK; /* no PID fallback available */
 
   if (!process_exists(prev_pid)) {
@@ -382,26 +495,57 @@ int memdbg_instance_write_pid_file(const memdbg_config_t *cfg) {
     return -1;
   }
 
-  fp = fopen(path, "w");
-  if (fp == NULL) {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "instance: cannot write pid file %s: %s",
-                     path, strerror(errno));
-    return -1;
-  }
+  /* Open without truncating, then lock exclusively before modifying.  This
+   * keeps two concurrent payload launches from interleaving writes. */
+  {
+    int fd = open(path, O_WRONLY | O_CREAT, MEMDBG_FILE_PERM);
+    if (fd < 0) {
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "instance: cannot write pid file %s: %s",
+                       path, strerror(errno));
+      return -1;
+    }
+    lock_pid_file(fd, true);
+    if (ftruncate(fd, 0) != 0) {
+      int saved = errno;
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "instance: ftruncate failed for %s: %s",
+                       path, strerror(errno));
+      unlock_pid_file(fd);
+      (void)pal_file_close(fd);
+      errno = saved;
+      return -1;
+    }
 
-  if (fprintf(fp, "%d\n", getpid()) < 0) {
-    int saved = errno;
+    fp = fdopen(fd, "w");
+    if (fp == NULL) {
+      int saved = errno;
+      unlock_pid_file(fd);
+      (void)close(fd);
+      errno = saved;
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "instance: cannot fdopen pid file %s: %s",
+                       path, strerror(errno));
+      return -1;
+    }
+
+    /* New format: "<pid> <instance_id_hex>\n".  Old files that contain only
+     * the PID are still read correctly (token == 0 means "no token"). */
+    if (fprintf(fp, "%d %016llx\n", getpid(),
+                (unsigned long long)memdbg_daemon_instance_id()) < 0) {
+      int saved = errno;
+      (void)fclose(fp);
+      (void)unlink(path);
+      errno = saved;
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "instance: failed to write pid to %s: %s",
+                       path, strerror(errno));
+      return -1;
+    }
+
+    unlock_pid_file(fd);
     (void)fclose(fp);
-    (void)unlink(path);
-    errno = saved;
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "instance: failed to write pid to %s: %s",
-                     path, strerror(errno));
-    return -1;
   }
-
-  (void)fclose(fp);
   memdbg_log_write(MEMDBG_LOG_INFO, "instance: wrote pid %d to %s",
                    getpid(), path);
   return 0;
@@ -411,13 +555,27 @@ void memdbg_instance_remove_pid_file(const memdbg_config_t *cfg) {
   char path[MEMDBG_PATH_MAX];
   pid_t my_pid = getpid();
   int prev_pid;
+  FILE *fp;
+  int fd;
 
   if (cfg == NULL) return;
   if (build_pid_path(cfg, path, sizeof(path)) != 0) return;
 
+  /* Lock the file before reading/unlinking so we don't race a concurrent
+   * writer that is between ftruncate and fprintf.  Open read-only because
+   * we only need to inspect the content before unlinking it. */
+  fp = fopen(path, "r");
+  if (fp == NULL) return;
+  fd = fileno(fp);
+  lock_pid_file(fd, true);
+
   /* Only remove if the file contains our own PID. */
-  prev_pid = read_pid_file(path);
-  if (prev_pid <= 0 || prev_pid != (int)my_pid) return;
+  prev_pid = read_pid_file_fp(fp, NULL);
+  if (prev_pid <= 0 || prev_pid != (int)my_pid) {
+    unlock_pid_file(fd);
+    (void)fclose(fp);
+    return;
+  }
 
   if (unlink(path) != 0 && errno != ENOENT)
     memdbg_log_write(MEMDBG_LOG_WARN,
@@ -425,4 +583,7 @@ void memdbg_instance_remove_pid_file(const memdbg_config_t *cfg) {
                      path, strerror(errno));
   else
     memdbg_log_write(MEMDBG_LOG_INFO, "instance: removed pid file %s", path);
+
+  unlock_pid_file(fd);
+  (void)fclose(fp);
 }
