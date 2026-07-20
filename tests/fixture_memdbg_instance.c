@@ -238,6 +238,10 @@ int fixture_start_memdbg_listener(fixture_listener_t *out) {
 
 void fixture_stop_listener(fixture_listener_t *listener) {
   if (listener == NULL || listener->listen_fd < 0) return;
+  /* shutdown() guarantees accept() unblocks on Linux (POSIX leaves close()
+   * behavior on an accept()-blocked socket undefined; Linux does NOT unblock,
+   * while macOS/BSD do).  pthread_join would hang forever without this. */
+  (void)shutdown(listener->listen_fd, SHUT_RDWR);
   (void)close(listener->listen_fd);
   listener->listen_fd = -1;
   (void)pthread_join(listener->thread, NULL);
