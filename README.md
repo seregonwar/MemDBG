@@ -517,6 +517,7 @@ and Android build. Release artifacts include `SHA256SUMS.txt`.
 | Document | Purpose |
 |---|---|
 | [`docs/showcase.md`](docs/showcase.md) | Product walkthrough and feature showcase. |
+| [`docs/ps4_goldhen_launch.md`](docs/ps4_goldhen_launch.md) | PS4 / GoldHEN launch notes and stale PID file handling. |
 | [`docs/protocol.md`](docs/protocol.md) | Internal MDBG wire protocol specification and extension rules. |
 | [`docs/ps5debug_compat.md`](docs/ps5debug_compat.md) | ps5debug compatibility layer for older trainer/debugger clients. |
 | [`docs/ps5_validation_2026-07-18.md`](docs/ps5_validation_2026-07-18.md) | Reproducible PS5 protocol, stability, and performance validation report. |

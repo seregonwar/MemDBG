@@ -224,20 +224,23 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   if (cfg_in == NULL) memdbg_config_defaults(&cfg);
   else                cfg = *cfg_in;
 
+  atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
+  g_start_ticks = monotonic_seconds();
+
+  if (pal_network_init() != 0) return MEMDBG_ERR_NET;
+
   /* A second GoldHEN injection may execute inside the same process.  Detect
-   * it before touching shared log, UDP, or listener state. */
+   * it as early as possible, before touching shared log, UDP, or listener
+   * state.  The TCP ping needs the network subsystem, but logging must stay
+   * uninitialised so a live daemon keeps its log sinks. */
   if (memdbg_instance_is_current_process(&cfg)) {
     if (pal_notification_init() == 0) {
       pal_notification_send("MemDBG is already running");
       pal_notification_shutdown();
     }
+    (void)pal_network_fini();
     return MEMDBG_OK;
   }
-
-  atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
-  g_start_ticks = monotonic_seconds();
-
-  if (pal_network_init() != 0) return MEMDBG_ERR_NET;
 
   if (memdbg_log_init(cfg.data_root) != 0) {
     (void)pal_network_fini();
