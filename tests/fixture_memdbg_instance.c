@@ -39,12 +39,21 @@ int fixture_pid_file_path(const char *data_root, char *out, size_t out_size) {
 }
 
 int fixture_write_pid_file(const char *data_root, int pid) {
+  return fixture_write_pid_file_with_token(data_root, pid, 0U);
+}
+
+int fixture_write_pid_file_with_token(const char *data_root, int pid,
+                                      uint64_t token) {
   char path[1024];
   FILE *fp;
   if (fixture_pid_file_path(data_root, path, sizeof(path)) != 0) return -1;
   fp = fopen(path, "w");
   if (fp == NULL) return -1;
-  fprintf(fp, "%d\n", pid);
+  if (token != 0U) {
+    fprintf(fp, "%d %016llx\n", pid, (unsigned long long)token);
+  } else {
+    fprintf(fp, "%d\n", pid);
+  }
   fclose(fp);
   return 0;
 }
@@ -211,6 +220,7 @@ static void *fake_memdbg_listener_thread(void *arg) {
     hello.debug_port = args->port;
     hello.udp_log_port = 0;
     hello.feature_level = MEMDBG_PROTOCOL_FEATURE_LEVEL;
+    hello.daemon_instance_id = FIXTURE_INSTANCE_ID;
     (void)snprintf(hello.version, sizeof(hello.version), "test");
     (void)snprintf(hello.name, sizeof(hello.name), "MemDBG");
 

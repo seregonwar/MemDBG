@@ -9,6 +9,7 @@
 #include "daemon_internal.h"
 
 #include "memdbg/core/memdbg.h"
+#include "memdbg/core/memdbg_instance.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/core/memdbg_log.h"
 
@@ -69,19 +70,8 @@ static uint16_t memdbg_platform_id(void) {
   /* Generate a random instance ID once at startup so the frontend can detect
    * whether the payload survived a rest-mode cycle.  Mix the monotonic clock,
    * process ID, and a static address for ASLR diversity. */
-  static uint64_t g_daemon_instance_id = 0;
-  static uint64_t g_daemon_start_ns = 0;
-  if (g_daemon_instance_id == 0) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
-      g_daemon_start_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-    uint64_t seed = g_daemon_start_ns ^ (uint64_t)(uintptr_t)&g_daemon_instance_id
-                    ^ (uint64_t)getpid();
-    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
-    g_daemon_instance_id = seed ? seed : 1ULL;
-  }
-  out->daemon_instance_id = g_daemon_instance_id;
-  out->daemon_start_monotonic_ns = g_daemon_start_ns;
+  out->daemon_instance_id = memdbg_daemon_instance_id();
+  out->daemon_start_monotonic_ns = memdbg_daemon_start_ns();
 
   return MEMDBG_OK;
 }
