@@ -1,27 +1,32 @@
 /**
  * High-level MDBG operations. Wrap raw commands with typed body encoders
- * and decoders so store code stays readable.
+ * and decoders matching the canonical C structs from memdbg_protocol.h.
+ *
+ * All wire layouts are confirmed by static_assert in the C header.
  */
 import { BodyReader, BodyWriter, addrToHex } from "./codec";
 import { Cmd, ValueType, type ValueTypeId, protString } from "./constants";
 import { getClient } from "./client";
 
-// ─── Types ───────────────────────────────────────────────────────────────
+// ─── Types (match C structs exactly) ─────────────────────────────────────
+
+/** memdbg_process_entry_t = 56 bytes: pid(4) + ppid(4) + name[48] */
 export interface RemoteProcess {
   pid: number;
+  ppid: number;
   name: string;
-  appId: number;
-  titleId: string;
-  flags: number;
+  titleId: string;  // not on wire for process_entry; populated from batch info
 }
 
+/** memdbg_map_entry_t = 88 bytes: start(8) + end(8) + protection(4) + flags(4) + name[64] */
 export interface MemoryRegion {
-  base: bigint;
-  size: bigint;
-  prot: number;
+  base: bigint;     // start
+  end: bigint;       // end (canonical)
+  size: bigint;      // derived: end - base
+  prot: number;      // protection
+  flags: number;     // native VM flags + map type in high byte
   protStr: string;
   name: string;
-  end: bigint;
 }
 
 export interface ScanHit {
@@ -30,23 +35,39 @@ export interface ScanHit {
   value: Uint8Array;
 }
 
-// ─── Process ─────────────────────────────────────────────────────────────
+export interface ScanResult {
+  count: number;
+  truncated: number;
+  bytesScanned: bigint;
+  elapsedNs: bigint;
+  readCalls: number;
+  regionsScanned: number;
+  readErrors: number;
+  hits: ScanHit[];
+}
+
+// ─── Process list ────────────────────────────────────────────────────────
+
+/** memdbg_process_entry_t = 56 bytes: pid(int32) + ppid(int32) + name[48] */
 export async function listProcesses(): Promise<RemoteProcess[]> {
   const body = await getClient().call(Cmd.PROCESS_LIST, new Uint8Array(0));
   const r = new BodyReader(body);
   const count = r.u32();
   const out: RemoteProcess[] = [];
   for (let i = 0; i < count; i++) {
-    const pid = r.u32();
-    const name = r.cstring(32);
-    const appId = r.u32();
-    const titleId = r.cstring(16);
-    const flags = r.u32();
-    out.push({ pid, name, appId, titleId, flags });
+    out.push({
+      pid: r.i32(),
+      ppid: r.i32(),
+      name: r.cstring(48),
+      titleId: "",
+    });
   }
   return out;
 }
 
+// ─── Process maps ────────────────────────────────────────────────────────
+
+/** memdbg_map_entry_t = 88 bytes: start(8) + end(8) + protection(4) + flags(4) + name[64] */
 export async function listMaps(pid: number): Promise<MemoryRegion[]> {
   const body = new BodyWriter().u32(pid).finish();
   const res = await getClient().call(Cmd.PROCESS_MAPS, body);
@@ -55,22 +76,26 @@ export async function listMaps(pid: number): Promise<MemoryRegion[]> {
   const out: MemoryRegion[] = [];
   for (let i = 0; i < count; i++) {
     const base = r.u64();
-    const size = r.u64();
+    const end = r.u64();
     const prot = r.u32();
-    const name = r.cstring(32);
+    const flags = r.u32();
+    const name = r.cstring(64);
     out.push({
       base,
-      size,
+      end,
+      size: end - base,
       prot,
+      flags,
       protStr: protString(prot),
       name,
-      end: base + size,
     });
   }
   return out;
 }
 
-// ─── Memory ──────────────────────────────────────────────────────────────
+// ─── Memory R/W ──────────────────────────────────────────────────────────
+
+/** memdbg_memory_request_t = 16 bytes: pid(4) + address(8) + length(4) */
 export async function readMemory(
   pid: number,
   address: bigint,
@@ -90,26 +115,38 @@ export async function writeMemory(
 }
 
 // ─── Scan ────────────────────────────────────────────────────────────────
+
 export interface ScanFilter {
   rangeStart?: bigint;
   rangeEnd?: bigint;
   maxHits?: number;
+  protectionMask?: number;
 }
 
+/**
+ * memdbg_scan_process_exact_request_t = 56 bytes:
+ *   pid(4) + value_type(4) + value_length(4) + alignment(4) +
+ *   max_results(4) + protection_mask(4) + start(8) + end(8) + value[16]
+ */
 export async function scanExact(
   pid: number,
   type: ValueTypeId,
   value: Uint8Array,
   filter: ScanFilter = {},
 ): Promise<ScanHit[]> {
+  // Pad value to exactly 16 bytes (MEMDBG_SCAN_VALUE_MAX)
+  const pad = new Uint8Array(16);
+  pad.set(value.subarray(0, 16));
   const w = new BodyWriter()
     .u32(pid)
-    .u16(type)
-    .u16(value.length)
-    .bytes(value)
+    .u32(type)
+    .u32(value.length)
+    .u32(0) // alignment
+    .u32(filter.maxHits ?? 0)
+    .u32(filter.protectionMask ?? 0)
     .u64(filter.rangeStart ?? 0n)
     .u64(filter.rangeEnd ?? 0n)
-    .u32(filter.maxHits ?? 0);
+    .bytes(pad);
   const res = await getClient().call(Cmd.SCAN_PROCESS_EXACT, w.finish(), 30000);
   return parseScanHits(res, value.length);
 }
@@ -120,15 +157,20 @@ export async function scanAob(
   filter: ScanFilter = {},
 ): Promise<ScanHit[]> {
   const { bytes, mask } = compilePattern(pattern);
+  // memdbg_scan_process_aob_request_t = 40 bytes:
+  //   pid(4) + protection_mask(4) + max_results(4) + pattern_length(4) +
+  //   start(8) + end(8) + reserved[2](8)
+  // Followed by: pattern bytes + mask bytes
   const w = new BodyWriter()
     .u32(pid)
-    .u16(bytes.length)
-    .u16(0)
-    .bytes(bytes)
-    .bytes(mask)
+    .u32(filter.protectionMask ?? 0)
+    .u32(filter.maxHits ?? 0)
+    .u32(bytes.length)
     .u64(filter.rangeStart ?? 0n)
     .u64(filter.rangeEnd ?? 0n)
-    .u32(filter.maxHits ?? 0);
+    .u32(0).u32(0); // reserved[2]
+  // Pattern bytes inline, then mask bytes inline
+  w.bytes(bytes).bytes(mask);
   const res = await getClient().call(Cmd.SCAN_PROCESS_AOB, w.finish(), 30000);
   return parseScanHits(res, bytes.length);
 }
@@ -146,6 +188,7 @@ function parseScanHits(body: Uint8Array, valueSize: number): ScanHit[] {
 }
 
 // ─── Value encode/decode ────────────────────────────────────────────────
+
 export function encodeValue(type: ValueTypeId, input: string): Uint8Array {
   const b = new BodyWriter();
   switch (type) {

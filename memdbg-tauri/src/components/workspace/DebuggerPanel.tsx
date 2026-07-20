@@ -259,10 +259,9 @@ function RegRow({
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          try {
-            const v = hexToAddr(text);
-            if (v !== value) onCommit(v);
+        onBlur={() => {            try {
+              const v = hexToAddr(text);
+              if (v !== value) onCommit(v as bigint);
           } catch {
             setText(addrToHex(value));
           }

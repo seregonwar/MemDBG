@@ -1,78 +1,106 @@
 /**
  * Page-table walk family (spec §9) — gated by MEMDBG_EXT_CAP_PTWALK.
  *
- *   PTWALK_DISCOVER 0x0C00 — find page-table root(s) for pid
- *   PTWALK_AUGMENT  0x0C01 — annotate maps with pte flags
- *   PTWALK_READ     0x0C02 — physical read via pt walk
- *   PTWALK_WRITE    0x0C03 — physical write via pt walk
- *   PTWALK_PROBE    0x0C04 — resolve VA → PA + prot
+ * Wire formats match the canonical C header:
+ *   memdbg_ptwalk_discover_response_t = 20 bytes
+ *   memdbg_ptwalk_probe_request_t     = 16 bytes
+ *   memdbg_ptwalk_probe_response_t    = 32 bytes
+ *   memdbg_ptwalk_io_request_t        = 24 bytes
+ *   memdbg_ptwalk_augment_request_t   = 8 bytes
  */
 import { BodyReader, BodyWriter } from "./codec";
 import { Cmd } from "./constants";
 import { getClient } from "./client";
 
-export interface PtWalkRoot {
-  pid: number;
-  cr3: bigint;
-  flags: number;
+/**
+ * PTWALK_DISCOVER (0x0C00) — find page-table root(s) for pid.
+ *
+ * Response: memdbg_ptwalk_discover_response_t (20 bytes).
+ */
+export interface PtWalkDiscover {
+  status: number;
+  dmapBase: bigint;
+  pmapOffset: bigint;
 }
-export async function ptwalkDiscover(pid: number): Promise<PtWalkRoot[]> {
-  const res = await getClient().call(Cmd.PTWALK_DISCOVER, new BodyWriter().u32(pid).finish());
+export async function ptwalkDiscover(pid: number): Promise<PtWalkDiscover> {
+  const res = await getClient().call(Cmd.PTWALK_DISCOVER, new BodyWriter().i32(pid).finish());
   const r = new BodyReader(res);
-  const count = r.u32();
-  const out: PtWalkRoot[] = [];
-  for (let i = 0; i < count && r.remaining >= 16; i++) {
-    out.push({ pid: r.u32(), cr3: r.u64(), flags: r.u32() });
-  }
-  return out;
-}
-
-export interface PtProbe {
-  physical: bigint;
-  present: boolean;
-  writable: boolean;
-  user: boolean;
-  nx: boolean;
-  pageSize: number;
-}
-export async function ptwalkProbe(pid: number, virt: bigint): Promise<PtProbe> {
-  const body = new BodyWriter().u32(pid).u64(virt).finish();
-  const res = await getClient().call(Cmd.PTWALK_PROBE, body);
-  const r = new BodyReader(res);
-  const physical = r.u64();
-  const flags = r.u32();
-  const pageSize = r.u32();
   return {
-    physical,
-    pageSize,
-    present:  (flags & 1) !== 0,
-    writable: (flags & 2) !== 0,
-    user:     (flags & 4) !== 0,
-    nx:       (flags & 8) !== 0,
+    status: r.u32(),
+    dmapBase: r.u64(),
+    pmapOffset: r.u64(),
   };
 }
 
-export async function ptwalkRead(pid: number, virt: bigint, length: number): Promise<Uint8Array> {
-  const body = new BodyWriter().u32(pid).u64(virt).u32(length).u32(0).finish();
+/**
+ * PTWALK_PROBE (0x0C04) — resolve VA → PA + prot.
+ *
+ * Request:  pid(i32) + reserved(u32) + address(u64) = 16 bytes.
+ * Response: memdbg_ptwalk_probe_response_t (32 bytes).
+ */
+export interface PtProbe {
+  physAddress: bigint;
+  pageSize: bigint;
+  pteValue: bigint;
+  pageLevel: number;
+  cached: boolean;
+}
+export async function ptwalkProbe(pid: number, virt: bigint): Promise<PtProbe> {
+  const body = new BodyWriter().i32(pid).u32(0).u64(virt).finish();
+  const res = await getClient().call(Cmd.PTWALK_PROBE, body);
+  const r = new BodyReader(res);
+  return {
+    physAddress: r.u64(),
+    pageSize: r.u64(),
+    pteValue: r.u64(),
+    pageLevel: r.i32(),
+    cached: r.u32() !== 0,
+  };
+}
+
+/**
+ * PTWALK_READ (0x0C02) — physical read via pt walk.
+ *
+ * Request: pid(i32) + reserved(u32) + address(u64) + length(u64) = 24 bytes.
+ */
+export async function ptwalkRead(pid: number, virt: bigint, length: bigint): Promise<Uint8Array> {
+  const body = new BodyWriter().i32(pid).u32(0).u64(virt).u64(length).finish();
   return getClient().call(Cmd.PTWALK_READ, body, 15000);
 }
 
+/**
+ * PTWALK_WRITE (0x0C03) — physical write via pt walk.
+ *
+ * Request: pid(i32) + reserved(u32) + address(u64) + length(u64) + data = 24 bytes + data.
+ */
 export async function ptwalkWrite(pid: number, virt: bigint, data: Uint8Array): Promise<void> {
-  const body = new BodyWriter().u32(pid).u64(virt).u32(data.length).u32(0).bytes(data).finish();
+  const body = new BodyWriter()
+    .i32(pid)
+    .u32(0)
+    .u64(virt)
+    .u64(BigInt(data.length))
+    .bytes(data)
+    .finish();
   await getClient().call(Cmd.PTWALK_WRITE, body);
 }
 
+/**
+ * PTWALK_AUGMENT (0x0C01) — annotate maps with pte flags.
+ *
+ * Request: pid(i32) + reserved(u32) = 8 bytes.
+ * Response: count-prefixed array of { base, size, pteFlags } entries.
+ */
 export interface PtAugmentEntry {
   base: bigint;
   size: bigint;
   pteFlags: number;
 }
 export async function ptwalkAugment(pid: number): Promise<PtAugmentEntry[]> {
-  const res = await getClient().call(Cmd.PTWALK_AUGMENT, new BodyWriter().u32(pid).finish());
+  const body = new BodyWriter().i32(pid).u32(0).finish();
+  const res = await getClient().call(Cmd.PTWALK_AUGMENT, body);
   const r = new BodyReader(res);
-  const count = r.u32();
   const out: PtAugmentEntry[] = [];
-  for (let i = 0; i < count && r.remaining >= 20; i++) {
+  while (r.remaining >= 20) {
     out.push({ base: r.u64(), size: r.u64(), pteFlags: r.u32() });
   }
   return out;

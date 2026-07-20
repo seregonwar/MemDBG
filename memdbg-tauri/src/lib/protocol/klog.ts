@@ -1,53 +1,53 @@
 /**
- * MDBG Kernel Log stream (0x0d02).
+ * MDBG Kernel Log stream (0x0D02).
  *
- * KLOG_CONNECT opens a one-shot streaming subscription. The server then
- * pushes line records back over the same command channel until the client
- * disconnects. We model it as a polling wrapper so it fits our
- * request/response codec — the server issues incremental replies that we
- * drain via repeated polls.
+ * KLOG_CONNECT opens a TCP port on the daemon for streaming kernel log
+ * lines. The response carries the ephemeral port number. The client
+ * connects to that port on a separate socket to receive klog entries.
+ *
+ * Per memdbg_protocol.h:
+ *   memdbg_klog_connect_request_t = 4 bytes: reserved(4)
+ *   Response: u32 port number
  */
 import { BodyReader, BodyWriter } from "./codec";
 import { Cmd } from "./constants";
 import { getClient } from "./client";
 
+/**
+ * Connect to the kernel log stream. Returns the ephemeral TCP port
+ * on which the daemon will stream klog lines.
+ */
+export async function klogConnect(): Promise<number> {
+  const body = new BodyWriter().u32(0).finish(); // reserved
+  const res = await getClient().call(Cmd.KLOG_CONNECT, body, 5000);
+  return new BodyReader(res).u32();
+}
+
+// ─── Compatibility exports for callers ──────────────────────────────────
+
+/** Severity level names for klog entries. */
+export function severityName(sev: number): string {
+  switch (sev) {
+    case 0: return "trace";
+    case 1: return "debug";
+    case 2: return "info";
+    case 3: return "warn";
+    case 4: return "error";
+    case 5: return "fatal";
+    default: return `sev_${sev}`;
+  }
+}
+
+/** Stub poll — klog streaming uses a separate TCP socket. */
+export async function klogPoll(): Promise<KLogLine[]> {
+  return [];
+}
+
+/** Kernel log line parsed from the klog stream. */
 export interface KLogLine {
   timestamp: bigint;
-  severity: number; // 0..7 syslog-style
-  cpu: number;
-  facility: number;
+  severity: number;
+  tag: string;
   message: string;
-}
-
-export const SEVERITY_NAMES: Record<number, string> = {
-  0: "emerg",
-  1: "alert",
-  2: "crit",
-  3: "err",
-  4: "warn",
-  5: "notice",
-  6: "info",
-  7: "debug",
-};
-
-export function severityName(sev: number): string {
-  return SEVERITY_NAMES[sev] ?? `s${sev}`;
-}
-
-export async function klogPoll(max = 256): Promise<KLogLine[]> {
-  const body = new BodyWriter().u32(max).finish();
-  const res = await getClient().call(Cmd.KLOG_CONNECT, body, 5000);
-  const r = new BodyReader(res);
-  const count = r.u32();
-  const out: KLogLine[] = [];
-  for (let i = 0; i < count; i++) {
-    const timestamp = r.u64();
-    const severity = r.u8();
-    const cpu = r.u8();
-    const facility = r.u16();
-    const msgLen = r.u32();
-    const message = new TextDecoder("utf-8", { fatal: false }).decode(r.bytes(msgLen));
-    out.push({ timestamp, severity, cpu, facility, message });
-  }
-  return out;
+  cpu: number;  // CPU core index, default 0
 }

@@ -1,0 +1,104 @@
+name: Build Tauri (macOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Mark as release artifact (longer retention)"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - 'memdbg-tauri/**'
+      - '.github/workflows/build-tauri.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    name: Tauri macOS .app + .dmg
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: memdbg-tauri/package-lock.json
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            memdbg-tauri/src-tauri/target
+          key: tauri-cargo-${{ runner.os }}-${{ hashFiles('memdbg-tauri/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            tauri-cargo-${{ runner.os }}-
+
+      - name: Install npm dependencies
+        working-directory: memdbg-tauri
+        run: npm install
+
+      - name: Build Tauri app (unsigned)
+        working-directory: memdbg-tauri
+        env:
+          CI: true
+        run: npx tauri build
+
+      - name: Find and report build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Bundle output ==="
+          find memdbg-tauri/src-tauri/target/release/bundle -type f 2>/dev/null | sort || echo "No bundle found"
+          echo "=== .app contents (top level) ==="
+          find memdbg-tauri/src-tauri/target/release/bundle/macos -maxdepth 2 -type f -o -type d 2>/dev/null | sort || true
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MemDBG-Tauri-macOS-dmg
+          path: memdbg-tauri/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: ${{ inputs.release == true && 30 || 7 }}
+
+      - name: Upload .app.zip (for quick testing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path=$(find memdbg-tauri/src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
+          if [ -n "$app_path" ]; then
+            app_name=$(basename "$app_path" .app)
+            (cd "$(dirname "$app_path")" && zip -qry "$GITHUB_WORKSPACE/$app_name.app.zip" "$(basename "$app_path")")
+            echo "app_zip=$app_name.app.zip" >> "$GITHUB_ENV"
+          else
+            echo "No .app found" >&2
+            exit 1
+          fi
+
+      - name: Upload .app.zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MemDBG-Tauri-macOS-app
+          path: ${{ env.app_zip }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.release == true && 30 || 7 }}

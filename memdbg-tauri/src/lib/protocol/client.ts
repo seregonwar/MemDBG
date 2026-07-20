@@ -246,8 +246,14 @@ export class MdbgClient {
       udpLogPort: r.u16(),
       version: r.cstring(16),
       name: r.cstring(16),
+      featureLevel: r.u16(),
+      daemonInstanceId: 0n,
+      daemonStartMonotonicNs: 0n,
       extendedCaps: [],
     };
+    r.skip(2); // reserved
+    hello.daemonInstanceId = r.u64();
+    hello.daemonStartMonotonicNs = r.u64();
     if (hello.protocolVersion !== MDBG_PROTOCOL_VERSION) {
       this.emit("protocol_mismatch", hello);
     }

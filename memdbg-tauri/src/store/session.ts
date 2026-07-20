@@ -823,7 +823,6 @@ export const useSession = create<State>((set, get) => {
         await debugSetBreakpointCond(
           address,
           hw ? BpType.HW : BpType.SW,
-          0,
           condReg,
           condOp,
           condValue,
@@ -869,7 +868,7 @@ export const useSession = create<State>((set, get) => {
     },
     dbgClearWatchpoint: async (address, hwIndex) => {
       try {
-        await debugClearWatchpoint(address, hwIndex);
+        await debugClearWatchpoint(address);
         await get().dbgRefreshWatchpoints();
       } catch (e) {
         get().pushLog(`wp clear failed: ${(e as Error).message}`, "error");
@@ -894,11 +893,12 @@ export const useSession = create<State>((set, get) => {
     },
 
     dbgRefreshDisasm: async (address, length = 128) => {
+      const pid = get().attachedPid;
       const base = address ?? get().dbg.regs?.rip ?? get().activeAddress ?? 0n;
-      if (base === 0n) return;
+      if (base === 0n || pid == null) return;
       set((st) => ({ dbg: { ...st.dbg, disasmLoading: true } }));
       try {
-        const insns = await opDisasm(base, length);
+        const insns = await opDisasm(pid, base, length);
         set((st) => ({
           dbg: {
             ...st.dbg,
@@ -914,8 +914,10 @@ export const useSession = create<State>((set, get) => {
     },
 
     dbgXrefsTo: async (address) => {
+      const pid = get().attachedPid;
+      if (pid == null) return;
       try {
-        const xrefs = await xrefsTo(address);
+        const xrefs = await xrefsTo(pid, address, 0n, address);
         set((st) => ({ dbg: { ...st.dbg, xrefs } }));
         get().pushLog(`xrefs ${addrToHex(address)} → ${xrefs.length}`, "debug");
       } catch (e) {
@@ -957,7 +959,7 @@ export const useSession = create<State>((set, get) => {
     },
 
     // ─── Tracer ───────────────────────────────────────────────
-    tracerAttach: async (pid, mask = 0xffffffff) => {
+    tracerAttach: async (pid) => {
       const s = get();
       const target = pid ?? s.attachedPid;
       if (target == null) {
@@ -965,7 +967,7 @@ export const useSession = create<State>((set, get) => {
         return;
       }
       try {
-        await tracerAttach(target, mask);
+        await tracerAttach(target);
         set({ tracer: { ...s.tracer, attached: true, running: true, pid: target } });
         s.pushLog(`tracer attached pid ${target}`, "info");
       } catch (e) {
@@ -1034,7 +1036,7 @@ export const useSession = create<State>((set, get) => {
       const k = get().klog;
       if (k.paused) return;
       try {
-        const lines = await klogPoll(256);
+        const lines = await klogPoll();
         if (lines.length === 0) return;
         set((st) => {
           const merged = [...st.klog.lines, ...lines];
@@ -1069,15 +1071,14 @@ export const useSession = create<State>((set, get) => {
           infos = procs.map<ProcessInfo>((p) => ({
             pid: p.pid,
             name: p.name,
-            appId: 0,
             titleId: "",
-            flags: 0,
-            parentPid: 0,
+            contentId: "",
+            path: "",
+            state: 0,
             threadCount: 0,
             vmRss: 0n,
             vmSize: 0n,
             cpuPercent: 0,
-            state: 0,
           }));
         }
         set((st) => ({
@@ -1109,10 +1110,10 @@ export const useSession = create<State>((set, get) => {
         get().pushLog(`continue failed: ${(e as Error).message}`, "error");
       }
     },
-    tmKill: async (pid, signal = 9) => {
+    tmKill: async (pid) => {
       try {
-        await processKill(pid, signal);
-        get().pushLog(`kill pid ${pid} sig ${signal}`, "warn");
+        await processKill(pid);
+        get().pushLog(`kill pid ${pid}`, "warn");
         await get().tmRefresh();
       } catch (e) {
         get().pushLog(`kill failed: ${(e as Error).message}`, "error");
@@ -1136,9 +1137,9 @@ export const useSession = create<State>((set, get) => {
     },
     tmAlloc: async (pid, size, prot) => {
       try {
-        const addr = await processAlloc(pid, size, prot);
-        get().pushLog(`alloc pid ${pid} sz=${size} → ${addrToHex(addr)}`, "info");
-        return addr;
+        const result = await processAlloc(pid, size, prot);
+        get().pushLog(`alloc pid ${pid} sz=${size} → ${addrToHex(result.address)}`, "info");
+        return result.address;
       } catch (e) {
         get().pushLog(`alloc failed: ${(e as Error).message}`, "error");
         return null;

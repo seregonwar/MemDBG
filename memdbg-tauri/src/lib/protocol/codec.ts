@@ -247,6 +247,7 @@ export class BodyReader {
   u32() { const v = this.dv.getUint32(this.offset, true); this.offset += 4; return v; }
   i32() { const v = this.dv.getInt32(this.offset, true); this.offset += 4; return v; }
   u64() { const v = this.dv.getBigUint64(this.offset, true); this.offset += 8; return v; }
+  i64() { const v = this.dv.getBigInt64(this.offset, true); this.offset += 8; return v; }
   bytes(n: number) {
     const s = this.buf.subarray(this.offset, this.offset + n).slice();
     this.offset += n;
