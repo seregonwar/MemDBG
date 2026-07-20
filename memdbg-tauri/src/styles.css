@@ -1,0 +1,145 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* MemDBG brand tokens */
+  --color-mem-bg: var(--mem-bg);
+  --color-mem-panel: var(--mem-panel);
+  --color-mem-panel-2: var(--mem-panel-2);
+  --color-mem-line: var(--mem-line);
+  --color-mem-text: var(--mem-text);
+  --color-mem-muted: var(--mem-muted);
+  --color-mem-accent: var(--mem-accent);
+  --color-mem-accent-dim: var(--mem-accent-dim);
+  --color-mem-danger: var(--mem-danger);
+  --color-mem-warn: var(--mem-warn);
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --radius: 0.375rem;
+
+  /* MemDBG palette (dark tool aesthetic) */
+  --mem-bg: #0b0d0f;
+  --mem-panel: #14171a;
+  --mem-panel-2: #10131600;
+  --mem-line: #1f242a;
+  --mem-text: #e6e8ea;
+  --mem-muted: #8a93a0;
+  --mem-accent: #22d3c5;
+  --mem-accent-dim: #0f6b64;
+  --mem-danger: #ff5566;
+  --mem-warn: #f5b544;
+
+  --background: var(--mem-bg);
+  --foreground: var(--mem-text);
+  --card: var(--mem-panel);
+  --card-foreground: var(--mem-text);
+  --popover: var(--mem-panel);
+  --popover-foreground: var(--mem-text);
+  --primary: var(--mem-accent);
+  --primary-foreground: #001615;
+  --secondary: #1a1f24;
+  --secondary-foreground: var(--mem-text);
+  --muted: #1a1f24;
+  --muted-foreground: var(--mem-muted);
+  --accent: #1a1f24;
+  --accent-foreground: var(--mem-text);
+  --destructive: var(--mem-danger);
+  --destructive-foreground: #180708;
+  --border: var(--mem-line);
+  --input: var(--mem-line);
+  --ring: var(--mem-accent);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-mem-bg);
+    color: var(--color-mem-text);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-mem-accent) 40%, transparent);
+    color: var(--color-mem-text);
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-mem-line);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a3138;
+  }
+}
+
+@utility mem-panel {
+  background: var(--color-mem-panel);
+  border: 1px solid var(--color-mem-line);
+}
+
+@utility mem-grid-bg {
+  background-image:
+    linear-gradient(var(--color-mem-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-mem-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+@keyframes mem-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@utility mem-live-dot {
+  animation: mem-pulse 1.4s ease-in-out infinite;
+}
