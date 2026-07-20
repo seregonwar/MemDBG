@@ -298,6 +298,12 @@ test-reconnect-50-restarts: host tests/test_reconnect_50_restarts.c
 	rm -rf $$tmpdir; \
 	exit $$rc
 
+test-memdbg-instance: $(filter-out $(BUILD_DIR)/host/core/main.o,$(HOST_OBJECTS)) tests/test_memdbg_instance.c tests/fixture_memdbg_instance.c tests/fixture_memdbg_instance.h
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_memdbg_instance.c tests/fixture_memdbg_instance.c $(filter-out $(BUILD_DIR)/host/core/main.o,$(HOST_OBJECTS)) $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_memdbg_instance
+	@echo "--- Running memdbg_instance unit tests ---"
+	$(BUILD_DIR)/test_memdbg_instance
+
 test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_partition
@@ -359,7 +365,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-protocol-abi test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts fuzz-corpus
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-protocol-abi test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts test-memdbg-instance fuzz-corpus
 
 # ---- Fuzz harnesses (pure, socket‑free parsers) ----
 

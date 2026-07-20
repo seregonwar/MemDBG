@@ -129,6 +129,56 @@ static const char *instance_control_host(const memdbg_config_t *cfg) {
   return cfg->bind_host;
 }
 
+/* ---- Verify a daemon is actually listening on the debug port.
+ *      A stale PID file can be left behind after a crash; if the kernel
+ *      later reuses that PID for a fresh payload launch, the PID file alone
+ *      is not enough to conclude MemDBG is already running in this process. */
+
+static bool is_daemon_responsive(const memdbg_config_t *cfg) {
+  socket_t fd = PAL_INVALID_SOCKET;
+  memdbg_packet_header_t request;
+  memdbg_response_header_t response;
+  memdbg_hello_response_t hello;
+  bool responsive = false;
+
+  if (cfg == NULL || cfg->debug_port == 0U) return false;
+  if (pal_tcp_connect(instance_control_host(cfg), cfg->debug_port, 500U,
+                      &fd) != 0) {
+    return false;
+  }
+
+  /* pal_tcp_connect already sets send/recv timeouts to 500 ms, but keep the
+   * whole probe under a generous ceiling in case the platform ignored it. */
+  (void)pal_socket_set_timeouts(fd, 1000U, 1000U);
+
+  memset(&request, 0, sizeof(request));
+  request.magic = MEMDBG_PACKET_MAGIC;
+  request.version = MEMDBG_PROTOCOL_VERSION;
+  request.command = MEMDBG_CMD_HELLO;
+  request.request_id = 0x4d444247U; /* "MDBG" */
+  request.length = 0U;
+
+  if (pal_socket_write_all(fd, &request, sizeof(request)) ==
+          (ssize_t)sizeof(request) &&
+      pal_socket_read_exact(fd, &response, sizeof(response)) ==
+          (ssize_t)sizeof(response) &&
+      response.magic == MEMDBG_PACKET_MAGIC &&
+      response.version == MEMDBG_PROTOCOL_VERSION &&
+      response.command == MEMDBG_CMD_HELLO &&
+      response.request_id == request.request_id &&
+      response.status == MEMDBG_OK &&
+      response.length == sizeof(memdbg_hello_response_t) &&
+      pal_socket_read_exact(fd, &hello, sizeof(hello)) ==
+          (ssize_t)sizeof(hello) &&
+      hello.protocol_version == MEMDBG_PROTOCOL_VERSION &&
+      hello.feature_level == MEMDBG_PROTOCOL_FEATURE_LEVEL) {
+    responsive = true;
+  }
+
+  (void)pal_socket_close(fd);
+  return responsive;
+}
+
 static bool request_previous_shutdown(const memdbg_config_t *cfg) {
   const uint32_t request_id = 0x4d444247U; /* "MDBG" */
   memdbg_packet_header_t request;
@@ -247,7 +297,12 @@ bool memdbg_instance_is_current_process(const memdbg_config_t *cfg) {
 
   if (cfg == NULL || build_pid_path(cfg, path, sizeof(path)) != 0)
     return false;
-  return read_pid_file(path) == (int)getpid();
+  if (read_pid_file(path) != (int)getpid()) return false;
+
+  /* The PID file matches our PID, but that can happen because of PID reuse
+   * after a stale file was left behind.  Only claim this process is the
+   * current instance if the daemon is actually responsive on its port. */
+  return is_daemon_responsive(cfg);
 }
 
 memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
@@ -266,10 +321,19 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
    * and let the second entry point return without touching its sockets. */
   prev_pid = read_pid_file(path);
   if (prev_pid == getpid()) {
-    memdbg_log_write(MEMDBG_LOG_INFO,
-                     "instance: MemDBG is already running in pid %d",
+    if (is_daemon_responsive(cfg)) {
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "instance: MemDBG is already running in pid %d",
+                       prev_pid);
+      return MEMDBG_ERR_STATE;
+    }
+    /* The PID file matches our PID but nobody is listening.  This is a
+     * stale file left after a crash where the kernel reused the PID. */
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "instance: stale pid file matches current pid %d; removing",
                      prev_pid);
-    return MEMDBG_ERR_STATE;
+    (void)unlink(path);
+    return MEMDBG_OK;
   }
 
   /* This also covers old payloads whose pid file was lost or pre-dates the
