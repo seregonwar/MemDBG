@@ -18,6 +18,13 @@
 #include <string.h>
 #include <unistd.h>
 
+static void copy_to_data_root(char *dest, size_t dest_size, const char *src) {
+  size_t n = strlen(src);
+  if (n >= dest_size) n = dest_size - 1;
+  memcpy(dest, src, n);
+  dest[n] = '\0';
+}
+
 static void test_no_pid_file(void) {
   memdbg_config_t cfg;
   char tmp[1024];
@@ -30,7 +37,7 @@ static void test_no_pid_file(void) {
   }
 
   memdbg_config_defaults(&cfg);
-  snprintf(cfg.data_root, sizeof(cfg.data_root), "%s", tmp);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
   cfg.debug_port = fixture_get_free_port();
   if (cfg.debug_port == 0U) {
     printf("  FAIL  could not obtain free port\n");
@@ -57,7 +64,7 @@ static void test_stale_current_pid_no_listener(void) {
   }
 
   memdbg_config_defaults(&cfg);
-  snprintf(cfg.data_root, sizeof(cfg.data_root), "%s", tmp);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
   cfg.debug_port = fixture_get_free_port();
   if (cfg.debug_port == 0U) {
     printf("  FAIL  could not obtain free port\n");
@@ -95,7 +102,7 @@ static void test_stale_current_pid_plain_listener(void) {
   }
 
   memdbg_config_defaults(&cfg);
-  snprintf(cfg.data_root, sizeof(cfg.data_root), "%s", tmp);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
 
   if (fixture_start_plain_listener(&listener) != 0) {
     printf("  FAIL  could not start plain listener\n");
@@ -137,7 +144,7 @@ static void test_same_process_reinjection(void) {
   }
 
   memdbg_config_defaults(&cfg);
-  snprintf(cfg.data_root, sizeof(cfg.data_root), "%s", tmp);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
 
   if (fixture_start_memdbg_listener(&listener) != 0) {
     printf("  FAIL  could not start fake MemDBG listener\n");
@@ -177,7 +184,7 @@ static void test_stale_other_pid(void) {
   }
 
   memdbg_config_defaults(&cfg);
-  snprintf(cfg.data_root, sizeof(cfg.data_root), "%s", tmp);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
   cfg.debug_port = fixture_get_free_port();
   if (cfg.debug_port == 0U) {
     printf("  FAIL  could not obtain free port\n");

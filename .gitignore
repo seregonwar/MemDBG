@@ -82,3 +82,4 @@ docs/x_project_article.md
 vr_toolkit.py
 /experimental
 /memdbg-tauri
+*.zip
