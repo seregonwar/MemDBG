@@ -2,6 +2,10 @@
  * MemDBG - Mobile scanner UI and async logic.
  */
 #include "../internal.hpp"
+#include "trainer/trainer_format.hpp"
+#include "trainer/batchcode_parser.hpp"
+#include "file_picker.hpp"
+
 namespace memdbg::frontend {
 
 uint32_t mobile_scan_value_len(const AppState &state) {
@@ -1427,8 +1431,7 @@ void draw_mobile_session(AppState &state, ImVec2 size) {
   ImGui::PopStyleVar(2);
 }
 
-[[maybe_unused]] static void draw_mobile_top_bar(AppState &state,
-                                                 ImVec2 size) {
+void draw_mobile_top_bar(AppState &state, ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                       ImVec2(10.0f * ui::dpi_scale(), 6.0f * ui::dpi_scale()));
@@ -1557,8 +1560,7 @@ void draw_mobile_tools_sheet(AppState &state, ImVec2 tab_pos,
   ImGui::PopStyleColor();
 }
 
-[[maybe_unused]] static void draw_bottom_tab_bar(AppState &state, ImVec2 pos,
-                                                 ImVec2 size) {
+void draw_bottom_tab_bar(AppState &state, ImVec2 pos, ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg2);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
@@ -1649,8 +1651,7 @@ void draw_mobile_tools_sheet(AppState &state, ImVec2 tab_pos,
   draw_mobile_tools_sheet(state, pos, size);
 }
 
-[[maybe_unused]] static void draw_mobile_status_bar(AppState &state,
-                                                    ImVec2 size) {
+void draw_mobile_status_bar(AppState &state, ImVec2 size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::colors().bg1);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                       ImVec2(10.0f * ui::dpi_scale(), 3.0f * ui::dpi_scale()));
@@ -1669,8 +1670,7 @@ void draw_mobile_tools_sheet(AppState &state, ImVec2 tab_pos,
   ImGui::PopStyleColor();
 }
 
-[[maybe_unused]] static void draw_mobile_content(AppState &state,
-                                                 ImVec2 size) {
+void draw_mobile_content(AppState &state, ImVec2 size) {
   const float scl = ui::dpi_scale();
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                       ImVec2(10.0f * scl, 8.0f * scl));

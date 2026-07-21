@@ -74,10 +74,20 @@ void draw_screen(AppState &state, ImVec2 avail);
 void handle_global_shortcuts(AppState &state);
 
 // mobile.cpp  (basic helpers, logs, draw_mobile_app)
+struct MobileSafeArea {
+  float left = 0;
+  float top = 0;
+  float right = 0;
+  float bottom = 0;
+};
+extern MobileSafeArea s_mobile_safe_area;
+extern bool s_mobile_tools_open;
 void set_mobile_safe_area(float left, float top, float right, float bottom);
 void draw_mobile_app(AppState &state);
 void draw_mobile_logs(AppState &state, ImVec2 size);
 void mobile_info_row(const char *label, const std::string &value, ImVec4 value_color);
+bool mobile_nav_button(const char *id, const char *icon, const char *label,
+                       bool enabled);
 bool mobile_action_button(const std::string &label, bool primary, bool danger = false);
 void draw_mobile_section_label(const char *label);
 std::string mobile_format_bytes(uint64_t bytes);
@@ -96,6 +106,10 @@ void draw_mobile_plugins(AppState &state, ImVec2 size);
 
 // scanner.cpp
 void draw_mobile_scanner(AppState &state, ImVec2 size);
+void draw_mobile_top_bar(AppState &state, ImVec2 size);
+void draw_bottom_tab_bar(AppState &state, ImVec2 pos, ImVec2 size);
+void draw_mobile_status_bar(AppState &state, ImVec2 size);
+void draw_mobile_content(AppState &state, ImVec2 size);
 
 // memdbg_app.cpp
 void draw_topbar_logo(float logo_h);

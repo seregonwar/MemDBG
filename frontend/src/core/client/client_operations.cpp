@@ -174,24 +174,11 @@ bool Client::memory_write(int32_t pid, uint64_t address,
                static_cast<uint32_t>(body.size()), response)) {
     return false;
   }
-
-                            char *content_id, size_t content_id_size,
-                            char *name, size_t name_size, char *app_ver,
-                            size_t app_ver_size) {
-  (void)pid;
-  std::vector<uint8_t> response;
-  if (!request(MEMDBG_CMD_FOREGROUND_APP, nullptr, 0, response))
-    return false;
-  memdbg_foreground_app_response_t app;
-  if (response.size() < sizeof(app)) {
-    set_error("short foreground app response");
+  if (response.size() < sizeof(uint32_t)) {
+    set_error("short write response");
     return false;
   }
-  memcpy(&app, response.data(), sizeof(app));
-  if (title_id)    std::snprintf(title_id, title_id_size, "%s", app.title_id);
-  if (content_id)  std::snprintf(content_id, content_id_size, "%s", app.content_id);
-  if (name)        std::snprintf(name, name_size, "%s", app.name);
-  if (app_ver)     std::snprintf(app_ver, app_ver_size, "%s", app.app_ver);
+  std::memcpy(&written, response.data(), sizeof(written));
   return true;
 }
 

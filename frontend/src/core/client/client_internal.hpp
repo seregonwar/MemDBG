@@ -7,6 +7,7 @@
 #define MEMDBG_FRONTEND_CLIENT_INTERNAL_HPP
 
 #include "memdbg_client.hpp"
+#include "memdbg/core/memdbg.h"
 
 #include <algorithm>
 #include <array>

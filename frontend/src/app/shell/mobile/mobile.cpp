@@ -5,9 +5,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "../internal.hpp"
-#include "trainer/trainer_format.hpp"
-#include "trainer/batchcode_parser.hpp"
-#include "file_picker.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,12 +12,11 @@
 #include <cctype>
 namespace memdbg::frontend {
 
-struct MobileSafeArea { float left=0,top=0,right=0,bottom=0; };
-static MobileSafeArea s_mobile_safe_area;
-static bool s_mobile_tools_open = false;
+MobileSafeArea s_mobile_safe_area;
+bool s_mobile_tools_open = false;
 void set_mobile_safe_area(float l,float t,float r,float b) { s_mobile_safe_area.left=std::max(0.0f,l); s_mobile_safe_area.top=std::max(0.0f,t); s_mobile_safe_area.right=std::max(0.0f,r); s_mobile_safe_area.bottom=std::max(0.0f,b); }
-static void mobile_info_row(const char *label, const std::string &value,
-                            ImVec4 value_color) {
+void mobile_info_row(const char *label, const std::string &value,
+                     ImVec4 value_color) {
   const float scl = ui::dpi_scale();
   const float label_w = 92.0f * scl;
   ImGui::TextColored(ui::colors().dim, "%s", label);
@@ -28,8 +24,8 @@ static void mobile_info_row(const char *label, const std::string &value,
   text_ellipsis(value.c_str(), ImGui::GetContentRegionAvail().x, value_color);
 }
 
-static bool mobile_nav_button(const char *id, const char *icon,
-                              const char *label, bool enabled) {
+bool mobile_nav_button(const char *id, const char *icon,
+                       const char *label, bool enabled) {
   const float scl = ui::dpi_scale();
   const ImVec2 size(ImGui::GetContentRegionAvail().x, 42.0f * scl);
   const std::string text = std::string(icon) + "  " + label;
@@ -41,14 +37,14 @@ static bool mobile_nav_button(const char *id, const char *icon,
   return clicked && enabled;
 }
 
-static std::string mobile_target_endpoint(const ConsoleTarget &target) {
+std::string mobile_target_endpoint(const ConsoleTarget &target) {
   return target.host + ":" + std::to_string(target.debug_port) +
          " / UDP " + std::to_string(target.udp_port) +
          " / ELF " + std::to_string(target.payload_port);
 }
 
-static void mobile_persist_console_targets(AppState &state,
-                                           const std::string &ok_message) {
+void mobile_persist_console_targets(AppState &state,
+                                    const std::string &ok_message) {
   std::string error;
   if (save_frontend_settings(state, &error)) {
     set_status(state, ok_message);
@@ -60,8 +56,8 @@ static void mobile_persist_console_targets(AppState &state,
   }
 }
 
-static void mobile_use_discovered_console(AppState &state,
-                                          const DiscoveryConsole &console) {
+void mobile_use_discovered_console(AppState &state,
+                                   const DiscoveryConsole &console) {
   const std::string name = !console.name.empty() ? console.name : console.ip;
   std::snprintf(state.target_name, sizeof(state.target_name), "%s",
                 name.c_str());
@@ -71,7 +67,7 @@ static void mobile_use_discovered_console(AppState &state,
   normalize_ports(state);
 }
 
-static void poll_mobile_discovery(AppState &state) {
+void poll_mobile_discovery(AppState &state) {
   if (!state.discovery_pending || !state.discovery_future.valid()) return;
   auto status = state.discovery_future.wait_for(std::chrono::milliseconds(0));
   if (status != std::future_status::ready) return;
@@ -98,7 +94,7 @@ static void poll_mobile_discovery(AppState &state) {
   }
 }
 
-static void start_mobile_discovery(AppState &state) {
+void start_mobile_discovery(AppState &state) {
   if (state.discovery_pending) return;
   if (state.discovery_future.valid()) state.discovery_future.wait();
   state.discovery_pending = true;
@@ -112,13 +108,13 @@ static void start_mobile_discovery(AppState &state) {
   });
 }
 
-static void draw_mobile_section_label(const char *label) {
+void draw_mobile_section_label(const char *label) {
   ImGui::Spacing();
   ImGui::TextColored(ui::colors().muted, "%s", label);
 }
 
-static bool mobile_action_button(const std::string &label, bool primary,
-                                 bool danger = false) {
+bool mobile_action_button(const std::string &label, bool primary,
+                          bool danger) {
   const float scl = ui::dpi_scale();
   const ImVec2 size(ImGui::GetContentRegionAvail().x, 42.0f * scl);
   if (danger) return ui::danger_button(label.c_str(), size);
@@ -126,7 +122,7 @@ static bool mobile_action_button(const std::string &label, bool primary,
   return ui::soft_button(label.c_str(), size);
 }
 
-static std::string mobile_format_bytes(uint64_t bytes) {
+std::string mobile_format_bytes(uint64_t bytes) {
   const char *units[] = {"B", "KiB", "MiB", "GiB"};
   double value = static_cast<double>(bytes);
   int unit = 0;
@@ -143,7 +139,7 @@ static std::string mobile_format_bytes(uint64_t bytes) {
   return buffer;
 }
 
-static void mobile_select_map(AppState &state, int row) {
+void mobile_select_map(AppState &state, int row) {
   if (row < 0 || row >= static_cast<int>(state.maps.size())) return;
   const MapEntry &map = state.maps[row];
   state.selected_map_row = row;
@@ -160,7 +156,7 @@ static void mobile_select_map(AppState &state, int row) {
 }
 
 
-static void draw_mobile_logs(AppState &state, ImVec2 size) {
+void draw_mobile_logs(AppState &state, ImVec2 size) {
   const float scl = ui::dpi_scale();
   const auto &palette = ui::colors();
   const auto stats = state.udp_listener.stats();
