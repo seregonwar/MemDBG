@@ -30,12 +30,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: memdbg-tauri/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: memdbg-tauri/pnpm-lock.yaml
 
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -54,9 +59,9 @@ jobs:
           restore-keys: |
             tauri-cargo-${{ runner.os }}-
 
-      - name: Install npm dependencies
+      - name: Install dependencies
         working-directory: memdbg-tauri
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app (unsigned)
         working-directory: memdbg-tauri
