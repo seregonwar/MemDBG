@@ -194,6 +194,9 @@ add_executable(memdbg_frontend
   src/app/shell/chrome.cpp
   src/app/shell/session.cpp
   src/app/shell/mobile/mobile.cpp
+  src/app/shell/mobile/network.cpp
+  src/app/shell/mobile/plugins.cpp
+  src/app/shell/mobile/scanner.cpp
 
   # core (backend clients)
   src/action_journal/action_journal.cpp
@@ -201,6 +204,9 @@ add_executable(memdbg_frontend
   src/core/discovery_client.cpp
   src/core/github_profile.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/client/client_pool.cpp
   src/core/platform.cpp
   src/core/payload_fetcher.cpp
@@ -416,6 +422,9 @@ endif()
 add_executable(memdbg_probe
   src/proto/protocol_probe.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
@@ -436,6 +445,9 @@ target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 add_executable(memdbg_performance_probe
   src/proto/performance_probe.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
@@ -457,6 +469,9 @@ add_executable(memdbg_payload_injection_probe
   src/proto/payload_injection_probe.cpp
   src/core/payload_sender.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
@@ -478,6 +493,9 @@ add_executable(memdbg_auto_search_test
   tests/test_auto_search.cpp
   src/core/client/client_pool.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
   src/scanner/heuristics/auto_search.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
@@ -547,6 +565,9 @@ add_executable(memdbg_app_state_parsing_test
   tests/test_app_state_parsing.cpp
   src/core/client/client_pool.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
@@ -575,6 +596,9 @@ add_executable(memdbg_app_reconnect_test
   tests/test_app_reconnect.cpp
   src/core/client/client_pool.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
   src/core/crash_logger.cpp
   src/core/discovery_client.cpp
@@ -649,6 +673,9 @@ add_executable(memdbg_client_test
   tests/test_memdbg_client.cpp
   src/core/client/client_pool.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/plugins/repository/protocol_broker.cpp
   src/core/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
@@ -682,6 +709,9 @@ add_executable(memdbg_trainer_formats_test
   src/trainer/batchcode_parser.cpp
   src/trainer/trainer_format.cpp
   src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/client/client_pool.cpp
   src/action_journal/action_journal.cpp
   src/core/crash_logger.cpp

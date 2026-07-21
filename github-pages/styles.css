@@ -183,20 +183,15 @@ pre code {
 }
 
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-weight: 800;
+  display: block;
   text-decoration: none;
+  line-height: 0;
 }
 
-.brand-mark {
-  width: 34px; height: 34px;
-  display: inline-grid; place-items: center;
-  border: 1px solid rgba(39,196,207,0.5);
-  border-radius: 8px;
-  background: rgba(39,196,207,0.14);
-  color: #b9f7fa;
+.brand-logo {
+  height: 32px;
+  width: auto;
+  display: block;
 }
 
 .sidebar-nav { padding: 14px 0 28px; flex: 1; }
@@ -313,6 +308,17 @@ pre code {
 
 /* ──────── Responsive ──────── */
 
+/* Medium: narrower sidebar, always visible */
+@media (max-width: 1024px) and (min-width: 861px) {
+  :root { --sidebar-w: 200px; }
+  .brand-logo { height: 26px; }
+  .sidebar-header { padding: 14px 14px 10px; }
+  .nav-link { padding: 6px 14px; font-size: 0.84rem; }
+  .nav-section { margin: 14px 14px 4px; font-size: 0.66rem; letter-spacing: 0.04em; }
+  .content { padding: 0 28px; }
+}
+
+/* Small: sidebar hidden, hamburger shown */
 @media (max-width: 860px) {
   :root { --sidebar-w: 0px; }
 

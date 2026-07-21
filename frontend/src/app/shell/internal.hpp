@@ -73,9 +73,29 @@ void update_payload_version_check(AppState &state);
 void draw_screen(AppState &state, ImVec2 avail);
 void handle_global_shortcuts(AppState &state);
 
-// mobile.cpp
+// mobile.cpp  (basic helpers, logs, draw_mobile_app)
 void set_mobile_safe_area(float left, float top, float right, float bottom);
 void draw_mobile_app(AppState &state);
+void draw_mobile_logs(AppState &state, ImVec2 size);
+void mobile_info_row(const char *label, const std::string &value, ImVec4 value_color);
+bool mobile_action_button(const std::string &label, bool primary, bool danger = false);
+void draw_mobile_section_label(const char *label);
+std::string mobile_format_bytes(uint64_t bytes);
+std::string mobile_target_endpoint(const ConsoleTarget &target);
+void mobile_persist_console_targets(AppState &state, const std::string &ok_message);
+void mobile_use_discovered_console(AppState &state, const DiscoveryConsole &console);
+void poll_mobile_discovery(AppState &state);
+void start_mobile_discovery(AppState &state);
+void mobile_select_map(AppState &state, int row);
+
+// network.cpp
+void draw_mobile_network(AppState &state, ImVec2 size);
+
+// plugins.cpp
+void draw_mobile_plugins(AppState &state, ImVec2 size);
+
+// scanner.cpp
+void draw_mobile_scanner(AppState &state, ImVec2 size);
 
 // memdbg_app.cpp
 void draw_topbar_logo(float logo_h);

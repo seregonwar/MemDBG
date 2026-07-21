@@ -195,9 +195,8 @@ memdbg_status_t scan_maps_parallel(
   }
   /* Allocate worker structs sized to actual used slots only. */
   parallel_worker_t *workers = NULL;
-  (void)posix_memalign((void **)&workers, 64,
-      actual_workers * sizeof(parallel_worker_t));
-  if (unlikely(workers == NULL)) {
+  if (unlikely(posix_memalign((void **)&workers, 64,
+          actual_workers * sizeof(parallel_worker_t)) != 0)) {
     free(slots);
     return MEMDBG_ERR_NOMEM;
   }
