@@ -10,7 +10,7 @@
 
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/pal/pal_process.h"
-#include "memdbg/scanner/pt_walker.h"
+#include "memdbg/scanner/walker.h"
 
 #include <pthread.h>
 #include <stdatomic.h>

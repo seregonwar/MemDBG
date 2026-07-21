@@ -13,8 +13,8 @@
 #define MEMDBG_CORE_MEMDBG_PROTOCOL_DEBUG_HANDLERS_H
 
 #include "memdbg/core/memdbg_protocol.h"
-#include "memdbg/debug/memdbg_debugger.h"
-#include "memdbg/pal/pal_debug.h"
+#include "memdbg/debug/debugger.h"
+#include "memdbg/pal/debug.h"
 
 #include <stdbool.h>
 #include <stdint.h>

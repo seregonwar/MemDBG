@@ -15,8 +15,8 @@
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/pal/pal_time.h"
 #include "memdbg/pal/pal_wait.h" /* MEMDBG_ACCEPT_POLL_MS */
-#include "memdbg/daemon/net_util.h"
-#include "memdbg/daemon/handler.h"
+#include "memdbg/daemon/network_utils.h"
+#include "memdbg/daemon/command_handler.h"
 #include "memdbg/daemon/thread_pool.h"
 
 #include <errno.h>

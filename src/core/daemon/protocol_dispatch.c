@@ -15,14 +15,14 @@
 
 #include "memdbg/debug/memdbg_disasm.h"
 #include "memdbg/debug/memdbg_assembler.h"
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
-#include "memdbg/tracer/memdbg_tracer_daemon.h"
+#include "memdbg/tracer/daemon.h"
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/pal/pal_time.h"
 #include "memdbg/scanner/flashscan.h"
-#include "memdbg/scanner/pt_walker.h"
+#include "memdbg/scanner/walker.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -11,8 +11,9 @@
  *   - Pointer scanner: chunk-boundary alignment and readable-map filtering.
  */
 
-#include "memdbg/scanner/memdbg_scan.h"
+#include "memdbg/scanner/scan.h"
 #include "memdbg/debug/memdbg_process.h"
+#include "memdbg/debug/memdbg_memory.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -129,6 +130,61 @@ memdbg_status_t memdbg_process_list(memdbg_process_list_t *out) {
 
 void memdbg_process_list_free(memdbg_process_list_t *list) {
   if (list != NULL) { free(list->entries); memset(list, 0, sizeof(*list)); }
+}
+
+/* Additional stubs required by scanner modules that are not exercised
+   by the AOB boundary tests. */
+
+memdbg_status_t memdbg_memory_write(int pid, uint64_t address,
+                                    const void *buffer, size_t length,
+                                    size_t *written_out) {
+  (void)pid; (void)address; (void)buffer; (void)length;
+  if (written_out != NULL) *written_out = 0U;
+  return MEMDBG_ERR_IO;
+}
+
+memdbg_status_t memdbg_memory_batch_read(
+    int pid, const memdbg_batch_read_item_t *items, uint32_t count,
+    memdbg_batch_read_result_entry_t *results, uint8_t *data_out,
+    uint32_t data_capacity, uint32_t *data_used) {
+  (void)pid; (void)items; (void)count; (void)results;
+  (void)data_out; (void)data_capacity;
+  if (data_used != NULL) *data_used = 0U;
+  return MEMDBG_OK;
+}
+
+void memdbg_memory_telemetry(memdbg_telemetry_response_t *out) {
+  (void)out;
+}
+
+memdbg_status_t memdbg_memory_batch_write(
+    int pid, const memdbg_batch_write_item_t *items, const uint8_t *data,
+    uint32_t count, memdbg_batch_write_result_entry_t *results) {
+  (void)pid; (void)items; (void)data; (void)count; (void)results;
+  return MEMDBG_OK;
+}
+
+memdbg_status_t memdbg_process_maps(int pid, memdbg_map_list_t *out) {
+  (void)pid;
+  if (out == NULL) return MEMDBG_ERR_PARAM;
+  memset(out, 0, sizeof(*out));
+  return MEMDBG_OK;
+}
+
+void memdbg_process_maps_cache_flush(int pid) {
+  (void)pid;
+}
+
+memdbg_status_t memdbg_process_info(int pid,
+                                    memdbg_process_info_response_t *out) {
+  (void)pid;
+  if (out != NULL) memset(out, 0, sizeof(*out));
+  return MEMDBG_ERR_IO;
+}
+
+void memdbg_process_cache_stats(uint32_t *hits, uint32_t *misses) {
+  if (hits != NULL) *hits = 0U;
+  if (misses != NULL) *misses = 0U;
 }
 
 /* ---- Helpers ---- */

@@ -5,7 +5,7 @@
  */
 
 #include "internal.h"
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 #include "memdbg/pal/pal_time.h"
 
 #include <errno.h>

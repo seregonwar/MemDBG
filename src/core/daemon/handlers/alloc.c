@@ -9,7 +9,7 @@
 #include "daemon_internal.h"
 
 #include "memdbg/core/memdbg.h"
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 #include "memdbg/pal/pal_memory.h"
 #include <stdlib.h>
 #include <string.h>

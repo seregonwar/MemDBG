@@ -10,7 +10,7 @@
 #include "daemon_internal.h"
 #include "memdbg/sjson.h"
 
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
 

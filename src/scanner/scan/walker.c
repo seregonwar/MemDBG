@@ -10,7 +10,7 @@
  * memory access and kernel_get_proc for the process structure.
  */
 
-#include "memdbg/scanner/pt_walker.h"
+#include "memdbg/scanner/walker.h"
 #include "memdbg/pal/pal_kernel_fast.h"
 #include <stdint.h>
 #include <stdatomic.h>

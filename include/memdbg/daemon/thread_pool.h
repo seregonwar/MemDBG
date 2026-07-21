@@ -14,7 +14,7 @@
 #ifndef MEMDBG_DAEMON_THREAD_POOL_H
 #define MEMDBG_DAEMON_THREAD_POOL_H
 
-#include "memdbg/daemon/handler.h"
+#include "memdbg/daemon/command_handler.h"
 #include <pthread.h>
 #include <stdbool.h>
 

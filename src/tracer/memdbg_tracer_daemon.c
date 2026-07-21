@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "memdbg/tracer/memdbg_tracer_daemon.h"
-#include "memdbg/tracer/memdbg_tracer.h"
-#include "memdbg/pal/pal_debug.h"
+#include "memdbg/tracer/daemon.h"
+#include "memdbg/tracer/tracer.h"
+#include "memdbg/pal/debug.h"
 
 #include <errno.h>
 #include <pthread.h>
