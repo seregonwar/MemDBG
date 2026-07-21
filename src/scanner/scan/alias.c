@@ -9,8 +9,8 @@
  * the mdbg_copyout syscall for large scans.
  */
 
-#include "memdbg/scanner/page_alias.h"
-#include "memdbg/scanner/pt_walker.h"
+#include "memdbg/scanner/alias.h"
+#include "memdbg/scanner/walker.h"
 #include "memdbg/pal/pal_memory.h"
 #include "memdbg/pal/pal_kernel_fast.h"
 #include <stdint.h>

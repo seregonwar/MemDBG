@@ -9,7 +9,7 @@
 #include "daemon_internal.h"
 
 #include "memdbg/core/memdbg.h"
-#include "memdbg/scanner/memdbg_scan.h"
+#include "memdbg/scanner/scan.h"
 #include "memdbg/scanner/scan_request.h"
 #include <stdlib.h>
 #include <string.h>

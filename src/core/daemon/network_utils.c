@@ -4,7 +4,7 @@
  * This file is part of MemDBG.
  */
 
-#include "memdbg/daemon/net_util.h"
+#include "memdbg/daemon/network_utils.h"
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/telemetry/udp_log.h"
 

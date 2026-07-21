@@ -18,7 +18,7 @@
  *   - error-path behaviour (double-attach, invalid params, etc.)
  */
 
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 
 #include <errno.h>
 #include <inttypes.h>

@@ -10,7 +10,7 @@
 
 #include "memdbg/core/memdbg_protocol_tracer_handlers.h"
 
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 
 #include <stdlib.h>
 #include <string.h>

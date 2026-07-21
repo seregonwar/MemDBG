@@ -112,9 +112,14 @@ all: host
 
 host: $(HOST_TARGET)
 
-test-aob-boundary: $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_aob_boundary.c
+# Objects to exclude for test_aob_boundary (provides its own mocks)
+AOB_BOUNDARY_EXCLUDE := $(BUILD_DIR)/host/core/main.o \
+	$(BUILD_DIR)/host/debug/memory/memdbg_memory.o \
+	$(BUILD_DIR)/host/debug/process/memdbg_process.o
+
+test-aob-boundary: $(filter-out $(AOB_BOUNDARY_EXCLUDE),$(HOST_OBJECTS)) tests/test_aob_boundary.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(BUILD_DIR)/host/scanner/memdbg_scan.o $(BUILD_DIR)/host/scanner/scan_partition.o $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(filter-out $(AOB_BOUNDARY_EXCLUDE),$(HOST_OBJECTS)) $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 
@@ -130,9 +135,13 @@ test-process-aob-e2e: host tests/test_process_aob_e2e.c tests/e2e_utils.c tests/
 	sleep 0.6; \
 	$(BUILD_DIR)/test_process_aob_e2e 127.0.0.1 $$port
 
-test-debugger: $(BUILD_DIR)/host/debug/session/memdbg_debugger.o tests/test_debugger.c
+DEBUGGER_SESSION_OBJECTS := $(BUILD_DIR)/host/debug/session/debugger.o \
+	$(BUILD_DIR)/host/debug/session/breakpoints.o \
+	$(BUILD_DIR)/host/debug/session/regs.o
+
+test-debugger: $(DEBUGGER_SESSION_OBJECTS) tests/test_debugger.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $< $(HOST_LDFLAGS) -lpthread -o $(BUILD_DIR)/test_debugger
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_debugger.c $(DEBUGGER_SESSION_OBJECTS) $(HOST_LDFLAGS) -lpthread -o $(BUILD_DIR)/test_debugger
 	@echo "--- Running Debugger test ---"
 	$(BUILD_DIR)/test_debugger
 
@@ -198,9 +207,9 @@ test-lz4: src/util/lz4.c include/memdbg/pal/lz4.h tests/test_lz4.c
 	@echo "--- Running LZ4 test ---"
 	$(BUILD_DIR)/test_lz4
 
-test-benchmarks: src/scanner/scan_simd.c src/scanner/scan_partition.c src/util/lz4.c tests/test_benchmarks.c
+test-benchmarks: src/scanner/scan/simd.c src/scanner/scan/partition.c src/util/lz4.c tests/test_benchmarks.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan_simd.c src/scanner/scan_partition.c src/util/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_benchmarks
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc -Isrc/scanner $(HOST_CFLAGS) tests/test_benchmarks.c src/scanner/scan/simd.c src/scanner/scan/partition.c src/util/lz4.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_benchmarks
 	@echo "--- Running Benchmarks ---"
 	$(BUILD_DIR)/test_benchmarks
 
@@ -304,16 +313,16 @@ test-memdbg-instance: $(filter-out $(BUILD_DIR)/host/core/main.o,$(HOST_OBJECTS)
 	@echo "--- Running memdbg_instance unit tests ---"
 	$(BUILD_DIR)/test_memdbg_instance
 
-test-scan-partition: $(BUILD_DIR)/host/scanner/scan_partition.o tests/test_scan_partition.c
+test-scan-partition: $(BUILD_DIR)/host/scanner/scan/partition.o tests/test_scan_partition.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $< $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_partition
+	$(HOST_CC) $(HOST_CPPFLAGS) -Isrc $(HOST_CFLAGS) tests/test_scan_partition.c $(BUILD_DIR)/host/scanner/scan/partition.o $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_partition
 	@echo "--- Running Scan Partition test ---"
 	$(BUILD_DIR)/test_scan_partition
 
-test-scan-protocol: tests/test_scan_protocol.c src/scanner/scan_request.c
+test-scan-protocol: tests/test_scan_protocol.c src/scanner/scan/request.c
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_scan_protocol.c \
-		src/scanner/scan_request.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_protocol
+		src/scanner/scan/request.c $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_scan_protocol
 	@echo "--- Running Scan Protocol test ---"
 	$(BUILD_DIR)/test_scan_protocol
 
@@ -428,7 +437,7 @@ deploy-ps5: $(PS5_TARGET)
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<
 
 TRACER_TOOL := $(BUILD_DIR)/tracer
-TRACER_SOURCES := src/tracer/memdbg_tracer.c src/tracer/syscall_names.c src/pal/pal_debug.c
+TRACER_SOURCES := src/tracer/memdbg_tracer.c src/tracer/syscall_names.c src/pal/debug/debug.c
 
 .PHONY: tracer-tool
 tracer-tool: $(TRACER_TOOL)

@@ -8,7 +8,7 @@
  * unreliable on some PS5 firmware versions.
  */
 
-#include "memdbg/pal/pal_debug_ps5.h"
+#include "memdbg/pal/debug_ps5.h"
 #include "memdbg/pal/pal_kernel_fast.h"
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)

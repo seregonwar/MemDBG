@@ -4,11 +4,11 @@
  * This file is part of MemDBG.
  */
 
-#include "memdbg/daemon/handler.h"
+#include "memdbg/daemon/command_handler.h"
 #include "memdbg/daemon/acceptor.h"
 #include "daemon_internal.h"
 #include "memdbg/core/memdbg_log.h"
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 #include "memdbg/pal/pal_time.h"
 #include "memdbg/privilege/privilege.h"
 #include "memdbg/scanner/flashscan.h"

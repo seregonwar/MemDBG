@@ -6,7 +6,7 @@
  * Extracted from memdbg.c.
  */
 
-#include "memdbg/daemon/response.h"
+#include "memdbg/daemon/network_utils.h"
 #include "memdbg/core/memdbg.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/lz4.h"

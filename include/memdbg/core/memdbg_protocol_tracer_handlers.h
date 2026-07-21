@@ -13,8 +13,8 @@
 #define MEMDBG_CORE_MEMDBG_PROTOCOL_TRACER_HANDLERS_H
 
 #include "memdbg/core/memdbg_protocol.h"
-#include "memdbg/debug/memdbg_debugger.h"
-#include "memdbg/tracer/memdbg_tracer_daemon.h"
+#include "memdbg/debug/debugger.h"
+#include "memdbg/tracer/daemon.h"
 
 #include <stdint.h>
 

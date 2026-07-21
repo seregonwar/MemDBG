@@ -16,7 +16,7 @@
 #include "memdbg/pal/pal_fileio.h"
 #include "memdbg/pal/pal_process.h"
 #include "memdbg/pal/pal_kernel_fast.h"
-#include "memdbg/scanner/pt_walker.h"
+#include "memdbg/scanner/walker.h"
 
 #include <errno.h>
 #include <fcntl.h>

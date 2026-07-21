@@ -11,7 +11,7 @@
 #include "daemon_internal.h"
 #include "memdbg/core/memdbg_protocol_process_handlers.h"
 
-#include "memdbg/debug/memdbg_debugger.h"
+#include "memdbg/debug/debugger.h"
 #include "memdbg/debug/memdbg_process.h"
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/pal/pal_time.h"

@@ -5,7 +5,7 @@
  */
 
 #include "internal.h"
-#include "memdbg/scanner/memdbg_scan.h"
+#include "memdbg/scanner/scan.h"
 
 legacy_scan_session_t g_scan_session;
 
