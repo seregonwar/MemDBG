@@ -35,6 +35,7 @@ typedef struct memdbg_ucred_backup {
 } memdbg_ucred_backup_t;
 
 bool memdbg_privilege_supported(void);
+bool memdbg_privilege_is_active(void);
 int memdbg_privilege_operation_begin(void);
 int memdbg_privilege_operation_end(void);
 int memdbg_privilege_jailbreak_self(void);

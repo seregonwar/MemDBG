@@ -53,6 +53,11 @@ static const uint8_t k_full_caps[16] = {
 static pthread_once_t g_credential_lock_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_credential_lock;
 static atomic_bool g_credential_state_poisoned = ATOMIC_VAR_INIT(false);
+static atomic_bool g_self_privileged = ATOMIC_VAR_INIT(false);
+
+bool memdbg_privilege_is_active(void) {
+  return atomic_load_explicit(&g_self_privileged, memory_order_acquire);
+}
 
 static void credential_lock_init(void) {
   pthread_mutexattr_t attr;
@@ -192,6 +197,7 @@ int memdbg_privilege_jailbreak_self(void) {
   memdbg_log_write(MEMDBG_LOG_INFO,
                    "privilege: payload escaped sandbox pid=%d root=0x%lx",
                    (int)pid, (unsigned long)rootv);
+  atomic_store_explicit(&g_self_privileged, true, memory_order_release);
   return 0;
 }
 
@@ -405,6 +411,8 @@ void memdbg_privilege_restore_target(pid_t pid,
 
 int memdbg_privilege_operation_begin(void) { return 0; }
 int memdbg_privilege_operation_end(void) { return 0; }
+
+bool memdbg_privilege_is_active(void) { return false; }
 
 int memdbg_privilege_jailbreak_self(void) { return 0; }
 

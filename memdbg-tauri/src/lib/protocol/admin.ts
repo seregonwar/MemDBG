@@ -1,14 +1,13 @@
 /**
- * Admin / auth / arena / telemetry (spec §7.4, §7.8, §12).
+ * Admin / arena / telemetry (spec §7.4, §7.8, §12).
  *
  * All wire layouts match canonical C structs in memdbg_protocol.h.
  *   TELEMETRY       0x0400 — server-side counters snapshot
- *   AUTH_KEY        0x0D00 — authenticate with a shared key
  *   ARENA_CONFIG    0x0D01 — configure scratch-arena
  *   SHUTDOWN        0x7F00 — request daemon shutdown
  *   GET_EXTENDED_CAPS 0x0D03 — query extended capability words
  */
-import { BodyReader, BodyWriter, TEXT_ENC } from "./codec";
+import { BodyReader, BodyWriter } from "./codec";
 import { Cmd } from "./constants";
 import { getClient } from "./client";
 
@@ -47,17 +46,6 @@ export async function telemetry(): Promise<TelemetrySnapshot> {
   };
 }
 
-/**
- * Authenticate with a pre-shared key.
- * memdbg_auth_key_request_t = 8 bytes: magic(4) + flags(4).
- */
-export async function authKey(key: string): Promise<void> {
-  const AUTH_KEY_MAGIC = 0x4DE640BB;
-  const bytes = TEXT_ENC.encode(key);
-  const body = new BodyWriter().u32(AUTH_KEY_MAGIC).u32(0).bytes(bytes).finish();
-  await getClient().call(Cmd.AUTH_KEY, body);
-}
-
 export interface ArenaConfig {
   /** 0 = disable, 1 = enable */
   enabled: boolean;
@@ -65,11 +53,14 @@ export interface ArenaConfig {
 
 /** memdbg_arena_config_request_t = 8 bytes: enabled(4) + reserved(4) */
 export async function arenaConfig(cfg: ArenaConfig): Promise<void> {
-  const body = new BodyWriter().u32(cfg.enabled ? 1 : 0).u32(0).finish();
+  const body = new BodyWriter()
+    .u32(cfg.enabled ? 1 : 0)
+    .u32(0)
+    .finish();
   await getClient().call(Cmd.ARENA_CONFIG, body);
 }
 
-/** Ask the daemon to shut down. Only works after AUTH_KEY on secured builds. */
+/** Ask the daemon to shut down. */
 export async function shutdown(): Promise<void> {
   await getClient().call(Cmd.SHUTDOWN, new Uint8Array(0));
 }
@@ -85,4 +76,6 @@ export async function getExtendedCaps(): Promise<number[]> {
   return words;
 }
 
-function readSkip(n: number): Record<string, never> { return {}; }
+function readSkip(n: number): Record<string, never> {
+  return {};
+}

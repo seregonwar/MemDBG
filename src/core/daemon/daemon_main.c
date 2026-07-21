@@ -288,12 +288,6 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                    memdbg_log_path()[0] ? memdbg_log_path() : "unavailable",
                    memdbg_log_mirror_path()[0] ? memdbg_log_mirror_path() : "off");
 
-  if (memdbg_privilege_supported() &&
-      memdbg_privilege_jailbreak_self() != 0) {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "privilege: payload escalation failed; memory actions may fail with permission/i-o status");
-  }
-
   if (open_debug_listener(&cfg, &listen_fd) != MEMDBG_OK) {
     memdbg_log_write(MEMDBG_LOG_ERROR, "debug listener failed: %s", pal_socket_last_error());
     if (notification_ready) pal_notification_shutdown();
@@ -305,6 +299,16 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
 
   if (memdbg_instance_write_pid_file(&cfg) != 0) {
     memdbg_log_write(MEMDBG_LOG_WARN, "instance: failed to write pid file");
+  }
+
+  /* Finish filesystem and listener setup before rewriting the console jail
+   * and root vnode.  On PS4, calling mkdir() for the PID directory after the
+   * jailbreak can block inside the kernel even when that directory already
+   * exists. */
+  if (memdbg_privilege_supported() &&
+      memdbg_privilege_jailbreak_self() != 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "privilege: payload escalation failed; memory actions may fail with permission/i-o status");
   }
 
   if (cfg.enable_legacy_compat) {
