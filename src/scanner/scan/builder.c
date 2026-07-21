@@ -97,11 +97,11 @@ memdbg_status_t scan_builder_append(scan_builder_t *builder, uint64_t address) {
   if (builder->progress != NULL)
     atomic_fetch_add_explicit(&builder->progress->results_found, 1U,
                               memory_order_relaxed);
-  if (result->count >= builder->max_results) {
+  if (unlikely(result->count >= builder->max_results)) {
     result->truncated = true;
     return MEMDBG_OK;
   }
-  if (result->count == builder->capacity) {
+  if (unlikely(result->count == builder->capacity)) {
     size_t next_capacity = builder->capacity == 0U ? MEMDBG_SCAN_INITIAL_CAPACITY
                                                    : builder->capacity * 2U;
     if (next_capacity < builder->capacity || next_capacity > builder->max_results)
@@ -109,7 +109,7 @@ memdbg_status_t scan_builder_append(scan_builder_t *builder, uint64_t address) {
     if (next_capacity <= result->count) { result->truncated = true; return MEMDBG_OK; }
     memdbg_scan_result_entry_t *next =
         (memdbg_scan_result_entry_t *)realloc(result->entries, next_capacity * sizeof(*result->entries));
-    if (next == NULL) return MEMDBG_ERR_NOMEM;
+  if (unlikely(next == NULL)) return MEMDBG_ERR_NOMEM;
     result->entries = next;
     builder->capacity = next_capacity;
   }
@@ -189,7 +189,7 @@ memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
   size_t carry = 0U;
   uint64_t range_end = 0U;
 
-  if (!scan_bounds_valid(range_start, range_len, ctx->value_len, &range_end))
+  if (unlikely(!scan_bounds_valid(range_start, range_len, ctx->value_len, &range_end)))
     return MEMDBG_ERR_PARAM;
 
   while (scanned < range_len) {
@@ -205,7 +205,7 @@ memdbg_status_t scan_range(scan_context_t *ctx, scan_builder_t *builder,
     memdbg_status_t st = scan_memory_read_resilient(ctx->pid,
         range_start + scanned, ctx->buffer + carry, to_read,
         builder->result, builder->progress, &read_len);
-    if (st != MEMDBG_OK) {
+    if (unlikely(st != MEMDBG_OK)) {
       if (!skip_read_errors) return st;
       scanned += scan_fault_skip_size(to_read);
       carry = 0U;

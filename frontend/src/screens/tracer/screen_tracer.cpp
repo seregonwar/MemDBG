@@ -10,7 +10,7 @@
 #include "app_state.hpp"
 #include "core/client/memdbg_client.hpp"
 #include "locale/locale.hpp"
-#include "memdbg/tracer/memdbg_tracer.h"
+#include "memdbg/tracer/tracer.h"
 #include "ui/ui_icons.hpp"
 #include "ui/ui_widgets.hpp"
 

@@ -38,7 +38,7 @@ struct memdbg_thread_pool {
   unsigned int     queue_len;
 
   atomic_bool      shutting_down;
-};
+} __attribute__((aligned(64)));
 
 /* ---- Worker entry point ---- */
 static void *pool_worker(void *arg) {
@@ -81,9 +81,9 @@ memdbg_thread_pool_t *memdbg_thread_pool_create(unsigned int num_workers) {
   if (num_workers == 0U) num_workers = 4U;
   if (num_workers > 32U)  num_workers = 32U;
 
-  memdbg_thread_pool_t *pool =
-      (memdbg_thread_pool_t *)calloc(1U, sizeof(*pool));
-  if (pool == NULL) return NULL;
+  memdbg_thread_pool_t *pool = NULL;
+  if (posix_memalign((void **)&pool, 64, sizeof(*pool)) != 0)
+    return NULL;
 
   pool->num_workers = num_workers;
   pool->workers = (pthread_t *)calloc(num_workers, sizeof(pthread_t));

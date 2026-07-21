@@ -67,7 +67,7 @@ endif
 COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude -Isrc/core/daemon
 COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
-HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2
+HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2 -flto -march=native
 # Console (PS4/PS5) builds share the host's strictness where the SDK allows.
 # CONSOLE_WERROR defaults to 1 (treat warnings as errors). Set to 0 to
 # allow warnings from console SDK headers outside MemDBG's control.
@@ -81,9 +81,9 @@ endif
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-HOST_LDFLAGS := -Wl,-z,relro -Wl,-z,now
+HOST_LDFLAGS := -Wl,-z,relro -Wl,-z,now -flto
 else ifeq ($(UNAME_S),Darwin)
-HOST_LDFLAGS := -Wl,-bind_at_load
+HOST_LDFLAGS := -Wl,-bind_at_load -flto
 else
 HOST_LDFLAGS :=
 endif
@@ -112,14 +112,19 @@ all: host
 
 host: $(HOST_TARGET)
 
-# Objects to exclude for test_aob_boundary (provides its own mocks)
-AOB_BOUNDARY_EXCLUDE := $(BUILD_DIR)/host/core/main.o \
-	$(BUILD_DIR)/host/debug/memory/memdbg_memory.o \
-	$(BUILD_DIR)/host/debug/process/memdbg_process.o
+SCANNER_OBJECTS := $(BUILD_DIR)/host/scanner/scan/api.o \
+	$(BUILD_DIR)/host/scanner/scan/alias.o \
+	$(BUILD_DIR)/host/scanner/scan/builder.o \
+	$(BUILD_DIR)/host/scanner/scan/match.o \
+	$(BUILD_DIR)/host/scanner/scan/parallel.o \
+	$(BUILD_DIR)/host/scanner/scan/partition.o \
+	$(BUILD_DIR)/host/scanner/scan/request.o \
+	$(BUILD_DIR)/host/scanner/scan/simd.o \
+	$(BUILD_DIR)/host/scanner/scan/walker.o
 
-test-aob-boundary: $(filter-out $(AOB_BOUNDARY_EXCLUDE),$(HOST_OBJECTS)) tests/test_aob_boundary.c
+test-aob-boundary: $(SCANNER_OBJECTS) tests/test_aob_boundary.c
 	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(filter-out $(AOB_BOUNDARY_EXCLUDE),$(HOST_OBJECTS)) $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_aob_boundary.c $(SCANNER_OBJECTS) $(HOST_LDFLAGS) -o $(BUILD_DIR)/test_aob_boundary
 	@echo "--- Running AOB boundary test ---"
 	$(BUILD_DIR)/test_aob_boundary
 

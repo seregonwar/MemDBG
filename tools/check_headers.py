@@ -27,6 +27,9 @@ SRC_DIR = ROOT / "src"
 NO_SOURCE_EXCEPTIONS = {
     "memdbg_protocol.h",
     "region_match.h",
+    "memdbg_protocol_debug_handlers",
+    "memdbg_protocol_process_handlers",
+    "memdbg_protocol_tracer_handlers",
 }
 
 # Headers whose primary implementation lives inside daemon/memdbg.c
