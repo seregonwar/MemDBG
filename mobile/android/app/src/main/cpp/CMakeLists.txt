@@ -184,6 +184,9 @@ set(MEMDBG_FRONTEND_SOURCES
   ${FRONTEND_ROOT}/src/core/github_profile.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/client/client_pool.cpp
+  ${FRONTEND_ROOT}/src/core/client/client_operations.cpp
+  ${FRONTEND_ROOT}/src/core/client/client_scan.cpp
+  ${FRONTEND_ROOT}/src/core/client/client_debug.cpp
   ${FRONTEND_ROOT}/src/core/platform.cpp
   ${FRONTEND_ROOT}/src/core/payload_fetcher.cpp
   ${FRONTEND_ROOT}/src/core/payload_sender.cpp
