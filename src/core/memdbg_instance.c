@@ -377,7 +377,12 @@ static bool terminate_process(int pid) {
    * shares a PID/PGID with the loader (reused PID 46 on PS4/GoldHEN); a stray
    * SIGTERM/SIGKILL here would tear down the payload itself and freeze the
    * console. */
+#if defined(PLATFORM_PS4)
+  /* PS4 SDK lacks getpgrp(); self-check is sufficient. */
+  if (pid == (int)getpid()) {
+#else
   if (pid == (int)getpid() || pid == (int)getpgrp()) {
+#endif /* PLATFORM_PS4 */
     memdbg_log_write(MEMDBG_LOG_WARN,
                      "instance: refusing to signal own pid/pgrp %d", pid);
     return true;

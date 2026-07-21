@@ -22,7 +22,7 @@ void *parallel_worker_thread(void *arg) {
 
   /* Allocate per-thread buffer. */
   buffer = (unsigned char *)malloc(w->buf_size);
-  if (buffer == NULL) {
+  if (unlikely(buffer == NULL)) {
     w->status = MEMDBG_ERR_NOMEM;
     if (w->progress != NULL)
       atomic_fetch_sub_explicit(&w->progress->workers_active, 1U,
@@ -159,7 +159,7 @@ memdbg_status_t scan_maps_parallel(
      number of used slots via out_used. */
   scan_partition_slot_t *slots = (scan_partition_slot_t *)calloc(
       num_threads, sizeof(scan_partition_slot_t));
-  if (slots == NULL) return MEMDBG_ERR_NOMEM;
+  if (unlikely(slots == NULL)) return MEMDBG_ERR_NOMEM;
 
   size_t actual_workers = 0U;
   memdbg_status_t part_st = partition_maps_by_bytes(
@@ -194,9 +194,10 @@ memdbg_status_t scan_maps_parallel(
                           memory_order_relaxed);
   }
   /* Allocate worker structs sized to actual used slots only. */
-  parallel_worker_t *workers =
-      (parallel_worker_t *)calloc(actual_workers, sizeof(parallel_worker_t));
-  if (workers == NULL) {
+  parallel_worker_t *workers = NULL;
+  (void)posix_memalign((void **)&workers, 64,
+      actual_workers * sizeof(parallel_worker_t));
+  if (unlikely(workers == NULL)) {
     free(slots);
     return MEMDBG_ERR_NOMEM;
   }
@@ -206,7 +207,7 @@ memdbg_status_t scan_maps_parallel(
   memset(out, 0, sizeof(*out));
   out->entries = (memdbg_scan_result_entry_t *)malloc(
       max_results * sizeof(memdbg_scan_result_entry_t));
-  if (out->entries == NULL) {
+  if (unlikely(out->entries == NULL)) {
     free(workers);
     free(slots);
     return MEMDBG_ERR_NOMEM;

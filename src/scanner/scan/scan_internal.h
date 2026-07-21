@@ -24,6 +24,10 @@
 #include <string.h>
 #include <time.h>
 
+/* Branch prediction hints for hot paths. */
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
 #if defined(PLATFORM_PS4) || defined(PLATFORM_PS5) || defined(PS4) ||          \
     defined(PS5) || defined(__ORBIS__) || defined(__PROSPERO__)
 #define MEMDBG_SCAN_CONSOLE 1
@@ -152,7 +156,7 @@ typedef struct {
   memdbg_status_t       status;
   bool                  threaded;
   memdbg_scan_progress_t *progress;
-} parallel_worker_t;
+} __attribute__((aligned(64))) parallel_worker_t;
 
 memdbg_status_t merge_scan_results(
     parallel_worker_t *workers, size_t num_workers,
