@@ -95,8 +95,12 @@ memdbg_status_t handle_console_reboot(int fd,
 
 /* Maximum window around kernel text / data base addresses in which we
  * allow reads and writes.  Larger ranges include unmapped gaps that
- * cause kernel_copyout / kernel_copyin to hang indefinitely on PS5. */
+ * cause kernel_copyout / kernel_copyin to hang indefinitely on PS5.
+ * We also skip the first page (16 KiB on PS5) from each base because
+ * the hypervisor protects the initial kernel pages and attempting
+ * kernel_copyout at the exact base triggers a kernel panic. */
 static const uint64_t kKernelMaxRange = 32ULL * 1024ULL * 1024ULL;
+static const uint64_t kKernelGuardFirstPage = 0x4000ULL;
 
 memdbg_status_t handle_kernel_base(int fd,
     const memdbg_packet_header_t *req) {
@@ -136,8 +140,8 @@ memdbg_status_t handle_kernel_read(int fd,
 
   {
     uint64_t end = kr->address + (uint64_t)kr->length;
-    bool in_text = (kr->address >= text_base && end <= text_base + kKernelMaxRange);
-    bool in_data = (kr->address >= data_base && end <= data_base + kKernelMaxRange);
+    bool in_text = (kr->address >= text_base + kKernelGuardFirstPage && end <= text_base + kKernelMaxRange);
+    bool in_data = (kr->address >= data_base + kKernelGuardFirstPage && end <= data_base + kKernelMaxRange);
     if (!in_text && !in_data)
       return MEMDBG_ERR_PARAM;
   }
@@ -173,8 +177,8 @@ memdbg_status_t handle_kernel_write(int fd,
 
   {
     uint64_t end = kw->address + (uint64_t)kw->length;
-    bool in_text = (kw->address >= text_base && end <= text_base + kKernelMaxRange);
-    bool in_data = (kw->address >= data_base && end <= data_base + kKernelMaxRange);
+    bool in_text = (kw->address >= text_base + kKernelGuardFirstPage && end <= text_base + kKernelMaxRange);
+    bool in_data = (kw->address >= data_base + kKernelGuardFirstPage && end <= data_base + kKernelMaxRange);
     if (!in_text && !in_data)
       return MEMDBG_ERR_PARAM;
   }
