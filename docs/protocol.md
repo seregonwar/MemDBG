@@ -448,7 +448,7 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_PTWALK_READ` | `0x0C02` | `memdbg_ptwalk_io_request_t` | raw bytes |
 | `MEMDBG_CMD_PTWALK_WRITE` | `0x0C03` | `memdbg_ptwalk_io_request_t` + bytes | empty |
 | `MEMDBG_CMD_PTWALK_PROBE` | `0x0C04` | `memdbg_ptwalk_probe_request_t` | `memdbg_ptwalk_probe_response_t` |
-| `MEMDBG_CMD_AUTH_KEY` | `0x0D00` | `memdbg_auth_key_request_t` | empty; status is in the normal response header |
+| `MEMDBG_CMD_AUTH_KEY` | `0x0D00` | `memdbg_auth_key_request_t` | deprecated compatibility no-op |
 | `MEMDBG_CMD_ARENA_CONFIG` | `0x0D01` | `memdbg_arena_config_request_t` | empty; status is in the normal response header |
 | `MEMDBG_CMD_KLOG_CONNECT` | `0x0D02` | `memdbg_klog_connect_request_t` | `uint32_t klog_port` |
 | `MEMDBG_CMD_GET_EXTENDED_CAPS` | `0x0D03` | empty | `uint32_t count` + `uint32_t capability_words[count]` |
@@ -498,7 +498,7 @@ should hide the feature or present it as unavailable. A daemon may still return
 
 Extended feature macros such as `MEMDBG_EXT_CAP_QUICKSCAN`,
 `MEMDBG_EXT_CAP_PTWALK`, `MEMDBG_EXT_CAP_ALIAS`, `MEMDBG_EXT_CAP_SIMD`,
-`MEMDBG_EXT_CAP_KLOG_SERVER`, `MEMDBG_EXT_CAP_AUTH`,
+`MEMDBG_EXT_CAP_KLOG_SERVER`,
 `MEMDBG_EXT_CAP_ARENA`, `MEMDBG_EXT_CAP_BATCH_WRITE_ADV`,
 `MEMDBG_EXT_CAP_HIJACK`, and `MEMDBG_EXT_CAP_SCAN_JOBS` describe extension
 subsystems. Since the `HELLO.capabilities`

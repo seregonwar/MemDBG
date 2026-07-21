@@ -1,5 +1,5 @@
 /*
- * memDBG - Extended daemon features: klog, auth, arena, bulk-write-advanced, ELF enhancements.
+ * memDBG - Extended daemon features: klog, arena, bulk-write-advanced, ELF enhancements.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -11,7 +11,6 @@
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/debug/memdbg_memory.h"
 #include "memdbg/debug/memdbg_process.h"
-#include "memdbg/privilege/privilege.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -30,7 +29,6 @@
 
 // External declarations for feature helpers
 
-extern int memdbg_privilege_jailbreak_self(void);
 extern int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_size,
                                     const char *region, uint32_t match_flags,
                                     uint64_t *entry, uint64_t *base);
@@ -38,54 +36,6 @@ extern int memdbg_elf_load_enhanced(int pid, const uint8_t *elf, uint64_t elf_si
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
 #endif
-
-// Auth ceremony
-
-static pthread_mutex_t g_auth_mutex = PTHREAD_MUTEX_INITIALIZER;
-static int g_auth_privileged = 0;
-
-memdbg_status_t memdbg_auth_handle(const memdbg_auth_key_request_t *req) {
-  if (!req || req->magic != MEMDBG_AUTH_KEY_MAGIC) {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "auth: rejected (bad magic byte)");
-    return MEMDBG_ERR_PERMISSION;
-  }
-
-  (void)pthread_mutex_lock(&g_auth_mutex);
-  if (g_auth_privileged) {
-    (void)pthread_mutex_unlock(&g_auth_mutex);
-    memdbg_log_write(MEMDBG_LOG_INFO,
-                     "auth: already privileged (duplicate AUTH_KEY)");
-    return MEMDBG_OK;
-  }
-  if (memdbg_privilege_operation_begin() != 0) {
-    (void)pthread_mutex_unlock(&g_auth_mutex);
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "auth: privilege operation begin failed");
-    return MEMDBG_ERR_STATE;
-  }
-  int rc = memdbg_privilege_jailbreak_self();
-  int end_rc = memdbg_privilege_operation_end();
-  int ok = (rc == 0 && end_rc == 0);
-  if (ok) {
-    g_auth_privileged = 1;
-    memdbg_log_write(MEMDBG_LOG_INFO,
-                     "auth: privilege escalation succeeded (payload escaped sandbox)");
-  } else {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "auth: privilege escalation failed (rc=%d end_rc=%d)",
-                     rc, end_rc);
-  }
-  (void)pthread_mutex_unlock(&g_auth_mutex);
-  return ok ? MEMDBG_OK : MEMDBG_ERR_PERMISSION;
-}
-
-int memdbg_is_privileged(void) {
-  (void)pthread_mutex_lock(&g_auth_mutex);
-  int privileged = g_auth_privileged;
-  (void)pthread_mutex_unlock(&g_auth_mutex);
-  return privileged;
-}
 
 // Arena memory sub-allocator
 

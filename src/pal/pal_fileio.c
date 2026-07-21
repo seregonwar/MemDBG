@@ -279,6 +279,7 @@ ssize_t pal_sendfile(int sock_fd, int file_fd, off_t *offset, size_t count) {
 int pal_mkdir_p(const char *path, mode_t mode) {
   char tmp[512];
   size_t len;
+  struct stat st;
 
   if (path == NULL || path[0] == '\0') {
     errno = EINVAL;
@@ -290,6 +291,16 @@ int pal_mkdir_p(const char *path, mode_t mode) {
     errno = ENAMETOOLONG;
     return -1;
   }
+
+  /* Avoid redundant mkdir() calls for an existing directory.  Besides being
+   * cheaper, this matters on PS4 after a payload changes its jail/root vnode:
+   * mkdir("/data") may block even though /data/memdbg already exists. */
+  if (stat(path, &st) == 0) {
+    if (S_ISDIR(st.st_mode)) return 0;
+    errno = ENOTDIR;
+    return -1;
+  }
+  if (errno != ENOENT) return -1;
 
   memcpy(tmp, path, len + 1U);
   while (len > 1U && tmp[len - 1U] == '/') {

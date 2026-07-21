@@ -16,6 +16,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static void copy_to_data_root(char *dest, size_t dest_size, const char *src) {
@@ -49,6 +50,45 @@ static void test_no_pid_file(void) {
   FIXTURE_TEST("is_current_process false when no pid file",
                !memdbg_instance_is_current_process(&cfg));
 
+  fixture_cleanup_dir(tmp);
+}
+
+static void test_pid_file_directory_setup(void) {
+  memdbg_config_t cfg;
+  char tmp[1024];
+  char nested[1024];
+  char parent[1024];
+
+  printf("\n--- PID file directory setup ---\n");
+  if (fixture_make_temp_dir(tmp, sizeof(tmp)) != 0) {
+    printf("  FAIL  could not create temp dir\n");
+    ++g_fixture_failed;
+    return;
+  }
+
+  memdbg_config_defaults(&cfg);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
+  FIXTURE_TEST("write_pid_file reuses existing data root",
+               memdbg_instance_write_pid_file(&cfg) == 0 &&
+                   fixture_pid_file_exists(tmp));
+  fixture_remove_pid_file(tmp);
+
+  if (snprintf(parent, sizeof(parent), "%s/parent", tmp) < 0 ||
+      snprintf(nested, sizeof(nested), "%s/parent/nested", tmp) < 0) {
+    printf("  FAIL  could not build nested test path\n");
+    ++g_fixture_failed;
+    fixture_cleanup_dir(tmp);
+    return;
+  }
+
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), nested);
+  FIXTURE_TEST("write_pid_file creates a missing directory tree",
+               memdbg_instance_write_pid_file(&cfg) == 0 &&
+                   fixture_pid_file_exists(nested));
+
+  fixture_remove_pid_file(nested);
+  (void)rmdir(nested);
+  (void)rmdir(parent);
   fixture_cleanup_dir(tmp);
 }
 
@@ -300,6 +340,7 @@ int main(void) {
   }
 
   test_no_pid_file();
+  test_pid_file_directory_setup();
   test_stale_current_pid_no_listener();
   test_stale_current_pid_plain_listener();
   test_same_process_reinjection();

@@ -48,7 +48,8 @@ static void *request_buffer_acquire(void **reusable, size_t *capacity,
  * Before a valid HELLO is received, each connection may send at most
  * MEMDBG_PRE_AUTH_CMD_BUDGET commands.  This prevents unauthenticated peers
  * from consuming arbitrary dispatch and I/O resources without first
- * establishing a protocol session.  HELLO, PING and AUTH_KEY are counted
+ * establishing a protocol session.  HELLO, PING and the retired AUTH_KEY
+ * compatibility command are counted
  * but permitted; GOOBYE is not counted; all other commands count toward the
  * budget.  Once a valid HELLO is processed, the budget is unlimited.
  */
@@ -144,7 +145,7 @@ void handle_client(socket_t fd, const memdbg_config_t *cfg) {
       switch ((memdbg_command_t)req.command) {
       case MEMDBG_CMD_HELLO:
       case MEMDBG_CMD_PING:
-      case MEMDBG_CMD_AUTH_KEY:
+      case MEMDBG_CMD_AUTH_KEY: /* retired compatibility no-op */
       case MEMDBG_CMD_GOODBYE:
         break;
       default:

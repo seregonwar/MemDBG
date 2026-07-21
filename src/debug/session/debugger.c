@@ -12,6 +12,7 @@
 
 #include "memdbg/core/memdbg_log.h"
 #include "memdbg/pal/debug.h"
+#include "memdbg/privilege/privilege.h"
 
 #include <errno.h>
 #include <string.h>
@@ -121,9 +122,8 @@ bool memdbg_debugger_supported(void) { return pal_debug_supported(); }
 
 bool memdbg_debugger_is_elevated(int32_t pid) {
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
-  extern int memdbg_is_privileged(void);
   (void)pid;
-  return memdbg_is_privileged();
+  return memdbg_privilege_is_active();
 #else
   (void)pid;
   return false;

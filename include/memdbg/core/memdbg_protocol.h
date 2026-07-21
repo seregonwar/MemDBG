@@ -171,7 +171,7 @@ typedef enum memdbg_command {
   /* Bulk write with per-entry status */
   MEMDBG_CMD_BATCH_WRITE_ADV  = 0x0204U,
 
-  /* Auth / privilege escalation ceremony */
+  /* Retired auth command; retained as a compatibility no-op. */
   MEMDBG_CMD_AUTH_KEY = 0x0D00U,
 
   /* Arena allocator toggle */
@@ -237,7 +237,7 @@ typedef enum memdbg_capability {
 #define MEMDBG_EXT_CAP_ALIAS          0x00000004U
 #define MEMDBG_EXT_CAP_SIMD           0x00000008U
 #define MEMDBG_EXT_CAP_KLOG_SERVER    0x00000010U
-#define MEMDBG_EXT_CAP_AUTH           0x00000020U
+#define MEMDBG_EXT_CAP_AUTH           0x00000020U /* reserved, no longer advertised */
 #define MEMDBG_EXT_CAP_ARENA          0x00000040U
 #define MEMDBG_EXT_CAP_BATCH_WRITE_ADV 0x00000080U
 #define MEMDBG_EXT_CAP_HIJACK           0x00000100U
@@ -1189,14 +1189,14 @@ typedef struct MEMDBG_PACKED memdbg_batch_write_adv_request {
 #define MEMDBG_BATCH_WRITE_ADV_MAX_ENTRIES 0xFFFFU
 #define MEMDBG_BATCH_WRITE_ADV_MAX_ENTRY   0x100000U
 
-// Auth ceremony
+// Retired auth request layout (wire compatibility only)
 
 typedef struct MEMDBG_PACKED memdbg_auth_key_request {
-  uint32_t magic;       /* must match MEMDBG_AUTH_KEY_MAGIC */
+  uint32_t magic;       /* ignored by current daemons */
   uint32_t flags;
 } memdbg_auth_key_request_t;
 
-#define MEMDBG_AUTH_KEY_MAGIC 0x4DE640BBU
+#define MEMDBG_AUTH_KEY_MAGIC 0x4DE640BBU /* legacy client compatibility */
 
 // Arena memory sub-allocator toggle
 
