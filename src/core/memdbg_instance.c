@@ -176,8 +176,12 @@ static bool process_exists(int pid) {
 
 /* ---- Verify the target PID actually belongs to a MemDBG instance.
  *      On systems with /proc/<pid>/comm we require the name to contain
- *      "memdbg" (case-insensitive).  On other platforms we accept any
- *      process that exists, because we cannot safely inspect it. ---- */
+ *      "memdbg" (case-insensitive).  On platforms without /proc (PS4/PS5)
+ *      we cannot inspect the process, so we REFUSE PID-based termination
+ *      and rely on the authoritative TCP SHUTDOWN probe
+ *      (request_previous_shutdown) instead.  Returning true here would
+ *      let us SIGKILL an unrelated live process (e.g. the shared loader
+ *      at a reused PID), which can freeze the console. ---- */
 
 static bool process_name_contains_memdbg(int pid) {
   char path[256];
@@ -186,7 +190,7 @@ static bool process_name_contains_memdbg(int pid) {
 
   (void)snprintf(path, sizeof(path), "/proc/%d/comm", pid);
   fp = fopen(path, "r");
-  if (fp == NULL) return true;  /* cannot verify — be conservative */
+  if (fp == NULL) return false;  /* cannot verify — refuse to terminate */
 
   if (fgets(comm, sizeof(comm), fp) != NULL) {
     size_t len = strlen(comm);
@@ -369,6 +373,16 @@ static bool wait_for_process_exit(int pid, uint32_t timeout_ms) {
 static bool terminate_process(int pid) {
   if (pid <= 0) return true;
 
+  /* Never signal our own process or process group.  On consoles the payload
+   * shares a PID/PGID with the loader (reused PID 46 on PS4/GoldHEN); a stray
+   * SIGTERM/SIGKILL here would tear down the payload itself and freeze the
+   * console. */
+  if (pid == (int)getpid() || pid == (int)getpgrp()) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "instance: refusing to signal own pid/pgrp %d", pid);
+    return true;
+  }
+
   memdbg_log_write(MEMDBG_LOG_INFO, "instance: sending SIGTERM to pid %d",
                    pid);
   if (kill((pid_t)pid, SIGTERM) != 0) {
@@ -458,6 +472,10 @@ memdbg_status_t memdbg_instance_stop_previous(const memdbg_config_t *cfg) {
 
   prev_pid = read_pid_file(path, NULL);
   if (prev_pid <= 0) return MEMDBG_OK; /* no PID fallback available */
+
+  /* Defense-in-depth: never signal ourselves even if the earlier same-PID
+   * check was bypassed (e.g. the file was rewritten between reads). */
+  if (prev_pid == (int)getpid()) return MEMDBG_OK;
 
   if (!process_exists(prev_pid)) {
     /* Stale PID file — clean it up. */

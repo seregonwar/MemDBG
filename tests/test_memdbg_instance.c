@@ -244,9 +244,49 @@ static void test_stale_other_pid(void) {
     return;
   }
 
+  /* Stale PID (non-existent) — stop_previous removes the file and returns OK
+   * without attempting PID-based termination. */
   FIXTURE_TEST("stop_previous removes stale pid file for unrelated pid",
                memdbg_instance_stop_previous(&cfg) == MEMDBG_OK &&
                    !fixture_pid_file_exists(tmp));
+
+  fixture_cleanup_dir(tmp);
+}
+
+static void test_live_non_memdbg_pid(void) {
+  memdbg_config_t cfg;
+  char tmp[1024];
+
+  printf("\n--- PID file for live non-MemDBG process (pid 1) ---\n");
+  if (fixture_make_temp_dir(tmp, sizeof(tmp)) != 0) {
+    printf("  FAIL  could not create temp dir\n");
+    ++g_fixture_failed;
+    return;
+  }
+
+  memdbg_config_defaults(&cfg);
+  copy_to_data_root(cfg.data_root, sizeof(cfg.data_root), tmp);
+  cfg.debug_port = fixture_get_free_port();
+  if (cfg.debug_port == 0U) {
+    printf("  FAIL  could not obtain free port\n");
+    ++g_fixture_failed;
+    fixture_cleanup_dir(tmp);
+    return;
+  }
+
+  /* pid 1 (init/systemd) is always live and not a MemDBG process. */
+  if (fixture_write_pid_file(tmp, 1) != 0) {
+    printf("  FAIL  could not write pid file\n");
+    ++g_fixture_failed;
+    fixture_cleanup_dir(tmp);
+    return;
+  }
+
+  FIXTURE_TEST("stop_previous refuses to terminate live non-MemDBG pid",
+               memdbg_instance_stop_previous(&cfg) == MEMDBG_OK);
+  /* The pid file should still exist — we refused to act on it. */
+  FIXTURE_TEST("pid file preserved when refusing to terminate",
+               fixture_pid_file_exists(tmp));
 
   fixture_cleanup_dir(tmp);
 }
@@ -265,6 +305,7 @@ int main(void) {
   test_same_process_reinjection();
   test_token_mismatch();
   test_stale_other_pid();
+  test_live_non_memdbg_pid();
 
   pal_network_fini();
 

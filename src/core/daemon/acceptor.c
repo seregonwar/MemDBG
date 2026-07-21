@@ -396,16 +396,11 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
 
   if (cfg == NULL || listen_fd == NULL) return MEMDBG_ERR_PARAM;
 
-  if (cfg->replace_existing) {
-    memdbg_status_t rs = memdbg_instance_stop_previous(cfg);
-    if (rs == MEMDBG_ERR_STATE &&
-        memdbg_instance_is_current_process(cfg)) {
-      errno = EADDRINUSE;
-      return MEMDBG_ERR_STATE;
-    }
-    if (rs == MEMDBG_OK) memdbg_sleep_ms(200U);
-  }
-
+  /* ---- Bind-first: a free port is the authoritative proof that no previous
+   *      instance is listening.  This avoids a loopback self-probe
+   *      (memdbg_instance_stop_previous → is_daemon_responsive) which can
+   *      stall on consoles (PS4) after the sandbox-jailbreak rewrites the
+   *      network view. ---- */
   if (pal_tcp_listen(cfg->bind_host, cfg->debug_port, 16, listen_fd) == 0)
     return MEMDBG_OK;
 
@@ -413,6 +408,18 @@ memdbg_status_t open_debug_listener(const memdbg_config_t *cfg,
   if (!cfg->replace_existing || saved_errno != EADDRINUSE) {
     errno = saved_errno;
     return MEMDBG_ERR_NET;
+  }
+
+  /* Port is genuinely busy — a previous instance is listening.  Ask it to
+   * stop via the authoritative TCP SHUTDOWN probe, then rebind. */
+  {
+    memdbg_status_t rs = memdbg_instance_stop_previous(cfg);
+    if (rs == MEMDBG_ERR_STATE &&
+        memdbg_instance_is_current_process(cfg)) {
+      errno = EADDRINUSE;
+      return MEMDBG_ERR_STATE;
+    }
+    if (rs == MEMDBG_OK) memdbg_sleep_ms(200U);
   }
 
   memdbg_log_write(MEMDBG_LOG_INFO,
