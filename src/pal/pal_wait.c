@@ -10,17 +10,17 @@
 #include <sys/select.h>
 #include <unistd.h>
 
-#if defined(__linux__)
+#if defined(MEMDBG_PAL_WAIT_BACKEND_EPOLL)
 #include <sys/epoll.h>
 #ifndef EPOLLRDHUP
 #define EPOLLRDHUP 0x2000
 #endif
-#elif defined(__FreeBSD__) || defined(__APPLE__)
+#elif defined(MEMDBG_PAL_WAIT_BACKEND_KQUEUE)
 #include <sys/event.h>
 #endif
 
 int wait_for_client(socket_t fd, int timeout_ms) {
-#if defined(__linux__)
+#if defined(MEMDBG_PAL_WAIT_BACKEND_EPOLL)
   /* Use epoll for near-zero-latency polling. */
   int epfd = epoll_create1(EPOLL_CLOEXEC);
   if (epfd < 0) goto fallback_select;
@@ -43,7 +43,7 @@ int wait_for_client(socket_t fd, int timeout_ms) {
   }
   return rc; /* 0 = timeout, <0 = error */
 
-#elif defined(__FreeBSD__) || defined(__APPLE__)
+#elif defined(MEMDBG_PAL_WAIT_BACKEND_KQUEUE)
   /* Use kqueue for precise polling. */
   int kq = kqueue();
   if (kq < 0) goto fallback_select;
@@ -67,16 +67,12 @@ int wait_for_client(socket_t fd, int timeout_ms) {
     return (ev.filter == EVFILT_READ) ? 1 : 0;
   }
   return rc; /* 0 = timeout, <0 = error */
-#elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) || \
-      defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
-  /* The console kqueue implementations are not equivalent to desktop
-   * FreeBSD for this short-lived usage.  Creating and closing a kqueue on
-   * every accept poll can eventually stop delivering listener events.
-   * select() is reliable here and the daemon only watches one descriptor. */
-  goto fallback_select;
 #endif
 
+#if defined(MEMDBG_PAL_WAIT_BACKEND_EPOLL) || \
+    defined(MEMDBG_PAL_WAIT_BACKEND_KQUEUE)
 fallback_select:
+#endif
   {
     /* Guard against fd out of range for select().
      * macOS/FreeBSD assert at runtime if fd >= FD_SETSIZE. */
