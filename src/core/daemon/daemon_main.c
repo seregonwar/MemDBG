@@ -215,6 +215,63 @@ static void install_signal_handlers(void) {
 #endif
 }
 
+static void start_auxiliary_services(const memdbg_config_t *cfg,
+                                     bool restarting) {
+  if (cfg == NULL) return;
+
+  if (restarting && cfg->enable_udp_log) {
+    memdbg_udp_log_config_t ucfg;
+    memdbg_udp_log_config_defaults(&ucfg);
+    (void)snprintf(ucfg.host, sizeof(ucfg.host), "%s", cfg->udp_log_host);
+    ucfg.port = cfg->udp_log_port;
+    ucfg.broadcast = strcmp(cfg->udp_log_host, "255.255.255.255") == 0;
+    memdbg_status_t status = memdbg_udp_log_start(&ucfg);
+    if (status != MEMDBG_OK)
+      memdbg_log_write(MEMDBG_LOG_WARN, "UDP log restart: %s",
+                       memdbg_strerror(status));
+  }
+
+  if (cfg->enable_legacy_compat) {
+    memdbg_status_t status = memdbg_legacy_start(cfg);
+    if (status == MEMDBG_OK) {
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       restarting ? "legacy: restarted on tcp/%u"
+                                  : "legacy: active on tcp/%u, debugger-intr tcp/755",
+                       cfg->legacy_port);
+    } else {
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       restarting ? "legacy restart: %s"
+                                  : "legacy: disabled: %s",
+                       memdbg_strerror(status));
+    }
+  }
+
+  {
+    memdbg_status_t status = memdbg_discovery_start(cfg);
+    if (status != MEMDBG_OK)
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       restarting ? "discovery restart: %s"
+                                  : "discovery: %s",
+                       memdbg_strerror(status));
+  }
+
+  {
+    pthread_t tid;
+    if (memdbg_beacon_start(&tid) == 0)
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       restarting ? "beacon: restarted"
+                                  : "beacon: active on udp/0x3F2");
+  }
+
+  {
+    pthread_t tid;
+    if (memdbg_klog_start(&tid) == 0)
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       restarting ? "klog: restarted"
+                                  : "klog: streaming on tcp/0xA00C");
+  }
+}
+
 /* ---- Daemon entry point ---- */
 
 int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
@@ -311,42 +368,8 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                      "privilege: payload escalation failed; memory actions may fail with permission/i-o status");
   }
 
-  if (cfg.enable_legacy_compat) {
-    memdbg_status_t lstatus = memdbg_legacy_start(&cfg);
-    if (lstatus == MEMDBG_OK) {
-      memdbg_log_write(MEMDBG_LOG_INFO,
-                       "legacy: active on tcp/%u, debugger-intr tcp/755",
-                       cfg.legacy_port);
-    } else {
-      memdbg_log_write(MEMDBG_LOG_WARN,
-                       "legacy: disabled: %s",
-                       memdbg_strerror(lstatus));
-    }
-  }
-
-  {
-    memdbg_status_t dstatus = memdbg_discovery_start(&cfg);
-    if (dstatus != MEMDBG_OK)
-      memdbg_log_write(MEMDBG_LOG_WARN, "discovery: %s",
-                       memdbg_strerror(dstatus));
-  }
-
-  {
-    pthread_t btid;
-    if (memdbg_beacon_start(&btid) == 0)
-      memdbg_log_write(MEMDBG_LOG_INFO, "beacon: active on udp/0x3F2");
-  }
-
-  {
-    pthread_t ktid;
-    if (memdbg_klog_start(&ktid) == 0)
-      memdbg_log_write(MEMDBG_LOG_INFO, "klog: streaming on tcp/0xA00C");
-  }
-
+  /* Initialise request-visible state before the acceptor can dispatch. */
   flashscan_init();
-
-  if (notification_ready)
-    pal_notification_send("MemDBG by seregonwar started");
 
   /* ---- Acceptor supervisor loop (rest mode resilience) ----
    * On console, the listening socket may be invalidated during rest mode
@@ -356,6 +379,8 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   unsigned int pool_workers =
       cfg.max_connections < 4U ? 2U :
       cfg.max_connections < 8U ? 4U : 8U;
+  bool initial_start = true;
+  bool auxiliary_restart = false;
 
   for (;;) {
     pthread_t acceptor_tid;
@@ -372,6 +397,31 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
       memdbg_thread_pool_shutdown(pool);
       memdbg_thread_pool_destroy(pool);
       goto shutdown_cleanup;
+    }
+
+    /* The debug listener is the core service and must become responsive
+     * before optional notification, legacy, discovery, beacon, or klog work.
+     * On PS4 a system notification (and historically some auxiliary startup
+     * calls) can block in the kernel after a GoldHEN reinjection.  Starting
+     * the acceptor first guarantees that both the frontend and the
+     * same-process instance probe can still complete their HELLO exchange. */
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "debug: accepting on tcp/%u with %u workers",
+                     cfg.debug_port,
+                     memdbg_thread_pool_active_workers(pool));
+
+    if (initial_start) {
+      start_auxiliary_services(&cfg, false);
+      initial_start = false;
+      if (notification_ready)
+        pal_notification_send("MemDBG by seregonwar started");
+    } else if (auxiliary_restart) {
+      /* Recreate auxiliary network services only after the new debug
+       * acceptor is already live. */
+      start_auxiliary_services(&cfg, true);
+      auxiliary_restart = false;
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "acceptor: listener recreated, accept loop active");
     }
 
     (void)pthread_join(acceptor_tid, NULL);
@@ -398,6 +448,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     memdbg_beacon_stop();
     memdbg_udp_log_stop();
     pal_network_fini();
+    auxiliary_restart = true;
 
     /* Backoff before retrying — give the kernel time to restore the
      * network stack after a suspend/resume cycle.
@@ -442,44 +493,8 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
       break;
     }
 
-    /* Recreate auxiliary network services torn down by pal_network_fini(). */
-    if (memdbg_daemon_should_stop()) break;
-    if (cfg.enable_udp_log) {
-      memdbg_udp_log_config_t ucfg2;
-      memdbg_udp_log_config_defaults(&ucfg2);
-      (void)snprintf(ucfg2.host, sizeof(ucfg2.host), "%s", cfg.udp_log_host);
-      ucfg2.port = cfg.udp_log_port;
-      ucfg2.broadcast = strcmp(cfg.udp_log_host, "255.255.255.255") == 0;
-      memdbg_status_t us = memdbg_udp_log_start(&ucfg2);
-      if (us != MEMDBG_OK)
-        memdbg_log_write(MEMDBG_LOG_WARN, "UDP log restart: %s",
-                         memdbg_strerror(us));
-    }
-    if (cfg.enable_legacy_compat) {
-      memdbg_status_t ls = memdbg_legacy_start(&cfg);
-      if (ls == MEMDBG_OK)
-        memdbg_log_write(MEMDBG_LOG_INFO, "legacy: restarted on tcp/%u", cfg.legacy_port);
-      else
-        memdbg_log_write(MEMDBG_LOG_WARN, "legacy restart: %s", memdbg_strerror(ls));
-    }
-    {
-      memdbg_status_t ds = memdbg_discovery_start(&cfg);
-      if (ds != MEMDBG_OK)
-        memdbg_log_write(MEMDBG_LOG_WARN, "discovery restart: %s", memdbg_strerror(ds));
-    }
-    {
-      pthread_t btid2;
-      if (memdbg_beacon_start(&btid2) == 0)
-        memdbg_log_write(MEMDBG_LOG_INFO, "beacon: restarted");
-    }
-    {
-      pthread_t ktid2;
-      if (memdbg_klog_start(&ktid2) == 0)
-        memdbg_log_write(MEMDBG_LOG_INFO, "klog: restarted");
-    }
-
-    memdbg_log_write(MEMDBG_LOG_INFO,
-                     "acceptor: listener recreated, resuming accept loop");
+    /* Go around immediately: the core acceptor is started before auxiliary
+     * services are recreated at the top of the next iteration. */
   }
 
 shutdown_cleanup:

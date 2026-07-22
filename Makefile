@@ -180,7 +180,7 @@ test-pal-memory-console-ps4: tests/test_pal_memory_console_ps4.c tests/include/p
 test-privilege-ps4: tests/test_privilege_ps4.c tests/include/ps4/authid.h tests/include/ps4/kernel.h $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) -Itests/include $(HOST_CFLAGS) -DPLATFORM_PS4=1 tests/test_privilege_ps4.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_privilege_ps4
-	@echo "--- Running PS4 privilege pointer test ---"
+	@echo "--- Running PS4 loader credential test ---"
 	$(BUILD_DIR)/test_privilege_ps4
 
 test-process-map-metadata: $(BUILD_DIR)/host/pal/pal_process.o tests/test_process_map_metadata.c

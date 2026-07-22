@@ -105,30 +105,30 @@ int memdbg_privilege_operation_end(void) {
   return 0;
 }
 
+/* PS5 payloads own their process and use the SDK's dedicated vnode helper.
+ * PS4 payloads run inside the GoldHEN loader and deliberately do not rewrite
+ * the loader's persistent root/jail state (see jailbreak_self below). */
+#if MEMDBG_PRIVILEGE_HAS_PS5
 static bool pid_alive(pid_t pid) { return kill(pid, 0) == 0; }
 
 static intptr_t privilege_root_vnode(void) {
-#if MEMDBG_PRIVILEGE_HAS_PS5
   return kernel_get_root_vnode();
-#else
-  /* The PS4 SDK resolves this symbol to the root vnode itself during CRT
-   * initialisation.  Despite the KERNEL_ADDRESS_* name, it is not the
-   * address of a pointer that needs another kernel_getlong().  Dereferencing
-   * it returns the vnode's first field (v_type, commonly 0x2) and installing
-   * that value as fd_rdir/fd_jdir makes later filesystem calls hang. */
-  return KERNEL_ADDRESS_ROOTVNODE;
-#endif
-}
-
-#if !MEMDBG_PRIVILEGE_HAS_PS5
-static intptr_t privilege_prison0(void) {
-  /* Same PS4 SDK contract as KERNEL_ADDRESS_ROOTVNODE: this is already the
-   * resolved prison0 pointer, not a pointer slot. */
-  return KERNEL_ADDRESS_PRISON0;
 }
 #endif
 
 int memdbg_privilege_jailbreak_self(void) {
+#if !MEMDBG_PRIVILEGE_HAS_PS5
+  /* A PS4 ELF is hosted by GoldHEN's long-lived loader process (commonly PID
+   * 46), which already exposes the mdbg kernel primitives used by the PAL.
+   * Rewriting that shared process's auth ID, prison, and root/jail vnodes is
+   * both unnecessary and unsafe: it changes the execution context used by
+   * system notification and subsequent ELF launches.  The known-good PS4
+   * payloads before the regression intentionally left this state untouched.
+   * Temporary auth/cap changes needed by ptrace remain in begin/end_ptrace. */
+  memdbg_log_write(MEMDBG_LOG_INFO,
+                   "privilege: retaining GoldHEN loader credentials on PS4");
+  return 0;
+#else
   pid_t pid = getpid();
   uint8_t caps[16];
   int failures = 0;
@@ -212,6 +212,7 @@ int memdbg_privilege_jailbreak_self(void) {
                    (int)pid, (unsigned long)rootv);
   atomic_store_explicit(&g_self_privileged, true, memory_order_release);
   return 0;
+#endif
 }
 
 int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
@@ -354,13 +355,6 @@ int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
       backup->fd_modified = true;
       failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_RDIR, (uint64_t)rootv) != 0;
       failures += kernel_setlong(fd + KERNEL_OFFSET_FILEDESC_FD_JDIR, (uint64_t)rootv) != 0;
-    }
-#else
-    (void)fd;
-    {
-      intptr_t prison0 = privilege_prison0();
-      if (prison0 != 0)
-        failures += kernel_set_ucred_prison(pid, prison0) != 0;
     }
 #endif
   } else {
