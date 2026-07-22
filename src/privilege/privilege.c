@@ -111,9 +111,22 @@ static intptr_t privilege_root_vnode(void) {
 #if MEMDBG_PRIVILEGE_HAS_PS5
   return kernel_get_root_vnode();
 #else
-  return (intptr_t)kernel_getlong(KERNEL_ADDRESS_ROOTVNODE);
+  /* The PS4 SDK resolves this symbol to the root vnode itself during CRT
+   * initialisation.  Despite the KERNEL_ADDRESS_* name, it is not the
+   * address of a pointer that needs another kernel_getlong().  Dereferencing
+   * it returns the vnode's first field (v_type, commonly 0x2) and installing
+   * that value as fd_rdir/fd_jdir makes later filesystem calls hang. */
+  return KERNEL_ADDRESS_ROOTVNODE;
 #endif
 }
+
+#if !MEMDBG_PRIVILEGE_HAS_PS5
+static intptr_t privilege_prison0(void) {
+  /* Same PS4 SDK contract as KERNEL_ADDRESS_ROOTVNODE: this is already the
+   * resolved prison0 pointer, not a pointer slot. */
+  return KERNEL_ADDRESS_PRISON0;
+}
+#endif
 
 int memdbg_privilege_jailbreak_self(void) {
   pid_t pid = getpid();
@@ -177,7 +190,7 @@ int memdbg_privilege_jailbreak_self(void) {
     (void)fd;
     backup.ucred_prison = kernel_get_ucred_prison(pid);
     {
-      intptr_t prison0 = (intptr_t)kernel_getlong(KERNEL_ADDRESS_PRISON0);
+      intptr_t prison0 = privilege_prison0();
       if (prison0 != 0)
         failures += kernel_set_ucred_prison(pid, prison0) != 0;
     }
@@ -345,7 +358,7 @@ int memdbg_privilege_elevate_target(pid_t pid, memdbg_ucred_backup_t *backup) {
 #else
     (void)fd;
     {
-      intptr_t prison0 = (intptr_t)kernel_getlong(KERNEL_ADDRESS_PRISON0);
+      intptr_t prison0 = privilege_prison0();
       if (prison0 != 0)
         failures += kernel_set_ucred_prison(pid, prison0) != 0;
     }
