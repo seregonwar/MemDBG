@@ -13,6 +13,23 @@
 
 #include "memdbg/pal/pal_network.h"
 
+/* Keep backend selection in one place.  Console SDKs expose FreeBSD-derived
+ * predefined macros, so the console checks must win over host OS detection. */
+#if defined(MEMDBG_PAL_PLATFORM_PS4) || defined(MEMDBG_PAL_PLATFORM_PS5)
+#  define MEMDBG_PAL_WAIT_BACKEND_SELECT 1
+#  define MEMDBG_PAL_WAIT_BACKEND_NAME "select"
+#elif defined(MEMDBG_PAL_PLATFORM_LINUX)
+#  define MEMDBG_PAL_WAIT_BACKEND_EPOLL 1
+#  define MEMDBG_PAL_WAIT_BACKEND_NAME "epoll"
+#elif defined(MEMDBG_PAL_PLATFORM_FREEBSD) || \
+      defined(MEMDBG_PAL_PLATFORM_MACOS)
+#  define MEMDBG_PAL_WAIT_BACKEND_KQUEUE 1
+#  define MEMDBG_PAL_WAIT_BACKEND_NAME "kqueue"
+#else
+#  define MEMDBG_PAL_WAIT_BACKEND_SELECT 1
+#  define MEMDBG_PAL_WAIT_BACKEND_NAME "select"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

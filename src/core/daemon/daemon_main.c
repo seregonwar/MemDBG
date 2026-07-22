@@ -45,17 +45,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
-#if defined(__linux__)
-#include <sys/epoll.h>
-#ifndef EPOLLRDHUP
-#define EPOLLRDHUP 0x2000
-#endif
-#elif defined(__FreeBSD__) || defined(__APPLE__) || defined(PLATFORM_PS4) || \
-      defined(PS4) || defined(__ORBIS__) || defined(PLATFORM_PS5) ||        \
-      defined(PS5) || defined(__PROSPERO__)
-#include <sys/event.h>
-#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -325,16 +314,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
                    cfg.enable_legacy_compat ? cfg.legacy_port : 0U,
                    cfg.enable_udp_log ? cfg.udp_log_host : "off",
                    cfg.enable_udp_log ? cfg.udp_log_port : 0U,
-#if defined(__linux__)
-                   "epoll",
-#elif defined(__FreeBSD__) || defined(__APPLE__)
-                   "kqueue",
-#elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__) || \
-      defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
-                   "select",
-#else
-                   "select",
-#endif
+                   MEMDBG_PAL_WAIT_BACKEND_NAME,
                    cfg.max_connections,
                    cfg.idle_timeout_ms);
   if (cfg.allow_host[0] != '\0') {
