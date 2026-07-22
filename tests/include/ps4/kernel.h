@@ -10,6 +10,8 @@ extern const intptr_t KERNEL_ADDRESS_PRISON0;
 extern const intptr_t KERNEL_ADDRESS_ROOTVNODE;
 
 uint64_t kernel_getlong(intptr_t addr);
+int32_t kernel_copyout(intptr_t kaddr, void *udaddr, size_t len);
+intptr_t kernel_get_proc_ucred(pid_t pid);
 intptr_t kernel_get_proc_filedesc(pid_t pid);
 
 int32_t kernel_set_ucred_uid(pid_t pid, uid_t uid);
