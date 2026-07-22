@@ -116,17 +116,22 @@ fail:
 // Minimal kernel copy wrappers
 
 static inline int kread(intptr_t kaddr, void *dst, size_t n) {
+  /* Prefer the safe SDK path for kernel-heap reads (kproc, vmspace, pmap).
+   * The fast rwpipe path can kernel-panic on arbitrary kernel addresses
+   * (see pal_kernel.c), so only use it as a fallback when kernel_copyout
+   * is unavailable or has been blocked by the hypervisor. */
+  if (kernel_copyout(kaddr, dst, n) == 0) return 0;
   if (memdbg_kernel_fast_available())
     return memdbg_kernel_copyout_fast(kaddr, dst, n) == 0 ? 0 : -1;
-  if (kernel_copyout(kaddr, dst, n) != 0) return -1;
-  return 0;
+  return -1;
 }
 
 static inline int kwrite(const void *src, intptr_t kaddr, size_t n) {
+  /* Prefer the safe SDK path; see kread() for rationale. */
+  if (kernel_copyin(src, kaddr, n) == 0) return 0;
   if (memdbg_kernel_fast_available())
     return memdbg_kernel_copyin_fast(src, kaddr, n) == 0 ? 0 : -1;
-  if (kernel_copyin(src, kaddr, n) != 0) return -1;
-  return 0;
+  return -1;
 }
 
 // Virtual to physical using known DMAP
