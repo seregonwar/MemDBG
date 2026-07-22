@@ -67,7 +67,10 @@ endif
 COMMON_CPPFLAGS := -I$(GENERATED_INCLUDE_DIR) -Iinclude -Isrc/core/daemon
 COMMON_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -fstack-protector-strong -O2
 HOST_CPPFLAGS := $(COMMON_CPPFLAGS) -D_DARWIN_C_SOURCE -D_POSIX_C_SOURCE=200809L -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS
-HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2 -flto -march=native
+# Keep cached CI objects and release binaries portable across host CPUs.
+# Local benchmark builds may opt in with HOST_ARCH_FLAGS=-march=native.
+HOST_ARCH_FLAGS ?=
+HOST_CFLAGS := $(COMMON_CFLAGS) -Werror -Wconversion -Wshadow -Wformat=2 -flto $(HOST_ARCH_FLAGS)
 # Console (PS4/PS5) builds share the host's strictness where the SDK allows.
 # CONSOLE_WERROR defaults to 1 (treat warnings as errors). Set to 0 to
 # allow warnings from console SDK headers outside MemDBG's control.
