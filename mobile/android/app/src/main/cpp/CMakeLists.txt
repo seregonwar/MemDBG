@@ -177,6 +177,9 @@ set(MEMDBG_FRONTEND_SOURCES
   ${FRONTEND_ROOT}/src/app/shell/chrome.cpp
   ${FRONTEND_ROOT}/src/app/shell/session.cpp
   ${FRONTEND_ROOT}/src/app/shell/mobile/mobile.cpp
+  ${FRONTEND_ROOT}/src/app/shell/mobile/network.cpp
+  ${FRONTEND_ROOT}/src/app/shell/mobile/plugins.cpp
+  ${FRONTEND_ROOT}/src/app/shell/mobile/scanner.cpp
 
   ${FRONTEND_ROOT}/src/core/crash_logger.cpp
   ${FRONTEND_ROOT}/src/core/discovery_client.cpp
