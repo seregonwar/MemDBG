@@ -109,7 +109,7 @@ ALL_DEPFILES := $(HOST_OBJECTS:.o=.d) $(PS4_OBJECTS:.o=.d) \
 # compiled against different layouts and trip the stack protector at runtime.
 -include $(ALL_DEPFILES)
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine test-protocol-abi check-locales check-headers tracer-tool fuzz-protocol-header fuzz-lz4 fuzz-sjson fuzz-process-maps fuzz-corpus FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-privilege-ps4 test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine test-protocol-abi check-locales check-headers tracer-tool fuzz-protocol-header fuzz-lz4 fuzz-sjson fuzz-process-maps fuzz-corpus FORCE
 
 all: host
 
@@ -176,6 +176,12 @@ test-pal-memory-console-ps4: tests/test_pal_memory_console_ps4.c tests/include/p
 	$(HOST_CC) $(HOST_CPPFLAGS) -Itests/include $(HOST_CFLAGS) -DMEMDBG_PAL_CONSOLE=1 -DMEMDBG_PAL_PS4=1 tests/test_pal_memory_console_ps4.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_pal_memory_console_ps4
 	@echo "--- Running PAL memory console test (PS4) ---"
 	$(BUILD_DIR)/test_pal_memory_console_ps4
+
+test-privilege-ps4: tests/test_privilege_ps4.c tests/include/ps4/authid.h tests/include/ps4/kernel.h $(GENERATED_VERSION_HEADER)
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CPPFLAGS) -Itests/include $(HOST_CFLAGS) -DPLATFORM_PS4=1 tests/test_privilege_ps4.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_privilege_ps4
+	@echo "--- Running PS4 privilege pointer test ---"
+	$(BUILD_DIR)/test_privilege_ps4
 
 test-process-map-metadata: $(BUILD_DIR)/host/pal/pal_process.o tests/test_process_map_metadata.c
 	@mkdir -p $(BUILD_DIR)
@@ -382,7 +388,7 @@ test-legacy-process-e2e: host tests/test_legacy_process_e2e.c
 	sleep 0.6; \
 	$(BUILD_DIR)/test_legacy_process_e2e 127.0.0.1 $$legacy_port
 
-test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-protocol-abi test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts test-memdbg-instance fuzz-corpus
+test: test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-privilege-ps4 test-process-map-metadata test-process-map-cache test-debugger-e2e test-debugger-protocol test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-protocol-abi test-legacy-scanner-e2e test-legacy-process-e2e test-thread-pool test-max-connections-e2e test-idle-timeout-e2e test-idle-timeout-unit test-kqueue-timeout test-reconnect-e2e test-reconnect-state-machine test-reconnect-50-restarts test-memdbg-instance fuzz-corpus
 
 # ---- Fuzz harnesses (pure, socket‑free parsers) ----
 
