@@ -11,7 +11,12 @@
 
 #include <errno.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#define getpid _getpid
+#else
 #include <unistd.h>
+#endif
 
 #if defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/kernel.h>
@@ -20,12 +25,9 @@
 #define MEMDBG_PRIVILEGE_SYSTEM_AUTHID 0x4801000000000013ULL
 #define MEMDBG_PRIVILEGE_PTRACE_AUTHID 0x4800000000010003ULL
 #elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
-#include <ps4/authid.h>
 #include <ps4/kernel.h>
 #define MEMDBG_PRIVILEGE_HAS_CONSOLE 1
 #define MEMDBG_PRIVILEGE_HAS_PS5 0
-#define MEMDBG_PRIVILEGE_SYSTEM_AUTHID ((uint64_t)SCE_AUTHID_SYSCORE)
-#define MEMDBG_PRIVILEGE_PTRACE_AUTHID ((uint64_t)SCE_AUTHID_DECID)
 #else
 #define MEMDBG_PRIVILEGE_HAS_CONSOLE 0
 #define MEMDBG_PRIVILEGE_HAS_PS5 0
@@ -45,10 +47,12 @@ bool memdbg_privilege_supported(void) {
 #include <signal.h>
 #include <stdatomic.h>
 
+#if MEMDBG_PRIVILEGE_HAS_PS5
 static const uint8_t k_full_caps[16] = {
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 };
+#endif
 
 #if !MEMDBG_PRIVILEGE_HAS_PS5
 /* PS4 ucred layout (payload SDK): groups[0] sits between svgid and prison. */
@@ -337,7 +341,6 @@ int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
       kernel_set_proc_jaildir(pid, KERNEL_ADDRESS_ROOTVNODE) != 0;
 
   if (failures == 0) {
-    const uid_t got_uid = (uid_t)0;
     uid_t check_uid = 1;
     intptr_t check_prison = 0;
     intptr_t check_rdir = 0;
@@ -349,7 +352,7 @@ int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
             KERNEL_ADDRESS_PRISON0 ||
         (check_rdir = kernel_get_proc_rootdir(pid)) !=
             KERNEL_ADDRESS_ROOTVNODE ||
-        check_uid != got_uid) {
+        check_uid != 0) {
       memdbg_log_write(
           MEMDBG_LOG_WARN,
           "privilege: begin_ptrace verify mismatch pid=%d uid=%u "
