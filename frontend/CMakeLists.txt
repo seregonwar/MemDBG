@@ -440,6 +440,57 @@ target_include_directories(memdbg_probe PRIVATE
 
 target_link_libraries(memdbg_probe PRIVATE Threads::Threads)
 
+# ---- memdbg_gdb_bridge (IDA / GDB RSP ↔ MDBG host proxy) ----
+
+set(MEMDBG_GDB_BRIDGE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gdb_bridge)
+
+add_executable(memdbg_gdb_bridge
+  ${MEMDBG_GDB_BRIDGE_DIR}/main.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_server.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/gdb_regs.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
+  src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
+)
+
+target_include_directories(memdbg_gdb_bridge PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
+  ${MEMDBG_GDB_BRIDGE_DIR}
+)
+
+target_link_libraries(memdbg_gdb_bridge PRIVATE Threads::Threads)
+
+add_executable(memdbg_gdb_bridge_test
+  ${MEMDBG_GDB_BRIDGE_DIR}/tests/test_gdb_bridge.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/gdb_regs.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_server.cpp
+  src/core/platform.cpp
+)
+
+target_include_directories(memdbg_gdb_bridge_test PRIVATE
+  ${MEMDBG_GENERATED_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core/client
+  ${MEMDBG_GDB_BRIDGE_DIR}
+)
+
+target_link_libraries(memdbg_gdb_bridge_test PRIVATE Threads::Threads)
+
+if(MSVC)
+  set_property(TARGET memdbg_gdb_bridge_test PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # ---- memdbg_performance_probe (read-only live-console benchmark) ----
 
 add_executable(memdbg_performance_probe
@@ -937,6 +988,8 @@ endif()
 if(WIN32)
   target_compile_definitions(memdbg_frontend PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_gdb_bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_gdb_bridge_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_performance_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_payload_injection_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_payload_sender_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -955,6 +1008,8 @@ if(WIN32)
   target_compile_definitions(memdbg_sandbox_python_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32 comdlg32 ole32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_gdb_bridge PRIVATE ws2_32 shell32)
+  target_link_libraries(memdbg_gdb_bridge_test PRIVATE ws2_32)
   target_link_libraries(memdbg_performance_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_payload_injection_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_payload_sender_test PRIVATE ws2_32 shell32)
@@ -975,6 +1030,8 @@ if(MSVC)
   # /WX targets: core-library code that must remain MSVC-portable.
   # These catch MSVC type-mismatch regressions (e.g. setsockopt char*/int*).
   target_compile_options(memdbg_probe PRIVATE /W4 /WX)
+  target_compile_options(memdbg_gdb_bridge PRIVATE /W4 /WX)
+  target_compile_options(memdbg_gdb_bridge_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_performance_probe PRIVATE /W4 /WX)
   target_compile_options(memdbg_payload_injection_probe PRIVATE /W4 /WX)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4 /WX)
@@ -999,6 +1056,8 @@ if(MSVC)
 else()
   target_compile_options(memdbg_frontend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_probe PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_gdb_bridge PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_gdb_bridge_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_performance_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_injection_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)

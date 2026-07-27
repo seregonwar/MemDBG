@@ -247,6 +247,8 @@ make test-debugger-e2e     # live host debugger protocol smoke test
 make test-process-aob-e2e  # live host AOB protocol path
 make check-locales         # validate locale completeness and manifest hashes
 make check-headers         # verify header/source correspondence
+make gdb-bridge            # host GDB RSP ↔ MDBG proxy for IDA (#37)
+make test-gdb-bridge       # unit tests for GDB bridge framing/registers
 git diff --check           # reject whitespace errors
 ```
 
@@ -255,6 +257,9 @@ Live console probes are built with the frontend tools:
 ```sh
 # Functional MDBG command matrix
 ./build/frontend/bin/memdbg_probe <console-ip> 9020
+
+# IDA / GDB remote bridge (standalone build also under build/gdb_bridge/)
+./build/gdb_bridge/Release/memdbg_gdb_bridge --host <console-ip> --pid <pid>
 
 # Read-only maps, memory, scan, and four-connection benchmark
 ./build/frontend/bin/memdbg_performance_probe <console-ip> 9020 eboot.bin
@@ -523,6 +528,7 @@ and Android build. Release artifacts include `SHA256SUMS.txt`.
 
 | Document | Purpose |
 |---|---|
+| [`docs/ida_gdb_bridge.md`](docs/ida_gdb_bridge.md) | Host GDB RSP proxy for IDA Pro Remote GDB (issue #37). |
 | [`docs/showcase.md`](docs/showcase.md) | Product walkthrough and feature showcase. |
 | [`docs/ps4_goldhen_launch.md`](docs/ps4_goldhen_launch.md) | PS4 / GoldHEN launch notes and stale PID file handling. |
 | [`docs/protocol.md`](docs/protocol.md) | Internal MDBG wire protocol specification and extension rules. |
