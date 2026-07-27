@@ -21,10 +21,10 @@ Platform-specific instructions for setting up MemDBG on PS4 and PS5 consoles.
 
 ### GoldHEN-specific notes
 
-- GoldHEN must be running BEFORE sending the payload. The payload uses GoldHEN's privilege escalation hooks.
-- If you see `privilege: payload escaped sandbox` in the logs, the payload has full access.
-- If this line is missing, try: restart GoldHEN, re-send the payload, or check your GoldHEN version.
-- Some firmware versions require specific GoldHEN builds. See the [PS4 GoldHEN notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md) for compatibility details.
+- GoldHEN must be running BEFORE sending the payload. The payload uses GoldHEN's privilege escalation hooks for memory (`mdbg`).
+- For debugger attach, look for `privilege: ps4 debug gates armed fw=...` (supported on PS4 firmware families from 5.05 through 12.02). The line `privilege: retaining GoldHEN loader credentials on PS4` is expected and is not a failure.
+- Do not expect `privilege: payload escaped sandbox` on PS4 — that message is the PS5 sandbox-escape path.
+- If debug gates fail to arm on your firmware, memory read/scan can still work; `PT_ATTACH` will return permission denied until a matching gate profile exists.
 
 ### "MemDBG is already running" error
 
@@ -135,7 +135,8 @@ If DMAP is unavailable, the payload falls back to standard process memory access
 | "Connection refused" | Payload not running | Re-send the payload ELF |
 | "Connection timed out" | Wrong IP or firewall | Verify console IP, check firewall |
 | Empty process list | Insufficient privileges | Check GoldHEN / ps5debug status |
-| `status -8` on all operations | Payload not escaped sandbox | Check `privilege: payload escaped sandbox` in logs |
+| `status -8` on debugger attach (PS4) | Debug gates not armed for this FW | Look for `privilege: ps4 debug gates armed`; supported 5.05–12.02 |
+| `status -8` on all ops (PS5) | Payload not escaped sandbox | Check `privilege: payload escaped sandbox` in logs |
 | Frontend can't discover console | Different subnet | Use direct IP connection instead of discovery |
 | Scan crashes the console | Too many parallel workers or oversized buffer | Reduce `MEMDBG_SCAN_PARALLEL_THREADS` or scan a smaller region |
 | KLOG not working (PS5) | Firmware doesn't support KLOG | Check validation notes for your firmware version |

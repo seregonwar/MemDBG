@@ -21,6 +21,7 @@
 
 const intptr_t KERNEL_ADDRESS_ROOTVNODE = (intptr_t)0x12345000;
 const intptr_t KERNEL_ADDRESS_PRISON0 = (intptr_t)0x12346000;
+const intptr_t KERNEL_ADDRESS_IMAGE_BASE = (intptr_t)0x100000000LL;
 
 static int g_kernel_getlong_calls;
 static intptr_t g_rootdir_set;

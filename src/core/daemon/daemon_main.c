@@ -25,6 +25,7 @@
 #include "memdbg/pal/pal_network.h"
 #include "memdbg/pal/pal_notification.h"
 #include "memdbg/privilege/privilege.h"
+#include "memdbg/privilege/ps4_debug_gate.h"
 #include "memdbg/scanner/flashscan.h"
 #include "memdbg/telemetry/discovery.h"
 #include "memdbg/telemetry/udp_log.h"
@@ -373,6 +374,14 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
       memdbg_privilege_jailbreak_self() != 0) {
     memdbg_log_write(MEMDBG_LOG_WARN,
                      "privilege: payload escalation failed; memory actions may fail with permission/i-o status");
+  }
+
+  /* PS4: arm ACMGR/ptrace gates needed for PT_ATTACH.  Non-fatal when the
+   * running firmware has no profile — mdbg memory paths remain available. */
+  if (memdbg_ps4_debug_gate_arm() != 0) {
+    memdbg_log_write(
+        MEMDBG_LOG_WARN,
+        "privilege: ps4 debug gate arming failed; debugger attach may return permission denied");
   }
 
   /* Initialise request-visible state before the acceptor can dispatch. */

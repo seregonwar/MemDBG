@@ -457,16 +457,23 @@ Validated end-to-end on the following firmware families:
 ### PlayStation 4
 
 Known-good on 9.00 and 11.00; other jailbreak-able firmwares (5.05, 6.72,
-7.02, 7.55) are expected to work through the same PS4 payload SDK but have
-not been explicitly tested by the MemDBG test suite.
+7.02, 7.55, 8.xx–12.02) are expected to work through the same PS4 payload SDK but have
+not all been explicitly live-validated by the MemDBG test suite.
+
+Native debugger attach (`PT_ATTACH`) uses per-firmware ACMGR/ptrace gate profiles
+covering the **5.05–12.02** families (same span as GoldHEN-era PS4 debug tooling).
 
 | Family | Releases tested | Status |
 |---|---|---|
 | 5.xx | 5.05 | Expected to work |
 | 6.xx | 6.72 | Expected to work |
 | 7.xx | 7.02, 7.55 | Expected to work |
+| 8.xx | 8.00, 8.50 | Expected to work |
 | 9.00 | 9.00 | **Live-validated** |
+| 9.xx | 9.03, 9.60 | Expected to work |
+| 10.xx | 10.00, 10.50, 10.70 | Expected to work |
 | 11.00 | 11.00 | Expected to work |
+| 11.xx–12.xx | 11.02, 11.50, 12.00, 12.02 | Expected to work |
 
 > PS4 debugging and kernel features are platform-gated via `MEMDBG_CAP_*` bits.
 > Not all capabilities are available on all PS4 firmware versions.
