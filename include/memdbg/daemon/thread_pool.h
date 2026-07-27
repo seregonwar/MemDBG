@@ -34,9 +34,10 @@ memdbg_thread_pool_t *memdbg_thread_pool_create(unsigned int num_workers);
 
 /*
  * Enqueue a connection for handling by an available worker.
- * `args` ownership transfers to the pool — it is freed by the
- * worker after connection_handler_thread() returns.
- * Returns 0 on success, -1 if the pool is shutting down.
+ * On success, `args` ownership transfers to the pool and it is freed by the
+ * worker after connection_handler_thread() returns. On failure, ownership
+ * remains with the caller.
+ * Returns 0 on success, -1 if allocation fails or the pool is shutting down.
  */
 int memdbg_thread_pool_enqueue(memdbg_thread_pool_t *pool,
                                connection_args_t *args);

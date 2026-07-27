@@ -84,6 +84,7 @@ memdbg_thread_pool_t *memdbg_thread_pool_create(unsigned int num_workers) {
   memdbg_thread_pool_t *pool = NULL;
   if (posix_memalign((void **)&pool, 64, sizeof(*pool)) != 0)
     return NULL;
+  memset(pool, 0, sizeof(*pool));
 
   pool->num_workers = num_workers;
   pool->workers = (pthread_t *)calloc(num_workers, sizeof(pthread_t));
@@ -128,13 +129,11 @@ int memdbg_thread_pool_enqueue(memdbg_thread_pool_t *pool,
 
   /* Reject if shutting down. */
   if (atomic_load_explicit(&pool->shutting_down, memory_order_acquire)) {
-    free(args);
     return -1;
   }
 
   work_node_t *node = (work_node_t *)malloc(sizeof(*node));
   if (node == NULL) {
-    free(args);
     return -1;
   }
   node->args = args;
@@ -145,7 +144,6 @@ int memdbg_thread_pool_enqueue(memdbg_thread_pool_t *pool,
   /* Double-check shutdown under lock. */
   if (atomic_load_explicit(&pool->shutting_down, memory_order_acquire)) {
     pthread_mutex_unlock(&pool->queue_mtx);
-    free(args);
     free(node);
     return -1;
   }
