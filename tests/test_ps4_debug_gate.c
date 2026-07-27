@@ -127,6 +127,17 @@ int main(void) {
     ++failures;
   }
 
+  /* Console-observed encoding: 0x11008001 -> BCD 11.00. */
+  reset_state();
+  g_fw_raw = 0x11008001u;
+  if (memdbg_ps4_debug_gate_arm() != 0) {
+    fprintf(stderr, "FAIL: console fw encoding 0x11008001 arm returned error\n");
+    ++failures;
+  }
+  failures += expect_bytes(0x003d0de0u, acmgr, sizeof(acmgr), "11.00 bcd acmgr");
+  failures += expect_bytes(0x00384285u, allow, sizeof(allow), "11.00 bcd allow");
+  failures += expect_bytes(0x00384771u, policy, sizeof(policy), "11.00 bcd policy");
+
   /* Firmware 11.00. */
   reset_state();
   g_fw_raw = 0x0b000000u;
