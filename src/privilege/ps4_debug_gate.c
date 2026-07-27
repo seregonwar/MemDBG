@@ -37,19 +37,16 @@ typedef struct memdbg_ps4_debug_gate_profile {
   uint32_t ptrace_allow_rva;
   uint32_t ptrace_policy_rva;
   int32_t ptrace_policy_rel32;
-  /* 1: CF-based deny Jcc / prior JMP at allow site -> NOP fall-through */
-  uint8_t allow_nop;
+  /* Original disp8 used to repair NOP NOP written by older MemDBG builds. */
+  uint8_t allow_legacy_nop_disp;
 } memdbg_ps4_debug_gate_profile_t;
 
 /* Always-allow ACMGR predicate: mov eax, 1; ret */
 static const uint8_t k_acmgr_allow_stub[8] = {
     0x48u, 0xc7u, 0xc0u, 0x01u, 0x00u, 0x00u, 0x00u, 0xc3u};
 
-/* Force the taken/allow side of a near conditional branch (JE/JNE family). */
+/* Match ps4debug: force the taken/allow side of the short conditional branch. */
 static const uint8_t k_ptrace_allow_jmp[1] = {0xebu};
-
-/* Fall through a CF-based Jcc (JA/JBE/...) that targets the deny path. */
-static const uint8_t k_ptrace_allow_nop[2] = {0x90u, 0x90u};
 
 /*
  * Firmware ids are major*100 + minor (900 = 9.00, 1100 = 11.00).
@@ -97,9 +94,9 @@ static const memdbg_ps4_debug_gate_profile_t k_profiles[] = {
     {1051u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
     {1070u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
     {1071u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
-    /* 11.00 / 11.02: live 11.00 used JA (0x77); NOP fall-through. */
-    {1100u, 0x003d0de0u, 0x00384285u, 0x00384771u, 0x0000027c, 1},
-    {1102u, 0x003d0e00u, 0x003842a5u, 0x00384791u, 0x0000027c, 1},
+    /* 11.00 / 11.02: ps4debug rewrites JA +0x1c to JMP +0x1c. */
+    {1100u, 0x003d0de0u, 0x00384285u, 0x00384771u, 0x0000027c, 0x1c},
+    {1102u, 0x003d0e00u, 0x003842a5u, 0x00384791u, 0x0000027c, 0x1c},
     /* 11.50 / 11.52 */
     {1150u, 0x003b2a90u, 0x00366745u, 0x00366c31u, 0x0000027c, 0},
     {1152u, 0x003b2a90u, 0x00366745u, 0x00366c31u, 0x0000027c, 0},
@@ -180,20 +177,6 @@ static int memdbg_ps4_debug_gate_is_jcc(uint8_t opcode) {
   return opcode >= 0x70u && opcode <= 0x7fu;
 }
 
-/* JE/JNE (and friends keyed on ZF) are patched to JMP; CF-based Jcc (JA/JB/...)
- * on 11.00-class kernels jump to the deny path, so NOP fall-through instead. */
-static int memdbg_ps4_debug_gate_allow_use_nop(uint8_t opcode) {
-  switch (opcode) {
-  case 0x72u: /* JB  */
-  case 0x73u: /* JAE */
-  case 0x76u: /* JBE */
-  case 0x77u: /* JA  */
-    return 1;
-  default:
-    return 0;
-  }
-}
-
 static void memdbg_ps4_debug_gate_hex(const uint8_t *bytes, size_t len,
                                       char *out, size_t out_len) {
   static const char k_hex[] = "0123456789abcdef";
@@ -217,11 +200,12 @@ static void memdbg_ps4_debug_gate_hex(const uint8_t *bytes, size_t len,
 static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
                                              size_t len, const char *slot_name,
                                              int allow_jcc_site,
-                                             int allow_nop_profile,
+                                             uint8_t allow_legacy_nop_disp,
                                              int *applied_out,
                                              int *skipped_out) {
   uint8_t cur[8];
   uint8_t verify[8];
+  uint8_t allow_repair[2];
   char hex[48];
   int32_t rc;
   const uint8_t *patch = want;
@@ -232,7 +216,7 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
     return -1;
   }
 
-  /* For the allow site, peek two bytes so JA xx can become NOP NOP. */
+  /* Peek two bytes at the allow site to detect obsolete NOP NOP patches. */
   {
     const size_t peek = allow_jcc_site ? 2u : len;
     rc = kernel_copyout(addr, cur, peek);
@@ -248,8 +232,9 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
   }
 
   if (allow_jcc_site) {
+    const int legacy_nop = cur[0] == 0x90u && cur[1] == 0x90u;
     if (!memdbg_ps4_debug_gate_is_jcc(cur[0]) && cur[0] != 0xebu &&
-        !(cur[0] == 0x90u && cur[1] == 0x90u)) {
+        !(legacy_nop && allow_legacy_nop_disp != 0u)) {
       memdbg_log_write(
           MEMDBG_LOG_WARN,
           "privilege: ps4 debug gate unexpected opcode slot=%s addr=0x%lx "
@@ -258,13 +243,16 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
       errno = EINVAL;
       return -1;
     }
-    if (allow_nop_profile) {
-      /* 11.00: NOP JA / rewrite prior JMP from older MemDBG builds. */
-      patch = k_ptrace_allow_nop;
-      patch_len = sizeof(k_ptrace_allow_nop);
-    } else if (memdbg_ps4_debug_gate_allow_use_nop(cur[0])) {
-      patch = k_ptrace_allow_nop;
-      patch_len = sizeof(k_ptrace_allow_nop);
+    if (legacy_nop) {
+      /*
+       * Nightly builds before this fix replaced 11.00's "77 1c" with
+       * "90 90". Restore the displacement while converting it to the exact
+       * ps4debug patch "eb 1c", so upgrading does not require a reboot.
+       */
+      allow_repair[0] = k_ptrace_allow_jmp[0];
+      allow_repair[1] = allow_legacy_nop_disp;
+      patch = allow_repair;
+      patch_len = sizeof(allow_repair);
     } else {
       patch = k_ptrace_allow_jmp;
       patch_len = sizeof(k_ptrace_allow_jmp);
@@ -364,7 +352,7 @@ int memdbg_ps4_debug_gate_arm(void) {
   if (memdbg_ps4_debug_gate_apply_bytes(
           base + (intptr_t)profile->ptrace_allow_rva, k_ptrace_allow_jmp,
           sizeof(k_ptrace_allow_jmp), "ptrace_allow_branch", 1,
-          profile->allow_nop != 0, &applied, &skipped) != 0) {
+          profile->allow_legacy_nop_disp, &applied, &skipped) != 0) {
     if (first_errno == 0)
       first_errno = errno != 0 ? errno : EPERM;
     failures++;
