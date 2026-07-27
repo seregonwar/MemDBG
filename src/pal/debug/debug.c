@@ -9,6 +9,7 @@
 
 #include "memdbg/pal/debug.h"
 
+#include "memdbg/core/memdbg_log.h"
 #include "memdbg/privilege/privilege.h"
 
 #include <errno.h>

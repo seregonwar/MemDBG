@@ -73,6 +73,11 @@ int32_t kernel_copyin(const void *udaddr, intptr_t kaddr, size_t len) {
 
 static void reset_state(void) {
   memset(g_kmem, 0xcc, sizeof(g_kmem));
+  /* Allow-branch sites must look like a real Jcc before patching. */
+  g_kmem[0x0041f4e5u] = 0x75u; /* 9.00 */
+  g_kmem[0x00384285u] = 0x75u; /* 11.00 */
+  g_kmem[0x0030d9aau] = 0x75u; /* 5.05 */
+  g_kmem[0x00366985u] = 0x75u; /* 12.00/12.02 */
   g_fw_raw = 0x09000000u;
   g_copyin_calls = 0;
   g_copyout_calls = 0;
@@ -124,6 +129,19 @@ int main(void) {
   }
   if (g_copyout_calls != 3) {
     fprintf(stderr, "FAIL: idempotent arm should still verify sites\n");
+    ++failures;
+  }
+
+  /* Non-Jcc byte at the allow site must fail closed. */
+  reset_state();
+  g_kmem[0x0041f4e5u] = 0x90u;
+  if (memdbg_ps4_debug_gate_arm() == 0) {
+    fprintf(stderr, "FAIL: unexpected opcode at allow site was accepted\n");
+    ++failures;
+  }
+  if (errno != EINVAL) {
+    fprintf(stderr, "FAIL: expected EINVAL for bad allow opcode, got %d\n",
+            errno);
     ++failures;
   }
 

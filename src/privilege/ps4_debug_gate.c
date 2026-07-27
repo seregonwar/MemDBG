@@ -172,11 +172,38 @@ static void memdbg_ps4_debug_gate_build_policy_patch(int32_t rel32,
   out[4] = (uint8_t)(((uint32_t)rel32 >> 24) & 0xffu);
 }
 
+static int memdbg_ps4_debug_gate_is_jcc(uint8_t opcode) {
+  return opcode >= 0x70u && opcode <= 0x7fu;
+}
+
+static void memdbg_ps4_debug_gate_hex(const uint8_t *bytes, size_t len,
+                                      char *out, size_t out_len) {
+  static const char k_hex[] = "0123456789abcdef";
+  size_t i;
+  size_t pos = 0u;
+
+  if (out == NULL || out_len == 0u)
+    return;
+  out[0] = '\0';
+  for (i = 0u; i < len; ++i) {
+    if (pos + 3u >= out_len)
+      break;
+    if (i != 0u)
+      out[pos++] = ' ';
+    out[pos++] = k_hex[(bytes[i] >> 4) & 0xfu];
+    out[pos++] = k_hex[bytes[i] & 0xfu];
+    out[pos] = '\0';
+  }
+}
+
 static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
                                              size_t len, const char *slot_name,
+                                             int allow_jcc_site,
                                              int *applied_out,
                                              int *skipped_out) {
   uint8_t cur[8];
+  uint8_t verify[8];
+  char hex[32];
   int32_t rc;
 
   if (len == 0u || len > sizeof(cur) || want == NULL || addr == 0) {
@@ -194,24 +221,57 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
     return -1;
   }
 
+  memdbg_ps4_debug_gate_hex(cur, len, hex, sizeof(hex));
+
   if (memcmp(cur, want, len) == 0) {
     if (skipped_out != NULL)
       (*skipped_out)++;
+    memdbg_log_write(MEMDBG_LOG_INFO,
+                     "privilege: ps4 debug gate already armed slot=%s "
+                     "addr=0x%lx bytes=[%s]",
+                     slot_name, (unsigned long)addr, hex);
     return 0;
+  }
+
+  if (allow_jcc_site && !memdbg_ps4_debug_gate_is_jcc(cur[0])) {
+    memdbg_log_write(
+        MEMDBG_LOG_WARN,
+        "privilege: ps4 debug gate unexpected opcode slot=%s addr=0x%lx "
+        "bytes=[%s] (expected Jcc 0x70-0x7f; wrong kernel base/offset?)",
+        slot_name, (unsigned long)addr, hex);
+    errno = EINVAL;
+    return -1;
   }
 
   rc = kernel_copyin(want, addr, len);
   if (rc != 0) {
     memdbg_log_write(MEMDBG_LOG_WARN,
                      "privilege: ps4 debug gate write failed slot=%s addr=0x%lx "
-                     "rc=%d",
-                     slot_name, (unsigned long)addr, (int)rc);
+                     "rc=%d before=[%s]",
+                     slot_name, (unsigned long)addr, (int)rc, hex);
     errno = EPERM;
+    return -1;
+  }
+
+  rc = kernel_copyout(addr, verify, len);
+  if (rc != 0 || memcmp(verify, want, len) != 0) {
+    char after[32];
+    memdbg_ps4_debug_gate_hex(verify, len, after, sizeof(after));
+    memdbg_log_write(
+        MEMDBG_LOG_WARN,
+        "privilege: ps4 debug gate verify failed slot=%s addr=0x%lx "
+        "before=[%s] after=[%s]",
+        slot_name, (unsigned long)addr, hex, after);
+    errno = EIO;
     return -1;
   }
 
   if (applied_out != NULL)
     (*applied_out)++;
+  memdbg_log_write(MEMDBG_LOG_INFO,
+                   "privilege: ps4 debug gate patched slot=%s addr=0x%lx "
+                   "before=[%s]",
+                   slot_name, (unsigned long)addr, hex);
   return 0;
 }
 
@@ -224,6 +284,7 @@ int memdbg_ps4_debug_gate_arm(void) {
   int applied = 0;
   int skipped = 0;
   int failures = 0;
+  int first_errno = 0;
 
   if (base == 0) {
     memdbg_log_write(MEMDBG_LOG_WARN,
@@ -246,22 +307,39 @@ int memdbg_ps4_debug_gate_arm(void) {
   memdbg_ps4_debug_gate_build_policy_patch(profile->ptrace_policy_rel32,
                                            policy_patch);
 
+  memdbg_log_write(MEMDBG_LOG_INFO,
+                   "privilege: ps4 debug gates arming fw=%u fw_raw=0x%x "
+                   "base=0x%lx prison0=0x%lx rootvnode=0x%lx",
+                   (unsigned)fw_id, (unsigned)raw_fw, (unsigned long)base,
+                   (unsigned long)KERNEL_ADDRESS_PRISON0,
+                   (unsigned long)KERNEL_ADDRESS_ROOTVNODE);
+
   if (memdbg_ps4_debug_gate_apply_bytes(
           base + (intptr_t)profile->acmgr_rva, k_acmgr_allow_stub,
-          sizeof(k_acmgr_allow_stub), "acmgr_system_debug", &applied,
-          &skipped) != 0)
+          sizeof(k_acmgr_allow_stub), "acmgr_system_debug", 0, &applied,
+          &skipped) != 0) {
+    if (first_errno == 0)
+      first_errno = errno != 0 ? errno : EPERM;
     failures++;
+  }
 
   if (memdbg_ps4_debug_gate_apply_bytes(
           base + (intptr_t)profile->ptrace_allow_rva, k_ptrace_allow_byte,
-          sizeof(k_ptrace_allow_byte), "ptrace_allow_branch", &applied,
-          &skipped) != 0)
+          sizeof(k_ptrace_allow_byte), "ptrace_allow_branch", 1, &applied,
+          &skipped) != 0) {
+    if (first_errno == 0)
+      first_errno = errno != 0 ? errno : EPERM;
     failures++;
+  }
 
   if (memdbg_ps4_debug_gate_apply_bytes(
           base + (intptr_t)profile->ptrace_policy_rva, policy_patch,
-          sizeof(policy_patch), "ptrace_policy_skip", &applied, &skipped) != 0)
+          sizeof(policy_patch), "ptrace_policy_skip", 0, &applied, &skipped) !=
+      0) {
+    if (first_errno == 0)
+      first_errno = errno != 0 ? errno : EPERM;
     failures++;
+  }
 
   if (failures != 0) {
     memdbg_log_write(
@@ -269,15 +347,15 @@ int memdbg_ps4_debug_gate_arm(void) {
         "privilege: ps4 debug gates incomplete fw=%u applied=%d skipped=%d "
         "failed=%d/%d",
         (unsigned)fw_id, applied, skipped, failures, MEMDBG_PS4_GATE_SLOT_COUNT);
-    errno = EPERM;
+    errno = first_errno != 0 ? first_errno : EPERM;
     return -1;
   }
 
   memdbg_log_write(MEMDBG_LOG_INFO,
                    "privilege: ps4 debug gates armed fw=%u applied=%d/%d "
-                   "skipped=%d",
+                   "skipped=%d base=0x%lx",
                    (unsigned)fw_id, applied + skipped,
-                   MEMDBG_PS4_GATE_SLOT_COUNT, skipped);
+                   MEMDBG_PS4_GATE_SLOT_COUNT, skipped, (unsigned long)base);
   return 0;
 }
 

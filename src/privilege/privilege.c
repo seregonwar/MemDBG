@@ -284,8 +284,25 @@ int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
   }
 
 #if !MEMDBG_PRIVILEGE_HAS_PS5
-  if (KERNEL_ADDRESS_PRISON0 == 0 ||
+  if (KERNEL_ADDRESS_PRISON0 == 0 || KERNEL_ADDRESS_ROOTVNODE == 0 ||
       privilege_ps4_backup_ids(pid, backup) != 0) {
+    memdbg_log_write(
+        MEMDBG_LOG_WARN,
+        "privilege: begin_ptrace backup failed pid=%d prison0=0x%lx "
+        "rootvnode=0x%lx",
+        (int)pid, (unsigned long)KERNEL_ADDRESS_PRISON0,
+        (unsigned long)KERNEL_ADDRESS_ROOTVNODE);
+    (void)memdbg_privilege_operation_end();
+    errno = EPERM;
+    return -1;
+  }
+
+  backup->proc_rootdir = kernel_get_proc_rootdir(pid);
+  backup->proc_jaildir = kernel_get_proc_jaildir(pid);
+  if (backup->proc_rootdir == 0 || backup->proc_jaildir == 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "privilege: begin_ptrace vnode backup failed pid=%d",
+                     (int)pid);
     (void)memdbg_privilege_operation_end();
     errno = EPERM;
     return -1;
@@ -294,9 +311,15 @@ int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
   /* FreeBSD checks prison membership and Unix credentials before reaching
    * Sony's auth-ID/capability gate in ptrace.  GoldHEN's ELF loader is a
    * shared process, so apply the traditional PS4 debugger identity only
-   * while the credential lock is held and restore it immediately afterward. */
+   * while the credential lock is held and restore it immediately afterward.
+   * Root/jail vnodes are required too: prison0 alone is not enough for
+   * PT_ATTACH when the loader still has a jailed filesystem view. */
   failures += privilege_ps4_set_ptrace_identity(
       pid, 0, 0, 0, 0, 0, KERNEL_ADDRESS_PRISON0);
+  failures +=
+      kernel_set_proc_rootdir(pid, KERNEL_ADDRESS_ROOTVNODE) != 0;
+  failures +=
+      kernel_set_proc_jaildir(pid, KERNEL_ADDRESS_ROOTVNODE) != 0;
 #endif
   failures +=
       kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_PTRACE_AUTHID) != 0;
@@ -310,11 +333,19 @@ int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
     restore_failures += privilege_ps4_set_ptrace_identity(
         pid, backup->uid, backup->ruid, backup->svuid, backup->rgid,
         backup->svgid, backup->ucred_prison);
+    restore_failures +=
+        kernel_set_proc_rootdir(pid, backup->proc_rootdir) != 0;
+    restore_failures +=
+        kernel_set_proc_jaildir(pid, backup->proc_jaildir) != 0;
 #endif
     const bool restore_failed = restore_failures != 0;
     if (restore_failed)
       atomic_store_explicit(&g_credential_state_poisoned, true,
                             memory_order_release);
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "privilege: begin_ptrace elevate failed pid=%d "
+                     "failures=%d restore_failures=%d",
+                     (int)pid, failures, restore_failures);
     (void)memdbg_privilege_operation_end();
     errno = restore_failed ? EIO : EPERM;
     return -1;
@@ -338,6 +369,8 @@ int memdbg_privilege_end_ptrace(const memdbg_ucred_backup_t *backup) {
   failures += privilege_ps4_set_ptrace_identity(
       pid, backup->uid, backup->ruid, backup->svuid, backup->rgid,
       backup->svgid, backup->ucred_prison);
+  failures += kernel_set_proc_rootdir(pid, backup->proc_rootdir) != 0;
+  failures += kernel_set_proc_jaildir(pid, backup->proc_jaildir) != 0;
 #endif
   if (failures != 0)
     atomic_store_explicit(&g_credential_state_poisoned, true,

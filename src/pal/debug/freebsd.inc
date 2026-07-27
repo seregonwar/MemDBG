@@ -47,7 +47,10 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
    */
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)
   memdbg_ucred_backup_t backup;
-  if (memdbg_privilege_begin_ptrace(&backup) != 0) return -1;
+  if (memdbg_privilege_begin_ptrace(&backup) != 0) {
+    /* begin_ptrace already logged; keep its errno for the attach path. */
+    return -1;
+  }
 #endif
 
   errno = 0;
@@ -60,6 +63,12 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
     if (result != -1) return -1;
   }
 #endif
+
+  if (result == -1 && op == PT_ATTACH) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: PT_ATTACH denied by kernel pid=%d errno=%d",
+                     pid, operation_errno);
+  }
 
   errno = operation_errno;
   return result;
