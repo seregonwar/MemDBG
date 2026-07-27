@@ -51,14 +51,13 @@ static const uint8_t k_full_caps[16] = {
 };
 
 #if !MEMDBG_PRIVILEGE_HAS_PS5
-/* These are the same PS4 ucred offsets used by the SDK's
- * kernel_set_ucred_* helpers.  The SDK does not expose matching getters, so
- * copy the original values out before opening the temporary ptrace window. */
-#define PS4_UCRED_UID_OFFSET   0x04
-#define PS4_UCRED_RUID_OFFSET  0x08
-#define PS4_UCRED_SVUID_OFFSET 0x0c
-#define PS4_UCRED_RGID_OFFSET  0x14
-#define PS4_UCRED_SVGID_OFFSET 0x18
+/* PS4 ucred layout (payload SDK): groups[0] sits between svgid and prison. */
+#define PS4_UCRED_UID_OFFSET     0x04
+#define PS4_UCRED_RUID_OFFSET    0x08
+#define PS4_UCRED_SVUID_OFFSET   0x0c
+#define PS4_UCRED_RGID_OFFSET    0x14
+#define PS4_UCRED_SVGID_OFFSET   0x18
+#define PS4_UCRED_GROUPS0_OFFSET 0x1c
 
 static int privilege_ps4_backup_ids(pid_t pid,
                                     memdbg_ucred_backup_t *backup) {
@@ -74,12 +73,26 @@ static int privilege_ps4_backup_ids(pid_t pid,
       kernel_copyout(ucred + PS4_UCRED_RGID_OFFSET, &backup->rgid,
                      sizeof(backup->rgid)) != 0 ||
       kernel_copyout(ucred + PS4_UCRED_SVGID_OFFSET, &backup->svgid,
-                     sizeof(backup->svgid)) != 0) {
+                     sizeof(backup->svgid)) != 0 ||
+      kernel_copyout(ucred + PS4_UCRED_GROUPS0_OFFSET, &backup->ngroups,
+                     sizeof(backup->ngroups)) != 0) {
     return -1;
   }
 
+  /* Re-use ngroups storage for groups[0]; PS4 jailbreak only clears gid 0. */
+  backup->ngroups_valid = true;
   backup->ucred_prison = kernel_get_ucred_prison(pid);
   return backup->ucred_prison != 0 ? 0 : -1;
+}
+
+static int privilege_ps4_set_groups0(pid_t pid, uint32_t groups0) {
+  const intptr_t ucred = kernel_get_proc_ucred(pid);
+  if (ucred == 0)
+    return -1;
+  return kernel_copyin(&groups0, ucred + PS4_UCRED_GROUPS0_OFFSET,
+                       sizeof(groups0)) != 0
+             ? -1
+             : 0;
 }
 
 static int privilege_ps4_set_ptrace_identity(
@@ -308,31 +321,62 @@ int memdbg_privilege_begin_ptrace(memdbg_ucred_backup_t *backup) {
     return -1;
   }
 
-  /* FreeBSD checks prison membership and Unix credentials before reaching
-   * Sony's auth-ID/capability gate in ptrace.  GoldHEN's ELF loader is a
-   * shared process, so apply the traditional PS4 debugger identity only
-   * while the credential lock is held and restore it immediately afterward.
-   * Root/jail vnodes are required too: prison0 alone is not enough for
-   * PT_ATTACH when the loader still has a jailed filesystem view. */
+  /*
+   * Match the working ps4debug jailbreak identity for PT_ATTACH:
+   * uid/ruid/rgid/groups0=0, prison0, fd_rdir/fd_jdir=rootvnode.
+   * Do NOT rewrite authid/caps here: with ACMGR patched those Sony gates are
+   * already open, and forcing DECID on GoldHEN's shared loader has been
+   * observed to still yield kernel EPERM on attach.
+   */
   failures += privilege_ps4_set_ptrace_identity(
       pid, 0, 0, 0, 0, 0, KERNEL_ADDRESS_PRISON0);
+  failures += privilege_ps4_set_groups0(pid, 0U) != 0;
   failures +=
       kernel_set_proc_rootdir(pid, KERNEL_ADDRESS_ROOTVNODE) != 0;
   failures +=
       kernel_set_proc_jaildir(pid, KERNEL_ADDRESS_ROOTVNODE) != 0;
-#endif
+
+  if (failures == 0) {
+    const uid_t got_uid = (uid_t)0;
+    uid_t check_uid = 1;
+    intptr_t check_prison = 0;
+    intptr_t check_rdir = 0;
+    const intptr_t ucred = kernel_get_proc_ucred(pid);
+    if (ucred == 0 ||
+        kernel_copyout(ucred + PS4_UCRED_UID_OFFSET, &check_uid,
+                       sizeof(check_uid)) != 0 ||
+        (check_prison = kernel_get_ucred_prison(pid)) !=
+            KERNEL_ADDRESS_PRISON0 ||
+        (check_rdir = kernel_get_proc_rootdir(pid)) !=
+            KERNEL_ADDRESS_ROOTVNODE ||
+        check_uid != got_uid) {
+      memdbg_log_write(
+          MEMDBG_LOG_WARN,
+          "privilege: begin_ptrace verify mismatch pid=%d uid=%u "
+          "prison=0x%lx rdir=0x%lx",
+          (int)pid, (unsigned)check_uid, (unsigned long)check_prison,
+          (unsigned long)check_rdir);
+      failures++;
+    }
+  }
+#else
   failures +=
       kernel_set_ucred_authid(pid, MEMDBG_PRIVILEGE_PTRACE_AUTHID) != 0;
   failures += kernel_set_ucred_caps(pid, k_full_caps) != 0;
+#endif
 
   if (failures != 0) {
     int restore_failures = 0;
+#if MEMDBG_PRIVILEGE_HAS_PS5
     restore_failures += kernel_set_ucred_authid(pid, backup->authid) != 0;
     restore_failures += kernel_set_ucred_caps(pid, backup->caps) != 0;
-#if !MEMDBG_PRIVILEGE_HAS_PS5
+#else
     restore_failures += privilege_ps4_set_ptrace_identity(
         pid, backup->uid, backup->ruid, backup->svuid, backup->rgid,
         backup->svgid, backup->ucred_prison);
+    if (backup->ngroups_valid)
+      restore_failures +=
+          privilege_ps4_set_groups0(pid, backup->ngroups) != 0;
     restore_failures +=
         kernel_set_proc_rootdir(pid, backup->proc_rootdir) != 0;
     restore_failures +=
@@ -363,12 +407,15 @@ int memdbg_privilege_end_ptrace(const memdbg_ucred_backup_t *backup) {
     return -1;
   }
 
+#if MEMDBG_PRIVILEGE_HAS_PS5
   failures += kernel_set_ucred_authid(pid, backup->authid) != 0;
   failures += kernel_set_ucred_caps(pid, backup->caps) != 0;
-#if !MEMDBG_PRIVILEGE_HAS_PS5
+#else
   failures += privilege_ps4_set_ptrace_identity(
       pid, backup->uid, backup->ruid, backup->svuid, backup->rgid,
       backup->svgid, backup->ucred_prison);
+  if (backup->ngroups_valid)
+    failures += privilege_ps4_set_groups0(pid, backup->ngroups) != 0;
   failures += kernel_set_proc_rootdir(pid, backup->proc_rootdir) != 0;
   failures += kernel_set_proc_jaildir(pid, backup->proc_jaildir) != 0;
 #endif

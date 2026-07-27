@@ -73,11 +73,15 @@ int32_t kernel_copyin(const void *udaddr, intptr_t kaddr, size_t len) {
 
 static void reset_state(void) {
   memset(g_kmem, 0xcc, sizeof(g_kmem));
-  /* Allow-branch sites must look like a real Jcc before patching. */
+  /* Allow-branch sites: ZF-based Jcc (75) -> JMP; 11.00 uses JA (77) -> NOP. */
   g_kmem[0x0041f4e5u] = 0x75u; /* 9.00 */
-  g_kmem[0x00384285u] = 0x75u; /* 11.00 */
+  g_kmem[0x0041f4e6u] = 0x12u;
+  g_kmem[0x00384285u] = 0x77u; /* 11.00 live console */
+  g_kmem[0x00384286u] = 0x12u;
   g_kmem[0x0030d9aau] = 0x75u; /* 5.05 */
+  g_kmem[0x0030d9abu] = 0x12u;
   g_kmem[0x00366985u] = 0x75u; /* 12.00/12.02 */
+  g_kmem[0x00366986u] = 0x12u;
   g_fw_raw = 0x09000000u;
   g_copyin_calls = 0;
   g_copyout_calls = 0;
@@ -98,7 +102,8 @@ int main(void) {
   int failures = 0;
   static const uint8_t acmgr[8] = {0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00,
                                    0xc3};
-  static const uint8_t allow[1] = {0xeb};
+  static const uint8_t allow_jmp[1] = {0xeb};
+  static const uint8_t allow_nop[2] = {0x90, 0x90};
   static const uint8_t policy[5] = {0xe9, 0x7c, 0x02, 0x00, 0x00};
 
   /* Firmware 9.00 (SDK encoding) arms all three sites. */
@@ -108,7 +113,7 @@ int main(void) {
     ++failures;
   }
   failures += expect_bytes(0x0008bc20u, acmgr, sizeof(acmgr), "9.00 acmgr");
-  failures += expect_bytes(0x0041f4e5u, allow, sizeof(allow), "9.00 allow");
+  failures += expect_bytes(0x0041f4e5u, allow_jmp, sizeof(allow_jmp), "9.00 allow");
   failures += expect_bytes(0x0041f9d1u, policy, sizeof(policy), "9.00 policy");
   if (g_copyin_calls != 3) {
     fprintf(stderr, "FAIL: expected 3 writes on first arm, got %d\n",
@@ -153,7 +158,8 @@ int main(void) {
     ++failures;
   }
   failures += expect_bytes(0x003d0de0u, acmgr, sizeof(acmgr), "11.00 bcd acmgr");
-  failures += expect_bytes(0x00384285u, allow, sizeof(allow), "11.00 bcd allow");
+  failures +=
+      expect_bytes(0x00384285u, allow_nop, sizeof(allow_nop), "11.00 bcd allow");
   failures += expect_bytes(0x00384771u, policy, sizeof(policy), "11.00 bcd policy");
 
   /* Firmware 11.00. */
@@ -164,7 +170,8 @@ int main(void) {
     ++failures;
   }
   failures += expect_bytes(0x003d0de0u, acmgr, sizeof(acmgr), "11.00 acmgr");
-  failures += expect_bytes(0x00384285u, allow, sizeof(allow), "11.00 allow");
+  failures +=
+      expect_bytes(0x00384285u, allow_nop, sizeof(allow_nop), "11.00 allow");
   failures += expect_bytes(0x00384771u, policy, sizeof(policy), "11.00 policy");
 
   /* Packed decimal encoding also maps. */
@@ -185,7 +192,8 @@ int main(void) {
       ++failures;
     }
     failures += expect_bytes(0x00011730u, acmgr, sizeof(acmgr), "5.05 acmgr");
-    failures += expect_bytes(0x0030d9aau, allow, sizeof(allow), "5.05 allow");
+    failures +=
+        expect_bytes(0x0030d9aau, allow_jmp, sizeof(allow_jmp), "5.05 allow");
     failures +=
         expect_bytes(0x0030de01u, policy_505, sizeof(policy_505), "5.05 policy");
   }
@@ -198,7 +206,8 @@ int main(void) {
     ++failures;
   }
   failures += expect_bytes(0x003b2cd0u, acmgr, sizeof(acmgr), "12.02 acmgr");
-  failures += expect_bytes(0x00366985u, allow, sizeof(allow), "12.02 allow");
+  failures +=
+      expect_bytes(0x00366985u, allow_jmp, sizeof(allow_jmp), "12.02 allow");
   failures += expect_bytes(0x00366e71u, policy, sizeof(policy), "12.02 policy");
 
   /* Unsupported firmware must not write. */
