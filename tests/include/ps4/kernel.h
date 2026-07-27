@@ -4,12 +4,22 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
 
+#if defined(_WIN32)
+typedef int pid_t;
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+#else
+#include <sys/types.h>
+#endif
+
+extern const intptr_t KERNEL_ADDRESS_IMAGE_BASE;
 extern const intptr_t KERNEL_ADDRESS_PRISON0;
 extern const intptr_t KERNEL_ADDRESS_ROOTVNODE;
 
+uint32_t kernel_get_fw_version(void);
 uint64_t kernel_getlong(intptr_t addr);
+int32_t kernel_copyin(const void *udaddr, intptr_t kaddr, size_t len);
 int32_t kernel_copyout(intptr_t kaddr, void *udaddr, size_t len);
 intptr_t kernel_get_proc_ucred(pid_t pid);
 intptr_t kernel_get_proc_filedesc(pid_t pid);

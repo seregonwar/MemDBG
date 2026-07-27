@@ -9,7 +9,7 @@ MemDBG exposes a TCP command channel and an optional UDP log channel. The payloa
 3. Check the PS4 notification area — you should see a MemDBG notification confirming the payload started.
 4. The payload binds to `0.0.0.0:9020` (TCP) and broadcasts logs on `255.255.255.255:9023` (UDP).
 
-> **Permission issues?** Look for the log line `privilege: payload escaped sandbox` in the console output. If it's missing, many operations will fail with status `-3` (I/O error) or `-8` (permission denied). See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md) for full details.
+> **Debugger attach (`status -8`)?** Look for `privilege: ps4 debug gates armed fw=...` in the console log. MemDBG arms ACMGR/ptrace gates at startup on supported PS4 firmware families from **5.05 through 12.02**. If you only see `privilege: retaining GoldHEN loader credentials on PS4`, that is expected — GoldHEN loader creds stay untouched. Missing debug-gate arming on an unsupported firmware leaves `PT_ATTACH` as permission denied. Memory read/scan via `mdbg` can still work. See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md).
 
 ### PS5 (ps5debug / etaHEN)
 
@@ -47,19 +47,26 @@ You can attach to any local process for memory reading, scanning, and debugging 
 
 On supported console platforms, MemDBG's privilege module attempts to:
 
-1. **Elevate the payload** at startup — escaping the sandbox to gain full memory access.
-2. **Temporarily elevate the target process** during read/write/batch operations.
+1. **Elevate the payload** at startup where safe (PS5 sandbox escape; on PS4 the GoldHEN loader credentials are retained on purpose).
+2. **Arm PS4 debug gates** (ACMgr + ptrace policy sites) on known-good firmware so `PT_ATTACH` works.
+3. **Temporarily elevate credentials** around ptrace and, on PS5, target elevation during read/write/batch operations.
 
-After a successful elevation, you'll see a log line similar to:
+Successful PS5 elevation logs:
 ```
 privilege: payload escaped sandbox
 ```
 
-If this line is missing:
-- Verify your jailbreak is active and up to date.
-- Check console logs for privilege-related errors.
-- Some operations (memory read, scan) may still work on accessible regions.
-- Operations requiring full access (kernel, debugger) will fail.
+Successful PS4 debugger enablement logs:
+```
+privilege: ps4 debug gates armed fw=900 applied=3/3
+```
+
+On PS4 you should also see `privilege: retaining GoldHEN loader credentials on PS4` — that is intentional, not a failure.
+
+If debugger attach still returns `status -8`:
+- Confirm the debug-gates line for your firmware (5.05–12.02 families).
+- Verify GoldHEN is running and the payload was re-sent after updating.
+- Memory read/scan may still work through GoldHEN `mdbg` even when attach is denied.
 
 ## Network configuration
 

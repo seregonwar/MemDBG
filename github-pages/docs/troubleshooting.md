@@ -20,7 +20,7 @@
 | `payload status -5` | `MEMDBG_ERR_PROTOCOL` | Malformed packet. | Usually a bug — report it with steps to reproduce. |
 | `payload status -6` | `MEMDBG_ERR_UNSUPPORTED` | Feature not available on this platform. | Check capabilities in Telemetry. |
 | `payload status -7` | `MEMDBG_ERR_NOT_FOUND` | Target process/map/thread not found. | Refresh process list. Verify PID. |
-| `payload status -8` | `MEMDBG_ERR_PERMISSION` | Permission denied. | Check privilege module, jailbreak status, target permissions. |
+| `payload status -8` | `MEMDBG_ERR_PERMISSION` | Permission denied. | On PS4 debugger attach: look for `privilege: ps4 debug gates armed`. On PS5: look for `privilege: payload escaped sandbox`. Also verify target process permissions. |
 | `payload status -9` | `MEMDBG_ERR_OVERFLOW` | Size/count/address overflow. | Reduce scan size or batch count. |
 | `payload status -10` | `MEMDBG_ERR_STATE` | Invalid state for this operation. | E.g., debugger not attached, scanner already running. |
 
