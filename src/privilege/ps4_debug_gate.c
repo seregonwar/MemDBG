@@ -105,7 +105,26 @@ static const memdbg_ps4_debug_gate_profile_t k_profiles[] = {
 };
 
 static uint16_t memdbg_ps4_fw_id_from_raw(uint32_t raw) {
-  /* SDK-style 0xMMmm0000 (seen on payload SDKs, e.g. 0x09000000). */
+  /*
+   * Real PS4 SDK values observed on console look like 0x11008001: the high
+   * 16 bits are BCD major/minor (0x1100 -> 11.00) and the low 16 bits carry
+   * build/flags.  Accept that form first.
+   */
+  {
+    const uint16_t bcd = (uint16_t)((raw >> 16) & 0xffffu);
+    const unsigned d0 = (bcd >> 12) & 0xfu;
+    const unsigned d1 = (bcd >> 8) & 0xfu;
+    const unsigned d2 = (bcd >> 4) & 0xfu;
+    const unsigned d3 = bcd & 0xfu;
+    if (bcd != 0u && d0 <= 9u && d1 <= 9u && d2 <= 9u && d3 <= 9u) {
+      const unsigned major = d0 * 10u + d1;
+      const unsigned minor = d2 * 10u + d3;
+      if (major >= 1u && major <= 99u)
+        return (uint16_t)(major * 100u + minor);
+    }
+  }
+
+  /* Hex major/minor bytes with zero low word (e.g. 0x0b000000 -> 11.00). */
   if ((raw & 0xffffu) == 0u && raw >= 0x01000000u) {
     const unsigned major = (raw >> 24) & 0xffu;
     const unsigned minor = (raw >> 16) & 0xffu;
@@ -117,12 +136,18 @@ static uint16_t memdbg_ps4_fw_id_from_raw(uint32_t raw) {
   if (raw >= 100u && raw <= 9999u)
     return (uint16_t)raw;
 
-  /* BCD-ish 0x0900 / 0x0b00. */
+  /* BCD-ish full low word 0x0900 / 0x0b00 when presented alone. */
   if (raw >= 0x0100u && raw <= 0x9999u) {
-    const unsigned major = (raw >> 8) & 0xffu;
-    const unsigned minor = raw & 0xffu;
-    if (major >= 1u && major <= 99u && minor <= 99u)
-      return (uint16_t)(major * 100u + minor);
+    const unsigned d0 = (raw >> 12) & 0xfu;
+    const unsigned d1 = (raw >> 8) & 0xfu;
+    const unsigned d2 = (raw >> 4) & 0xfu;
+    const unsigned d3 = raw & 0xfu;
+    if (d0 <= 9u && d1 <= 9u && d2 <= 9u && d3 <= 9u) {
+      const unsigned major = d0 * 10u + d1;
+      const unsigned minor = d2 * 10u + d3;
+      if (major >= 1u && major <= 99u)
+        return (uint16_t)(major * 100u + minor);
+    }
   }
 
   return 0u;
