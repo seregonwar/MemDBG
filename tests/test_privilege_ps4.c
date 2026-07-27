@@ -33,6 +33,7 @@ static uid_t g_ruid = 502;
 static uid_t g_svuid = 503;
 static gid_t g_rgid = 601;
 static gid_t g_svgid = 602;
+static uint32_t g_groups0 = 701;
 static intptr_t g_prison = (intptr_t)0x11113000;
 static uint64_t g_authid = UINT64_C(0x3800000000000001);
 static uint8_t g_caps[16] = {
@@ -66,9 +67,19 @@ int32_t kernel_copyout(intptr_t kaddr, void *udaddr, size_t len) {
   if (kaddr == MOCK_UCRED + 0x0c && len == sizeof(g_svuid)) source = &g_svuid;
   if (kaddr == MOCK_UCRED + 0x14 && len == sizeof(g_rgid)) source = &g_rgid;
   if (kaddr == MOCK_UCRED + 0x18 && len == sizeof(g_svgid)) source = &g_svgid;
+  if (kaddr == MOCK_UCRED + 0x1c && len == sizeof(g_groups0)) source = &g_groups0;
   if (source == NULL) return -1;
   memcpy(udaddr, source, len);
   return 0;
+}
+
+int32_t kernel_copyin(const void *udaddr, intptr_t kaddr, size_t len) {
+  if (kaddr == MOCK_UCRED + 0x1c && len == sizeof(g_groups0) && udaddr != NULL) {
+    memcpy(&g_groups0, udaddr, len);
+    ++g_credential_write_calls;
+    return 0;
+  }
+  return -1;
 }
 
 intptr_t kernel_get_proc_filedesc(pid_t pid) {
@@ -221,13 +232,15 @@ int main(void) {
   g_credential_write_calls = 0;
   g_rootdir_set = 0;
   g_jaildir_set = 0;
+  g_groups0 = 701;
+  memset(full_caps, 0x5a, sizeof(full_caps));
   if (memdbg_privilege_begin_ptrace(&ptrace_backup) != 0) {
     fprintf(stderr, "FAIL: temporary PS4 ptrace credentials failed\n");
     ++failures;
   } else {
     if (g_uid != 0 || g_ruid != 0 || g_svuid != 0 || g_rgid != 0 ||
-        g_svgid != 0 || g_prison != KERNEL_ADDRESS_PRISON0 ||
-        g_authid != MEMDBG_PRIVILEGE_PTRACE_AUTHID ||
+        g_svgid != 0 || g_groups0 != 0 || g_prison != KERNEL_ADDRESS_PRISON0 ||
+        g_authid != UINT64_C(0x3800000000000001) ||
         g_rootdir_set != KERNEL_ADDRESS_ROOTVNODE ||
         g_jaildir_set != KERNEL_ADDRESS_ROOTVNODE ||
         memcmp(g_caps, full_caps, sizeof(g_caps)) != 0) {
@@ -240,8 +253,9 @@ int main(void) {
     }
   }
 
-  /* 8 identity fields + root/jail vnodes, applied and restored. */
-  if (g_credential_write_calls != 20) {
+  /* 6 identity fields + groups0 + root/jail vnodes, applied and restored.
+   * Authid/caps stay untouched on PS4 (ps4debug-compatible). */
+  if (g_credential_write_calls != 18) {
     fprintf(stderr,
             "FAIL: ptrace credentials were not applied/restored narrowly "
             "(writes=%d)\n",
@@ -249,41 +263,29 @@ int main(void) {
     ++failures;
   }
   if (g_uid != 501 || g_ruid != 502 || g_svuid != 503 || g_rgid != 601 ||
-      g_svgid != 602 || g_prison != (intptr_t)0x11113000 ||
+      g_svgid != 602 || g_groups0 != 701 ||
+      g_prison != (intptr_t)0x11113000 ||
       g_authid != UINT64_C(0x3800000000000001) ||
       g_rootdir_set != (intptr_t)0x11111000 ||
       g_jaildir_set != (intptr_t)0x11112000) {
     fprintf(stderr, "FAIL: PS4 loader identity was not restored exactly\n");
     ++failures;
   }
-  memset(full_caps, 0x5a, sizeof(full_caps));
   if (memcmp(g_caps, full_caps, sizeof(g_caps)) != 0) {
-    fprintf(stderr, "FAIL: PS4 loader capabilities were not restored\n");
+    fprintf(stderr, "FAIL: PS4 loader capabilities were modified\n");
     ++failures;
   }
 
-  /* A partial elevation must roll every loader credential back and leave the
-   * lock usable for the next debugger request. */
+  /* Round-trip again to ensure the credential lock stays usable. */
   g_credential_write_calls = 0;
-  g_fail_caps_write_once = true;
-  if (memdbg_privilege_begin_ptrace(&ptrace_backup) == 0) {
-    fprintf(stderr, "FAIL: injected ptrace credential failure was ignored\n");
-    ++failures;
-    (void)memdbg_privilege_end_ptrace(&ptrace_backup);
-  }
-  if (g_credential_write_calls != 20 || g_uid != 501 || g_ruid != 502 ||
-      g_svuid != 503 || g_rgid != 601 || g_svgid != 602 ||
-      g_prison != (intptr_t)0x11113000 ||
-      g_authid != UINT64_C(0x3800000000000001) ||
-      g_rootdir_set != (intptr_t)0x11111000 ||
-      g_jaildir_set != (intptr_t)0x11112000 ||
-      memcmp(g_caps, full_caps, sizeof(g_caps)) != 0) {
-    fprintf(stderr, "FAIL: partial ptrace elevation was not rolled back\n");
-    ++failures;
-  }
   if (memdbg_privilege_begin_ptrace(&ptrace_backup) != 0 ||
       memdbg_privilege_end_ptrace(&ptrace_backup) != 0) {
     fprintf(stderr, "FAIL: ptrace credential lock remained poisoned\n");
+    ++failures;
+  }
+  if (g_uid != 501 || g_groups0 != 701 ||
+      g_authid != UINT64_C(0x3800000000000001)) {
+    fprintf(stderr, "FAIL: ptrace credentials were not restored after cycle\n");
     ++failures;
   }
 

@@ -37,14 +37,19 @@ typedef struct memdbg_ps4_debug_gate_profile {
   uint32_t ptrace_allow_rva;
   uint32_t ptrace_policy_rva;
   int32_t ptrace_policy_rel32;
+  /* 1: CF-based deny Jcc / prior JMP at allow site -> NOP fall-through */
+  uint8_t allow_nop;
 } memdbg_ps4_debug_gate_profile_t;
 
 /* Always-allow ACMGR predicate: mov eax, 1; ret */
 static const uint8_t k_acmgr_allow_stub[8] = {
     0x48u, 0xc7u, 0xc0u, 0x01u, 0x00u, 0x00u, 0x00u, 0xc3u};
 
-/* Force the taken/allow side of a near conditional branch. */
-static const uint8_t k_ptrace_allow_byte[1] = {0xebu};
+/* Force the taken/allow side of a near conditional branch (JE/JNE family). */
+static const uint8_t k_ptrace_allow_jmp[1] = {0xebu};
+
+/* Fall through a CF-based Jcc (JA/JBE/...) that targets the deny path. */
+static const uint8_t k_ptrace_allow_nop[2] = {0x90u, 0x90u};
 
 /*
  * Firmware ids are major*100 + minor (900 = 9.00, 1100 = 11.00).
@@ -55,53 +60,52 @@ static const uint8_t k_ptrace_allow_byte[1] = {0xebu};
  */
 static const memdbg_ps4_debug_gate_profile_t k_profiles[] = {
     /* 5.05 / 5.07 */
-    {505u, 0x00011730u, 0x0030d9aau, 0x0030de01u, 0x000000d0},
-    {507u, 0x00011730u, 0x0030d9aau, 0x0030de01u, 0x000000d0},
+    {505u, 0x00011730u, 0x0030d9aau, 0x0030de01u, 0x000000d0, 0},
+    {507u, 0x00011730u, 0x0030d9aau, 0x0030de01u, 0x000000d0, 0},
     /* 6.71 / 6.72 */
-    {671u, 0x00233bd0u, 0x0010f879u, 0x0010fd22u, 0x000002e2},
-    {672u, 0x00233bd0u, 0x0010f879u, 0x0010fd22u, 0x000002e2},
+    {671u, 0x00233bd0u, 0x0010f879u, 0x0010fd22u, 0x000002e2, 0},
+    {672u, 0x00233bd0u, 0x0010f879u, 0x0010fd22u, 0x000002e2, 0},
     /* 7.00 / 7.01 / 7.02 */
-    {700u, 0x001cb880u, 0x000448d5u, 0x00044dafu, 0x0000027c},
-    {701u, 0x001cb880u, 0x000448d5u, 0x00044dafu, 0x0000027c},
-    {702u, 0x001cb880u, 0x000448d5u, 0x00044dafu, 0x0000027c},
+    {700u, 0x001cb880u, 0x000448d5u, 0x00044dafu, 0x0000027c, 0},
+    {701u, 0x001cb880u, 0x000448d5u, 0x00044dafu, 0x0000027c, 0},
+    {702u, 0x001cb880u, 0x000448d5u, 0x00044dafu, 0x0000027c, 0},
     /* 7.50 / 7.51 / 7.55 */
-    {750u, 0x00364cd0u, 0x00361cf5u, 0x003621cfu, 0x0000027c},
-    {751u, 0x00364cd0u, 0x00361cf5u, 0x003621cfu, 0x0000027c},
-    {755u, 0x00364cd0u, 0x00361cf5u, 0x003621cfu, 0x0000027c},
+    {750u, 0x00364cd0u, 0x00361cf5u, 0x003621cfu, 0x0000027c, 0},
+    {751u, 0x00364cd0u, 0x00361cf5u, 0x003621cfu, 0x0000027c, 0},
+    {755u, 0x00364cd0u, 0x00361cf5u, 0x003621cfu, 0x0000027c, 0},
     /* 8.00 / 8.01 / 8.03 */
-    {800u, 0x001d5710u, 0x00174155u, 0x0017462fu, 0x0000027c},
-    {801u, 0x001d5710u, 0x00174155u, 0x0017462fu, 0x0000027c},
-    {803u, 0x001d5710u, 0x00174155u, 0x0017462fu, 0x0000027c},
+    {800u, 0x001d5710u, 0x00174155u, 0x0017462fu, 0x0000027c, 0},
+    {801u, 0x001d5710u, 0x00174155u, 0x0017462fu, 0x0000027c, 0},
+    {803u, 0x001d5710u, 0x00174155u, 0x0017462fu, 0x0000027c, 0},
     /* 8.50 / 8.52 */
-    {850u, 0x002935e0u, 0x00132535u, 0x00132a0fu, 0x0000027c},
-    {852u, 0x002935e0u, 0x00132535u, 0x00132a0fu, 0x0000027c},
+    {850u, 0x002935e0u, 0x00132535u, 0x00132a0fu, 0x0000027c, 0},
+    {852u, 0x002935e0u, 0x00132535u, 0x00132a0fu, 0x0000027c, 0},
     /* 9.00 */
-    {900u, 0x0008bc20u, 0x0041f4e5u, 0x0041f9d1u, 0x0000027c},
+    {900u, 0x0008bc20u, 0x0041f4e5u, 0x0041f9d1u, 0x0000027c, 0},
     /* 9.03 / 9.04 */
-    {903u, 0x0008bc20u, 0x0041d455u, 0x0041d941u, 0x0000027c},
-    {904u, 0x0008bc20u, 0x0041d455u, 0x0041d941u, 0x0000027c},
+    {903u, 0x0008bc20u, 0x0041d455u, 0x0041d941u, 0x0000027c, 0},
+    {904u, 0x0008bc20u, 0x0041d455u, 0x0041d941u, 0x0000027c, 0},
     /* 9.50 / 9.51 / 9.60 */
-    {950u, 0x00032590u, 0x0047a005u, 0x0047a4f1u, 0x0000027c},
-    {951u, 0x00032590u, 0x0047a005u, 0x0047a4f1u, 0x0000027c},
-    {960u, 0x00032590u, 0x0047a005u, 0x0047a4f1u, 0x0000027c},
+    {950u, 0x00032590u, 0x0047a005u, 0x0047a4f1u, 0x0000027c, 0},
+    {951u, 0x00032590u, 0x0047a005u, 0x0047a4f1u, 0x0000027c, 0},
+    {960u, 0x00032590u, 0x0047a005u, 0x0047a4f1u, 0x0000027c, 0},
     /* 10.00 / 10.01 */
-    {1000u, 0x000a5c60u, 0x0044e625u, 0x0044eb11u, 0x0000027c},
-    {1001u, 0x000a5c60u, 0x0044e625u, 0x0044eb11u, 0x0000027c},
+    {1000u, 0x000a5c60u, 0x0044e625u, 0x0044eb11u, 0x0000027c, 0},
+    {1001u, 0x000a5c60u, 0x0044e625u, 0x0044eb11u, 0x0000027c, 0},
     /* 10.50 / 10.51 / 10.70 / 10.71 */
-    {1050u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c},
-    {1051u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c},
-    {1070u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c},
-    {1071u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c},
-    /* 11.00 */
-    {1100u, 0x003d0de0u, 0x00384285u, 0x00384771u, 0x0000027c},
-    /* 11.02 */
-    {1102u, 0x003d0e00u, 0x003842a5u, 0x00384791u, 0x0000027c},
+    {1050u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
+    {1051u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
+    {1070u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
+    {1071u, 0x001f4470u, 0x00424e85u, 0x00425371u, 0x0000027c, 0},
+    /* 11.00 / 11.02: live 11.00 used JA (0x77); NOP fall-through. */
+    {1100u, 0x003d0de0u, 0x00384285u, 0x00384771u, 0x0000027c, 1},
+    {1102u, 0x003d0e00u, 0x003842a5u, 0x00384791u, 0x0000027c, 1},
     /* 11.50 / 11.52 */
-    {1150u, 0x003b2a90u, 0x00366745u, 0x00366c31u, 0x0000027c},
-    {1152u, 0x003b2a90u, 0x00366745u, 0x00366c31u, 0x0000027c},
+    {1150u, 0x003b2a90u, 0x00366745u, 0x00366c31u, 0x0000027c, 0},
+    {1152u, 0x003b2a90u, 0x00366745u, 0x00366c31u, 0x0000027c, 0},
     /* 12.00 / 12.02 */
-    {1200u, 0x003b2cd0u, 0x00366985u, 0x00366e71u, 0x0000027c},
-    {1202u, 0x003b2cd0u, 0x00366985u, 0x00366e71u, 0x0000027c},
+    {1200u, 0x003b2cd0u, 0x00366985u, 0x00366e71u, 0x0000027c, 0},
+    {1202u, 0x003b2cd0u, 0x00366985u, 0x00366e71u, 0x0000027c, 0},
 };
 
 static uint16_t memdbg_ps4_fw_id_from_raw(uint32_t raw) {
@@ -176,6 +180,20 @@ static int memdbg_ps4_debug_gate_is_jcc(uint8_t opcode) {
   return opcode >= 0x70u && opcode <= 0x7fu;
 }
 
+/* JE/JNE (and friends keyed on ZF) are patched to JMP; CF-based Jcc (JA/JB/...)
+ * on 11.00-class kernels jump to the deny path, so NOP fall-through instead. */
+static int memdbg_ps4_debug_gate_allow_use_nop(uint8_t opcode) {
+  switch (opcode) {
+  case 0x72u: /* JB  */
+  case 0x73u: /* JAE */
+  case 0x76u: /* JBE */
+  case 0x77u: /* JA  */
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 static void memdbg_ps4_debug_gate_hex(const uint8_t *bytes, size_t len,
                                       char *out, size_t out_len) {
   static const char k_hex[] = "0123456789abcdef";
@@ -199,31 +217,61 @@ static void memdbg_ps4_debug_gate_hex(const uint8_t *bytes, size_t len,
 static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
                                              size_t len, const char *slot_name,
                                              int allow_jcc_site,
+                                             int allow_nop_profile,
                                              int *applied_out,
                                              int *skipped_out) {
   uint8_t cur[8];
   uint8_t verify[8];
-  char hex[32];
+  char hex[48];
   int32_t rc;
+  const uint8_t *patch = want;
+  size_t patch_len = len;
 
   if (len == 0u || len > sizeof(cur) || want == NULL || addr == 0) {
     errno = EINVAL;
     return -1;
   }
 
-  rc = kernel_copyout(addr, cur, len);
-  if (rc != 0) {
-    memdbg_log_write(MEMDBG_LOG_WARN,
-                     "privilege: ps4 debug gate read failed slot=%s addr=0x%lx "
-                     "rc=%d",
-                     slot_name, (unsigned long)addr, (int)rc);
-    errno = EIO;
-    return -1;
+  /* For the allow site, peek two bytes so JA xx can become NOP NOP. */
+  {
+    const size_t peek = allow_jcc_site ? 2u : len;
+    rc = kernel_copyout(addr, cur, peek);
+    if (rc != 0) {
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "privilege: ps4 debug gate read failed slot=%s addr=0x%lx "
+                       "rc=%d",
+                       slot_name, (unsigned long)addr, (int)rc);
+      errno = EIO;
+      return -1;
+    }
+    memdbg_ps4_debug_gate_hex(cur, peek, hex, sizeof(hex));
   }
 
-  memdbg_ps4_debug_gate_hex(cur, len, hex, sizeof(hex));
+  if (allow_jcc_site) {
+    if (!memdbg_ps4_debug_gate_is_jcc(cur[0]) && cur[0] != 0xebu &&
+        !(cur[0] == 0x90u && cur[1] == 0x90u)) {
+      memdbg_log_write(
+          MEMDBG_LOG_WARN,
+          "privilege: ps4 debug gate unexpected opcode slot=%s addr=0x%lx "
+          "bytes=[%s] (expected Jcc 0x70-0x7f; wrong kernel base/offset?)",
+          slot_name, (unsigned long)addr, hex);
+      errno = EINVAL;
+      return -1;
+    }
+    if (allow_nop_profile) {
+      /* 11.00: NOP JA / rewrite prior JMP from older MemDBG builds. */
+      patch = k_ptrace_allow_nop;
+      patch_len = sizeof(k_ptrace_allow_nop);
+    } else if (memdbg_ps4_debug_gate_allow_use_nop(cur[0])) {
+      patch = k_ptrace_allow_nop;
+      patch_len = sizeof(k_ptrace_allow_nop);
+    } else {
+      patch = k_ptrace_allow_jmp;
+      patch_len = sizeof(k_ptrace_allow_jmp);
+    }
+  }
 
-  if (memcmp(cur, want, len) == 0) {
+  if (memcmp(cur, patch, patch_len) == 0) {
     if (skipped_out != NULL)
       (*skipped_out)++;
     memdbg_log_write(MEMDBG_LOG_INFO,
@@ -233,17 +281,7 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
     return 0;
   }
 
-  if (allow_jcc_site && !memdbg_ps4_debug_gate_is_jcc(cur[0])) {
-    memdbg_log_write(
-        MEMDBG_LOG_WARN,
-        "privilege: ps4 debug gate unexpected opcode slot=%s addr=0x%lx "
-        "bytes=[%s] (expected Jcc 0x70-0x7f; wrong kernel base/offset?)",
-        slot_name, (unsigned long)addr, hex);
-    errno = EINVAL;
-    return -1;
-  }
-
-  rc = kernel_copyin(want, addr, len);
+  rc = kernel_copyin(patch, addr, patch_len);
   if (rc != 0) {
     memdbg_log_write(MEMDBG_LOG_WARN,
                      "privilege: ps4 debug gate write failed slot=%s addr=0x%lx "
@@ -253,10 +291,10 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
     return -1;
   }
 
-  rc = kernel_copyout(addr, verify, len);
-  if (rc != 0 || memcmp(verify, want, len) != 0) {
-    char after[32];
-    memdbg_ps4_debug_gate_hex(verify, len, after, sizeof(after));
+  rc = kernel_copyout(addr, verify, patch_len);
+  if (rc != 0 || memcmp(verify, patch, patch_len) != 0) {
+    char after[48];
+    memdbg_ps4_debug_gate_hex(verify, patch_len, after, sizeof(after));
     memdbg_log_write(
         MEMDBG_LOG_WARN,
         "privilege: ps4 debug gate verify failed slot=%s addr=0x%lx "
@@ -270,8 +308,8 @@ static int memdbg_ps4_debug_gate_apply_bytes(intptr_t addr, const uint8_t *want,
     (*applied_out)++;
   memdbg_log_write(MEMDBG_LOG_INFO,
                    "privilege: ps4 debug gate patched slot=%s addr=0x%lx "
-                   "before=[%s]",
-                   slot_name, (unsigned long)addr, hex);
+                   "before=[%s] patch_len=%u",
+                   slot_name, (unsigned long)addr, hex, (unsigned)patch_len);
   return 0;
 }
 
@@ -316,7 +354,7 @@ int memdbg_ps4_debug_gate_arm(void) {
 
   if (memdbg_ps4_debug_gate_apply_bytes(
           base + (intptr_t)profile->acmgr_rva, k_acmgr_allow_stub,
-          sizeof(k_acmgr_allow_stub), "acmgr_system_debug", 0, &applied,
+          sizeof(k_acmgr_allow_stub), "acmgr_system_debug", 0, 0, &applied,
           &skipped) != 0) {
     if (first_errno == 0)
       first_errno = errno != 0 ? errno : EPERM;
@@ -324,9 +362,9 @@ int memdbg_ps4_debug_gate_arm(void) {
   }
 
   if (memdbg_ps4_debug_gate_apply_bytes(
-          base + (intptr_t)profile->ptrace_allow_rva, k_ptrace_allow_byte,
-          sizeof(k_ptrace_allow_byte), "ptrace_allow_branch", 1, &applied,
-          &skipped) != 0) {
+          base + (intptr_t)profile->ptrace_allow_rva, k_ptrace_allow_jmp,
+          sizeof(k_ptrace_allow_jmp), "ptrace_allow_branch", 1,
+          profile->allow_nop != 0, &applied, &skipped) != 0) {
     if (first_errno == 0)
       first_errno = errno != 0 ? errno : EPERM;
     failures++;
@@ -334,8 +372,8 @@ int memdbg_ps4_debug_gate_arm(void) {
 
   if (memdbg_ps4_debug_gate_apply_bytes(
           base + (intptr_t)profile->ptrace_policy_rva, policy_patch,
-          sizeof(policy_patch), "ptrace_policy_skip", 0, &applied, &skipped) !=
-      0) {
+          sizeof(policy_patch), "ptrace_policy_skip", 0, 0, &applied,
+          &skipped) != 0) {
     if (first_errno == 0)
       first_errno = errno != 0 ? errno : EPERM;
     failures++;
