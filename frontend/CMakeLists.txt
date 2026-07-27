@@ -151,6 +151,21 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(memdbg_lua PUBLIC m ${CMAKE_DL_LIBS})
 endif()
 
+# ---- Zydis (client-side disassembly for debugger UI, issue #39) ----
+set(ZYDIS_BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_DOXYGEN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_MAN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_DECODER ON CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_FORMATTER ON CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_ENCODER OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../external/zydis ${CMAKE_CURRENT_BINARY_DIR}/zydis)
+
 # ---- memdbg_frontend ----
 
 set(MEMDBG_APP_ICON_PNG ${CMAKE_CURRENT_SOURCE_DIR}/../assets/app-icon.png)
@@ -326,7 +341,7 @@ target_include_directories(memdbg_frontend PRIVATE
 )
 
 target_compile_definitions(memdbg_frontend PRIVATE MEMDBG_ENABLE_EMBEDDED_LUA)
-target_link_libraries(memdbg_frontend PRIVATE imgui memdbg_lua Threads::Threads)
+target_link_libraries(memdbg_frontend PRIVATE imgui memdbg_lua Zydis Threads::Threads)
 
 if(MSVC)
   target_compile_options(memdbg_frontend PRIVATE /utf-8)
@@ -573,6 +588,20 @@ if(MSVC)
 endif()
 
 # ---- memdbg_structure_compare_test ----
+
+# ---- memdbg_structure_compare_test ----
+
+add_executable(memdbg_debugger_disassembly_test
+  tests/test_debugger_disassembly.cpp
+  src/screens/debugger/debugger_disassembly.cpp
+)
+
+target_include_directories(memdbg_debugger_disassembly_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/screens/debugger
+)
+
+target_link_libraries(memdbg_debugger_disassembly_test PRIVATE Zydis)
 
 add_executable(memdbg_scanner_plan_test
   tests/test_scanner_plan.cpp
@@ -1006,6 +1035,7 @@ if(WIN32)
   target_compile_definitions(memdbg_sandbox_fuzz_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_limits_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(memdbg_sandbox_python_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(memdbg_debugger_disassembly_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(memdbg_frontend PRIVATE ws2_32 shell32 comdlg32 ole32)
   target_link_libraries(memdbg_probe PRIVATE ws2_32 shell32)
   target_link_libraries(memdbg_gdb_bridge PRIVATE ws2_32 shell32)
@@ -1036,6 +1066,7 @@ if(MSVC)
   target_compile_options(memdbg_payload_injection_probe PRIVATE /W4 /WX)
   target_compile_options(memdbg_auto_search_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_structure_compare_test PRIVATE /W4 /WX)
+  target_compile_options(memdbg_debugger_disassembly_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_app_reconnect_test PRIVATE /W4 /WX)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE /W4 /WX)
@@ -1062,6 +1093,7 @@ else()
   target_compile_options(memdbg_payload_injection_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_auto_search_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_structure_compare_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(memdbg_debugger_disassembly_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_state_parsing_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_app_reconnect_test PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(memdbg_payload_fetcher_test PRIVATE -Wall -Wextra -Wpedantic)

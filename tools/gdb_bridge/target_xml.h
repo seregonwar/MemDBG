@@ -1,5 +1,5 @@
 /*
- * MemDBG - Minimal GDB target description for i386:x86-64.
+ * MemDBG - GDB target description for i386:x86-64 (core + SSE).
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -7,7 +7,8 @@
 #ifndef MEMDBG_GDB_BRIDGE_TARGET_XML_H
 #define MEMDBG_GDB_BRIDGE_TARGET_XML_H
 
-/* Core GPRs only (MVP). FPU/XMM intentionally omitted. */
+/* Core GPRs + SSE (XMM0-15, MXCSR). X87 left out of the g-packet for now;
+ * individual p/P can still be extended later. */
 static const char kMemdbgGdbTargetXml[] =
     "<?xml version=\"1.0\"?>"
     "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">"
@@ -38,6 +39,25 @@ static const char kMemdbgGdbTargetXml[] =
     "<reg name=\"es\" bitsize=\"32\" type=\"int32\" regnum=\"21\"/>"
     "<reg name=\"fs\" bitsize=\"32\" type=\"int32\" regnum=\"22\"/>"
     "<reg name=\"gs\" bitsize=\"32\" type=\"int32\" regnum=\"23\"/>"
+    "</feature>"
+    "<feature name=\"org.gnu.gdb.i386.sse\">"
+    "<reg name=\"xmm0\" bitsize=\"128\" type=\"uint128\" regnum=\"40\"/>"
+    "<reg name=\"xmm1\" bitsize=\"128\" type=\"uint128\" regnum=\"41\"/>"
+    "<reg name=\"xmm2\" bitsize=\"128\" type=\"uint128\" regnum=\"42\"/>"
+    "<reg name=\"xmm3\" bitsize=\"128\" type=\"uint128\" regnum=\"43\"/>"
+    "<reg name=\"xmm4\" bitsize=\"128\" type=\"uint128\" regnum=\"44\"/>"
+    "<reg name=\"xmm5\" bitsize=\"128\" type=\"uint128\" regnum=\"45\"/>"
+    "<reg name=\"xmm6\" bitsize=\"128\" type=\"uint128\" regnum=\"46\"/>"
+    "<reg name=\"xmm7\" bitsize=\"128\" type=\"uint128\" regnum=\"47\"/>"
+    "<reg name=\"xmm8\" bitsize=\"128\" type=\"uint128\" regnum=\"48\"/>"
+    "<reg name=\"xmm9\" bitsize=\"128\" type=\"uint128\" regnum=\"49\"/>"
+    "<reg name=\"xmm10\" bitsize=\"128\" type=\"uint128\" regnum=\"50\"/>"
+    "<reg name=\"xmm11\" bitsize=\"128\" type=\"uint128\" regnum=\"51\"/>"
+    "<reg name=\"xmm12\" bitsize=\"128\" type=\"uint128\" regnum=\"52\"/>"
+    "<reg name=\"xmm13\" bitsize=\"128\" type=\"uint128\" regnum=\"53\"/>"
+    "<reg name=\"xmm14\" bitsize=\"128\" type=\"uint128\" regnum=\"54\"/>"
+    "<reg name=\"xmm15\" bitsize=\"128\" type=\"uint128\" regnum=\"55\"/>"
+    "<reg name=\"mxcsr\" bitsize=\"32\" type=\"int32\" regnum=\"56\"/>"
     "</feature>"
     "</target>";
 

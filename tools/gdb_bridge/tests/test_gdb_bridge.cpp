@@ -66,12 +66,12 @@ int main() {
   CHECK("eflags truncated",
         gdb_get_reg_value(regs, GDB_EFLAGS) == 0x246ULL);
 
-  const std::string g = gdb_encode_g_packet(regs);
-  /* 17 * 8 + 7 * 4 = 136 + 28 = 164 bytes => 328 hex chars */
-  CHECK("g packet size", g.size() == 328U);
+  const std::string g = gdb_encode_g_packet(regs, nullptr);
+  /* core 328 + xmm 512 + mxcsr 8 = 848 hex chars */
+  CHECK("g packet size", g.size() == 848U);
 
   memdbg_debug_regs_t decoded{};
-  CHECK("g decode succeeds", gdb_decode_g_packet(g, decoded));
+  CHECK("g decode succeeds", gdb_decode_g_packet(g, decoded, nullptr));
   CHECK("rax round-trip",
         static_cast<uint64_t>(decoded.r_rax) ==
             0x1122334455667788ULL);
@@ -83,6 +83,61 @@ int main() {
         (static_cast<uint64_t>(decoded.r_rflags) & 0xFFFFFFFFULL) == 0x246ULL);
   CHECK("ss round-trip",
         static_cast<uint64_t>(decoded.r_ss) == 0x2BULL);
+
+  memdbg_debug_fpregs_t fpregs{};
+  fpregs.length = 512U;
+  std::memset(fpregs.data, 0, sizeof(fpregs.data));
+  const uint8_t xmm7[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+  CHECK("set xmm7", gdb_set_sse_bytes(fpregs, GDB_XMM7, xmm7, 16U));
+  uint32_t mxcsr = 0x1F80U;
+  CHECK("set mxcsr",
+        gdb_set_sse_bytes(fpregs, GDB_MXCSR,
+                          reinterpret_cast<const uint8_t *>(&mxcsr), 4U));
+  const std::string g2 = gdb_encode_g_packet(regs, &fpregs);
+  CHECK("g+sse size", g2.size() == 848U);
+  memdbg_debug_fpregs_t fpregs2{};
+  memdbg_debug_regs_t decoded2{};
+  CHECK("g+sse decode", gdb_decode_g_packet(g2, decoded2, &fpregs2));
+  uint8_t xmm7_out[16]{};
+  CHECK("get xmm7", gdb_get_sse_bytes(fpregs2, GDB_XMM7, xmm7_out, 16U));
+  CHECK("xmm7 round-trip", std::memcmp(xmm7, xmm7_out, 16U) == 0);
+
+  uint32_t mxcsr_out = 0;
+  CHECK("get mxcsr",
+        gdb_get_sse_bytes(fpregs2, GDB_MXCSR,
+                          reinterpret_cast<uint8_t *>(&mxcsr_out), 4U));
+  CHECK("mxcsr round-trip", mxcsr_out == 0x1F80U);
+
+  /* xmm0 and xmm15 extremes */
+  const uint8_t xmm0[16] = {0xAA};
+  const uint8_t xmm15[16] = {0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+                             0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB};
+  CHECK("set xmm0", gdb_set_sse_bytes(fpregs, GDB_XMM0, xmm0, 16U));
+  CHECK("set xmm15", gdb_set_sse_bytes(fpregs, GDB_XMM15, xmm15, 16U));
+  uint8_t xmm0_out[16]{};
+  uint8_t xmm15_out[16]{};
+  CHECK("get xmm0", gdb_get_sse_bytes(fpregs, GDB_XMM0, xmm0_out, 16U));
+  CHECK("get xmm15", gdb_get_sse_bytes(fpregs, GDB_XMM15, xmm15_out, 16U));
+  CHECK("xmm0 round-trip", std::memcmp(xmm0, xmm0_out, 16U) == 0);
+  CHECK("xmm15 round-trip", std::memcmp(xmm15, xmm15_out, 16U) == 0);
+
+  /* Short FXSAVE still reports zeros for SSE reads. */
+  memdbg_debug_fpregs_t short_fp{};
+  short_fp.length = 32U;
+  uint8_t zero16[16]{};
+  CHECK("short fxsave get xmm0 zeros",
+        gdb_get_sse_bytes(short_fp, GDB_XMM0, xmm0_out, 16U) &&
+            std::memcmp(xmm0_out, zero16, 16U) == 0);
+  CHECK("reject bad sse size",
+        !gdb_set_sse_bytes(fpregs, GDB_XMM0, xmm0, 8U));
+  CHECK("reject core as sse",
+        !gdb_set_sse_bytes(fpregs, GDB_RAX, xmm0, 16U));
+
+  /* target.xml must not claim X87 yet (documented gap). */
+  CHECK("target xml no st0",
+        std::strstr(kMemdbgGdbTargetXml, "name=\"st0\"") == nullptr);
+  CHECK("target xml no fctrl",
+        std::strstr(kMemdbgGdbTargetXml, "name=\"fctrl\"") == nullptr);
 
   uint64_t patched = 0xDEADBEEFCAFEULL;
   CHECK("set rbx", gdb_set_reg_value(regs, GDB_RBX, patched));
@@ -99,10 +154,14 @@ int main() {
         std::strstr(kMemdbgGdbTargetXml, "i386:x86-64") != nullptr);
   CHECK("target xml has rax",
         std::strstr(kMemdbgGdbTargetXml, "name=\"rax\"") != nullptr);
+  CHECK("target xml has xmm0",
+        std::strstr(kMemdbgGdbTargetXml, "name=\"xmm0\"") != nullptr);
+  CHECK("target xml has mxcsr",
+        std::strstr(kMemdbgGdbTargetXml, "name=\"mxcsr\"") != nullptr);
 
   CHECK("reg size rax", gdb_reg_size(GDB_RAX) == 8U);
   CHECK("reg size eflags", gdb_reg_size(GDB_EFLAGS) == 4U);
-  CHECK("invalid regno", !gdb_reg_valid(-1) && !gdb_reg_valid(GDB_REG_COUNT));
+  CHECK("invalid regno", !gdb_reg_valid(-1) && !gdb_reg_valid(GDB_REG_MAX));
 
   if (failures == 0) {
     std::fprintf(stdout, "All gdb_bridge tests passed\n");

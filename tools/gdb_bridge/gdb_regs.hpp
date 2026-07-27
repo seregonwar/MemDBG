@@ -14,7 +14,7 @@
 
 namespace memdbg::gdb_bridge {
 
-/* GDB org.gnu.gdb.i386.core register numbers. */
+/* GDB org.gnu.gdb.i386.core + sse register numbers (amd64 layout). */
 enum GdbReg : int {
   GDB_RAX = 0,
   GDB_RBX = 1,
@@ -40,11 +40,25 @@ enum GdbReg : int {
   GDB_ES = 21,
   GDB_FS = 22,
   GDB_GS = 23,
-  GDB_REG_COUNT = 24
+  GDB_CORE_COUNT = 24,
+
+  GDB_XMM0 = 40,
+  GDB_XMM7 = 47,
+  GDB_XMM15 = 55,
+  GDB_MXCSR = 56,
+  GDB_REG_MAX = 57
 };
+
+/* FXSAVE offsets inside memdbg_debug_fpregs_t::data (AMD64). */
+constexpr size_t kFxsaveMxcsrOff = 24U;
+constexpr size_t kFxsaveXmm0Off = 160U;
+constexpr size_t kFxsaveXmmBytes = 16U;
+constexpr size_t kFxsaveMinLen = 416U; /* through xmm15 */
 
 size_t gdb_reg_size(int regno);
 bool gdb_reg_valid(int regno);
+bool gdb_reg_is_core(int regno);
+bool gdb_reg_is_sse(int regno);
 
 /* Encode/decode little-endian hex used by RSP. */
 std::string bytes_to_hex(const void *data, size_t size);
@@ -53,9 +67,21 @@ bool hex_to_bytes(const std::string &hex, void *out, size_t size);
 uint64_t gdb_get_reg_value(const memdbg_debug_regs_t &regs, int regno);
 bool gdb_set_reg_value(memdbg_debug_regs_t &regs, int regno, uint64_t value);
 
-/* Full `g`/`G` blob matching target.xml sizes. */
-std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs);
-bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs);
+/* Core-only helpers (legacy tests / partial G). */
+std::string gdb_encode_g_core(const memdbg_debug_regs_t &regs);
+bool gdb_decode_g_core(const std::string &hex, memdbg_debug_regs_t &regs);
+
+/* Full g/G matching target.xml (core + SSE). Missing/short fpregs → zero SSE. */
+std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
+                                const memdbg_debug_fpregs_t *fpregs);
+bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
+                         memdbg_debug_fpregs_t *fpregs);
+
+/* Read/write one SSE register into an FXSAVE-backed fpregs blob. */
+bool gdb_get_sse_bytes(const memdbg_debug_fpregs_t &fpregs, int regno,
+                       uint8_t *out, size_t out_size);
+bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno,
+                       const uint8_t *data, size_t size);
 
 } // namespace memdbg::gdb_bridge
 

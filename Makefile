@@ -109,7 +109,7 @@ ALL_DEPFILES := $(HOST_OBJECTS:.o=.d) $(PS4_OBJECTS:.o=.d) \
 # compiled against different layouts and trip the stack protector at runtime.
 -include $(ALL_DEPFILES)
 
-.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend gdb-bridge test-gdb-bridge verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-pal-wait-backend-ps4 test-privilege-ps4 test-ps4-debug-gate test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine test-protocol-abi check-locales check-headers tracer-tool fuzz-protocol-header fuzz-lz4 fuzz-sjson fuzz-process-maps fuzz-corpus FORCE
+.PHONY: all clean host payload-ps4 payload-ps4-lib payload-ps5 payload-ps5-lib deploy-ps4 deploy-ps5 frontend gdb-bridge test-gdb-bridge test-debugger-disassembly x64dbg-plugin verify test test-aob-boundary test-process-aob-e2e test-debugger test-memory test-pal-ebadf test-pal-memory-console test-pal-memory-console-ps4 test-pal-wait-backend-ps4 test-privilege-ps4 test-ps4-debug-gate test-process-map-metadata test-process-map-cache test-lz4 test-scan-partition test-scan-protocol test-tracer-daemon test-new-features test-sjson test-legacy-scanner-e2e test-legacy-process-e2e test-reconnect-state-machine test-protocol-abi check-locales check-headers tracer-tool fuzz-protocol-header fuzz-lz4 fuzz-sjson fuzz-process-maps fuzz-corpus FORCE
 
 all: host
 
@@ -477,6 +477,17 @@ frontend:
 	cmake -S frontend -B $(BUILD_DIR)/frontend -DCMAKE_BUILD_TYPE=Release -DMEMDBG_RELEASE_VERSION="$(MEMDBG_VERSION)"
 	cmake --build $(BUILD_DIR)/frontend -j4
 
+test-debugger-disassembly: frontend
+	@if [ -x "$(BUILD_DIR)/frontend/bin/Release/memdbg_debugger_disassembly_test.exe" ]; then \
+	  "$(BUILD_DIR)/frontend/bin/Release/memdbg_debugger_disassembly_test.exe"; \
+	elif [ -x "$(BUILD_DIR)/frontend/bin/memdbg_debugger_disassembly_test.exe" ]; then \
+	  "$(BUILD_DIR)/frontend/bin/memdbg_debugger_disassembly_test.exe"; \
+	elif [ -x "$(BUILD_DIR)/frontend/bin/Release/memdbg_debugger_disassembly_test" ]; then \
+	  "$(BUILD_DIR)/frontend/bin/Release/memdbg_debugger_disassembly_test"; \
+	else \
+	  "$(BUILD_DIR)/frontend/bin/memdbg_debugger_disassembly_test"; \
+	fi
+
 # Standalone host GDB RSP bridge (does not pull ImGui/GLFW FetchContent).
 gdb-bridge:
 	cmake -S tools/gdb_bridge -B $(BUILD_DIR)/gdb_bridge
@@ -489,6 +500,22 @@ test-gdb-bridge: gdb-bridge
 	  "$(BUILD_DIR)/gdb_bridge/Release/memdbg_gdb_bridge_test"; \
 	else \
 	  "$(BUILD_DIR)/gdb_bridge/memdbg_gdb_bridge_test"; \
+	fi
+
+# Optional x64dbg plugin (Windows). Fetches official x64dbg-pluginsdk-cmake.zip.
+x64dbg-plugin:
+	cmake -S tools/x64dbg_plugin -B $(BUILD_DIR)/x64dbg_plugin -A x64 $(if $(MEMDBG_X64DBG_SDK),-DMEMDBG_X64DBG_SDK="$(MEMDBG_X64DBG_SDK)",)
+	cmake --build $(BUILD_DIR)/x64dbg_plugin --config Release -j4 --target memdbg_x64dbg_plugin
+
+test-x64dbg-plugin-util:
+	cmake -S tools/x64dbg_plugin -B $(BUILD_DIR)/x64dbg_plugin -A x64 $(if $(MEMDBG_X64DBG_SDK),-DMEMDBG_X64DBG_SDK="$(MEMDBG_X64DBG_SDK)",)
+	cmake --build $(BUILD_DIR)/x64dbg_plugin --config Release -j4 --target memdbg_x64dbg_plugin_util_test
+	@if [ -x "$(BUILD_DIR)/x64dbg_plugin/Release/memdbg_x64dbg_plugin_util_test.exe" ]; then \
+	  "$(BUILD_DIR)/x64dbg_plugin/Release/memdbg_x64dbg_plugin_util_test.exe"; \
+	elif [ -x "$(BUILD_DIR)/x64dbg_plugin/Release/memdbg_x64dbg_plugin_util_test" ]; then \
+	  "$(BUILD_DIR)/x64dbg_plugin/Release/memdbg_x64dbg_plugin_util_test"; \
+	else \
+	  "$(BUILD_DIR)/x64dbg_plugin/memdbg_x64dbg_plugin_util_test"; \
 	fi
 
 check-locales:

@@ -62,12 +62,13 @@ You can also use stock GDB:
 (gdb) target remote 127.0.0.1:23946
 ```
 
-## Supported RSP subset (MVP)
+## Supported RSP subset
 
 - `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`, thread info
-- `qXfer:features:read` → minimal `i386:x86-64` core register XML
+- `qXfer:features:read` → core GPR + SSE (`xmm0`–`xmm15`, `mxcsr`) XML
+- `qXfer:memory-map:read` → map from `process_maps` (`ram` entries)
 - `vAttach`, `vCont` (`c`/`s`), `?`, `H`, `T`, `D`
-- Registers: `g` / `G` / `p` / `P` (GPRs only; no FPU/XMM in this MVP)
+- Registers: `g` / `G` / `p` / `P` (GPR + SSE via FXSAVE / `debug_get_fpregs`)
 - Memory: `m` / `M`
 - Breakpoints: `Z0`/`z0` (software), `Z1`/`z1` (hardware)
 - Watchpoints: `Z2`–`Z4` / `z2`–`z4`
@@ -79,8 +80,8 @@ Unsupported packets receive an empty RSP reply (`$#00`).
 
 - Single attached PID (same constraint as the MemDBG debugger session).
 - All-stop only (no GDB non-stop mode).
-- No `qXfer:memory-map`, no `vRun` / spawn, no on-console `gdbsrv`.
-- FPU/XMM not exposed in `target.xml` yet.
+- No `vRun` / spawn, no on-console `gdbsrv`.
+- X87 (st0–st7 / fctrl…) not in `target.xml` yet (SSE is).
 
 ## Source
 
