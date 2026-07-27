@@ -51,6 +51,7 @@
 #if defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
 #include <ps4/klog.h>
 #define MEMDBG_DAEMON_CONSOLE 1
+#define MEMDBG_DAEMON_PS4 1
 #elif defined(PLATFORM_PS5) || defined(PS5) || defined(__PROSPERO__)
 #include <ps5/klog.h>
 #include <sys/reboot.h>
@@ -68,8 +69,20 @@ extern void memdbg_beacon_stop(void);
 /* ---- Globals ---- */
 
 static atomic_bool g_stop_requested = false;
+static atomic_bool g_daemon_entry_active = ATOMIC_VAR_INIT(false);
 atomic_uint g_active_connections = 0;
 uint64_t    g_start_ticks = 0;
+
+static bool daemon_entry_try_acquire(void) {
+  bool expected = false;
+  return atomic_compare_exchange_strong_explicit(
+      &g_daemon_entry_active, &expected, true,
+      memory_order_acquire, memory_order_relaxed);
+}
+
+static void daemon_entry_release(void) {
+  atomic_store_explicit(&g_daemon_entry_active, false, memory_order_release);
+}
 
 /* ---- Config ---- */
 
@@ -270,26 +283,39 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
   if (cfg_in == NULL) memdbg_config_defaults(&cfg);
   else                cfg = *cfg_in;
 
+  /* GoldHEN can invoke the ELF entry point again inside the same loader
+   * process while the first invocation is still starting or running.  Do not
+   * reset shared stop/log/socket state from that concurrent entry. */
+  if (!daemon_entry_try_acquire())
+    return MEMDBG_OK;
+
   atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
   g_start_ticks = monotonic_seconds();
 
-  if (pal_network_init() != 0) return MEMDBG_ERR_NET;
+  if (pal_network_init() != 0) {
+    daemon_entry_release();
+    return MEMDBG_ERR_NET;
+  }
 
   /* A second GoldHEN injection may execute inside the same process.  Detect
    * it as early as possible, before touching shared log, UDP, or listener
    * state.  The TCP ping needs the network subsystem, but logging must stay
    * uninitialised so a live daemon keeps its log sinks. */
   if (memdbg_instance_is_current_process(&cfg)) {
+#if !defined(MEMDBG_DAEMON_PS4)
     if (pal_notification_init() == 0) {
       pal_notification_send("MemDBG is already running");
       pal_notification_shutdown();
     }
+#endif
     (void)pal_network_fini();
+    daemon_entry_release();
     return MEMDBG_OK;
   }
 
   if (memdbg_log_init(cfg.data_root) != 0) {
     (void)pal_network_fini();
+    daemon_entry_release();
     return MEMDBG_ERR_IO;
   }
   int notification_ready = (pal_notification_init() == 0);
@@ -331,6 +357,7 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
     memdbg_udp_log_stop();
     memdbg_log_close();
     pal_network_fini();
+    daemon_entry_release();
     return MEMDBG_ERR_NET;
   }
 
@@ -495,5 +522,6 @@ shutdown_cleanup:
   memdbg_udp_log_stop();
   memdbg_log_close();
   pal_network_fini();
+  daemon_entry_release();
   return MEMDBG_OK;
 }
