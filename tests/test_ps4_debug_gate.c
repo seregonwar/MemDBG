@@ -73,11 +73,11 @@ int32_t kernel_copyin(const void *udaddr, intptr_t kaddr, size_t len) {
 
 static void reset_state(void) {
   memset(g_kmem, 0xcc, sizeof(g_kmem));
-  /* Allow-branch sites: ZF-based Jcc (75) -> JMP; 11.00 uses JA (77) -> NOP. */
+  /* Every allow-branch site is forced taken; 11.00 uses JA +0x1c. */
   g_kmem[0x0041f4e5u] = 0x75u; /* 9.00 */
   g_kmem[0x0041f4e6u] = 0x12u;
   g_kmem[0x00384285u] = 0x77u; /* 11.00 live console */
-  g_kmem[0x00384286u] = 0x12u;
+  g_kmem[0x00384286u] = 0x1cu;
   g_kmem[0x0030d9aau] = 0x75u; /* 5.05 */
   g_kmem[0x0030d9abu] = 0x12u;
   g_kmem[0x00366985u] = 0x75u; /* 12.00/12.02 */
@@ -103,7 +103,7 @@ int main(void) {
   static const uint8_t acmgr[8] = {0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00,
                                    0xc3};
   static const uint8_t allow_jmp[1] = {0xeb};
-  static const uint8_t allow_nop[2] = {0x90, 0x90};
+  static const uint8_t allow_jmp_1100[2] = {0xeb, 0x1c};
   static const uint8_t policy[5] = {0xe9, 0x7c, 0x02, 0x00, 0x00};
 
   /* Firmware 9.00 (SDK encoding) arms all three sites. */
@@ -159,7 +159,8 @@ int main(void) {
   }
   failures += expect_bytes(0x003d0de0u, acmgr, sizeof(acmgr), "11.00 bcd acmgr");
   failures +=
-      expect_bytes(0x00384285u, allow_nop, sizeof(allow_nop), "11.00 bcd allow");
+      expect_bytes(0x00384285u, allow_jmp_1100, sizeof(allow_jmp_1100),
+                   "11.00 bcd allow");
   failures += expect_bytes(0x00384771u, policy, sizeof(policy), "11.00 bcd policy");
 
   /* Firmware 11.00. */
@@ -171,8 +172,22 @@ int main(void) {
   }
   failures += expect_bytes(0x003d0de0u, acmgr, sizeof(acmgr), "11.00 acmgr");
   failures +=
-      expect_bytes(0x00384285u, allow_nop, sizeof(allow_nop), "11.00 allow");
+      expect_bytes(0x00384285u, allow_jmp_1100, sizeof(allow_jmp_1100),
+                   "11.00 allow");
   failures += expect_bytes(0x00384771u, policy, sizeof(policy), "11.00 policy");
+
+  /* Repair the incorrect NOP NOP written by previous 11.00 nightlies. */
+  reset_state();
+  g_fw_raw = 0x11008001u;
+  g_kmem[0x00384285u] = 0x90u;
+  g_kmem[0x00384286u] = 0x90u;
+  if (memdbg_ps4_debug_gate_arm() != 0) {
+    fprintf(stderr, "FAIL: legacy 11.00 NOP repair returned error\n");
+    ++failures;
+  }
+  failures +=
+      expect_bytes(0x00384285u, allow_jmp_1100, sizeof(allow_jmp_1100),
+                   "11.00 legacy NOP repair");
 
   /* Packed decimal encoding also maps. */
   reset_state();
