@@ -24,6 +24,8 @@ const intptr_t KERNEL_ADDRESS_PRISON0 = (intptr_t)0x12346000;
 const intptr_t KERNEL_ADDRESS_IMAGE_BASE = (intptr_t)0x100000000LL;
 
 static int g_kernel_getlong_calls;
+static intptr_t g_rootdir = (intptr_t)0x11111000;
+static intptr_t g_jaildir = (intptr_t)0x11112000;
 static intptr_t g_rootdir_set;
 static intptr_t g_jaildir_set;
 static int g_credential_write_calls;
@@ -105,12 +107,12 @@ uint64_t kernel_get_ucred_attrs(pid_t pid) {
 
 intptr_t kernel_get_proc_rootdir(pid_t pid) {
   (void)pid;
-  return (intptr_t)0x11111000;
+  return g_rootdir;
 }
 
 intptr_t kernel_get_proc_jaildir(pid_t pid) {
   (void)pid;
-  return (intptr_t)0x11112000;
+  return g_jaildir;
 }
 
 intptr_t kernel_get_ucred_prison(int pid) {
@@ -180,6 +182,7 @@ int32_t kernel_set_ucred_attrs(pid_t pid, uint64_t attrs) {
 
 int32_t kernel_set_proc_rootdir(pid_t pid, intptr_t vnode) {
   (void)pid;
+  g_rootdir = vnode;
   g_rootdir_set = vnode;
   ++g_credential_write_calls;
   return 0;
@@ -187,6 +190,7 @@ int32_t kernel_set_proc_rootdir(pid_t pid, intptr_t vnode) {
 
 int32_t kernel_set_proc_jaildir(pid_t pid, intptr_t vnode) {
   (void)pid;
+  g_jaildir = vnode;
   g_jaildir_set = vnode;
   ++g_credential_write_calls;
   return 0;
