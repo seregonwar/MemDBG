@@ -508,6 +508,23 @@ void set_reg_field_value(memdbg_debug_regs_t &regs, RegField field,
   }
 }
 
+void push_disasm_history(DebuggerState &ds, uint64_t addr) {
+  if (addr == 0) return;
+  if (!ds.disasm_history.empty() &&
+      ds.disasm_history_index < ds.disasm_history.size() &&
+      ds.disasm_history[ds.disasm_history_index] == addr) {
+    return;
+  }
+  if (ds.disasm_history_index + 1U < ds.disasm_history.size()) {
+    ds.disasm_history.resize(ds.disasm_history_index + 1U);
+  }
+  ds.disasm_history.push_back(addr);
+  if (ds.disasm_history.size() > 64U) {
+    ds.disasm_history.erase(ds.disasm_history.begin());
+  }
+  ds.disasm_history_index = ds.disasm_history.size() - 1U;
+}
+
 void refresh_disasm(AppState &state) {
   auto &ds = dstate(state);
   if (!state.client.connected() || !ds.attached) return;
@@ -529,18 +546,59 @@ void refresh_disasm(AppState &state) {
   if (start_addr == ds.disasm_base && !ds.disasm_needs_refresh) return;
 
   ds.disasm_lines.clear();
-  ds.disasm_base = start_addr;
   ds.disasm_needs_refresh = false;
 
-  /* Read 256 bytes from the selected instruction pointer window. */
+  /* Auto-realign when navigating (goto / history / paging): Jump-to can land
+   * mid-instruction; look back a few bytes and pick a stream that lands on
+   * the preferred address. Follow-RIP skips this (CIP is already aligned). */
+  constexpr size_t kLookback = 15;
+  const bool auto_realign =
+      ds.disasm_nav_addr != 0 && ds.disasm_reg_sel == 0;
+  uint64_t read_base = start_addr;
+  uint32_t read_len = 8192;
+  if (auto_realign) {
+    read_base = (start_addr > kLookback) ? (start_addr - kLookback) : 0;
+    const uint64_t span = (start_addr - read_base) + 8192ULL;
+    read_len = span > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(span);
+  }
+
   std::vector<uint8_t> code;
-  if (!state.client.memory_read(ds.pid, start_addr, 256, code) || code.empty()) {
+  if (!state.client.memory_read(ds.pid, read_base, read_len, code) ||
+      code.empty()) {
+    ds.disasm_base = start_addr;
     ds.disasm_needs_refresh = true;
     return;
   }
 
-  ds.disasm_lines = debugger::decode_x86_64_window(code, start_addr,
-                                                   ds.disasm_cfg_view, 60U);
+  uint64_t decode_addr = start_addr;
+  if (auto_realign && code.size() > (start_addr - read_base)) {
+    const uint64_t aligned = debugger::realign_x86_64_address(
+        code, read_base, start_addr, kLookback);
+    if (aligned != start_addr) {
+      ds.disasm_nav_addr = aligned;
+      decode_addr = aligned;
+    }
+  }
+
+  size_t offset = 0;
+  if (decode_addr >= read_base) {
+    offset = static_cast<size_t>(decode_addr - read_base);
+  }
+  if (offset >= code.size()) {
+    ds.disasm_base = decode_addr;
+    return;
+  }
+
+  std::vector<uint8_t> window(code.begin() + static_cast<std::ptrdiff_t>(offset),
+                              code.end());
+  /* Cap decode window to ~8 KiB from the chosen start. */
+  if (window.size() > 8192U) {
+    window.resize(8192U);
+  }
+
+  ds.disasm_base = decode_addr;
+  ds.disasm_lines = debugger::decode_x86_64_window(window, decode_addr,
+                                                   ds.disasm_cfg_view, 512U);
 }
 
 void refresh_stack(AppState &state) {
@@ -1605,7 +1663,9 @@ void draw_debugger(AppState &state, ImVec2 avail) {
                                ImGuiInputTextFlags_EnterReturnsTrue)) {
         uint64_t addr = 0;
         if (parse_input_u64(ds.goto_addr_input, addr)) {
+          push_disasm_history(ds, ds.disasm_base != 0 ? ds.disasm_base : addr);
           ds.disasm_nav_addr = addr;
+          push_disasm_history(ds, addr);
           ds.disasm_reg_sel = 0;
           ds.disasm_follow_rip = false;
           ds.disasm_needs_refresh = true;
@@ -1624,6 +1684,108 @@ void draw_debugger(AppState &state, ImVec2 avail) {
       }
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", "Show only jump/call instructions and their targets (CFG view)");
+
+      ImGui::SameLine();
+      ImGui::BeginDisabled(client_busy || !ds.stopped || ds.selected_lwp == 0 ||
+                           ds.disasm_base == 0);
+      if (ui::soft_button("Prev page", ImVec2(92.0f * scl, 0))) {
+        constexpr uint64_t kPageStep = 0x1000;
+        ds.disasm_follow_rip = false;
+        ds.disasm_reg_sel = 0;
+        const uint64_t next =
+            (ds.disasm_base > kPageStep) ? (ds.disasm_base - kPageStep) : 0;
+        push_disasm_history(ds, ds.disasm_base);
+        ds.disasm_nav_addr = next;
+        push_disasm_history(ds, next);
+        ds.disasm_needs_refresh = true;
+        refresh_disasm(state);
+      }
+      ImGui::SameLine();
+      if (ui::soft_button("Next page", ImVec2(92.0f * scl, 0))) {
+        ds.disasm_follow_rip = false;
+        ds.disasm_reg_sel = 0;
+        uint64_t next = ds.disasm_base + 0x1000;
+        if (!ds.disasm_lines.empty()) {
+          next = ds.disasm_lines.back().address;
+        }
+        push_disasm_history(ds, ds.disasm_base);
+        ds.disasm_nav_addr = next;
+        push_disasm_history(ds, next);
+        ds.disasm_needs_refresh = true;
+        refresh_disasm(state);
+      }
+      ImGui::SameLine();
+      ImGui::BeginDisabled(ds.disasm_history_index == 0 ||
+                           ds.disasm_history.empty());
+      if (ui::soft_button("Hist Back", ImVec2(88.0f * scl, 0))) {
+        if (ds.disasm_history_index > 0) {
+          --ds.disasm_history_index;
+          ds.disasm_nav_addr = ds.disasm_history[ds.disasm_history_index];
+          ds.disasm_follow_rip = false;
+          ds.disasm_reg_sel = 0;
+          ds.disasm_needs_refresh = true;
+          refresh_disasm(state);
+        }
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(ds.disasm_history.empty() ||
+                           ds.disasm_history_index + 1U >=
+                               ds.disasm_history.size());
+      if (ui::soft_button("Hist Fwd", ImVec2(88.0f * scl, 0))) {
+        if (ds.disasm_history_index + 1U < ds.disasm_history.size()) {
+          ++ds.disasm_history_index;
+          ds.disasm_nav_addr = ds.disasm_history[ds.disasm_history_index];
+          ds.disasm_follow_rip = false;
+          ds.disasm_reg_sel = 0;
+          ds.disasm_needs_refresh = true;
+          refresh_disasm(state);
+        }
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ui::soft_button("Copy view", ImVec2(88.0f * scl, 0))) {
+        std::string clip;
+        clip.reserve(ds.disasm_lines.size() * 48U);
+        for (const auto &dl : ds.disasm_lines) {
+          char line[256];
+          std::snprintf(line, sizeof(line), "%016" PRIX64 "  %-24s  %s\n",
+                        dl.address, dl.bytes.c_str(), dl.mnemonic.c_str());
+          clip += line;
+        }
+        ImGui::SetClipboardText(clip.c_str());
+        set_status(state, "Disassembly copied to clipboard");
+      }
+      ImGui::SameLine();
+      if (ui::soft_button("Realign", ImVec2(80.0f * scl, 0))) {
+        constexpr size_t kLookback = 15;
+        const uint64_t preferred = ds.disasm_base;
+        const uint64_t read_base =
+            (preferred > kLookback) ? (preferred - kLookback) : 0;
+        std::vector<uint8_t> probe;
+        if (state.client.memory_read(ds.pid, read_base,
+                                     static_cast<uint32_t>(preferred - read_base + 1U),
+                                     probe) &&
+            !probe.empty()) {
+          const uint64_t aligned = debugger::realign_x86_64_address(
+              probe, read_base, preferred, kLookback);
+          if (aligned != preferred) {
+            ds.disasm_follow_rip = false;
+            ds.disasm_reg_sel = 0;
+            ds.disasm_nav_addr = aligned;
+            ds.disasm_needs_refresh = true;
+            refresh_disasm(state);
+            set_status(state, "Disasm realigned");
+          } else {
+            set_status(state, "Disasm already aligned (or no better start)");
+          }
+        } else {
+          set_status(state, "Realign read failed: " + state.client.last_error());
+        }
+      }
+      ImGui::EndDisabled();
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", "Manual realign (goto already auto-realigns mid-instruction targets)");
 
       ImGui::Spacing();
       if (ds.disasm_lines.empty() && ds.stopped && ds.selected_lwp != 0) {

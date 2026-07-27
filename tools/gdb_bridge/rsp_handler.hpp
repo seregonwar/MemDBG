@@ -36,6 +36,7 @@ private:
   std::string stop_reply() const;
   std::string qxfer_features(const std::string &annex, size_t offset,
                              size_t length) const;
+  std::string qxfer_memory_map(size_t offset, size_t length);
   bool ensure_attached();
   int32_t current_thread() const;
   void refresh_threads();

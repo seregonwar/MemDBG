@@ -62,12 +62,13 @@ Oppure con GDB stock:
 (gdb) target remote 127.0.0.1:23946
 ```
 
-## Subset RSP supportato (MVP)
+## Subset RSP supportato
 
 - `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`, thread info
-- `qXfer:features:read` → XML minimo registri core `i386:x86-64`
+- `qXfer:features:read` → XML core GPR + SSE (`xmm0`–`xmm15`, `mxcsr`)
+- `qXfer:memory-map:read` → mappa da `process_maps` (tipo `ram`)
 - `vAttach`, `vCont` (`c`/`s`), `?`, `H`, `T`, `D`
-- Registri: `g` / `G` / `p` / `P` (solo GPR; niente FPU/XMM in questo MVP)
+- Registri: `g` / `G` / `p` / `P` (GPR + SSE via FXSAVE/`debug_get_fpregs`)
 - Memoria: `m` / `M`
 - Breakpoint: `Z0`/`z0` (software), `Z1`/`z1` (hardware)
 - Watchpoint: `Z2`–`Z4` / `z2`–`z4`
@@ -79,8 +80,8 @@ I pacchetti non supportati ricevono una risposta RSP vuota (`$#00`).
 
 - Un solo PID attached (stesso vincolo della sessione debugger MemDBG).
 - Solo all-stop (niente non-stop GDB).
-- Niente `qXfer:memory-map`, niente `vRun` / spawn, niente `gdbsrv` on-console.
-- FPU/XMM non ancora esposti in `target.xml`.
+- Niente `vRun` / spawn, niente `gdbsrv` on-console.
+- X87 (st0–st7 / fctrl…) non ancora in `target.xml` (SSE sì).
 
 ## Sorgenti
 

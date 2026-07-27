@@ -65,6 +65,8 @@ struct DebuggerState {
   int disasm_reg_sel = 0;
   bool disasm_cfg_view = false;
   char goto_addr_input[32] = {};
+  std::vector<uint64_t> disasm_history;
+  size_t disasm_history_index = 0;
   char bp_filename[256] = "breakpoints.mbp";
   char wp_filename[256] = "watchpoints.mwp";
 
@@ -204,6 +206,7 @@ void draw_hex_blob_table(const char *id, const uint8_t *data, size_t length, flo
 
 /* ---- Memory / Disassembly / Stack ---- */
 void refresh_disasm(AppState &state);
+void push_disasm_history(DebuggerState &ds, uint64_t addr);
 void refresh_stack(AppState &state);
 
 /* ---- Patch Studio ---- */

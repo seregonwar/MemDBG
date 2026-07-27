@@ -120,6 +120,38 @@ std::string RspHandler::qxfer_features(const std::string &annex, size_t offset,
   return out;
 }
 
+std::string RspHandler::qxfer_memory_map(size_t offset, size_t length) {
+  if (!ensure_attached()) return err_packet(1);
+  std::vector<memdbg::frontend::MapEntry> maps;
+  if (!client_.process_maps(pid_, maps)) return err_packet(1);
+
+  std::string xml = "<?xml version=\"1.0\"?>"
+                    "<!DOCTYPE memory-map PUBLIC "
+                    "\"+//IDN gnu.org/DTD GDB Memory Map V1.0//EN\" "
+                    "\"http://sourceware.org/gdb/gdb-memory-map.dtd\">"
+                    "<memory-map>";
+  for (const auto &m : maps) {
+    if (m.end <= m.start) continue;
+    const uint64_t len = m.end - m.start;
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+                  "<memory type=\"ram\" start=\"0x%llx\" length=\"0x%llx\"/>",
+                  static_cast<unsigned long long>(m.start),
+                  static_cast<unsigned long long>(len));
+    xml += buf;
+  }
+  xml += "</memory-map>";
+
+  if (offset >= xml.size()) return "l";
+  const size_t avail = xml.size() - offset;
+  const size_t n = length < avail ? length : avail;
+  const bool last = offset + n >= xml.size();
+  std::string out;
+  out.push_back(last ? 'l' : 'm');
+  out.append(xml, offset, n);
+  return out;
+}
+
 std::string RspHandler::handle_continue_or_step(bool step, RspConnection &conn,
                                                  int32_t lwp) {
   if (!ensure_attached()) return err_packet(1);
@@ -264,8 +296,8 @@ std::string RspHandler::handle_breakpoint(const std::string &packet,
 std::string RspHandler::handle_query(const std::string &packet,
                                      RspConnection &conn) {
   if (packet.rfind("qSupported", 0) == 0) {
-    return "PacketSize=1048576;qXfer:features:read+;swbreak+;hwbreak+;"
-           "vContSupported+;QStartNoAckMode+";
+    return "PacketSize=1048576;qXfer:features:read+;qXfer:memory-map:read+;"
+           "swbreak+;hwbreak+;vContSupported+;QStartNoAckMode+";
   }
   if (packet == "QStartNoAckMode") {
     conn.set_no_ack(true);
@@ -309,6 +341,22 @@ std::string RspHandler::handle_query(const std::string &packet,
       return err_packet(1);
     return qxfer_features(annex, static_cast<size_t>(offset),
                           static_cast<size_t>(length));
+  }
+  if (packet.rfind("qXfer:memory-map:read:", 0) == 0) {
+    /* qXfer:memory-map:read::offset,length  (empty annex) */
+    const std::string rest =
+        packet.substr(std::strlen("qXfer:memory-map:read:"));
+    const size_t colon = rest.find(':');
+    if (colon == std::string::npos) return err_packet(1);
+    const size_t comma = rest.find(',', colon + 1U);
+    if (comma == std::string::npos) return err_packet(1);
+    uint64_t offset = 0U;
+    uint64_t length = 0U;
+    if (!parse_hex_u64(rest, colon + 1U, comma, offset)) return err_packet(1);
+    if (!parse_hex_u64(rest, comma + 1U, rest.size(), length))
+      return err_packet(1);
+    return qxfer_memory_map(static_cast<size_t>(offset),
+                            static_cast<size_t>(length));
   }
   if (packet.rfind("qRcmd,", 0) == 0) {
     return "OK";
@@ -406,14 +454,25 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
     if (!ensure_attached()) return err_packet(1);
     memdbg::frontend::Client::DebugRegs regs;
     if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    return gdb_encode_g_packet(regs.regs);
+    memdbg::frontend::Client::DebugFpregs fpregs;
+    const memdbg_debug_fpregs_t *fp = nullptr;
+    if (client_.debug_get_fpregs(current_thread(), fpregs)) {
+      fp = &fpregs.fpregs;
+    }
+    return gdb_encode_g_packet(regs.regs, fp);
   }
   if (packet[0] == 'G') {
     if (!ensure_attached()) return err_packet(1);
     memdbg::frontend::Client::DebugRegs regs;
     if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    if (!gdb_decode_g_packet(packet.substr(1U), regs.regs)) return err_packet(1);
+    memdbg::frontend::Client::DebugFpregs fpregs;
+    (void)client_.debug_get_fpregs(current_thread(), fpregs);
+    if (!gdb_decode_g_packet(packet.substr(1U), regs.regs, &fpregs.fpregs))
+      return err_packet(1);
     if (!client_.debug_set_regs(current_thread(), regs)) return err_packet(1);
+    if (fpregs.fpregs.length > 0U) {
+      (void)client_.debug_set_fpregs(current_thread(), fpregs);
+    }
     return "OK";
   }
   if (packet[0] == 'p') {
@@ -423,10 +482,20 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
         !gdb_reg_valid(static_cast<int>(regno))) {
       return err_packet(1);
     }
+    const int ir = static_cast<int>(regno);
+    const size_t size = gdb_reg_size(ir);
+    if (gdb_reg_is_sse(ir)) {
+      memdbg::frontend::Client::DebugFpregs fpregs;
+      if (!client_.debug_get_fpregs(current_thread(), fpregs))
+        return err_packet(1);
+      uint8_t buf[16]{};
+      if (!gdb_get_sse_bytes(fpregs.fpregs, ir, buf, sizeof(buf)))
+        return err_packet(1);
+      return bytes_to_hex(buf, size);
+    }
     memdbg::frontend::Client::DebugRegs regs;
     if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    const size_t size = gdb_reg_size(static_cast<int>(regno));
-    uint64_t value = gdb_get_reg_value(regs.regs, static_cast<int>(regno));
+    uint64_t value = gdb_get_reg_value(regs.regs, ir);
     if (size == 4U) value &= 0xFFFFFFFFULL;
     return bytes_to_hex(&value, size);
   }
@@ -439,13 +508,23 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
         !gdb_reg_valid(static_cast<int>(regno))) {
       return err_packet(1);
     }
-    const size_t size = gdb_reg_size(static_cast<int>(regno));
+    const int ir = static_cast<int>(regno);
+    const size_t size = gdb_reg_size(ir);
+    if (gdb_reg_is_sse(ir)) {
+      uint8_t buf[16]{};
+      if (!hex_to_bytes(packet.substr(eq + 1U), buf, size)) return err_packet(1);
+      memdbg::frontend::Client::DebugFpregs fpregs;
+      (void)client_.debug_get_fpregs(current_thread(), fpregs);
+      if (!gdb_set_sse_bytes(fpregs.fpregs, ir, buf, size)) return err_packet(1);
+      if (!client_.debug_set_fpregs(current_thread(), fpregs))
+        return err_packet(1);
+      return "OK";
+    }
     uint64_t value = 0U;
     if (!hex_to_bytes(packet.substr(eq + 1U), &value, size)) return err_packet(1);
     memdbg::frontend::Client::DebugRegs regs;
     if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    if (!gdb_set_reg_value(regs.regs, static_cast<int>(regno), value))
-      return err_packet(1);
+    if (!gdb_set_reg_value(regs.regs, ir, value)) return err_packet(1);
     if (!client_.debug_set_regs(current_thread(), regs)) return err_packet(1);
     return "OK";
   }
