@@ -219,6 +219,8 @@ int main(void) {
 
   /* The narrow, reversible ptrace credential window must remain available. */
   g_credential_write_calls = 0;
+  g_rootdir_set = 0;
+  g_jaildir_set = 0;
   if (memdbg_privilege_begin_ptrace(&ptrace_backup) != 0) {
     fprintf(stderr, "FAIL: temporary PS4 ptrace credentials failed\n");
     ++failures;
@@ -226,6 +228,8 @@ int main(void) {
     if (g_uid != 0 || g_ruid != 0 || g_svuid != 0 || g_rgid != 0 ||
         g_svgid != 0 || g_prison != KERNEL_ADDRESS_PRISON0 ||
         g_authid != MEMDBG_PRIVILEGE_PTRACE_AUTHID ||
+        g_rootdir_set != KERNEL_ADDRESS_ROOTVNODE ||
+        g_jaildir_set != KERNEL_ADDRESS_ROOTVNODE ||
         memcmp(g_caps, full_caps, sizeof(g_caps)) != 0) {
       fprintf(stderr, "FAIL: ptrace identity was not fully elevated\n");
       ++failures;
@@ -236,14 +240,19 @@ int main(void) {
     }
   }
 
-  if (g_credential_write_calls != 16) {
+  /* 8 identity fields + root/jail vnodes, applied and restored. */
+  if (g_credential_write_calls != 20) {
     fprintf(stderr,
-            "FAIL: ptrace credentials were not applied/restored narrowly\n");
+            "FAIL: ptrace credentials were not applied/restored narrowly "
+            "(writes=%d)\n",
+            g_credential_write_calls);
     ++failures;
   }
   if (g_uid != 501 || g_ruid != 502 || g_svuid != 503 || g_rgid != 601 ||
       g_svgid != 602 || g_prison != (intptr_t)0x11113000 ||
-      g_authid != UINT64_C(0x3800000000000001)) {
+      g_authid != UINT64_C(0x3800000000000001) ||
+      g_rootdir_set != (intptr_t)0x11111000 ||
+      g_jaildir_set != (intptr_t)0x11112000) {
     fprintf(stderr, "FAIL: PS4 loader identity was not restored exactly\n");
     ++failures;
   }
@@ -262,10 +271,12 @@ int main(void) {
     ++failures;
     (void)memdbg_privilege_end_ptrace(&ptrace_backup);
   }
-  if (g_credential_write_calls != 16 || g_uid != 501 || g_ruid != 502 ||
+  if (g_credential_write_calls != 20 || g_uid != 501 || g_ruid != 502 ||
       g_svuid != 503 || g_rgid != 601 || g_svgid != 602 ||
       g_prison != (intptr_t)0x11113000 ||
       g_authid != UINT64_C(0x3800000000000001) ||
+      g_rootdir_set != (intptr_t)0x11111000 ||
+      g_jaildir_set != (intptr_t)0x11112000 ||
       memcmp(g_caps, full_caps, sizeof(g_caps)) != 0) {
     fprintf(stderr, "FAIL: partial ptrace elevation was not rolled back\n");
     ++failures;
