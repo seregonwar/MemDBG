@@ -233,10 +233,10 @@ test-zero-copy: src/util/lz4.c tests/test_zero_copy.c tests/bench_utils.h
 	@echo "--- Running Zero-Copy Benchmarks ---"
 	$(BUILD_DIR)/test_zero_copy
 
-test-thread-pool: tests/test_thread_pool.c
+test-thread-pool: tests/test_thread_pool.c $(GENERATED_VERSION_HEADER)
 	@mkdir -p $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) tests/test_thread_pool.c $(HOST_LDFLAGS) $(HOST_LDLIBS) -o $(BUILD_DIR)/test_thread_pool
-	@echo "--- Running Dynamic Thread Pool test ---"
+	@echo "--- Running thread pool implementation test ---"
 	$(BUILD_DIR)/test_thread_pool
 
 test-max-connections-e2e: host tests/test_max_connections_e2e.c
