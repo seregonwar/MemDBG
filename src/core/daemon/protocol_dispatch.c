@@ -62,8 +62,12 @@ static uint16_t memdbg_platform_id(void) {
   out->udp_log_port     = cfg->enable_udp_log ? cfg->udp_log_port : 0U;
   out->feature_level    = MEMDBG_PROTOCOL_FEATURE_LEVEL;
   size_t version_len = sizeof(MEMDBG_VERSION_STRING) - 1U;
-  if (version_len >= sizeof(out->version)) version_len = sizeof(out->version) - 1U;
-  memcpy(out->version, MEMDBG_VERSION_STRING, version_len);
+  size_t short_len = version_len;
+  if (short_len >= sizeof(out->version)) short_len = sizeof(out->version) - 1U;
+  memcpy(out->version, MEMDBG_VERSION_STRING, short_len);
+  size_t full_len = version_len;
+  if (full_len >= sizeof(out->version_full)) full_len = sizeof(out->version_full) - 1U;
+  memcpy(out->version_full, MEMDBG_VERSION_STRING, full_len);
   (void)snprintf(out->name, sizeof(out->name), "MemDBG");
 
   /* Generate a random instance ID once at startup so the frontend can detect

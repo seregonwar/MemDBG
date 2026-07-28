@@ -252,8 +252,14 @@ export class MdbgClient {
       extendedCaps: [],
     };
     r.skip(2); // reserved
-    hello.daemonInstanceId = r.u64();
-    hello.daemonStartMonotonicNs = r.u64();
+    if (r.remaining >= 16) {
+      hello.daemonInstanceId = r.u64();
+      hello.daemonStartMonotonicNs = r.u64();
+    }
+    if (r.remaining >= 48) {
+      const full = r.cstring(48);
+      if (full.length > 0) hello.version = full;
+    }
     if (hello.protocolVersion !== MDBG_PROTOCOL_VERSION) {
       this.emit("protocol_mismatch", hello);
     }

@@ -124,7 +124,7 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
       break;
     }
 
-    if (static_cast<size_t>(n) < sizeof(resp) ||
+    if (static_cast<size_t>(n) < MEMDBG_DISCOVERY_V1_SIZE ||
         resp.magic != MEMDBG_PACKET_MAGIC ||
         resp.protocol_version != MEMDBG_PROTOCOL_VERSION) {
       continue;
@@ -146,6 +146,12 @@ bool DiscoveryClient::discover(uint16_t discovery_port, double timeout_seconds,
     console.capabilities = resp.capabilities;
     console.platform_id = resp.platform_id;
     console.version.assign(resp.version, strnlen(resp.version, sizeof(resp.version)));
+    if (static_cast<size_t>(n) >= MEMDBG_DISCOVERY_V2_SIZE) {
+      const size_t full_len = strnlen(resp.version_full, sizeof(resp.version_full));
+      if (full_len > 0U) {
+        console.version.assign(resp.version_full, full_len);
+      }
+    }
     console.name.assign(resp.name, strnlen(resp.name, sizeof(resp.name)));
     out.push_back(std::move(console));
   }

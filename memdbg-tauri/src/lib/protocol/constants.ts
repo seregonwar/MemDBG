@@ -1,7 +1,7 @@
 /**
  * MemDBG (MDBG) wire protocol constants.
  *
- * Source of truth: docs/protocol.md — wire version 1, feature level 2.
+ * Source of truth: docs/protocol.md — wire version 1, feature level 3.
  * All scalar fields are little-endian; every struct is packed.
  */
 
@@ -9,14 +9,16 @@
 export const MDBG_MAGIC = 0x4742444d;
 export const MDBG_HELLO_MAGIC = 0x31534553; // "SES1" LE
 export const MDBG_PROTOCOL_VERSION = 1;
-export const MDBG_FEATURE_LEVEL = 2;
+export const MDBG_FEATURE_LEVEL = 3;
 export const MDBG_HELLO_IDENTITY_VERSION = 1;
 
 /** Header sizes (packed). Per memdbg_protocol.h static_asserts. */
 export const REQUEST_HEADER_SIZE = 16;
 export const RESPONSE_HEADER_SIZE = 20;
 export const HELLO_REQUEST_SIZE = 16;   // magic(4)+version(2)+role(2)+session_id(8)
-export const HELLO_RESPONSE_SIZE = 64;  // protocol_version(2)+platform_id(2)+capabilities(4)+debug_port(2)+udp_log_port(2)+version[16]+name[16]+feature_level(2)+reserved(2)+daemon_instance_id(8)+daemon_start_monotonic_ns(8)
+export const HELLO_RESPONSE_SIZE = 112; // V3: V2(64) + version_full[48]
+export const HELLO_RESPONSE_V2_SIZE = 64;
+export const HELLO_RESPONSE_V3_SIZE = 112;
 
 /** Framed payload cap (default). */
 export const MDBG_MAX_PACKET = 1 << 20; // 1 MiB

@@ -28,6 +28,7 @@ import {
   Cap,
   MDBG_MAGIC,
   MDBG_PROTOCOL_VERSION,
+  MDBG_FEATURE_LEVEL,
   REQUEST_HEADER_SIZE,
   HELLO_REQUEST_SIZE,
   MDBG_HELLO_MAGIC,
@@ -57,11 +58,11 @@ vi.mock("../client", async (importOriginal) => {
   };
 });
 
-// Helper to build a HELLO response body (64 bytes)
+// Helper to build a HELLO response body (V2=64 or V3=112 bytes)
 function helloResponseBody(overrides: Partial<{
   protoVer: number; platId: number; caps: number;
   debugPort: number; udpPort: number; version: string; name: string;
-  featureLevel: number; instanceId: bigint; startNs: bigint;
+  versionFull: string; featureLevel: number; instanceId: bigint; startNs: bigint;
 }> = {}): Uint8Array {
   const w = new BodyWriter()
     .u16(overrides.protoVer ?? MDBG_PROTOCOL_VERSION)
@@ -74,10 +75,17 @@ function helloResponseBody(overrides: Partial<{
   const verPadded = new Uint8Array(16); verPadded.set(ver, 0);
   const namePadded = new Uint8Array(16); namePadded.set(name, 0);
   w.bytes(verPadded).bytes(namePadded);
-  w.u16(overrides.featureLevel ?? 2);
+  w.u16(overrides.featureLevel ?? MDBG_FEATURE_LEVEL);
   w.u16(0); // reserved
   w.u64(overrides.instanceId ?? 0xDEADBEEFn);
   w.u64(overrides.startNs ?? 1000000n);
+  if (overrides.versionFull !== undefined || overrides.featureLevel === undefined ||
+      (overrides.featureLevel ?? MDBG_FEATURE_LEVEL) >= 3) {
+    const fullSrc = overrides.versionFull ?? overrides.version ?? "1.0.0";
+    const full = new TextEncoder().encode(fullSrc.padEnd(47, "\0")).subarray(0, 47);
+    const fullPadded = new Uint8Array(48); fullPadded.set(full, 0);
+    w.bytes(fullPadded);
+  }
   return w.finish();
 }
 
@@ -141,6 +149,27 @@ describe("MDBG Protocol E2E", () => {
       expect(hello.version).toContain("1.0.0");
       expect(hello.name).toContain("memdbg-test");
       expect(client.isOnline()).toBe(true);
+    });
+
+    it("prefers version_full from HELLO V3 over truncated version", async () => {
+      transport.queueResponse({
+        requestId: 1,
+        status: Status.OK,
+        body: helloResponseBody({
+          version: "0.2.0-nightly.8",
+          versionFull: "0.2.0-nightly.82.g6794bf3",
+          featureLevel: 3,
+        }),
+      });
+      transport.queueResponse({
+        requestId: 2,
+        status: Status.ERR_UNSUPPORTED,
+        body: new Uint8Array(0),
+      });
+
+      const hello = await client.connect({ host: "127.0.0.1", port: 9020 });
+      expect(hello.version).toBe("0.2.0-nightly.82.g6794bf3");
+      expect(hello.featureLevel).toBe(3);
     });
 
     it("sends correctly formed HELLO request", async () => {
