@@ -256,10 +256,15 @@ bool Client::hello(HelloInfo &out) {
   out.udp_log_port = wire.udp_log_port;
   out.version = fixed_string(wire.version, sizeof(wire.version));
   out.name = fixed_string(wire.name, sizeof(wire.name));
-  /* Read extended fields if present (protocol v2). */
+  /* Read extended fields if present (protocol v2 / feature level 3). */
   if (response.size() >= MEMDBG_HELLO_V2_SIZE) {
     out.daemon_instance_id = wire.daemon_instance_id;
     out.daemon_start_monotonic_ns = wire.daemon_start_monotonic_ns;
+  }
+  if (response.size() >= MEMDBG_HELLO_V3_SIZE) {
+    const std::string full =
+        fixed_string(wire.version_full, sizeof(wire.version_full));
+    if (!full.empty()) out.version = full;
   }
   return true;
 }

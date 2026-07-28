@@ -70,6 +70,17 @@ jobs:
           if [ "${{ github.event_name == 'schedule' || inputs.nightly == true }}" = "true" ]; then
             args+=(--nightly)
           fi
+          # Skip scheduled nightlies when HEAD already has a nightly tag (#35).
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            args+=(--existing-nightly-tag "${tag}")
+          done < <(
+            {
+              git tag --points-at "${GITHUB_SHA}" 2>/dev/null || true
+              git ls-remote --tags origin 'refs/tags/nightly-*' 2>/dev/null |
+                awk -v sha="${GITHUB_SHA}" '$1 == sha { sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2 }'
+            } | awk '/^nightly-[0-9]{8}-g/ { print }' | sort -u
+          )
           python3 tools/resolve_release_identity.py "${args[@]}" |
             tee -a "$GITHUB_OUTPUT"
 

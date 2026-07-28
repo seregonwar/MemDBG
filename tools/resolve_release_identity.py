@@ -16,6 +16,7 @@ from resolve_build_version import resolve_version
 ROME = ZoneInfo("Europe/Rome")
 NIGHTLY_SCHEDULES = frozenset({"0 20 * * *", "0 21 * * *"})
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+NIGHTLY_TAG_RE = re.compile(r"^nightly-\d{8}-g([0-9a-f]+)$")
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,21 @@ def release_sha(sha: str, abbreviated_sha: str) -> str:
     return abbreviated
 
 
+def nightly_tag_matches_commit(tag: str, sha: str) -> bool:
+    """Return True when tag is nightly-YYYYMMDD-g… and its g-suffix prefixes sha."""
+    match = NIGHTLY_TAG_RE.fullmatch(tag.strip().lower())
+    if match is None:
+        return False
+    full = sha.lower()
+    short_sha(full)
+    tag_sha = match.group(1)
+    return bool(tag_sha) and full.startswith(tag_sha)
+
+
+def commit_has_nightly_tag(existing_tags: list[str], sha: str) -> bool:
+    return any(nightly_tag_matches_commit(tag, sha) for tag in existing_tags)
+
+
 def scheduled_rome_datetime(now: datetime, schedule: str) -> datetime:
     if schedule not in NIGHTLY_SCHEDULES:
         raise ValueError(f"unsupported nightly schedule: {schedule!r}")
@@ -87,6 +103,7 @@ def resolve_identity(
     abbreviated_sha: str,
     now: str,
     schedule: str,
+    existing_nightly_tags: list[str] | None = None,
 ) -> ReleaseIdentity:
     parsed_now = parse_utc_datetime(now)
     version = resolve_version(
@@ -113,6 +130,13 @@ def resolve_identity(
             should_run = True
 
         abbreviated_sha = release_sha(sha, abbreviated_sha)
+        if (
+            should_run
+            and event == "schedule"
+            and commit_has_nightly_tag(existing_nightly_tags or [], sha)
+        ):
+            should_run = False
+
         date_compact = local.strftime("%Y%m%d")
         date_display = local.strftime("%Y-%m-%d")
         return ReleaseIdentity(
@@ -177,6 +201,7 @@ def identity_command(args: argparse.Namespace) -> int:
         abbreviated_sha=args.short_sha,
         now=args.now,
         schedule=args.schedule,
+        existing_nightly_tags=args.existing_nightly_tag,
     )
     print(f"should_run={str(identity.should_run).lower()}")
     print(f"nightly={str(identity.nightly).lower()}")
@@ -214,6 +239,12 @@ def main() -> int:
     identity.add_argument("--short-sha", default="")
     identity.add_argument("--now", required=True)
     identity.add_argument("--schedule", default="")
+    identity.add_argument(
+        "--existing-nightly-tag",
+        action="append",
+        default=[],
+        help="Nightly tag already published for this commit (repeatable)",
+    )
     identity.set_defaults(handler=identity_command)
 
     publication = subparsers.add_parser("publication")

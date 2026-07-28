@@ -50,14 +50,14 @@ static const uint8_t kGoldenPacketHeader[16] = {
     0x10, 0x00, 0x00, 0x00  /* length = 16 LE */
 };
 
-/* Known-good response_header for HELLO_OK with request_id=1, status=0, len=64 */
+/* Known-good response_header for HELLO_OK with request_id=1, status=0, len=112 */
 static const uint8_t kGoldenResponseHeader[20] = {
     0x4d, 0x44, 0x42, 0x47, /* magic */
     0x01, 0x00,             /* version */
     0x01, 0x00,             /* command = HELLO */
     0x01, 0x00, 0x00, 0x00, /* request_id */
     0x00, 0x00, 0x00, 0x00, /* status = MEMDBG_OK */
-    0x40, 0x00, 0x00, 0x00  /* length = 64 */
+    0x70, 0x00, 0x00, 0x00  /* length = 112 */
 };
 
 static void test_golden_packet_header(void) {
@@ -399,9 +399,10 @@ static void test_wire_sizes(void) {
 
   /* Session */
   TEST("sizeof hello_request == 16", sizeof(memdbg_hello_request_t) == 16U);
-  TEST("sizeof hello_response == 64", sizeof(memdbg_hello_response_t) == 64U);
+  TEST("sizeof hello_response == 112", sizeof(memdbg_hello_response_t) == 112U);
   TEST("HELLO_V1_SIZE == 44", MEMDBG_HELLO_V1_SIZE == 44U);
   TEST("HELLO_V2_SIZE == 64", MEMDBG_HELLO_V2_SIZE == 64U);
+  TEST("HELLO_V3_SIZE == 112", MEMDBG_HELLO_V3_SIZE == 112U);
 
   /* Process */
   TEST("sizeof process_entry == 56", sizeof(memdbg_process_entry_t) == 56U);

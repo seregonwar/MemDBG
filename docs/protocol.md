@@ -1,6 +1,6 @@
 # MemDBG Internal Protocol Specification
 
-Status: stable wire version `MEMDBG_PROTOCOL_VERSION` 1, feature level 2
+Status: stable wire version `MEMDBG_PROTOCOL_VERSION` 1, feature level 3
 Canonical header: [`include/memdbg/core/memdbg_protocol.h`](../include/memdbg/core/memdbg_protocol.h)  
 Canonical daemon dispatch: [`src/core/daemon/dispatch.c`](../src/core/daemon/dispatch.c)  
 Canonical frontend client: [`frontend/src/core/client/memdbg_client.cpp`](../frontend/src/core/client/memdbg_client.cpp)
@@ -15,11 +15,11 @@ and how the protocol should evolve without breaking existing clients.
 
 `MEMDBG_PROTOCOL_VERSION` identifies the packet framing and remains `1` for
 backward compatibility. `MEMDBG_PROTOCOL_FEATURE_LEVEL` identifies the
-append-only command/HELLO feature set and is currently `2`. User interfaces
-must therefore present the negotiated pair as **feature level v2 (wire v1)**,
-not simply "Protocol v1". A v2 client accepts the shorter legacy HELLO body and
-defaults its missing feature level to `1`; a v2 payload appends the negotiated
-feature level without changing any v1 field offsets.
+append-only command/HELLO feature set and is currently `3`. User interfaces
+must therefore present the negotiated pair as **feature level v3 (wire v1)**,
+not simply "Protocol v1". A v3 client accepts shorter legacy HELLO bodies
+(V1=44, V2=64) and defaults a missing feature level to `1`; a v3 payload
+appends `version_full` without changing any earlier field offsets.
 
 ## Goals
 
@@ -264,8 +264,13 @@ The response body is `memdbg_hello_response_t`:
 | `capabilities` | 32-bit capability bitmap. |
 | `debug_port` | TCP control port. |
 | `udp_log_port` | UDP log port, or `0` when disabled. |
-| `version[16]` | Payload version string. |
+| `version[16]` | Truncated payload version string (legacy field, max 15 chars). |
 | `name[16]` | Payload name, currently `MemDBG`. |
+| `feature_level` | Negotiated feature level (`3` for current payloads). |
+| `reserved` | Reserved; must be zero. |
+| `daemon_instance_id` | Random ID generated at payload startup (HELLO V2+). |
+| `daemon_start_monotonic_ns` | Monotonic clock at payload startup (HELLO V2+). |
+| `version_full[48]` | Full payload version string (HELLO V3 / feature level 3). Prefer this over `version[16]` when present. |
 
 Clients must gate optional UI and commands from `capabilities`, not from
 `platform_id`. Platform id is descriptive; capability bits are authoritative.
@@ -867,6 +872,8 @@ UDP discovery uses two packed structs that reuse `MEMDBG_PACKET_MAGIC`.
 The frontend sends `memdbg_discovery_ping_t` to the broadcast address on
 `discovery_port`. Payloads reply directly to the sender with
 `memdbg_discovery_response_t`, which mirrors the important fields from `HELLO`.
+Feature-level 3 payloads append `version_full[48]` after the legacy 48-byte
+layout; clients must accept both sizes and prefer `version_full` when present.
 
 Discovery is advisory. Clients must still open a TCP connection and run `HELLO`
 before enabling features.

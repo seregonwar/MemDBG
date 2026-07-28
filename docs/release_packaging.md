@@ -34,7 +34,9 @@ workflow run. Manual nightlies use the same identity format; official tag and
 manual releases retain their `v<version>` identity.
 
 The first publication creates the tag without force and uploads assets without
-`--clobber`. A rerun for the same date and commit verifies the existing title,
+`--clobber`. A scheduled nightly whose HEAD commit already has any
+`nightly-YYYYMMDD-gSHA` tag is skipped so unchanged main does not produce a new
+dated release each day. A rerun for the same date and commit verifies the existing title,
 tag target, asset names, and the checksums of the already-published assets, then
 exits without mutation. It does not compare freshly rebuilt archives, whose
 container metadata may differ. A tag collision or inconsistent release state

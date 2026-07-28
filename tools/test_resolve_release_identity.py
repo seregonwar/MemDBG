@@ -158,6 +158,32 @@ class ResolveReleaseIdentityTests(unittest.TestCase):
         self.assertTrue(identity.nightly)
         self.assertTrue(identity.version.startswith("0.2.0-nightly."))
 
+    def test_scheduled_nightly_skips_when_commit_already_published(self) -> None:
+        identity = self.resolve(
+            event="schedule",
+            now="2026-07-23T20:05:00Z",
+            schedule="0 20 * * *",
+            existing_nightly_tags=["nightly-20260722-gd791061"],
+        )
+        self.assertFalse(identity.should_run)
+        self.assertEqual(identity.tag, "nightly-20260723-gd791061")
+
+    def test_manual_nightly_still_runs_when_commit_already_published(self) -> None:
+        identity = self.resolve(
+            existing_nightly_tags=["nightly-20260722-gd791061"],
+        )
+        self.assertTrue(identity.should_run)
+        self.assertEqual(identity.tag, "nightly-20260716-gd791061")
+
+    def test_scheduled_nightly_runs_without_existing_commit_tag(self) -> None:
+        identity = self.resolve(
+            event="schedule",
+            now="2026-07-23T20:05:00Z",
+            schedule="0 20 * * *",
+            existing_nightly_tags=["nightly-20260722-gabcdef0"],
+        )
+        self.assertTrue(identity.should_run)
+
     def test_first_publication_creates_tag_and_release(self) -> None:
         self.assertEqual(
             resolve_publication_action(

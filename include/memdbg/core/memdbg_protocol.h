@@ -32,9 +32,10 @@ extern "C" {
 #define MEMDBG_PACKET_MAGIC 0x4742444dU /* "MDBG", little-endian */
 /* The packet header stays at wire version 1 for compatibility.  Feature
  * level 2 identifies the extended command/capability suite introduced after
- * the original protocol (Maps V2, versioned scans, batch writes, auth, etc.). */
+ * the original protocol (Maps V2, versioned scans, batch writes, auth, etc.).
+ * Feature level 3 appends the full payload version string to HELLO/discovery. */
 #define MEMDBG_PROTOCOL_VERSION 1U
-#define MEMDBG_PROTOCOL_FEATURE_LEVEL 2U
+#define MEMDBG_PROTOCOL_FEATURE_LEVEL 3U
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_MAP_RESPONSE (8U * 1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
@@ -317,10 +318,14 @@ typedef struct MEMDBG_PACKED memdbg_hello_response {
                                            identical across rest-mode cycles iff the
                                            payload process survived */
   uint64_t daemon_start_monotonic_ns;   /* monotonic clock at payload startup */
+  /* ---- Added in feature level 3 (full nightly version strings, 2026-07) ---- */
+  char version_full[48];                /* full MEMDBG_VERSION_STRING; version[16]
+                                           remains truncated for legacy clients */
 } memdbg_hello_response_t;
 
 #define MEMDBG_HELLO_V1_SIZE offsetof(memdbg_hello_response_t, feature_level)
-#define MEMDBG_HELLO_V2_SIZE sizeof(memdbg_hello_response_t)
+#define MEMDBG_HELLO_V2_SIZE offsetof(memdbg_hello_response_t, version_full)
+#define MEMDBG_HELLO_V3_SIZE sizeof(memdbg_hello_response_t)
 
 typedef struct MEMDBG_PACKED memdbg_process_entry {
   int32_t pid;
@@ -918,7 +923,12 @@ typedef struct MEMDBG_PACKED memdbg_discovery_response {
   uint16_t udp_log_port;
   char version[16];
   char name[16];
+  /* ---- Added with HELLO V3 / feature level 3 ---- */
+  char version_full[48];
 } memdbg_discovery_response_t;
+
+#define MEMDBG_DISCOVERY_V1_SIZE offsetof(memdbg_discovery_response_t, version_full)
+#define MEMDBG_DISCOVERY_V2_SIZE sizeof(memdbg_discovery_response_t)
 
 /* ---- Tracer (syscall tracing, crash dump) ---- */
 
@@ -1264,9 +1274,14 @@ static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire siz
 
 /* Session / discovery */
 static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed");
-static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed");
+static_assert(sizeof(memdbg_hello_response_t) == 112U, "hello response wire size changed");
 static_assert(sizeof(memdbg_discovery_ping_t) == 8U, "discovery ping wire size changed");
-static_assert(sizeof(memdbg_discovery_response_t) == 48U, "discovery response wire size changed");
+static_assert(sizeof(memdbg_discovery_response_t) == 96U, "discovery response wire size changed");
+static_assert(MEMDBG_HELLO_V1_SIZE == 44U, "HELLO V1 size changed");
+static_assert(MEMDBG_HELLO_V2_SIZE == 64U, "HELLO V2 size changed");
+static_assert(MEMDBG_HELLO_V3_SIZE == 112U, "HELLO V3 size changed");
+static_assert(MEMDBG_DISCOVERY_V1_SIZE == 48U, "discovery V1 size changed");
+static_assert(MEMDBG_DISCOVERY_V2_SIZE == 96U, "discovery V2 size changed");
 
 /* Process */
 static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed");
@@ -1413,9 +1428,9 @@ _Static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire si
 
 /* Session / discovery */
 _Static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed");
-_Static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed");
+_Static_assert(sizeof(memdbg_hello_response_t) == 112U, "hello response wire size changed");
 _Static_assert(sizeof(memdbg_discovery_ping_t) == 8U, "discovery ping wire size changed");
-_Static_assert(sizeof(memdbg_discovery_response_t) == 48U, "discovery response wire size changed");
+_Static_assert(sizeof(memdbg_discovery_response_t) == 96U, "discovery response wire size changed");
 
 /* Process */
 _Static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed");
@@ -1563,7 +1578,7 @@ _Static_assert(MEMDBG_SCAN_JOB_FAILED == 4U, "scan job failed state changed");
 _Static_assert(sizeof(memdbg_packet_header_t) == 16U, "packet header wire size changed (C)");
 _Static_assert(sizeof(memdbg_response_header_t) == 20U, "response header wire size changed (C)");
 _Static_assert(sizeof(memdbg_hello_request_t) == 16U, "hello request wire size changed (C)");
-_Static_assert(sizeof(memdbg_hello_response_t) == 64U, "hello response wire size changed (C)");
+_Static_assert(sizeof(memdbg_hello_response_t) == 112U, "hello response wire size changed (C)");
 _Static_assert(sizeof(memdbg_process_entry_t) == 56U, "process entry wire size changed (C)");
 _Static_assert(sizeof(memdbg_process_info_response_t) == 260U, "process info response wire size changed (C)");
 _Static_assert(sizeof(memdbg_map_entry_t) == 88U, "map entry wire size changed (C)");
@@ -1578,6 +1593,9 @@ _Static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config reques
 _Static_assert(sizeof(memdbg_extended_caps_response_t) == 4U, "extended caps response prefix wire size changed");
 _Static_assert(MEMDBG_HELLO_V1_SIZE == 44U, "HELLO V1 size changed");
 _Static_assert(MEMDBG_HELLO_V2_SIZE == 64U, "HELLO V2 size changed");
+_Static_assert(MEMDBG_HELLO_V3_SIZE == 112U, "HELLO V3 size changed");
+_Static_assert(MEMDBG_DISCOVERY_V1_SIZE == 48U, "discovery V1 size changed");
+_Static_assert(MEMDBG_DISCOVERY_V2_SIZE == 96U, "discovery V2 size changed");
 #endif
 
 #if defined(_MSC_VER)

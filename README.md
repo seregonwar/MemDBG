@@ -376,7 +376,7 @@ contract.
 MemDBG uses a packed little-endian binary protocol identified by
 `MEMDBG_PACKET_MAGIC = "MDBG"`. The stable packet framing remains **wire
 version 1**, while the current append-only command and HELLO contract is
-**feature level 2**. Payloads advertise the negotiated feature level and
+**feature level 3**. Payloads advertise the negotiated feature level and
 capabilities during `HELLO`, and clients gate UI and requests accordingly.
 
 The normative technical specification is
@@ -514,7 +514,9 @@ At 22:00 Europe/Rome each day, the workflow creates an immutable release tagged
 `nightly-YYYYMMDD-gSHA`, where the date is local to Rome and `SHA` is the
 lowercase seven-character commit ID (automatically lengthened by Git only to
 avoid an abbreviation collision). Its title is
-`nightly [YYYY-MM-DD-gSHA]`. Manual nightlies use the same identity rules, and a
+`nightly [YYYY-MM-DD-gSHA]`. If HEAD already has a nightly tag for that commit,
+the scheduled run skips publishing so idle main does not mint a new dated
+release every day. Manual nightlies use the same identity rules, and a
 rerun for an existing date and commit only verifies identical metadata and
 assets; it never overwrites the release.
 
