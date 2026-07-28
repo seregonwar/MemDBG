@@ -21,6 +21,9 @@ The payload is unchanged. The plugin reuses the same frontend `Client` as
 
 ## Build
 
+Official / nightly releases publish `MemDBG-x64dbg-plugin.zip` with a
+prebuilt `MemDBG.dp64` (job `plugin-x64dbg`).
+
 CMake automatically downloads the official
 [`x64dbg-pluginsdk-cmake.zip`](https://github.com/x64dbg/x64dbg/releases/download/2026.05.27/x64dbg-pluginsdk-cmake.zip)
 (release **2026.05.27**: headers + `x64dbg.lib` / `x64bridge.lib`). Requires **Windows** and an MSVC x64 toolchain.

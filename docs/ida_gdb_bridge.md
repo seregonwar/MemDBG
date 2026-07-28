@@ -18,6 +18,9 @@ usato da `memdbg_probe` e dall’UI desktop.
 
 ## Build
 
+I binary di release includono già `memdbg_gdb_bridge` nei pacchetti
+`MemDBG-frontend-{linux,macos,windows}` (su GitHub Releases / nightly).
+
 I target ufficiali sono nel CMake del frontend (`memdbg_gdb_bridge`,
 `memdbg_gdb_bridge_test`). Per una build host più veloce senza FetchContent
 ImGui/GLFW:

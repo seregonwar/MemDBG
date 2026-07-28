@@ -502,9 +502,10 @@ candidate.
 |---|---|
 | `host-linux` | `MemDBG-host-linux` |
 | `host-macos` | `MemDBG-host-macos` |
-| `frontend-linux` | `MemDBG-frontend-linux` |
-| `frontend-macos` | `MemDBG-frontend-macos.app.zip` and DMG |
-| `frontend-windows` | `MemDBG-frontend-windows.zip` |
+| `frontend-linux` | `MemDBG-frontend-linux` (includes `memdbg_gdb_bridge`) |
+| `frontend-macos` | `MemDBG-frontend-macos.app.zip`, zip with GDB bridge, and DMG |
+| `frontend-windows` | `MemDBG-frontend-windows.zip` (includes `memdbg_gdb_bridge.exe`) |
+| `plugin-x64dbg` | `MemDBG-x64dbg-plugin.zip` (`MemDBG.dp64`) |
 | `payload-ps4` | `MemDBG-ps4.elf`, `libmemdbg-ps4.a` |
 | `payload-ps5` | `MemDBG-ps5.elf`, `libmemdbg-ps5.a` |
 | `mobile-ios` | `MemDBG-mobile-ios.ipa` |

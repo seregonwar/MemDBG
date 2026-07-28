@@ -21,6 +21,9 @@ usato da `memdbg_gdb_bridge` e dall’UI desktop.
 
 ## Build
 
+Le release notturne/ufficiali pubblicano `MemDBG-x64dbg-plugin.zip` con
+`MemDBG.dp64` già compilato (job `plugin-x64dbg`).
+
 Il CMake scarica automaticamente l’SDK ufficiale
 [`x64dbg-pluginsdk-cmake.zip`](https://github.com/x64dbg/x64dbg/releases/download/2026.05.27/x64dbg-pluginsdk-cmake.zip)
 (release **2026.05.27**: header + `x64dbg.lib` / `x64bridge.lib`). Richiede **Windows** e un toolchain MSVC x64.
