@@ -18,6 +18,9 @@ The payload is unchanged. The bridge reuses the same frontend `Client` used by
 
 ## Build
 
+Release binaries already include `memdbg_gdb_bridge` inside the
+`MemDBG-frontend-{linux,macos,windows}` packages on GitHub Releases / nightlies.
+
 Official targets live in the frontend CMake project (`memdbg_gdb_bridge`,
 `memdbg_gdb_bridge_test`). For a faster host-only build that skips ImGui/GLFW
 FetchContent:

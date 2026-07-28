@@ -120,6 +120,11 @@ jobs:
             kind: frontend
             platform: windows
             artifact: MemDBG-frontend-windows
+          - name: plugin-x64dbg
+            os: windows-latest
+            kind: x64dbg
+            platform: windows
+            artifact: MemDBG-x64dbg-plugin
           - name: payload-ps4
             os: ubuntu-latest
             kind: ps4
@@ -195,7 +200,7 @@ jobs:
           fi
 
       - name: Setup ccache
-        if: matrix.kind == 'host' || matrix.kind == 'frontend'
+        if: matrix.kind == 'host' || matrix.kind == 'frontend' || matrix.kind == 'x64dbg'
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-${{ matrix.kind }}-ccache-${{ github.sha }}
@@ -203,12 +208,16 @@ jobs:
           max-size: 400M
 
       - name: Cache FetchContent dependencies
-        if: matrix.kind == 'frontend'
+        if: matrix.kind == 'frontend' || matrix.kind == 'x64dbg'
         uses: actions/cache@v4
         with:
-          path: build/frontend/_deps
-          key: ${{ runner.os }}-deps-${{ hashFiles('frontend/CMakeLists.txt') }}
-          restore-keys: ${{ runner.os }}-deps-
+          path: |
+            build/frontend/_deps
+            build/x64dbg_plugin/_deps
+          key: ${{ runner.os }}-deps-${{ matrix.kind }}-${{ hashFiles('frontend/CMakeLists.txt', 'tools/x64dbg_plugin/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-${{ matrix.kind }}-
+            ${{ runner.os }}-deps-
 
       - name: Validate vendored PS4 SDK
         if: matrix.kind == 'ps4'
@@ -255,6 +264,13 @@ jobs:
                   -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
                 cmake --build build/frontend --config Release
               fi
+              ;;
+            x64dbg)
+              rm -rf build/x64dbg_plugin
+              cmake -S tools/x64dbg_plugin -B build/x64dbg_plugin -A x64 \
+                -DMEMDBG_RELEASE_VERSION="${MEMDBG_RELEASE_VERSION}"
+              cmake --build build/x64dbg_plugin --config Release \
+                --target memdbg_x64dbg_plugin
               ;;
             ps4)
               make clean payload-ps4 payload-ps4-lib \
@@ -305,10 +321,18 @@ jobs:
                   find build/frontend -maxdepth 6 -print | sort
                   exit 1
                 fi
+                bridge_bin=$(find build/frontend -type f -name 'memdbg_gdb_bridge' | head -n 1)
+                if [ -z "$bridge_bin" ]; then
+                  echo "memdbg_gdb_bridge not found (IDA GDB bridge)" >&2
+                  find build/frontend -maxdepth 4 -type f | sort
+                  exit 1
+                fi
 
                 mkdir -p "dist/$pkg"
                 cp -R "$app_bundle" "dist/$pkg/MemDBG.app"
                 chmod +x "dist/$pkg/MemDBG.app/Contents/MacOS/"*
+                cp "$bridge_bin" "dist/$pkg/memdbg_gdb_bridge"
+                chmod +x "dist/$pkg/memdbg_gdb_bridge"
                 cat > "dist/$pkg/MemDBG.app/Contents/Resources/BUILD_INFO.txt" <<EOF
           project=MemDBG
           version=${MEMDBG_RELEASE_VERSION}
@@ -317,7 +341,18 @@ jobs:
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
+                cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
+          component=frontend
+          platform=${{ matrix.platform }}
+          includes=MemDBG.app,memdbg_gdb_bridge
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
                 (cd "dist/$pkg" && ditto -c -k --sequesterRsrc --keepParent "MemDBG.app" "../$pkg.app.zip")
+                # Also ship a zip that includes the IDA GDB bridge alongside the app.
+                (cd dist && ditto -c -k --sequesterRsrc --keepParent "$pkg" "$pkg.zip")
                 ln -s /Applications "dist/$pkg/Applications"
                 hdiutil create \
                   -volname "MemDBG ${MEMDBG_RELEASE_VERSION}" \
@@ -331,14 +366,23 @@ jobs:
                 mkdir -p "dist/$pkg/assets"
                 frontend_bin=$(find build/frontend -type f \( -name 'memdbg_frontend' -o -name 'memdbg_frontend.exe' \) | head -n 1)
                 probe_bin=$(find build/frontend -type f \( -name 'memdbg_probe' -o -name 'memdbg_probe.exe' \) | head -n 1)
+                bridge_bin=$(find build/frontend -type f \( -name 'memdbg_gdb_bridge' -o -name 'memdbg_gdb_bridge.exe' \) | head -n 1)
                 if [ -z "$frontend_bin" ] || [ -z "$probe_bin" ]; then
                   echo "Frontend binaries not found" >&2
                   find build/frontend -maxdepth 4 -type f | sort
                   exit 1
                 fi
+                if [ -z "$bridge_bin" ]; then
+                  echo "memdbg_gdb_bridge not found (IDA GDB bridge)" >&2
+                  find build/frontend -maxdepth 4 -type f | sort
+                  exit 1
+                fi
                 cp "$frontend_bin" "dist/$pkg/"
                 cp "$probe_bin" "dist/$pkg/"
-                chmod +x "dist/$pkg/$(basename "$frontend_bin")" "dist/$pkg/$(basename "$probe_bin")"
+                cp "$bridge_bin" "dist/$pkg/"
+                chmod +x "dist/$pkg/$(basename "$frontend_bin")" \
+                  "dist/$pkg/$(basename "$probe_bin")" \
+                  "dist/$pkg/$(basename "$bridge_bin")"
                 cp assets/app-icon.png "dist/$pkg/assets/app-icon.png"
                 plugin_repo="$(dirname "$frontend_bin")/plugin-repository"
                 if [ -d "$plugin_repo" ]; then
@@ -372,6 +416,7 @@ jobs:
           version=${MEMDBG_RELEASE_VERSION}
           component=frontend
           platform=${{ matrix.platform }}
+          includes=memdbg_frontend,memdbg_probe,memdbg_gdb_bridge
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
@@ -382,6 +427,32 @@ jobs:
                 fi
                 rm -rf "dist/$pkg"
               fi
+              ;;
+            x64dbg)
+              pkg="MemDBG-x64dbg-plugin"
+              mkdir -p "dist/$pkg"
+              plugin_bin=$(find build/x64dbg_plugin -type f -name 'MemDBG.dp64' | head -n 1)
+              if [ -z "$plugin_bin" ]; then
+                echo "MemDBG.dp64 not found" >&2
+                find build/x64dbg_plugin -maxdepth 6 -type f | sort
+                exit 1
+              fi
+              cp "$plugin_bin" "dist/$pkg/MemDBG.dp64"
+              if [ -f docs/x64dbg_bridge.en.md ]; then
+                cp docs/x64dbg_bridge.en.md "dist/$pkg/README.md"
+              elif [ -f docs/x64dbg_bridge.md ]; then
+                cp docs/x64dbg_bridge.md "dist/$pkg/README.md"
+              fi
+              cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
+          component=x64dbg-plugin
+          platform=${{ matrix.platform }}
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
+              python3 -c "import shutil; shutil.make_archive('dist/$pkg', 'zip', 'dist', '$pkg')"
+              rm -rf "dist/$pkg"
               ;;
             ps4)
               cp build/ps4/MemDBG-ps4.elf dist/MemDBG-ps4.elf

@@ -5,17 +5,21 @@ MemDBG release artifacts are produced by `.github/workflows/release.yml`.
 | Target | Build job | Artifact |
 |---|---|---|
 | Linux host daemon | `host-linux` | `MemDBG-host-linux.tar.gz` |
-| Linux desktop frontend | `frontend-linux` | `MemDBG-frontend-linux.tar.gz` |
+| Linux desktop frontend | `frontend-linux` | `MemDBG-frontend-linux.tar.gz` (includes `memdbg_gdb_bridge` for IDA) |
 | macOS host daemon | `host-macos` | `MemDBG-host-macos.tar.gz` |
-| macOS desktop frontend | `frontend-macos` | `MemDBG-frontend-macos.app.zip`, `MemDBG-frontend-macos.dmg` |
-| Windows desktop frontend | `frontend-windows` | `MemDBG-frontend-windows.zip` containing `.exe` files |
+| macOS desktop frontend | `frontend-macos` | `MemDBG-frontend-macos.app.zip`, `MemDBG-frontend-macos.zip` (app + GDB bridge), `MemDBG-frontend-macos.dmg` |
+| Windows desktop frontend | `frontend-windows` | `MemDBG-frontend-windows.zip` containing `.exe` files including `memdbg_gdb_bridge.exe` |
+| x64dbg plugin | `plugin-x64dbg` | `MemDBG-x64dbg-plugin.zip` containing `MemDBG.dp64` |
 | PS4 payload | `payload-ps4` | `MemDBG-ps4.elf`, `libmemdbg-ps4.a` |
 | PS5 payload | `payload-ps5` | `MemDBG-ps5.elf`, `libmemdbg-ps5.a` |
 | iOS / iPadOS mobile | `mobile-ios` | `MemDBG-mobile-ios.ipa` (unsigned, CMake + Xcode archive) |
 | Android mobile | `mobile-android` | `MemDBG-mobile-android.apk` (debug-signed release, Gradle + NDK CMake) |
 
 The desktop frontend bundles `assets/` and `plugin-repository/` so a downloaded
-app has icons and a local plugin catalog even without a network refresh.
+app has icons and a local plugin catalog even without a network refresh. The
+IDA Remote GDB helper (`memdbg_gdb_bridge`) ships inside each desktop frontend
+package. The x64dbg plugin is a separate Windows-only zip for the x64dbg
+`plugins` folder.
 
 ## Nightly candidates
 
