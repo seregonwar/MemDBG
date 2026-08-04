@@ -1,6 +1,6 @@
 # PS4 / GoldHEN Launch Notes
 
-*Available in: [English](ps4_goldhen_launch.en.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
+*Available in: [English](ps4_goldhen_launch.md) · [Deutsch](../i18n/ps4_goldhen_launch.de.md) · [Español](../i18n/ps4_goldhen_launch.es.md) · [Français](../i18n/ps4_goldhen_launch.fr.md) · [Italiano](../i18n/ps4_goldhen_launch.it.md) · [日本語](../i18n/ps4_goldhen_launch.ja.md) · [한국어](../i18n/ps4_goldhen_launch.ko.md) · [Português](../i18n/ps4_goldhen_launch.pt.md) · [Русский](../i18n/ps4_goldhen_launch.ru.md)*
 
 When you launch MemDBG from the GoldHEN menu, the payload may be injected into
 a loader process that already ran MemDBG during an earlier attempt.  If the

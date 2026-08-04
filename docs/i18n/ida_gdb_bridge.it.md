@@ -1,5 +1,7 @@
 # Bridge GDB per IDA
 
+*Disponibile in: [English](../bridges/ida_gdb_bridge.md) · [Italiano](ida_gdb_bridge.it.md)*
+
 Proxy host che espone un endpoint **GDB Remote Serial Protocol (RSP)** per il
 Remote GDB Debugger di IDA Pro, traducendo i pacchetti sul protocollo nativo
 MemDBG `MDBG` (TCP `9020`).
@@ -108,6 +110,6 @@ I pacchetti non supportati ricevono una risposta RSP vuota (`$#00`).
 
 | Path | Ruolo |
 |---|---|
-| [`tools/gdb_bridge/`](../tools/gdb_bridge/) | Sorgenti del bridge |
-| [`tools/gdb_bridge/gdb_regs.cpp`](../tools/gdb_bridge/gdb_regs.cpp) | Mapping FreeBSD/`memdbg_debug_regs_t` ↔ ordine registri GDB |
-| [`tools/gdb_bridge/rsp_handler.cpp`](../tools/gdb_bridge/rsp_handler.cpp) | RSP → API debug/memoria del `Client` |
+| [`tools/gdb_bridge/`](../../tools/gdb_bridge/) | Sorgenti del bridge |
+| [`tools/gdb_bridge/gdb_regs.cpp`](../../tools/gdb_bridge/gdb_regs.cpp) | Mapping FreeBSD/`memdbg_debug_regs_t` ↔ ordine registri GDB |
+| [`tools/gdb_bridge/rsp_handler.cpp`](../../tools/gdb_bridge/rsp_handler.cpp) | RSP → API debug/memoria del `Client` |

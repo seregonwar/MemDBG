@@ -1,6 +1,6 @@
 # Примечания по запуску PS4 / GoldHEN
 
-*Доступно на: [English](ps4_goldhen_launch.en.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
+*Доступно на: [English](../platform/ps4_goldhen_launch.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
 
 Когда вы запускаете MemDBG из меню GoldHEN, полезная нагрузка может быть внедрена в процесс loader, который уже запускал MemDBG во время предыдущей попытки. Если предыдущая полезная нагрузка аварийно завершилась или была убита без очистки, в корне данных может остаться файл `memdbg.pid`. Поскольку ядро PS4 быстро повторно использует PID, этот устаревший файл может случайно совпасть с новым процессом loader и заставить MemDBG думать, что он уже запущен.
 

@@ -165,5 +165,5 @@ primary God Object risk.  Eight substructs were extracted across six commits,
 reducing `AppState` by ~70% and eliminating the largest architectural concern
 flagged by the audit.
 
-See also: [codecave.md](codecave.md), [plugins.md](plugins.md),
-[protocol.md](protocol.md).
+See also: [codecave.md](../codecave.md), [plugins.md](../plugins.md),
+[protocol.md](../protocol.md).

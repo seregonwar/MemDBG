@@ -1,6 +1,6 @@
 # Notes de lancement PS4 / GoldHEN
 
-*Disponible en : [English](ps4_goldhen_launch.en.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
+*Disponible en : [English](../platform/ps4_goldhen_launch.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
 
 Lorsque vous lancez MemDBG depuis le menu GoldHEN, le payload peut être injecté dans un processus loader qui a déjà exécuté MemDBG lors d'une tentative antérieure. Si le payload précédent a crashé ou a été tué sans nettoyage, un fichier `memdbg.pid` peut rester dans la racine des données. Comme le noyau PS4 réutilise rapidement les PID, ce fichier obsolète peut correspondre accidentellement au nouveau processus loader et faire croire à MemDBG qu'il est déjà en cours d'exécution.
 

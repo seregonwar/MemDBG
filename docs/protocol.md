@@ -1,6 +1,6 @@
 # MemDBG Internal Protocol Specification
 
-Status: stable wire version `MEMDBG_PROTOCOL_VERSION` 1, feature level 3
+Status: stable wire version `MEMDBG_PROTOCOL_VERSION` 1, feature level 4
 Canonical header: [`include/memdbg/core/memdbg_protocol.h`](../include/memdbg/core/memdbg_protocol.h)  
 Canonical daemon dispatch: [`src/core/daemon/dispatch.c`](../src/core/daemon/dispatch.c)  
 Canonical frontend client: [`frontend/src/core/client/memdbg_client.cpp`](../frontend/src/core/client/memdbg_client.cpp)
@@ -15,11 +15,13 @@ and how the protocol should evolve without breaking existing clients.
 
 `MEMDBG_PROTOCOL_VERSION` identifies the packet framing and remains `1` for
 backward compatibility. `MEMDBG_PROTOCOL_FEATURE_LEVEL` identifies the
-append-only command/HELLO feature set and is currently `3`. User interfaces
-must therefore present the negotiated pair as **feature level v3 (wire v1)**,
-not simply "Protocol v1". A v3 client accepts shorter legacy HELLO bodies
-(V1=44, V2=64) and defaults a missing feature level to `1`; a v3 payload
-appends `version_full` without changing any earlier field offsets.
+append-only command/HELLO feature set and is currently `4`. User interfaces
+must therefore present the negotiated pair as **feature level v4 (wire v1)**,
+not simply "Protocol v1". A v4 client accepts shorter legacy HELLO bodies
+(V1=44, V2=64) and defaults a missing feature level to `1`; a v3+ payload
+appends `version_full` without changing any earlier field offsets. Feature
+level 4 adds `GET_SERVICES` / `SET_SERVICES` for persistent listener control
+(see [`docs/ps5debug_compat.md`](ps5debug_compat.md)).
 
 ## Goals
 
@@ -266,7 +268,7 @@ The response body is `memdbg_hello_response_t`:
 | `udp_log_port` | UDP log port, or `0` when disabled. |
 | `version[16]` | Truncated payload version string (legacy field, max 15 chars). |
 | `name[16]` | Payload name, currently `MemDBG`. |
-| `feature_level` | Negotiated feature level (`3` for current payloads). |
+| `feature_level` | Negotiated feature level (`4` for current payloads). |
 | `reserved` | Reserved; must be zero. |
 | `daemon_instance_id` | Random ID generated at payload startup (HELLO V2+). |
 | `daemon_start_monotonic_ns` | Monotonic clock at payload startup (HELLO V2+). |
@@ -283,6 +285,14 @@ HELLO session reference. It does not stop the payload or other role sockets.
 
 `SHUTDOWN` has no request or response body. A successful response means the
 daemon accepted remote termination and requested its listener to stop.
+
+`GET_SERVICES` / `SET_SERVICES` (feature level 4) report and toggle daemon
+listeners. Response fields: `active` (currently listening), `configured`
+(persisted intent), `debug_port`, `legacy_port`. Bit `MEMDBG_SERVICE_LEGACY`
+(`1`) controls the ps5debug-compat TCP listener. `SET_SERVICES` always writes
+`${data-root}/daemon.conf`; if enable fails because the port is busy the
+response status may be `MEMDBG_ERR_NET` while `configured` still reflects the
+saved intent. See [`docs/ps5debug_compat.md`](ps5debug_compat.md).
 
 ## Framed Payload Compression
 
@@ -355,6 +365,7 @@ Command values are grouped by the high byte.
 | `0x0B00` | FlashScan / QuickScan. |
 | `0x0C00` | Page-table walk / DMAP introspection. |
 | `0x0D00` | Auth, arena, KLOG, and other privileged extensions. |
+| `0x0E00` | Runtime daemon service listeners (`GET`/`SET_SERVICES`). |
 | `0x7F00` | Administrative shutdown. |
 
 New command families should reserve an unused high-byte range. New commands in
@@ -457,6 +468,8 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_ARENA_CONFIG` | `0x0D01` | `memdbg_arena_config_request_t` | empty; status is in the normal response header |
 | `MEMDBG_CMD_KLOG_CONNECT` | `0x0D02` | `memdbg_klog_connect_request_t` | `uint32_t klog_port` |
 | `MEMDBG_CMD_GET_EXTENDED_CAPS` | `0x0D03` | empty | `uint32_t count` + `uint32_t capability_words[count]` |
+| `MEMDBG_CMD_GET_SERVICES` | `0x0E00` | empty | `memdbg_services_response_t` |
+| `MEMDBG_CMD_SET_SERVICES` | `0x0E01` | `memdbg_services_set_request_t` | `memdbg_services_response_t` (intent always persisted; bind failure may return `MEMDBG_ERR_NET`) |
 | `MEMDBG_CMD_SHUTDOWN` | `0x7F00` | empty | empty |
 
 ## Capabilities

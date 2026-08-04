@@ -1,5 +1,7 @@
 # Bridge x64dbg per MemDBG
 
+*Disponibile in: [English](../bridges/x64dbg_bridge.md) · [Italiano](x64dbg_bridge.it.md)*
+
 Plugin host che collega **x64dbg** al payload MemDBG tramite il protocollo
 nativo `MDBG` (TCP `9020`), senza passare da GDB RSP.
 
@@ -111,7 +113,7 @@ usa i comandi con argomenti).
 
 | Path | Ruolo |
 |---|---|
-| [`tools/x64dbg_plugin/`](../tools/x64dbg_plugin/) | Plugin + sessione MDBG |
-| [`memdbg_session.*`](../tools/x64dbg_plugin/memdbg_session.cpp) | Wrapper thread-safe sul `Client` |
-| [`plugin_util.*`](../tools/x64dbg_plugin/plugin_util.cpp) | Parse/GPR/sync plan (unit-testati) |
-| [`plugin_main.cpp`](../tools/x64dbg_plugin/plugin_main.cpp) | Export x64dbg + comandi/menu |
+| [`tools/x64dbg_plugin/`](../../tools/x64dbg_plugin/) | Plugin + sessione MDBG |
+| [`memdbg_session.*`](../../tools/x64dbg_plugin/memdbg_session.cpp) | Wrapper thread-safe sul `Client` |
+| [`plugin_util.*`](../../tools/x64dbg_plugin/plugin_util.cpp) | Parse/GPR/sync plan (unit-testati) |
+| [`plugin_main.cpp`](../../tools/x64dbg_plugin/plugin_main.cpp) | Export x64dbg + comandi/menu |

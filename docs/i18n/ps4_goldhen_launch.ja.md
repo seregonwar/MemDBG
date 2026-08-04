@@ -1,6 +1,6 @@
 # PS4 / GoldHEN 起動時の注意事項
 
-*対応言語: [English](ps4_goldhen_launch.en.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
+*対応言語: [English](../platform/ps4_goldhen_launch.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
 
 GoldHEN メニューから MemDBG を起動すると、ペイロードは以前の試行で MemDBG を実行した loader プロセスに注入される可能性があります。前回のペイロードがクラッシュしたり、クリーンアップされずに終了したりすると、データルートに `memdbg.pid` ファイルが残ることがあります。PS4 カーネルは PID を迅速に再利用するため、その古いファイルが新しい loader プロセスと偶然一致し、MemDBG が既に実行中であると誤認識することがあります。
 
