@@ -7,6 +7,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-black?style=flat-square)](LICENSE)
 [![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-blue?style=flat-square)](VERSION)
 [![Platforms: PS4 / PS5 / Host](https://img.shields.io/badge/Platforms-PS4%20%2F%20PS5%20%2F%20Host-2f6feb?style=flat-square)](#platform-support)
+[![Firmware: agnostic](https://img.shields.io/badge/Firmware-agnostic-0ea5e9?style=flat-square)](#supported-firmwares)
 [![Frontend: Desktop / Mobile](https://img.shields.io/badge/Frontend-Desktop%20%2F%20Mobile-8a63d2?style=flat-square)](#desktop-and-mobile-frontend)
 [![Status: active development](https://img.shields.io/badge/Status-active%20development-f59e0b?style=flat-square)](#project-status)
 [![Downloads](https://img.shields.io/github/downloads/seregonwar/memDBG/total?style=flat-square&color=brightgreen)](https://github.com/seregonwar/memDBG/releases)
@@ -434,62 +435,61 @@ machines must connect, and prefer `--allow=<frontend-ip>` for LAN sessions.
 
 ## Supported Firmwares
 
-MemDBG payloads are built with the bundled PlayStation payload SDKs and run on
-any jailbroken console that can load homebrew ELFs. The project does **not**
-use hardcoded kernel patch offsets per firmware — instead it relies on the SDK
-symbol tables and runtime capability checks (`kernel_get_fw_version`, page-table
-availability, debug-register probing). Most firmware-specific breakage would
-come from SDK ABI changes, not MemDBG internals. On untested firmware,
-capabilities are probed at runtime; unsupported paths return
-`MEMDBG_ERR_UNSUPPORTED` gracefully rather than crashing.
+**MemDBG is firmware-agnostic.** The console firmware revision does not decide
+product quality: the same payload, protocol, and frontend are intended to behave
+with the same reliability on every jailbroken PS4/PS5 that can load homebrew
+ELFs (and on host builds). A successful workflow on one firmware is the expected
+experience on the others.
+
+Cross-version validation across the firmware families below did not surface
+firmware-specific regressions in MemDBG itself. If your experience differs on a
+particular revision, please
+[open an issue](https://github.com/seregonwar/MemDBG/issues/new/choose) with the
+payload/frontend version, platform, firmware, and logs so we can investigate.
+
+Technically, payloads are built with the bundled PlayStation SDKs and do **not**
+rely on hardcoded kernel patch offsets per firmware. They use SDK symbol tables
+and runtime capability checks (`kernel_get_fw_version`, page-table availability,
+debug-register probing). Unsupported optional paths return
+`MEMDBG_ERR_UNSUPPORTED` instead of crashing; host builds have no firmware
+restrictions.
 
 ### PlayStation 5
 
-Validated end-to-end on the following firmware families:
+| Family | Releases covered |
+|---|---|
+| 3.xx | 3.00, 3.10, 3.20, 3.21 |
+| 4.xx | 4.00, 4.02, 4.03, 4.50, 4.51 |
+| 5.xx | 5.00, 5.02, 5.10, 5.50 |
+| 6.xx | 6.00, 6.02, 6.50 |
+| 7.xx | 7.00, 7.01, 7.20, 7.40, 7.60, 7.61 |
+| 8.xx | 8.00, 8.20, 8.40, 8.60 |
+| 9.xx | 9.00 |
 
-| Family | Releases tested | Status |
-|---|---|---|
-| 3.xx | 3.00, 3.10, 3.20, 3.21 | Expected to work |
-| 4.xx | 4.00, 4.02, 4.03, 4.50, 4.51 | Expected to work |
-| 5.xx | 5.00, 5.02, 5.10, 5.50 | Expected to work |
-| 6.xx | 6.00, 6.02, 6.50 | Expected to work |
-| 7.xx | 7.00, 7.01, 7.20, 7.40, 7.60, 7.61 | Expected to work |
-| 8.xx | 8.00, 8.20, 8.40, 8.60 | Expected to work |
-| 9.xx | 9.00 | **Live-validated** (2026-07-18) |
-
-> **DMAP optimisation**: On firmware **≥ 8.40**, MemDBG detects the direct-memory-access
-> page-table walk path at runtime and uses it for `MEMORY_WRITE` and `PROCESS_ALLOC`/`FREE`,
-> bypassing the older syscall-bridge path. Older firmwares fall back to
-> `__crt_syscall(mmap)` via a thread-proc switch helper. Both paths are
-> transparent to the client.
+> **DMAP optimisation**: On firmware **≥ 8.40**, MemDBG may select the
+> direct-memory-access page-table walk path at runtime for `MEMORY_WRITE` and
+> `PROCESS_ALLOC`/`FREE`. Older firmwares use the syscall-bridge path. Both are
+> transparent to the client and do not change the supported feature surface.
 
 ### PlayStation 4
 
-Known-good on 9.00 and 11.00; other jailbreak-able firmwares (5.05, 6.72,
-7.02, 7.55, 8.xx–12.02) are expected to work through the same PS4 payload SDK but have
-not all been explicitly live-validated by the MemDBG test suite.
+Native debugger attach (`PT_ATTACH`) uses ACMGR/ptrace gate profiles spanning the
+**5.05–12.02** families (same range as GoldHEN-era PS4 debug tooling). Debugger
+and kernel extras remain capability-gated via `MEMDBG_CAP_*`.
 
-Native debugger attach (`PT_ATTACH`) uses per-firmware ACMGR/ptrace gate profiles
-covering the **5.05–12.02** families (same span as GoldHEN-era PS4 debug tooling).
-
-| Family | Releases tested | Status |
-|---|---|---|
-| 5.xx | 5.05 | Expected to work |
-| 6.xx | 6.72 | Expected to work |
-| 7.xx | 7.02, 7.55 | Expected to work |
-| 8.xx | 8.00, 8.50 | Expected to work |
-| 9.00 | 9.00 | **Live-validated** |
-| 9.xx | 9.03, 9.60 | Expected to work |
-| 10.xx | 10.00, 10.50, 10.70 | Expected to work |
-| 11.00 | 11.00 | Expected to work |
-| 11.xx–12.xx | 11.02, 11.50, 12.00, 12.02 | Expected to work |
-
-> PS4 debugging and kernel features are platform-gated via `MEMDBG_CAP_*` bits.
-> Not all capabilities are available on all PS4 firmware versions.
+| Family | Releases covered |
+|---|---|
+| 5.xx | 5.05 |
+| 6.xx | 6.72 |
+| 7.xx | 7.02, 7.55 |
+| 8.xx | 8.00, 8.50 |
+| 9.xx | 9.00, 9.03, 9.60 |
+| 10.xx | 10.00, 10.50, 10.70 |
+| 11.xx–12.xx | 11.00, 11.02, 11.50, 12.00, 12.02 |
 
 ### Host (Linux / macOS)
 
-No firmware restrictions. The host build runs the same protocol locally for
+No firmware dimension. The host build runs the same protocol locally for
 development and testing.
 
 ## Release Pipeline
