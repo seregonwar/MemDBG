@@ -18,9 +18,13 @@ namespace memdbg::gdb_bridge {
 
 class RspHandler {
 public:
-  RspHandler(memdbg::frontend::Client &client, int32_t initial_pid);
+  RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
+             bool verbose = false);
 
   std::string handle(const std::string &packet, RspConnection &conn);
+
+  /* Resume (best-effort) then detach; safe on disconnect / dtor paths. */
+  void cleanup();
 
   int32_t attached_pid() const { return pid_; }
   bool attached() const { return attached_; }
@@ -38,12 +42,15 @@ private:
                              size_t length) const;
   std::string qxfer_memory_map(size_t offset, size_t length);
   bool ensure_attached();
+  void safe_detach();
+  void logf(const char *fmt, ...) const;
   int32_t current_thread() const;
   void refresh_threads();
 
   memdbg::frontend::Client &client_;
   int32_t pid_ = 0;
   bool attached_ = false;
+  bool verbose_ = false;
   int32_t general_thread_ = 0; /* Hg */
   int32_t continue_thread_ = 0; /* Hc; 0 = all */
   int32_t stop_lwp_ = 0;

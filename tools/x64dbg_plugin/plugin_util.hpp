@@ -19,6 +19,16 @@ bool parse_u64(const char *text, uint64_t &out);
 bool parse_i32(const char *text, int32_t &out);
 bool parse_hex_bytes(const char *text, std::vector<uint8_t> &out);
 
+/* Parse MemDBGConnect args. Accepts:
+ *   host
+ *   host port
+ *   host:port
+ *   "host" port   (strips quotes; x64dbg expression bar often needs quotes)
+ * Also tolerates host+port jammed into argv[1] ("192.168.1.50 9020").
+ * Default port is 9020. */
+bool parse_connect_endpoint(int argc, char **argv, std::string &host,
+                            uint16_t &port);
+
 /* Case-insensitive GPR name → field write. Accepts eflags as alias of rflags. */
 bool apply_gpr_name(memdbg_debug_regs_t &regs, const char *name, uint64_t value);
 

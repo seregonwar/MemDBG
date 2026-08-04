@@ -69,6 +69,58 @@ int main() {
   const auto plan4 = make_view_sync_plan(0, 0, 0);
   CHECK("sync plan empty", !plan4.ok);
 
+  {
+    std::string host;
+    uint16_t port = 0;
+    char *a0[] = {const_cast<char *>("MemDBGConnect")};
+    CHECK("connect default",
+          parse_connect_endpoint(1, a0, host, port) && host == "127.0.0.1" &&
+              port == 9020);
+
+    char *a1[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("192.168.1.50")};
+    CHECK("connect host only",
+          parse_connect_endpoint(2, a1, host, port) &&
+              host == "192.168.1.50" && port == 9020);
+
+    char *a2[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("192.168.1.50"),
+                  const_cast<char *>("9021")};
+    CHECK("connect host port",
+          parse_connect_endpoint(3, a2, host, port) &&
+              host == "192.168.1.50" && port == 9021);
+
+    char *a3[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("192.168.1.50:9030")};
+    CHECK("connect host:port",
+          parse_connect_endpoint(2, a3, host, port) &&
+              host == "192.168.1.50" && port == 9030);
+
+    char *a4[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("\"192.168.1.50\""),
+                  const_cast<char *>("9020")};
+    CHECK("connect quoted host",
+          parse_connect_endpoint(3, a4, host, port) &&
+              host == "192.168.1.50" && port == 9020);
+
+    char *a5[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("192.168.1.50,"),
+                  const_cast<char *>("9020")};
+    CHECK("connect comma host",
+          parse_connect_endpoint(3, a5, host, port) &&
+              host == "192.168.1.50" && port == 9020);
+
+    char *a6[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("192.168.1.50 9020")};
+    CHECK("connect jammed argv",
+          parse_connect_endpoint(2, a6, host, port) &&
+              host == "192.168.1.50" && port == 9020);
+
+    char *a7[] = {const_cast<char *>("MemDBGConnect"),
+                  const_cast<char *>("not-an-ip")};
+    CHECK("connect reject host", !parse_connect_endpoint(2, a7, host, port));
+  }
+
   if (failures == 0) {
     std::fprintf(stdout, "All x64dbg plugin util tests passed\n");
     return 0;
