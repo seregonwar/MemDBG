@@ -219,3 +219,7 @@ void memdbg_legacy_stop(void) {
   if (g_legacy_listen_fd != PAL_INVALID_SOCKET) { (void)shutdown(g_legacy_listen_fd, SHUT_RDWR); (void)pal_socket_close(g_legacy_listen_fd); g_legacy_listen_fd = PAL_INVALID_SOCKET; }
   if (g_legacy_thread_started) { (void)pthread_join(g_legacy_thread, NULL); g_legacy_thread_started = false; }
 }
+
+bool memdbg_legacy_is_running(void) {
+  return atomic_load_explicit(&g_legacy_running, memory_order_relaxed);
+}

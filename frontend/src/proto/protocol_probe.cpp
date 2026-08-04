@@ -70,15 +70,92 @@ static std::string fmt_hex(uint64_t a) {
   return std::string(b);
 }
 
+static void print_services(const memdbg::frontend::Client::ServicesInfo &s) {
+  std::cout << "active=0x" << std::hex << s.active << std::dec
+            << " configured=0x" << std::hex << s.configured << std::dec
+            << " debug_port=" << s.debug_port
+            << " legacy_port=" << s.legacy_port
+            << " legacy_active="
+            << ((s.active & MEMDBG_SERVICE_LEGACY) ? "yes" : "no")
+            << " legacy_configured="
+            << ((s.configured & MEMDBG_SERVICE_LEGACY) ? "yes" : "no")
+            << "\n";
+}
+
 /* ---- Main ---- */
 
 int main(int argc, char **argv) {
-  std::string host = argc > 1 ? argv[1] : "127.0.0.1";
-  uint16_t port = argc > 2
-                      ? static_cast<uint16_t>(std::strtoul(argv[2], nullptr, 10))
-                      : 9020;
+  std::string host = "127.0.0.1";
+  uint16_t port = 9020;
+  bool do_get_services = false;
+  int set_legacy = -1; /* -1 = unset, 0/1 = value */
+
+  std::vector<std::string> positionals;
+  for (int i = 1; i < argc; ++i) {
+    const char *arg = argv[i];
+    if (std::strcmp(arg, "--get-services") == 0) {
+      do_get_services = true;
+      continue;
+    }
+    if (std::strncmp(arg, "--set-legacy=", 13) == 0) {
+      set_legacy = static_cast<int>(std::strtol(arg + 13, nullptr, 10));
+      if (set_legacy != 0 && set_legacy != 1) {
+        std::cerr << "Usage: --set-legacy=0|1\n";
+        return 2;
+      }
+      continue;
+    }
+    if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
+      std::cout
+          << "Usage: memdbg_probe [host] [port]\n"
+          << "       memdbg_probe --get-services [host] [port]\n"
+          << "       memdbg_probe --set-legacy=0|1 [host] [port]\n";
+      return 0;
+    }
+    positionals.emplace_back(arg);
+  }
+  if (!positionals.empty()) host = positionals[0];
+  if (positionals.size() >= 2U) {
+    port = static_cast<uint16_t>(std::strtoul(positionals[1].c_str(), nullptr, 10));
+  }
 
   memdbg::frontend::Client client;
+
+  if (do_get_services || set_legacy >= 0) {
+    if (!client.connect_to(host, port)) {
+      std::cerr << "connect failed: " << client.last_error() << "\n";
+      return 1;
+    }
+    memdbg::frontend::HelloInfo hello;
+    if (!client.hello(hello)) {
+      std::cerr << "HELLO failed: " << client.last_error() << "\n";
+      return 1;
+    }
+    memdbg::frontend::Client::ServicesInfo services{};
+    if (set_legacy >= 0) {
+      if (!client.set_legacy_compat(set_legacy != 0, services) &&
+          client.last_error().find("SET_SERVICES status") == std::string::npos) {
+        std::cerr << "set-legacy failed: " << client.last_error() << "\n";
+        return 1;
+      }
+      if (!client.last_error().empty() &&
+          client.last_error().find("SET_SERVICES status") != std::string::npos) {
+        std::cerr << "warning: " << client.last_error()
+                  << " (intent may still be persisted)\n";
+        /* Refresh from GET so we report configured bits after a soft fail. */
+        (void)client.get_services(services);
+      }
+      std::cout << "set-legacy=" << set_legacy << "\n";
+      print_services(services);
+      return 0;
+    }
+    if (!client.get_services(services)) {
+      std::cerr << "get-services failed: " << client.last_error() << "\n";
+      return 1;
+    }
+    print_services(services);
+    return 0;
+  }
 
   std::cout << "=== memDBG Protocol Probe ===\n";
   std::cout << "Target: " << host << ":" << port << "\n\n";

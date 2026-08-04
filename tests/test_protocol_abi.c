@@ -243,6 +243,8 @@ static void test_command_id_uniqueness(void) {
     {"ARENA_CONFIG",             MEMDBG_CMD_ARENA_CONFIG},
     {"KLOG_CONNECT",             MEMDBG_CMD_KLOG_CONNECT},
     {"GET_EXTENDED_CAPS",        MEMDBG_CMD_GET_EXTENDED_CAPS},
+    {"GET_SERVICES",             MEMDBG_CMD_GET_SERVICES},
+    {"SET_SERVICES",             MEMDBG_CMD_SET_SERVICES},
     {"SHUTDOWN",                 MEMDBG_CMD_SHUTDOWN},
   };
 
@@ -436,6 +438,16 @@ static void test_wire_sizes(void) {
   /* Batch process info response */
   TEST("sizeof batch_process_info_response == 8",
        sizeof(memdbg_batch_process_info_response_t) == 8U);
+
+  /* Daemon services (feature level 4) */
+  TEST("FEATURE_LEVEL == 4", MEMDBG_PROTOCOL_FEATURE_LEVEL == 4U);
+  TEST("GET_SERVICES == 0x0E00", MEMDBG_CMD_GET_SERVICES == 0x0E00U);
+  TEST("SET_SERVICES == 0x0E01", MEMDBG_CMD_SET_SERVICES == 0x0E01U);
+  TEST("SERVICE_LEGACY == 1", MEMDBG_SERVICE_LEGACY == 0x00000001U);
+  TEST("sizeof services_response == 12",
+       sizeof(memdbg_services_response_t) == 12U);
+  TEST("sizeof services_set_request == 8",
+       sizeof(memdbg_services_set_request_t) == 8U);
 }
 
 /* ===================================================================

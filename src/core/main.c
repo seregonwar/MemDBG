@@ -11,6 +11,7 @@
  */
 
 #include "memdbg/core/memdbg.h"
+#include "memdbg/daemon/daemon_config_file.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -77,6 +78,10 @@ static void print_usage(const char *argv0) {
   printf("  --replace-existing       Ask a previous payload on the same port to stop (default)\n");
   printf("  --no-replace-existing    Do not stop a previous payload automatically\n");
   printf("  --no-udp-log             Disable UDP log delivery\n");
+  printf("\n");
+  printf("Persistent listener toggles live in ${data-root}/daemon.conf and can\n");
+  printf("be changed at runtime with MEMDBG_CMD_SET_SERVICES. CLI --legacy-compat\n");
+  printf("/ --no-legacy-compat override the file for this run only.\n");
 }
 
 static int apply_arg(memdbg_config_t *cfg, const char *arg) {
@@ -129,6 +134,17 @@ static int apply_arg(memdbg_config_t *cfg, const char *arg) {
 static int run_default(int argc, char **argv) {
   memdbg_config_t cfg;
   memdbg_config_defaults(&cfg);
+
+  /* Pass 1: resolve data-root before loading daemon.conf. */
+  for (int i = 1; i < argc; ++i) {
+    if (strncmp(argv[i], "--data-root=", 12) == 0) {
+      (void)snprintf(cfg.data_root, sizeof(cfg.data_root), "%s", argv[i] + 12);
+    }
+  }
+
+  /* defaults → file → CLI (CLI overrides file for this run only). */
+  (void)memdbg_daemon_config_load(cfg.data_root, &cfg);
+
   for (int i = 1; i < argc; ++i) {
     int rc = apply_arg(&cfg, argv[i]);
     if (rc > 0) {
@@ -144,7 +160,12 @@ static int run_default(int argc, char **argv) {
   return memdbg_daemon_run(&cfg);
 }
 
-int memdbg_main(void) { return run_default(0, NULL); }
+int memdbg_main(void) {
+  memdbg_config_t cfg;
+  memdbg_config_defaults(&cfg);
+  (void)memdbg_daemon_config_load(cfg.data_root, &cfg);
+  return memdbg_daemon_run(&cfg);
+}
 
 #ifndef MEMDBG_NO_MAIN
 int main(int argc, char **argv) { return run_default(argc, argv); }

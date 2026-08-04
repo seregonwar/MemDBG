@@ -74,6 +74,7 @@ uint64_t monotonic_seconds(void);
 
 memdbg_status_t memdbg_legacy_start(const memdbg_config_t *cfg);
 void            memdbg_legacy_stop(void);
+bool            memdbg_legacy_is_running(void);
 
 /* ---- Shared globals (defined in memdbg.c) ---- */
 

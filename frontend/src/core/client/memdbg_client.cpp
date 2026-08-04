@@ -279,6 +279,53 @@ bool Client::shutdown_payload() {
   return request(MEMDBG_CMD_SHUTDOWN, nullptr, 0, response);
 }
 
+bool Client::get_services(ServicesInfo &out) {
+  std::vector<uint8_t> response;
+  if (!request(MEMDBG_CMD_GET_SERVICES, nullptr, 0, response)) return false;
+  memdbg_services_response_t wire{};
+  if (response.size() < sizeof(wire)) {
+    set_error("short GET_SERVICES response");
+    return false;
+  }
+  std::memcpy(&wire, response.data(), sizeof(wire));
+  out.active = wire.active;
+  out.configured = wire.configured;
+  out.debug_port = wire.debug_port;
+  out.legacy_port = wire.legacy_port;
+  return true;
+}
+
+bool Client::set_services(uint32_t set_mask, uint32_t enable_bits,
+                          ServicesInfo &out) {
+  memdbg_services_set_request_t body{};
+  body.set_mask = set_mask;
+  body.enable_bits = enable_bits;
+  std::vector<uint8_t> response;
+  int32_t status = MEMDBG_OK;
+  const bool ok =
+      request(MEMDBG_CMD_SET_SERVICES, &body, sizeof(body), response, &status);
+  if (response.size() >= sizeof(memdbg_services_response_t)) {
+    memdbg_services_response_t wire{};
+    std::memcpy(&wire, response.data(), sizeof(wire));
+    out.active = wire.active;
+    out.configured = wire.configured;
+    out.debug_port = wire.debug_port;
+    out.legacy_port = wire.legacy_port;
+  }
+  if (ok) return true;
+  /* Bind may fail while intent is still persisted (port busy). */
+  if (status != MEMDBG_OK &&
+      response.size() >= sizeof(memdbg_services_response_t)) {
+    set_error("SET_SERVICES status " + std::to_string(status));
+  }
+  return false;
+}
+
+bool Client::set_legacy_compat(bool enabled, ServicesInfo &out) {
+  const uint32_t bits = enabled ? MEMDBG_SERVICE_LEGACY : 0U;
+  return set_services(MEMDBG_SERVICE_LEGACY, bits, out);
+}
+
 bool Client::raw_request(uint16_t command, const void *payload,
                          uint32_t payload_len,
                          std::vector<uint8_t> &response,

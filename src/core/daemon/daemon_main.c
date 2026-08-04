@@ -11,6 +11,7 @@
  */
 
 #include "memdbg/core/memdbg.h"
+#include "memdbg/daemon/daemon_config_file.h"
 
 #include "daemon_internal.h"
 #include "memdbg/core/memdbg_instance.h"
@@ -283,6 +284,10 @@ int memdbg_daemon_run(const memdbg_config_t *cfg_in) {
 
   if (cfg_in == NULL) memdbg_config_defaults(&cfg);
   else                cfg = *cfg_in;
+
+  /* Publish early so GET/SET_SERVICES see the boot-time intent even if a
+   * later stage fails; CLI/file merge already happened in main(). */
+  memdbg_daemon_config_publish(&cfg);
 
   /* GoldHEN can invoke the ELF entry point again inside the same loader
    * process while the first invocation is still starting or running.  Do not
