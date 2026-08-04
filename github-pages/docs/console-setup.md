@@ -32,7 +32,7 @@ This error occurs when a previous MemDBG instance left a stale PID file. Solutio
 
 1. **Restart the PS4** — this clears all running processes and PID files.
 2. **Use GoldHEN's process manager** to kill the old MemDBG process, then restart.
-3. See the [GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md) for workarounds.
+3. See the [GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/platform/ps4_goldhen_launch.md) for workarounds.
 
 ### PS4 limitations
 
@@ -45,7 +45,7 @@ This error occurs when a previous MemDBG instance left a stale PID file. Solutio
 
 ### Requirements
 
-- **PS5 firmware**: 3.xx–5.xx (see [validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps5_validation_2026-07-18.md) for tested versions)
+- **PS5 firmware**: 3.xx–5.xx (see [validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/archive/ps5_validation_2026-07-18.md) for tested versions)
 - **ps5debug** or **etaHEN**: Active and running
 - **Payload loader**: ps5debug payload sender (port `9021`) or equivalent
 - **Network**: PS5 and PC on the same local network
@@ -91,7 +91,7 @@ If DMAP is unavailable, the payload falls back to standard process memory access
 
 ### PS5 limitations
 
-- **Firmware compatibility**: Not all firmware versions support all features. Check the [validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps5_validation_2026-07-18.md).
+- **Firmware compatibility**: Not all firmware versions support all features. Check the [validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/archive/ps5_validation_2026-07-18.md).
 - **4 watchpoint limit** (AArch64 hardware limit, same as x86-64)
 - **Anti-debug**: Some PS5 games have kernel-level anti-debugging. The debugger may not work with all titles.
 - **Rest mode**: The [reconnect system](https://github.com/seregonwar/MemDBG/blob/main/docs/reconnect.md) handles rest-mode cycles, but some payloads may need re-injection.

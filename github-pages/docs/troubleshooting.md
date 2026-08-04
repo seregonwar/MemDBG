@@ -53,10 +53,10 @@
 | Symptom | Likely cause | Solution |
 |---|---|---|
 | Empty process list | Insufficient privileges | PS4: Check GoldHEN is active. PS5: Check ps5debug status. |
-| `MemDBG is already running` | Stale PID file or live daemon on PS4/GoldHEN. | See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md). |
+| `MemDBG is already running` | Stale PID file or live daemon on PS4/GoldHEN. | See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/platform/ps4_goldhen_launch.md). |
 | No UDP logs | UDP channel broken. | Verify port 9023. Check firewall. Ensure same network segment. |
 | Console crashes during scan | Memory pressure, kernel panic. | Reduce parallel workers. Scan smaller regions. |
-| PS5 KLOG not working | Unsupported firmware. | Check [PS5 validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps5_validation_2026-07-18.md). |
+| PS5 KLOG not working | Unsupported firmware. | Check [PS5 validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/archive/ps5_validation_2026-07-18.md). |
 | Payload disappears after rest mode | Rest mode kills the payload. | Enable auto-inject in Settings. The reconnect system handles this. |
 | PS4 crashes on ELF load | ELF architecture mismatch. | Verify you're loading a PS4 ELF (x86-64), not PS5 (AArch64). |
 

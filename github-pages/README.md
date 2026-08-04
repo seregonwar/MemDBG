@@ -11,6 +11,7 @@ github-pages/
 ├── docs/               ← Markdown content files (one per section)
 │   ├── quick-start.md
 │   ├── setup.md
+│   ├── console-setup.md
 │   ├── frontend.md
 │   ├── workflow.md
 │   ├── memory.md
@@ -18,12 +19,17 @@ github-pages/
 │   ├── scanner.md
 │   ├── trainer.md
 │   ├── batchcode.md
+│   ├── plugins.md
+│   ├── debugger.md
 │   ├── troubleshooting.md
 │   ├── best-practices.md
 │   ├── ports.md
 │   └── credits.md
 └── README.md
 ```
+
+Engineering notes (protocol, bridges, packaging) live under
+[`../docs/`](../docs/), not here.
 
 ## How it works
 
