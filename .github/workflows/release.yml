@@ -361,7 +361,27 @@ jobs:
                   -format UDZO \
                   "dist/$pkg.dmg"
                 rm -f "dist/$pkg/Applications"
-                rm -rf "dist/$pkg"
+
+                # Standalone IDA bridge asset (discoverable next to x64dbg plugin).
+                bridge_pkg="MemDBG-ida-gdb-bridge-${{ matrix.platform }}"
+                mkdir -p "dist/$bridge_pkg"
+                cp "$bridge_bin" "dist/$bridge_pkg/memdbg_gdb_bridge"
+                chmod +x "dist/$bridge_pkg/memdbg_gdb_bridge"
+                if [ -f docs/ida_gdb_bridge.en.md ]; then
+                  cp docs/ida_gdb_bridge.en.md "dist/$bridge_pkg/README.md"
+                elif [ -f docs/ida_gdb_bridge.md ]; then
+                  cp docs/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
+                fi
+                cat > "dist/$bridge_pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
+          component=ida-gdb-bridge
+          platform=${{ matrix.platform }}
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
+                tar -C dist -czf "dist/$bridge_pkg.tar.gz" "$bridge_pkg"
+                rm -rf "dist/$bridge_pkg" "dist/$pkg"
               else
                 mkdir -p "dist/$pkg/assets"
                 frontend_bin=$(find build/frontend -type f \( -name 'memdbg_frontend' -o -name 'memdbg_frontend.exe' \) | head -n 1)
@@ -420,12 +440,34 @@ jobs:
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
+
+                # Standalone IDA bridge asset for the Releases page (#37/#39).
+                bridge_pkg="MemDBG-ida-gdb-bridge-${{ matrix.platform }}"
+                mkdir -p "dist/$bridge_pkg"
+                cp "$bridge_bin" "dist/$bridge_pkg/$(basename "$bridge_bin")"
+                chmod +x "dist/$bridge_pkg/$(basename "$bridge_bin")"
+                if [ -f docs/ida_gdb_bridge.en.md ]; then
+                  cp docs/ida_gdb_bridge.en.md "dist/$bridge_pkg/README.md"
+                elif [ -f docs/ida_gdb_bridge.md ]; then
+                  cp docs/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
+                fi
+                cat > "dist/$bridge_pkg/BUILD_INFO.txt" <<EOF
+          project=MemDBG
+          version=${MEMDBG_RELEASE_VERSION}
+          component=ida-gdb-bridge
+          platform=${{ matrix.platform }}
+          ref=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          EOF
+
                 if [ "${{ matrix.platform }}" = "windows" ]; then
                   python3 -c "import shutil; shutil.make_archive('dist/$pkg', 'zip', 'dist', '$pkg')"
+                  python3 -c "import shutil; shutil.make_archive('dist/$bridge_pkg', 'zip', 'dist', '$bridge_pkg')"
                 else
                   tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+                  tar -C dist -czf "dist/$bridge_pkg.tar.gz" "$bridge_pkg"
                 fi
-                rm -rf "dist/$pkg"
+                rm -rf "dist/$pkg" "dist/$bridge_pkg"
               fi
               ;;
             x64dbg)
@@ -696,11 +738,14 @@ jobs:
       - build
       - mobile-ios
       - mobile-android
+    # Publish desktop/payload/plugin assets even when mobile fails. Mobile was
+    # blocking every nightly after #37/#39, so IDA/x64dbg packages never shipped.
     if: >-
+      always() &&
+      !cancelled() &&
+      needs.preflight.result == 'success' &&
       needs.preflight.outputs.should_run == 'true' &&
-      needs.build.result == 'success' &&
-      needs.mobile-ios.result == 'success' &&
-      needs.mobile-android.result == 'success'
+      needs.build.result == 'success'
     permissions:
       contents: write
     steps:
@@ -716,6 +761,9 @@ jobs:
           merge-multiple: true
 
       - name: Prepare release assets
+        env:
+          MOBILE_IOS_RESULT: ${{ needs.mobile-ios.result }}
+          MOBILE_ANDROID_RESULT: ${{ needs.mobile-android.result }}
         run: |
           set -euo pipefail
           mkdir -p release-assets
@@ -738,6 +786,31 @@ jobs:
             echo "No release assets found" >&2
             exit 1
           fi
+
+          # Hard-require debugger bridge packages produced by the build matrix.
+          required=(
+            MemDBG-x64dbg-plugin.zip
+            MemDBG-ida-gdb-bridge-windows.zip
+            MemDBG-ida-gdb-bridge-linux.tar.gz
+            MemDBG-ida-gdb-bridge-macos.tar.gz
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [ ! -f "${name}" ]; then
+              echo "Missing required release asset: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            echo "Available assets:" >&2
+            ls -lh >&2 || true
+            exit 1
+          fi
+
+          if [ ! -f MemDBG-mobile-ios.ipa ] || [ ! -f MemDBG-mobile-android.apk ]; then
+            echo "Warning: mobile assets missing (ios=${MOBILE_IOS_RESULT} android=${MOBILE_ANDROID_RESULT}); publishing desktop/plugin/payload assets anyway." >&2
+          fi
+
           sha256sum "${assets[@]}" > SHA256SUMS.txt
           ls -lh
 
