@@ -367,10 +367,8 @@ jobs:
                 mkdir -p "dist/$bridge_pkg"
                 cp "$bridge_bin" "dist/$bridge_pkg/memdbg_gdb_bridge"
                 chmod +x "dist/$bridge_pkg/memdbg_gdb_bridge"
-                if [ -f docs/ida_gdb_bridge.en.md ]; then
-                  cp docs/ida_gdb_bridge.en.md "dist/$bridge_pkg/README.md"
-                elif [ -f docs/ida_gdb_bridge.md ]; then
-                  cp docs/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
+                if [ -f docs/bridges/ida_gdb_bridge.md ]; then
+                  cp docs/bridges/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
                 fi
                 cat > "dist/$bridge_pkg/BUILD_INFO.txt" <<EOF
           project=MemDBG
@@ -446,10 +444,8 @@ jobs:
                 mkdir -p "dist/$bridge_pkg"
                 cp "$bridge_bin" "dist/$bridge_pkg/$(basename "$bridge_bin")"
                 chmod +x "dist/$bridge_pkg/$(basename "$bridge_bin")"
-                if [ -f docs/ida_gdb_bridge.en.md ]; then
-                  cp docs/ida_gdb_bridge.en.md "dist/$bridge_pkg/README.md"
-                elif [ -f docs/ida_gdb_bridge.md ]; then
-                  cp docs/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
+                if [ -f docs/bridges/ida_gdb_bridge.md ]; then
+                  cp docs/bridges/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
                 fi
                 cat > "dist/$bridge_pkg/BUILD_INFO.txt" <<EOF
           project=MemDBG
@@ -480,10 +476,8 @@ jobs:
                 exit 1
               fi
               cp "$plugin_bin" "dist/$pkg/MemDBG.dp64"
-              if [ -f docs/x64dbg_bridge.en.md ]; then
-                cp docs/x64dbg_bridge.en.md "dist/$pkg/README.md"
-              elif [ -f docs/x64dbg_bridge.md ]; then
-                cp docs/x64dbg_bridge.md "dist/$pkg/README.md"
+              if [ -f docs/bridges/x64dbg_bridge.md ]; then
+                cp docs/bridges/x64dbg_bridge.md "dist/$pkg/README.md"
               fi
               cat > "dist/$pkg/BUILD_INFO.txt" <<EOF
           project=MemDBG
