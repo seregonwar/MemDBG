@@ -46,6 +46,7 @@ enum MenuId : int {
   kMenuSync = 20,
 };
 
+using memdbg::x64dbg_bridge::parse_connect_endpoint;
 using memdbg::x64dbg_bridge::parse_hex_bytes;
 using memdbg::x64dbg_bridge::parse_i32;
 using memdbg::x64dbg_bridge::parse_u64;
@@ -86,23 +87,40 @@ bool sync_views_from_regs(const memdbg::frontend::Client::DebugRegs &regs,
 }
 
 bool cmd_connect(int argc, char **argv) {
-  auto &session = memdbg::x64dbg_bridge::global_session();
-  const char *host = (argc >= 2) ? argv[1] : "127.0.0.1";
+  /* x64dbg's default command engine expression-evaluates bare args, so
+   * 192.168.1.50 9020 often mangles the IP. Prefer quotes or host:port:
+   *   MemDBGConnect "192.168.1.50", 9020
+   *   MemDBGConnect "192.168.1.50:9020"
+   * Also switch the command bar from Script DLL to the default engine. */
+  std::string host;
   uint16_t port = 9020;
-  if (argc >= 3) {
-    const int p = std::atoi(argv[2]);
-    if (p <= 0 || p > 65535) {
-      log_err("invalid port");
-      return false;
-    }
-    port = static_cast<uint16_t>(p);
+  if (!parse_connect_endpoint(argc, argv, host, port)) {
+    log_err("usage: MemDBGConnect \"<ipv4>\" [port] | MemDBGConnect "
+            "\"<ipv4>:<port>\" (quote the IP; x64dbg evaluates bare dots)");
+    return false;
   }
+  auto &session = memdbg::x64dbg_bridge::global_session();
   if (!session.connect(host, port)) {
     log_err(session.last_error().c_str());
     return false;
   }
-  _plugin_logprintf("[MemDBG] connected to %s:%u\n", host,
+  _plugin_logprintf("[MemDBG] connected to %s:%u\n", host.c_str(),
                     static_cast<unsigned>(port));
+  return true;
+}
+
+bool cmd_ps(int, char **) {
+  auto &session = memdbg::x64dbg_bridge::global_session();
+  std::vector<memdbg::frontend::ProcessEntry> procs;
+  if (!session.list_processes(procs)) {
+    log_err(session.last_error().c_str());
+    return false;
+  }
+  _plugin_logprintf("[MemDBG] %zu processes:\n", procs.size());
+  for (const auto &p : procs) {
+    _plugin_logprintf("  pid=%d ppid=%d %s\n", static_cast<int>(p.pid),
+                      static_cast<int>(p.ppid), p.name.c_str());
+  }
   return true;
 }
 
@@ -507,7 +525,12 @@ bool cmd_fpregs(int, char **) {
 void handle_menu(int entry) {
   switch (entry) {
   case kMenuConnect:
-    _plugin_logputs("[MemDBG] Use command: MemDBGConnect <host> [port]");
+    _plugin_logputs(
+        "[MemDBG] Use: MemDBGConnect \"192.168.1.50\", 9020  (or "
+        "\"192.168.1.50:9020\"; quote IP; default engine not Script DLL)");
+    break;
+  case 21:
+    cmd_ps(0, nullptr);
     break;
   case kMenuDisconnect:
     cmd_disconnect(0, nullptr);
@@ -582,6 +605,7 @@ extern "C" __declspec(dllexport) bool pluginit(PLUG_INITSTRUCT *initStruct) {
 
   _plugin_registercommand(g_plugin_handle, "MemDBGConnect", cmd_connect, false);
   _plugin_registercommand(g_plugin_handle, "MemDBGDisconnect", cmd_disconnect, false);
+  _plugin_registercommand(g_plugin_handle, "MemDBGPs", cmd_ps, false);
   _plugin_registercommand(g_plugin_handle, "MemDBGAttach", cmd_attach, false);
   _plugin_registercommand(g_plugin_handle, "MemDBGDetach", cmd_detach, false);
   _plugin_registercommand(g_plugin_handle, "MemDBGStop", cmd_stop, false);
@@ -609,6 +633,7 @@ extern "C" __declspec(dllexport) void plugsetup(PLUG_SETUPSTRUCT *setupStruct) {
   g_menu = setupStruct->hMenu;
   _plugin_menuaddentry(g_menu, kMenuConnect, "Connect (see MemDBGConnect)...");
   _plugin_menuaddentry(g_menu, kMenuDisconnect, "Disconnect");
+  _plugin_menuaddentry(g_menu, 21, "Process list (MemDBGPs)");
   _plugin_menuaddseparator(g_menu);
   _plugin_menuaddentry(g_menu, kMenuAttach, "Attach (see MemDBGAttach)...");
   _plugin_menuaddentry(g_menu, kMenuDetach, "Detach");
@@ -637,6 +662,7 @@ extern "C" __declspec(dllexport) bool plugstop() {
   memdbg::x64dbg_bridge::global_session().disconnect();
   _plugin_unregistercommand(g_plugin_handle, "MemDBGConnect");
   _plugin_unregistercommand(g_plugin_handle, "MemDBGDisconnect");
+  _plugin_unregistercommand(g_plugin_handle, "MemDBGPs");
   _plugin_unregistercommand(g_plugin_handle, "MemDBGAttach");
   _plugin_unregistercommand(g_plugin_handle, "MemDBGDetach");
   _plugin_unregistercommand(g_plugin_handle, "MemDBGStop");

@@ -10,7 +10,16 @@
 
 #include "memdbg/core/memdbg_protocol.h"
 
+#include <chrono>
+
 namespace memdbg::x64dbg_bridge {
+
+namespace {
+/* Payload idle timeout is 30s; ping well under that while the session lives. */
+constexpr auto kKeepaliveInterval = std::chrono::seconds(10);
+} // namespace
+
+Session::~Session() { stop_keepalive(); }
 
 void Session::set_error(const std::string &msg) { last_error_ = msg; }
 
@@ -19,7 +28,34 @@ std::string Session::last_error() const {
   return last_error_;
 }
 
+void Session::stop_keepalive() {
+  stop_keepalive_.store(true);
+  if (keepalive_.joinable()) {
+    keepalive_.join();
+  }
+}
+
+void Session::start_keepalive_unlocked() {
+  /* Caller holds mu_. Previous thread must already be joined. */
+  stop_keepalive_.store(false);
+  keepalive_ = std::thread([this] {
+    while (!stop_keepalive_.load()) {
+      for (int i = 0; i < 100 && !stop_keepalive_.load(); ++i) {
+        std::this_thread::sleep_for(kKeepaliveInterval / 100);
+      }
+      if (stop_keepalive_.load()) break;
+      std::lock_guard<std::mutex> lock(mu_);
+      if (!client_.connected()) continue;
+      if (!client_.ping()) {
+        /* Soft failure: next user command will surface the dead socket. */
+        set_error("keepalive ping failed: " + client_.last_error());
+      }
+    }
+  });
+}
+
 bool Session::connect(const std::string &host, uint16_t port) {
+  stop_keepalive();
   std::lock_guard<std::mutex> lock(mu_);
   if (attached_) {
     client_.debug_detach();
@@ -43,10 +79,12 @@ bool Session::connect(const std::string &host, uint16_t port) {
     /* Still usable for memory; keep connection. */
   }
   last_error_.clear();
+  start_keepalive_unlocked();
   return true;
 }
 
 void Session::disconnect() {
+  stop_keepalive();
   std::lock_guard<std::mutex> lock(mu_);
   if (attached_) {
     client_.debug_detach();
@@ -376,6 +414,20 @@ bool Session::list_maps(std::vector<frontend::MapEntry> &out) {
   const int32_t pid = pid_ != 0 ? pid_ : 0;
   if (!client_.process_maps(pid, out)) {
     set_error("process_maps failed: " + client_.last_error());
+    return false;
+  }
+  last_error_.clear();
+  return true;
+}
+
+bool Session::list_processes(std::vector<frontend::ProcessEntry> &out) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (!client_.connected()) {
+    set_error("not connected");
+    return false;
+  }
+  if (!client_.process_list(out)) {
+    set_error("process_list failed: " + client_.last_error());
     return false;
   }
   last_error_.clear();

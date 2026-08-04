@@ -9,8 +9,139 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace memdbg::x64dbg_bridge {
+
+namespace {
+
+std::string strip_quotes_and_space(const char *text) {
+  if (!text) return {};
+  const char *begin = text;
+  while (*begin == ' ' || *begin == '\t' || *begin == '"' || *begin == '\'') {
+    ++begin;
+  }
+  const char *end = begin + std::strlen(begin);
+  while (end > begin) {
+    const char c = *(end - 1);
+    if (c == ' ' || c == '\t' || c == '"' || c == '\'') {
+      --end;
+      continue;
+    }
+    break;
+  }
+  return std::string(begin, end);
+}
+
+bool looks_like_ipv4(const std::string &host) {
+  int dots = 0;
+  int group = -1;
+  for (char c : host) {
+    if (c == '.') {
+      if (group < 0 || group > 255) return false;
+      dots++;
+      group = -1;
+      continue;
+    }
+    if (c < '0' || c > '9') return false;
+    if (group < 0) group = 0;
+    group = group * 10 + (c - '0');
+    if (group > 255) return false;
+  }
+  return dots == 3 && group >= 0 && group <= 255;
+}
+
+bool parse_port_token(const std::string &token, uint16_t &port) {
+  if (token.empty()) return false;
+  char *end = nullptr;
+  const long v = std::strtol(token.c_str(), &end, 10);
+  if (end == token.c_str() || (end && *end != '\0')) return false;
+  if (v <= 0 || v > 65535) return false;
+  port = static_cast<uint16_t>(v);
+  return true;
+}
+
+} // namespace
+
+bool parse_connect_endpoint(int argc, char **argv, std::string &host,
+                            uint16_t &port) {
+  host = "127.0.0.1";
+  port = 9020;
+  if (argc < 2 || argv == nullptr) return true;
+
+  /* Join argv[1..] so Script-engine / odd splitters still work. */
+  std::string joined;
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] == nullptr || argv[i][0] == '\0') continue;
+    if (!joined.empty()) joined.push_back(' ');
+    joined += argv[i];
+  }
+  joined = strip_quotes_and_space(joined.c_str());
+  if (joined.empty()) return true;
+
+  /* Normalize "host", port  /  host,port  (x64dbg often inserts commas). */
+  for (char &c : joined) {
+    if (c == ',') c = ' ';
+  }
+  /* Collapse runs of spaces. */
+  {
+    std::string norm;
+    norm.reserve(joined.size());
+    bool prev_space = false;
+    for (char c : joined) {
+      if (c == ' ' || c == '\t') {
+        if (!prev_space && !norm.empty()) norm.push_back(' ');
+        prev_space = true;
+        continue;
+      }
+      prev_space = false;
+      norm.push_back(c);
+    }
+    while (!norm.empty() && norm.back() == ' ') norm.pop_back();
+    joined = std::move(norm);
+  }
+  if (joined.empty()) return true;
+
+  /* host:port (prefer last colon so IPv4 stays intact). */
+  const auto colon = joined.rfind(':');
+  if (colon != std::string::npos && colon > 0 && colon + 1 < joined.size() &&
+      joined.find(' ') == std::string::npos) {
+    std::string maybe_host = strip_quotes_and_space(joined.substr(0, colon).c_str());
+    std::string maybe_port = strip_quotes_and_space(joined.substr(colon + 1).c_str());
+    uint16_t p = 9020;
+    if (looks_like_ipv4(maybe_host) && parse_port_token(maybe_port, p)) {
+      host = std::move(maybe_host);
+      port = p;
+      return true;
+    }
+  }
+
+  /* host port */
+  const auto space = joined.find(' ');
+  if (space != std::string::npos) {
+    std::string maybe_host =
+        strip_quotes_and_space(joined.substr(0, space).c_str());
+    std::string rest = strip_quotes_and_space(joined.substr(space + 1).c_str());
+    /* drop any further tokens after port */
+    const auto rest_space = rest.find(' ');
+    if (rest_space != std::string::npos) rest = rest.substr(0, rest_space);
+    uint16_t p = 9020;
+    if (looks_like_ipv4(maybe_host) && parse_port_token(rest, p)) {
+      host = std::move(maybe_host);
+      port = p;
+      return true;
+    }
+    if (looks_like_ipv4(maybe_host)) {
+      host = std::move(maybe_host);
+      return true;
+    }
+    return false;
+  }
+
+  if (!looks_like_ipv4(joined)) return false;
+  host = std::move(joined);
+  return true;
+}
 
 bool parse_u64(const char *text, uint64_t &out) {
   if (!text || !*text) return false;

@@ -47,10 +47,17 @@ Copia `MemDBG.dp64` nella cartella `plugins` di x64dbg (build x64).
 
 1. Avvia il payload MemDBG sulla console (porta `9020` raggiungibile).
 2. Avvia x64dbg e verifica che il plugin sia caricato (log `[MemDBG] plugin loaded`).
-3. Nella console comandi di x64dbg:
+3. Nella command bar, passa da **Script DLL** al motore comandi **default**
+   (lato destro della barra). In Script mode i comandi plugin non partono.
+4. Connettiti con IPv4 **tra virgolette**. x64dbg valuta le espressioni sugli
+   argomenti nudi, quindi `MemDBGConnect 192.168.1.50 9020` spesso finisce in
+   `invalid IPv4 address`. Usa una di queste forme:
 
 ```text
-MemDBGConnect 192.168.1.50 9020
+MemDBGConnect "192.168.1.50", 9020
+MemDBGConnect "192.168.1.50:9020"
+MemDBGConnect "192.168.1.50"
+MemDBGPs
 MemDBGAttach 123
 MemDBGRegs
 MemDBGRead 0x200000000 128
@@ -62,6 +69,9 @@ MemDBGDetach
 MemDBGDisconnect
 ```
 
+A connessione attiva il plugin fa ping al payload ogni ~10s così l’idle
+timeout della console (30s) non chiude la sessione prima dell’attach.
+
 Il menu **Plugins → MemDBG** espone le stesse azioni (per connect/attach/read/BP
 usa i comandi con argomenti).
 
@@ -69,8 +79,9 @@ usa i comandi con argomenti).
 
 | Comando | Significato |
 |---|---|
-| `MemDBGConnect <host> [port]` | Hello MDBG (default port `9020`) |
+| `MemDBGConnect <host> [port]` | Hello MDBG (default port `9020`; quotare IPv4 / usare `host:port`) |
 | `MemDBGDisconnect` | Chiude la sessione |
+| `MemDBGPs` | Elenca i processi remoti (pid / ppid / name) |
 | `MemDBGAttach <pid>` | Attach debugger |
 | `MemDBGDetach` | Detach |
 | `MemDBGStop` / `MemDBGContinue` / `MemDBGStep` | Run-control all-stop |
@@ -92,7 +103,8 @@ usa i comandi con argomenti).
 - Solo all-stop; niente non-stop.
 - Non sostituisce il motore TitanEngine di x64dbg: ops via comandi plugin.
   `MemDBGSync` sposta CIP/VA nelle view native, ma quelle view leggono il
-  debuggee **locale** TitanEngine (non la memoria remota PS4/PS5).
+  debuggee **locale** TitanEngine (non la memoria remota PS4/PS5). Il disasm
+  remoto nella CPU view nativa non è ancora implementato.
 - X87 st0–st7 non formattati (blob FXSAVE sì per XMM/MXCSR).
 
 ## Sorgenti

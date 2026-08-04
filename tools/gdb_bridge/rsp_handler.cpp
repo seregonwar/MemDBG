@@ -11,6 +11,7 @@
 
 #include <cctype>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -65,13 +66,51 @@ int watch_type_from_z(char kind) {
 
 } // namespace
 
-RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid)
-    : client_(client), pid_(initial_pid) {}
+RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
+                       bool verbose)
+    : client_(client), pid_(initial_pid), verbose_(verbose) {}
+
+void RspHandler::logf(const char *fmt, ...) const {
+  if (!verbose_ || fmt == nullptr) return;
+  std::fputs("[gdb_bridge] ", stderr);
+  va_list ap;
+  va_start(ap, fmt);
+  std::vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  std::fputc('\n', stderr);
+}
+
+void RspHandler::safe_detach() {
+  if (!attached_) return;
+  /* Resume before detach so the console process is not left stopped. */
+  if (!client_.debug_continue()) {
+    logf("pre-detach continue failed: %s", client_.last_error().c_str());
+  }
+  if (!client_.debug_detach()) {
+    logf("debug_detach failed: %s", client_.last_error().c_str());
+  } else {
+    logf("detached pid=%d", static_cast<int>(pid_));
+  }
+  attached_ = false;
+  stop_lwp_ = 0;
+  general_thread_ = 0;
+  continue_thread_ = 0;
+  threads_.clear();
+}
+
+void RspHandler::cleanup() { safe_detach(); }
 
 bool RspHandler::ensure_attached() {
   if (attached_) return true;
-  if (pid_ <= 0) return false;
-  if (!client_.debug_attach(pid_)) return false;
+  if (pid_ <= 0) {
+    logf("ensure_attached: no pid");
+    return false;
+  }
+  logf("debug_attach pid=%d", static_cast<int>(pid_));
+  if (!client_.debug_attach(pid_)) {
+    logf("debug_attach failed: %s", client_.last_error().c_str());
+    return false;
+  }
   attached_ = true;
   refresh_threads();
   if (!threads_.empty()) {
@@ -159,11 +198,17 @@ std::string RspHandler::handle_continue_or_step(bool step, RspConnection &conn,
   bool ok = false;
   if (step) {
     const int32_t tid = lwp != 0 ? lwp : current_thread();
+    logf("debug_step lwp=%d", static_cast<int>(tid));
     ok = client_.debug_step(tid);
   } else {
+    logf("debug_continue");
     ok = client_.debug_continue();
   }
-  if (!ok) return err_packet(1);
+  if (!ok) {
+    logf("%s failed: %s", step ? "debug_step" : "debug_continue",
+         client_.last_error().c_str());
+    return err_packet(1);
+  }
 
   for (;;) {
     if (conn.poll_interrupt(50U)) {
@@ -368,13 +413,28 @@ std::string RspHandler::handle_v(const std::string &packet,
                                  RspConnection &conn) {
   if (packet.rfind("vAttach;", 0) == 0) {
     uint64_t pid = 0U;
-    if (!parse_hex_u64(packet.c_str() + 8, pid) || pid == 0U) return err_packet(1);
-    if (attached_) {
-      (void)client_.debug_detach();
-      attached_ = false;
+    if (!parse_hex_u64(packet.c_str() + 8, pid) || pid == 0U) {
+      logf("vAttach: bad pid hex in '%s'", packet.c_str());
+      return err_packet(1);
     }
-    pid_ = static_cast<int32_t>(pid);
-    if (!client_.debug_attach(pid_)) return err_packet(1);
+    const auto attach_pid = static_cast<int32_t>(pid);
+    /* RSP vAttach pid is hexadecimal. IDA's PID field is hex too: decimal 88
+     * typed as "88" becomes pid 0x88 = 136. */
+    logf("vAttach pid=0x%x (%d decimal)", static_cast<unsigned>(attach_pid),
+         static_cast<int>(attach_pid));
+    if (attached_ && pid_ == attach_pid) {
+      logf("vAttach: already attached to pid=%d", static_cast<int>(pid_));
+      return stop_reply();
+    }
+    if (attached_) {
+      logf("vAttach: switching from pid=%d", static_cast<int>(pid_));
+      safe_detach();
+    }
+    pid_ = attach_pid;
+    if (!client_.debug_attach(pid_)) {
+      logf("vAttach debug_attach failed: %s", client_.last_error().c_str());
+      return err_packet(1);
+    }
     attached_ = true;
     refresh_threads();
     if (!threads_.empty()) {
@@ -411,152 +471,225 @@ std::string RspHandler::handle_v(const std::string &packet,
 
 std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
   if (packet.empty()) return std::string();
-
-  if (packet[0] == 'q' || packet[0] == 'Q') {
-    return handle_query(packet, conn);
-  }
-  if (packet[0] == 'v') {
-    return handle_v(packet, conn);
-  }
-  if (packet == "?") {
-    if (!attached_ && pid_ > 0) {
-      if (!ensure_attached()) return "W00";
-    }
-    return attached_ ? stop_reply() : "W00";
-  }
-  if (packet == "!") {
-    /* extended mode — acknowledge */
-    return "OK";
-  }
-  if (packet[0] == 'H') {
-    /* Hg / Hc */
-    if (packet.size() < 3U) return err_packet(1);
-    const char which = packet[1];
-    int32_t tid = 0;
-    if (packet[2] == '-') {
-      tid = -1;
+  if (verbose_) {
+    /* Truncate huge memory payloads in logs. */
+    if (packet.size() > 96U &&
+        (packet[0] == 'M' || packet[0] == 'X' || packet[0] == 'G')) {
+      logf("rsp <- %.64s... (%zu bytes)", packet.c_str(), packet.size());
     } else {
-      uint64_t value = 0U;
-      if (!parse_hex_u64(packet.c_str() + 2, value)) return err_packet(1);
-      tid = static_cast<int32_t>(value);
+      logf("rsp <- %s", packet.c_str());
     }
-    if (which == 'g') {
-      if (tid > 0) general_thread_ = tid;
-      return "OK";
-    }
-    if (which == 'c') {
-      continue_thread_ = tid > 0 ? tid : 0;
-      return "OK";
-    }
-    return std::string();
-  }
-  if (packet[0] == 'g') {
-    if (!ensure_attached()) return err_packet(1);
-    memdbg::frontend::Client::DebugRegs regs;
-    if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    memdbg::frontend::Client::DebugFpregs fpregs;
-    const memdbg_debug_fpregs_t *fp = nullptr;
-    if (client_.debug_get_fpregs(current_thread(), fpregs)) {
-      fp = &fpregs.fpregs;
-    }
-    return gdb_encode_g_packet(regs.regs, fp);
-  }
-  if (packet[0] == 'G') {
-    if (!ensure_attached()) return err_packet(1);
-    memdbg::frontend::Client::DebugRegs regs;
-    if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    memdbg::frontend::Client::DebugFpregs fpregs;
-    (void)client_.debug_get_fpregs(current_thread(), fpregs);
-    if (!gdb_decode_g_packet(packet.substr(1U), regs.regs, &fpregs.fpregs))
-      return err_packet(1);
-    if (!client_.debug_set_regs(current_thread(), regs)) return err_packet(1);
-    if (fpregs.fpregs.length > 0U) {
-      (void)client_.debug_set_fpregs(current_thread(), fpregs);
-    }
-    return "OK";
-  }
-  if (packet[0] == 'p') {
-    if (!ensure_attached()) return err_packet(1);
-    uint64_t regno = 0U;
-    if (!parse_hex_u64(packet.c_str() + 1, regno) ||
-        !gdb_reg_valid(static_cast<int>(regno))) {
-      return err_packet(1);
-    }
-    const int ir = static_cast<int>(regno);
-    const size_t size = gdb_reg_size(ir);
-    if (gdb_reg_is_sse(ir)) {
-      memdbg::frontend::Client::DebugFpregs fpregs;
-      if (!client_.debug_get_fpregs(current_thread(), fpregs))
-        return err_packet(1);
-      uint8_t buf[16]{};
-      if (!gdb_get_sse_bytes(fpregs.fpregs, ir, buf, sizeof(buf)))
-        return err_packet(1);
-      return bytes_to_hex(buf, size);
-    }
-    memdbg::frontend::Client::DebugRegs regs;
-    if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    uint64_t value = gdb_get_reg_value(regs.regs, ir);
-    if (size == 4U) value &= 0xFFFFFFFFULL;
-    return bytes_to_hex(&value, size);
-  }
-  if (packet[0] == 'P') {
-    if (!ensure_attached()) return err_packet(1);
-    const size_t eq = packet.find('=');
-    if (eq == std::string::npos) return err_packet(1);
-    uint64_t regno = 0U;
-    if (!parse_hex_u64(packet, 1U, eq, regno) ||
-        !gdb_reg_valid(static_cast<int>(regno))) {
-      return err_packet(1);
-    }
-    const int ir = static_cast<int>(regno);
-    const size_t size = gdb_reg_size(ir);
-    if (gdb_reg_is_sse(ir)) {
-      uint8_t buf[16]{};
-      if (!hex_to_bytes(packet.substr(eq + 1U), buf, size)) return err_packet(1);
-      memdbg::frontend::Client::DebugFpregs fpregs;
-      (void)client_.debug_get_fpregs(current_thread(), fpregs);
-      if (!gdb_set_sse_bytes(fpregs.fpregs, ir, buf, size)) return err_packet(1);
-      if (!client_.debug_set_fpregs(current_thread(), fpregs))
-        return err_packet(1);
-      return "OK";
-    }
-    uint64_t value = 0U;
-    if (!hex_to_bytes(packet.substr(eq + 1U), &value, size)) return err_packet(1);
-    memdbg::frontend::Client::DebugRegs regs;
-    if (!client_.debug_get_regs(current_thread(), regs)) return err_packet(1);
-    if (!gdb_set_reg_value(regs.regs, ir, value)) return err_packet(1);
-    if (!client_.debug_set_regs(current_thread(), regs)) return err_packet(1);
-    return "OK";
-  }
-  if (packet[0] == 'm') return handle_memory_read(packet);
-  if (packet[0] == 'M') return handle_memory_write(packet);
-  if (packet[0] == 'c' || packet[0] == 'C') {
-    return handle_continue_or_step(false, conn, continue_thread_);
-  }
-  if (packet[0] == 's' || packet[0] == 'S') {
-    return handle_continue_or_step(true, conn, continue_thread_);
-  }
-  if (packet[0] == 'Z') return handle_breakpoint(packet, true);
-  if (packet[0] == 'z') return handle_breakpoint(packet, false);
-  if (packet[0] == 'D' || packet == "k") {
-    if (attached_) {
-      (void)client_.debug_detach();
-      attached_ = false;
-    }
-    return "OK";
-  }
-  if (packet[0] == 'T') {
-    /* Thread alive? */
-    refresh_threads();
-    uint64_t tid = 0U;
-    if (!parse_hex_u64(packet.c_str() + 1, tid)) return err_packet(1);
-    for (const auto &t : threads_) {
-      if (static_cast<uint64_t>(t.lwp) == tid) return "OK";
-    }
-    return err_packet(1);
   }
 
-  return std::string(); /* unsupported */
+  std::string reply;
+  if (packet[0] == 'q' || packet[0] == 'Q') {
+    reply = handle_query(packet, conn);
+  } else if (packet[0] == 'v') {
+    reply = handle_v(packet, conn);
+  } else if (packet == "?") {
+    if (!attached_ && pid_ > 0) {
+      if (!ensure_attached()) reply = "W00";
+      else reply = stop_reply();
+    } else {
+      reply = attached_ ? stop_reply() : "W00";
+    }
+  } else {
+    if (packet == "!") {
+      /* extended mode — acknowledge */
+      reply = "OK";
+    } else if (packet[0] == 'H') {
+      /* Hg / Hc */
+      if (packet.size() < 3U) {
+        reply = err_packet(1);
+      } else {
+        const char which = packet[1];
+        int32_t tid = 0;
+        bool tid_ok = true;
+        if (packet[2] == '-') {
+          tid = -1;
+        } else {
+          uint64_t value = 0U;
+          if (!parse_hex_u64(packet.c_str() + 2, value)) {
+            tid_ok = false;
+            reply = err_packet(1);
+          } else {
+            tid = static_cast<int32_t>(value);
+          }
+        }
+        if (tid_ok) {
+          if (which == 'g') {
+            if (tid > 0) general_thread_ = tid;
+            reply = "OK";
+          } else if (which == 'c') {
+            continue_thread_ = tid > 0 ? tid : 0;
+            reply = "OK";
+          } else {
+            reply = std::string();
+          }
+        }
+      }
+    } else if (packet[0] == 'g') {
+      if (!ensure_attached()) {
+        reply = err_packet(1);
+      } else {
+        memdbg::frontend::Client::DebugRegs regs;
+        if (!client_.debug_get_regs(current_thread(), regs)) {
+          reply = err_packet(1);
+        } else {
+          memdbg::frontend::Client::DebugFpregs fpregs;
+          const memdbg_debug_fpregs_t *fp = nullptr;
+          if (client_.debug_get_fpregs(current_thread(), fpregs)) {
+            fp = &fpregs.fpregs;
+          }
+          reply = gdb_encode_g_packet(regs.regs, fp);
+        }
+      }
+    } else if (packet[0] == 'G') {
+      if (!ensure_attached()) {
+        reply = err_packet(1);
+      } else {
+        memdbg::frontend::Client::DebugRegs regs;
+        if (!client_.debug_get_regs(current_thread(), regs)) {
+          reply = err_packet(1);
+        } else {
+          memdbg::frontend::Client::DebugFpregs fpregs;
+          (void)client_.debug_get_fpregs(current_thread(), fpregs);
+          if (!gdb_decode_g_packet(packet.substr(1U), regs.regs, &fpregs.fpregs))
+            reply = err_packet(1);
+          else if (!client_.debug_set_regs(current_thread(), regs))
+            reply = err_packet(1);
+          else {
+            if (fpregs.fpregs.length > 0U) {
+              (void)client_.debug_set_fpregs(current_thread(), fpregs);
+            }
+            reply = "OK";
+          }
+        }
+      }
+    } else if (packet[0] == 'p') {
+      if (!ensure_attached()) {
+        reply = err_packet(1);
+      } else {
+        uint64_t regno = 0U;
+        if (!parse_hex_u64(packet.c_str() + 1, regno) ||
+            !gdb_reg_valid(static_cast<int>(regno))) {
+          reply = err_packet(1);
+        } else {
+          const int ir = static_cast<int>(regno);
+          const size_t size = gdb_reg_size(ir);
+          if (gdb_reg_is_sse(ir)) {
+            memdbg::frontend::Client::DebugFpregs fpregs;
+            if (!client_.debug_get_fpregs(current_thread(), fpregs))
+              reply = err_packet(1);
+            else {
+              uint8_t buf[16]{};
+              if (!gdb_get_sse_bytes(fpregs.fpregs, ir, buf, sizeof(buf)))
+                reply = err_packet(1);
+              else
+                reply = bytes_to_hex(buf, size);
+            }
+          } else {
+            memdbg::frontend::Client::DebugRegs regs;
+            if (!client_.debug_get_regs(current_thread(), regs)) {
+              reply = err_packet(1);
+            } else {
+              uint64_t value = gdb_get_reg_value(regs.regs, ir);
+              if (size == 4U) value &= 0xFFFFFFFFULL;
+              reply = bytes_to_hex(&value, size);
+            }
+          }
+        }
+      }
+    } else if (packet[0] == 'P') {
+      if (!ensure_attached()) {
+        reply = err_packet(1);
+      } else {
+        const size_t eq = packet.find('=');
+        if (eq == std::string::npos) {
+          reply = err_packet(1);
+        } else {
+          uint64_t regno = 0U;
+          if (!parse_hex_u64(packet, 1U, eq, regno) ||
+              !gdb_reg_valid(static_cast<int>(regno))) {
+            reply = err_packet(1);
+          } else {
+            const int ir = static_cast<int>(regno);
+            const size_t size = gdb_reg_size(ir);
+            if (gdb_reg_is_sse(ir)) {
+              uint8_t buf[16]{};
+              if (!hex_to_bytes(packet.substr(eq + 1U), buf, size))
+                reply = err_packet(1);
+              else {
+                memdbg::frontend::Client::DebugFpregs fpregs;
+                (void)client_.debug_get_fpregs(current_thread(), fpregs);
+                if (!gdb_set_sse_bytes(fpregs.fpregs, ir, buf, size))
+                  reply = err_packet(1);
+                else if (!client_.debug_set_fpregs(current_thread(), fpregs))
+                  reply = err_packet(1);
+                else
+                  reply = "OK";
+              }
+            } else {
+              uint64_t value = 0U;
+              if (!hex_to_bytes(packet.substr(eq + 1U), &value, size))
+                reply = err_packet(1);
+              else {
+                memdbg::frontend::Client::DebugRegs regs;
+                if (!client_.debug_get_regs(current_thread(), regs))
+                  reply = err_packet(1);
+                else if (!gdb_set_reg_value(regs.regs, ir, value))
+                  reply = err_packet(1);
+                else if (!client_.debug_set_regs(current_thread(), regs))
+                  reply = err_packet(1);
+                else
+                  reply = "OK";
+              }
+            }
+          }
+        }
+      }
+    } else if (packet[0] == 'm') {
+      reply = handle_memory_read(packet);
+    } else if (packet[0] == 'M') {
+      reply = handle_memory_write(packet);
+    } else if (packet[0] == 'c' || packet[0] == 'C') {
+      reply = handle_continue_or_step(false, conn, continue_thread_);
+    } else if (packet[0] == 's' || packet[0] == 'S') {
+      reply = handle_continue_or_step(true, conn, continue_thread_);
+    } else if (packet[0] == 'Z') {
+      reply = handle_breakpoint(packet, true);
+    } else if (packet[0] == 'z') {
+      reply = handle_breakpoint(packet, false);
+    } else if (packet[0] == 'D' || packet == "k") {
+      safe_detach();
+      reply = "OK";
+    } else if (packet[0] == 'T') {
+      refresh_threads();
+      uint64_t tid = 0U;
+      if (!parse_hex_u64(packet.c_str() + 1, tid)) {
+        reply = err_packet(1);
+      } else {
+        reply = err_packet(1);
+        for (const auto &t : threads_) {
+          if (static_cast<uint64_t>(t.lwp) == tid) {
+            reply = "OK";
+            break;
+          }
+        }
+      }
+    } else {
+      reply = std::string(); /* unsupported */
+    }
+  }
+
+  if (verbose_) {
+    if (reply.size() > 96U) {
+      logf("rsp -> %.64s... (%zu bytes)", reply.c_str(), reply.size());
+    } else {
+      logf("rsp -> %s", reply.empty() ? "(empty)" : reply.c_str());
+    }
+  }
+  return reply;
 }
 
 } // namespace memdbg::gdb_bridge

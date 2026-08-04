@@ -6,6 +6,7 @@
  * Usage:
  *   memdbg_gdb_bridge --host 192.168.1.50 --port 9020 \
  *                     --listen 127.0.0.1:23946 --pid 123
+ *   memdbg_gdb_bridge --host 192.168.1.50 --name eboot.bin --verbose
  */
 
 #include "memdbg_client.hpp"
@@ -13,10 +14,15 @@
 #include "rsp_handler.hpp"
 #include "rsp_server.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -26,13 +32,15 @@ struct Options {
   std::string listen_host = "127.0.0.1";
   uint16_t listen_port = 23946;
   int32_t pid = 0;
+  std::string process_name;
   bool once = false;
+  bool verbose = false;
 };
 
 void print_usage(const char *prog) {
   std::fprintf(stderr,
                "Usage: %s --host HOST [--port 9020] [--listen [HOST:]PORT] "
-               "[--pid PID] [--once]\n"
+               "[--pid PID | --name NAME] [--verbose] [--once]\n"
                "\n"
                "Proxy GDB Remote Serial Protocol to a MemDBG console payload.\n"
                "Point IDA Pro Remote GDB Debugger at the --listen address.\n"
@@ -41,9 +49,15 @@ void print_usage(const char *prog) {
                "  --host HOST          Console IP / hostname (required)\n"
                "  --port N             MDBG debug port (default 9020)\n"
                "  --listen [HOST:]N    RSP listen address (default 127.0.0.1:23946)\n"
-               "  --pid PID            Optional pre-attach PID (or use vAttach)\n"
+               "  --pid PID            Optional pre-attach PID (decimal)\n"
+               "  --name NAME          Resolve PID via process_list (e.g. eboot.bin)\n"
+               "  --verbose            Log RSP packets and MDBG attach/continue/detach\n"
                "  --once               Exit after the first GDB client disconnects\n"
-               "  --help               Show this help\n",
+               "  --help               Show this help\n"
+               "\n"
+               "Note: RSP vAttach PIDs are hexadecimal. In IDA, enter the PID in hex\n"
+               "(decimal 88 → 58), or prefer --pid/--name and leave IDA's PID blank\n"
+               "when the bridge already has a target.\n",
                prog);
 }
 
@@ -61,6 +75,62 @@ bool parse_listen(const std::string &value, std::string &host, uint16_t &port) {
   if (n <= 0 || n > 65535) return false;
   if (host.empty()) host = "127.0.0.1";
   port = static_cast<uint16_t>(n);
+  return true;
+}
+
+bool iequals(const std::string &a, const std::string &b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(a[i])) !=
+        std::tolower(static_cast<unsigned char>(b[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool name_matches(const std::string &proc_name, const std::string &want) {
+  if (iequals(proc_name, want)) return true;
+  /* Match basename suffix: "/app/eboot.bin" vs "eboot.bin". */
+  if (proc_name.size() > want.size()) {
+    const size_t off = proc_name.size() - want.size();
+    const char sep = proc_name[off - 1U];
+    if ((sep == '/' || sep == '\\') &&
+        iequals(proc_name.substr(off), want)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool resolve_process_name(memdbg::frontend::Client &client,
+                          const std::string &name, int32_t &pid_out) {
+  std::vector<memdbg::frontend::ProcessEntry> procs;
+  if (!client.process_list(procs)) {
+    std::fprintf(stderr, "[gdb_bridge] process_list failed: %s\n",
+                 client.last_error().c_str());
+    return false;
+  }
+  int32_t found = 0;
+  int matches = 0;
+  for (const auto &p : procs) {
+    if (!name_matches(p.name, name)) continue;
+    ++matches;
+    if (found == 0) found = p.pid;
+    std::fprintf(stderr, "[gdb_bridge] name match: pid=%d %s\n",
+                 static_cast<int>(p.pid), p.name.c_str());
+  }
+  if (found == 0) {
+    std::fprintf(stderr, "[gdb_bridge] no process matching '%s'\n",
+                 name.c_str());
+    return false;
+  }
+  if (matches > 1) {
+    std::fprintf(stderr,
+                 "[gdb_bridge] warning: %d matches for '%s'; using pid=%d\n",
+                 matches, name.c_str(), static_cast<int>(found));
+  }
+  pid_out = found;
   return true;
 }
 
@@ -110,6 +180,16 @@ bool parse_args(int argc, char **argv, Options &opt) {
       opt.pid = static_cast<int32_t>(std::atoi(v));
       continue;
     }
+    if (std::strcmp(arg, "--name") == 0) {
+      const char *v = need_value("--name");
+      if (!v) return false;
+      opt.process_name = v;
+      continue;
+    }
+    if (std::strcmp(arg, "--verbose") == 0 || std::strcmp(arg, "-v") == 0) {
+      opt.verbose = true;
+      continue;
+    }
     if (std::strcmp(arg, "--once") == 0) {
       opt.once = true;
       continue;
@@ -119,6 +199,10 @@ bool parse_args(int argc, char **argv, Options &opt) {
   }
   if (!have_host) {
     std::fprintf(stderr, "--host is required\n");
+    return false;
+  }
+  if (opt.pid != 0 && !opt.process_name.empty()) {
+    std::fprintf(stderr, "Use either --pid or --name, not both\n");
     return false;
   }
   return true;
@@ -170,19 +254,48 @@ int main(int argc, char **argv) {
                  "MEMDBG_CAP_DEBUGGER\n");
   }
 
+  if (!opt.process_name.empty()) {
+    if (!resolve_process_name(client, opt.process_name, opt.pid)) {
+      client.disconnect();
+      memdbg::frontend::platform::socket_cleanup();
+      return 1;
+    }
+    std::fprintf(stderr, "[gdb_bridge] Resolved --name '%s' -> pid=%d\n",
+                 opt.process_name.c_str(), static_cast<int>(opt.pid));
+  }
+
+  /* Payload idle timeout is 30s; ping under that while the bridge is up. */
+  std::atomic<bool> stop_keepalive{false};
+  std::thread keepalive([&client, &stop_keepalive, verbose = opt.verbose] {
+    while (!stop_keepalive.load()) {
+      for (int i = 0; i < 100 && !stop_keepalive.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      if (stop_keepalive.load()) break;
+      if (!client.connected()) continue;
+      if (!client.ping() && verbose) {
+        std::fprintf(stderr, "[gdb_bridge] keepalive ping failed: %s\n",
+                     client.last_error().c_str());
+      }
+    }
+  });
+
   memdbg::gdb_bridge::RspServer server;
   std::string listen_error;
   if (!server.listen_on(opt.listen_host, opt.listen_port, listen_error)) {
     std::fprintf(stderr, "[gdb_bridge] Listen failed: %s\n",
                  listen_error.c_str());
+    stop_keepalive.store(true);
+    keepalive.join();
     client.disconnect();
     memdbg::frontend::platform::socket_cleanup();
     return 1;
   }
   std::fprintf(stderr,
-               "[gdb_bridge] Listening for IDA/GDB on %s:%u (pid=%d)\n",
+               "[gdb_bridge] Listening for IDA/GDB on %s:%u (pid=%d)%s\n",
                opt.listen_host.c_str(),
-               static_cast<unsigned>(server.listen_port()), opt.pid);
+               static_cast<unsigned>(server.listen_port()), opt.pid,
+               opt.verbose ? " verbose" : "");
 
   int exit_code = 0;
   for (;;) {
@@ -196,16 +309,19 @@ int main(int argc, char **argv) {
     }
     std::fprintf(stderr, "[gdb_bridge] GDB client connected\n");
 
-    memdbg::gdb_bridge::RspHandler handler(client, opt.pid);
+    memdbg::gdb_bridge::RspHandler handler(client, opt.pid, opt.verbose);
     server.serve(client_fd, [&](const std::string &packet,
                                 memdbg::gdb_bridge::RspConnection &conn) {
       return handler.handle(packet, conn);
     });
+    handler.cleanup();
 
     std::fprintf(stderr, "[gdb_bridge] GDB client disconnected\n");
     if (opt.once) break;
   }
 
+  stop_keepalive.store(true);
+  keepalive.join();
   client.disconnect();
   server.close_listen();
   memdbg::frontend::platform::socket_cleanup();

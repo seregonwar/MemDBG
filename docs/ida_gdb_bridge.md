@@ -40,15 +40,26 @@ cmake --build <frontend-build-dir> --target memdbg_gdb_bridge memdbg_gdb_bridge_
 ```text
 memdbg_gdb_bridge --host 192.168.1.50 --port 9020 \
                   --listen 127.0.0.1:23946 --pid 123
+
+# oppure per nome processo:
+memdbg_gdb_bridge --host 192.168.1.50 --name eboot.bin --verbose
 ```
+
+I pacchetti di release includono `memdbg_gdb_bridge` nello zip frontend (Publish).
+Se Actions fallisce prima di Publish, quella nightly non avrà il bridge.
 
 | Flag | Significato |
 |---|---|
 | `--host` | IP / hostname della console (obbligatorio) |
 | `--port` | Porta debug MDBG (default `9020`) |
 | `--listen` | Indirizzo RSP (`[host:]port`, default `127.0.0.1:23946`) |
-| `--pid` | PID opzionale da attachare al primo halt (`?`); altrimenti `vAttach` |
+| `--pid` | PID opzionale (**decimale**) da attachare al primo halt (`?`) |
+| `--name` | Risolve il PID via `process_list` (es. `eboot.bin`) |
+| `--verbose` | Log pacchetti RSP e attach/continue/detach MDBG |
 | `--once` | Esci dopo la disconnessione del primo client GDB/IDA |
+
+Il bridge fa ping al payload ogni ~10s (idle timeout 30s) e fa resume del
+target prima del detach così il processo console non resta congelato.
 
 ## Setup IDA Pro
 
@@ -57,7 +68,8 @@ memdbg_gdb_bridge --host 192.168.1.50 --port 9020 \
 3. In IDA: **Debugger → Attach → Remote GDB debugger**.
 4. Hostname `127.0.0.1`, porta `23946`.
 5. Nelle opzioni specifiche del debugger, imposta la CPU su **x86_64** / `metapc`.
-6. Fai attach al processo (IDA può inviare `vAttach;<pid>` in esadecimale).
+6. Fai attach. I PID di `vAttach` RSP sono **esadecimali**: il decimale `88`
+   va inserito come `58`, oppure usa `--pid`/`--name` sul bridge.
 
 Oppure con GDB stock:
 

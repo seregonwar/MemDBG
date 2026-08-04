@@ -47,10 +47,17 @@ Copy `MemDBG.dp64` into x64dbg’s `plugins` folder (x64 build).
 
 1. Start the MemDBG payload on the console (`9020` reachable).
 2. Start x64dbg and confirm the plugin loaded (`[MemDBG] plugin loaded`).
-3. In the x64dbg command bar:
+3. In the command bar, switch from **Script DLL** to the **default** command
+   engine (right side of the bar). Script mode will not run plugin commands.
+4. Connect with a **quoted** IPv4 address. x64dbg expression-evaluates bare
+   args, so `MemDBGConnect 192.168.1.50 9020` often becomes
+   `invalid IPv4 address`. Prefer one of:
 
 ```text
-MemDBGConnect 192.168.1.50 9020
+MemDBGConnect "192.168.1.50", 9020
+MemDBGConnect "192.168.1.50:9020"
+MemDBGConnect "192.168.1.50"
+MemDBGPs
 MemDBGAttach 123
 MemDBGRegs
 MemDBGRead 0x200000000 128
@@ -62,6 +69,9 @@ MemDBGDetach
 MemDBGDisconnect
 ```
 
+While connected, the plugin pings the payload every ~10s so the console idle
+timeout (30s) does not drop the session before attach.
+
 **Plugins → MemDBG** exposes the same actions (argument-bearing ops use the
 commands above).
 
@@ -69,8 +79,9 @@ commands above).
 
 | Command | Meaning |
 |---|---|
-| `MemDBGConnect <host> [port]` | MDBG hello (default port `9020`) |
+| `MemDBGConnect <host> [port]` | MDBG hello (default port `9020`; quote IPv4 / use `host:port`) |
 | `MemDBGDisconnect` | Close session |
+| `MemDBGPs` | List remote processes (pid / ppid / name) |
 | `MemDBGAttach <pid>` | Debugger attach |
 | `MemDBGDetach` | Detach |
 | `MemDBGStop` / `MemDBGContinue` / `MemDBGStep` | All-stop run-control |
@@ -92,7 +103,8 @@ commands above).
 - All-stop only; no non-stop.
 - Does not replace x64dbg’s TitanEngine: ops go through plugin commands.
   `MemDBGSync` moves CIP/VA in the native views, but those views still read the
-  **local** TitanEngine debuggee (not remote PS4/PS5 memory).
+  **local** TitanEngine debuggee (not remote PS4/PS5 memory). Remote disassembly
+  into the native CPU view is not implemented yet.
 - X87 st0–st7 not pretty-printed (FXSAVE XMM/MXCSR yes).
 
 ## Sources

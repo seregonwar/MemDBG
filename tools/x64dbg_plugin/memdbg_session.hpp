@@ -9,15 +9,23 @@
 
 #include "memdbg_client.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace memdbg::x64dbg_bridge {
 
 class Session {
 public:
+  Session() = default;
+  ~Session();
+
+  Session(const Session &) = delete;
+  Session &operator=(const Session &) = delete;
+
   bool connect(const std::string &host, uint16_t port);
   void disconnect();
   bool connected() const;
@@ -50,6 +58,7 @@ public:
   bool get_fpregs(frontend::Client::DebugFpregs &out);
   bool set_gpr(const char *name, uint64_t value);
   bool list_maps(std::vector<frontend::MapEntry> &out);
+  bool list_processes(std::vector<frontend::ProcessEntry> &out);
 
   std::string last_error() const;
 
@@ -61,7 +70,12 @@ private:
   int32_t selected_lwp_ = 0;
   std::string last_error_;
 
+  std::thread keepalive_;
+  std::atomic<bool> stop_keepalive_{true};
+
   void set_error(const std::string &msg);
+  void start_keepalive_unlocked();
+  void stop_keepalive();
 };
 
 Session &global_session();
