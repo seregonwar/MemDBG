@@ -18,8 +18,9 @@ The payload is unchanged. The bridge reuses the same frontend `Client` used by
 
 ## Build
 
-Release binaries already include `memdbg_gdb_bridge` inside the
-`MemDBG-frontend-{linux,macos,windows}` packages on GitHub Releases / nightlies.
+Release binaries ship `memdbg_gdb_bridge` inside
+`MemDBG-frontend-{linux,macos,windows}` and as standalone
+`MemDBG-ida-gdb-bridge-{linux,macos,windows}` assets on GitHub Releases / nightlies.
 
 Official targets live in the frontend CMake project (`memdbg_gdb_bridge`,
 `memdbg_gdb_bridge_test`). For a faster host-only build that skips ImGui/GLFW
@@ -45,8 +46,8 @@ memdbg_gdb_bridge --host 192.168.1.50 --port 9020 \
 memdbg_gdb_bridge --host 192.168.1.50 --name eboot.bin --verbose
 ```
 
-Release packages ship `memdbg_gdb_bridge` inside the frontend zip (Publish).
-If Actions fail before Publish, that nightly will not include the bridge.
+Release packages ship `memdbg_gdb_bridge` inside the frontend archives and as a
+standalone asset (`MemDBG-ida-gdb-bridge-{windows,linux,macos}`).
 
 | Flag | Meaning |
 |---|---|

@@ -18,8 +18,9 @@ usato da `memdbg_probe` e dall’UI desktop.
 
 ## Build
 
-I binary di release includono già `memdbg_gdb_bridge` nei pacchetti
-`MemDBG-frontend-{linux,macos,windows}` (su GitHub Releases / nightly).
+I binary di release includono `memdbg_gdb_bridge` nei pacchetti
+`MemDBG-frontend-{linux,macos,windows}` e come asset standalone
+`MemDBG-ida-gdb-bridge-{linux,macos,windows}` su GitHub Releases / nightly.
 
 I target ufficiali sono nel CMake del frontend (`memdbg_gdb_bridge`,
 `memdbg_gdb_bridge_test`). Per una build host più veloce senza FetchContent
@@ -45,8 +46,8 @@ memdbg_gdb_bridge --host 192.168.1.50 --port 9020 \
 memdbg_gdb_bridge --host 192.168.1.50 --name eboot.bin --verbose
 ```
 
-I pacchetti di release includono `memdbg_gdb_bridge` nello zip frontend (Publish).
-Se Actions fallisce prima di Publish, quella nightly non avrà il bridge.
+I pacchetti di release includono `memdbg_gdb_bridge` negli archivi frontend e
+come asset dedicato (`MemDBG-ida-gdb-bridge-{windows,linux,macos}`).
 
 | Flag | Significato |
 |---|---|
