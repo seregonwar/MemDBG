@@ -64,6 +64,9 @@ bool gdb_reg_is_sse(int regno);
 std::string bytes_to_hex(const void *data, size_t size);
 bool hex_to_bytes(const std::string &hex, void *out, size_t size);
 
+/* ASCII→hex body for qThreadExtraInfo. Empty name → "LWP <tid>". */
+std::string gdb_thread_extra_info_hex(int32_t tid, const std::string &name);
+
 uint64_t gdb_get_reg_value(const memdbg_debug_regs_t &regs, int regno);
 bool gdb_set_reg_value(memdbg_debug_regs_t &regs, int regno, uint64_t value);
 

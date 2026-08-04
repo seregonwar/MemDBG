@@ -80,15 +80,19 @@ You can also use stock GDB:
 
 ## Supported RSP subset
 
-- `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`, thread info
+- `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`
+- Threads: `qfThreadInfo` / `qsThreadInfo`, `qThreadExtraInfo` (display name), `H`, `T`
 - `qXfer:features:read` → core GPR + SSE (`xmm0`–`xmm15`, `mxcsr`) XML
 - `qXfer:memory-map:read` → map from `process_maps` (`ram` entries)
-- `vAttach`, `vCont` (`c`/`s`), `?`, `H`, `T`, `D`
+- `vAttach`, `vCont` (`c`/`s`), `?`, `D`
 - Registers: `g` / `G` / `p` / `P` (GPR + SSE via FXSAVE / `debug_get_fpregs`)
 - Memory: `m` / `M`
 - Breakpoints: `Z0`/`z0` (software), `Z1`/`z1` (hardware)
 - Watchpoints: `Z2`–`Z4` / `z2`–`z4`
 - Stop replies via polling `DEBUG_POLL_EVENTS` (all-stop); Ctrl-C → `debug_stop`
+
+Process attach uses bridge `--pid` / `--name` (or IDA `vAttach` in hex). There is
+no RSP OS process-list (`qXfer:osdata`); PS3 / deci3dbg-style modules are out of scope.
 
 Unsupported packets receive an empty RSP reply (`$#00`).
 
