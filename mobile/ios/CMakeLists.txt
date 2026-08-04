@@ -170,6 +170,23 @@ set(MEMDBG_LUA_SOURCES
 add_library(memdbg_lua STATIC ${MEMDBG_LUA_SOURCES})
 target_include_directories(memdbg_lua PUBLIC ${lua_SOURCE_DIR})
 
+# ---- Zydis (client-side disassembly for debugger UI, issue #39) -------------
+# Same static build configuration as the desktop frontend so the shared
+# debugger_disassembly.cpp compiles identically on iOS.
+set(ZYDIS_BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_DOXYGEN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_MAN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_DECODER ON CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_FORMATTER ON CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_ENCODER OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${REPO_ROOT}/external/zydis ${CMAKE_CURRENT_BINARY_DIR}/zydis)
+
 # ---- MemDBG mobile executable -----------------------------------------------
 
 set(MOBILE_SOURCES
@@ -320,6 +337,7 @@ target_include_directories(MemDBGMobile PRIVATE
 target_link_libraries(MemDBGMobile PRIVATE
   memdbg_imgui_metal
   memdbg_lua
+  Zydis
   nlohmann_json::nlohmann_json
   Threads::Threads
   "-framework Metal"
