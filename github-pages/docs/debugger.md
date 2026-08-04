@@ -174,7 +174,8 @@ The **Disassembly** panel shows the code at the current RIP or any address you e
 - The desktop frontend reads an ~8 KiB window of process memory and disassembles it **locally with Zydis** (x86-64 Intel syntax), so Jump-to-offset shows a full instruction stream instead of a truncated hand-rolled decode.
 - Toggle **CFG / jump targets** to filter the view to control-flow anchors (call/jmp/ret).
 - Use **Prev/Next page**, **Hist Back/Fwd**, **Realign**, and **Copy view** for navigation and export.
-- For IDA Pro–quality browsing and full workflows, use the host GDB bridge (`memdbg_gdb_bridge`) or the x64dbg plugin (see `docs/ida_gdb_bridge.md` / `docs/x64dbg_bridge.md`).
+- For IDA Pro–quality browsing and full workflows, use the host GDB bridge (`memdbg_gdb_bridge`) or the x64dbg plugin (see [`docs/bridges/ida_gdb_bridge.md`](https://github.com/seregonwar/MemDBG/blob/main/docs/bridges/ida_gdb_bridge.md) / [`docs/bridges/x64dbg_bridge.md`](https://github.com/seregonwar/MemDBG/blob/main/docs/bridges/x64dbg_bridge.md)).
+- For code-cave alloc / write / detour workflows, see the engineering deep dive [`docs/codecave.md`](https://github.com/seregonwar/MemDBG/blob/main/docs/codecave.md).
 - **Xrefs** (cross-references) show what other code references this address — click **Find Xrefs To** to see all callers.
 - **Patch Studio** lets you assemble and inject custom instructions (requires `MEMDBG_CAP_DISASSEMBLY`).
 

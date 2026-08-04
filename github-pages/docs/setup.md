@@ -9,7 +9,7 @@ MemDBG exposes a TCP command channel and an optional UDP log channel. The payloa
 3. Check the PS4 notification area — you should see a MemDBG notification confirming the payload started.
 4. The payload binds to `0.0.0.0:9020` (TCP) and broadcasts logs on `255.255.255.255:9023` (UDP).
 
-> **Debugger attach (`status -8`)?** Look for `privilege: ps4 debug gates armed fw=...` in the console log. MemDBG arms ACMGR/ptrace gates at startup on supported PS4 firmware families from **5.05 through 12.02**. If you only see `privilege: retaining GoldHEN loader credentials on PS4`, that is expected — GoldHEN loader creds stay untouched. Missing debug-gate arming on an unsupported firmware leaves `PT_ATTACH` as permission denied. Memory read/scan via `mdbg` can still work. See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps4_goldhen_launch.md).
+> **Debugger attach (`status -8`)?** Look for `privilege: ps4 debug gates armed fw=...` in the console log. MemDBG arms ACMGR/ptrace gates at startup on supported PS4 firmware families from **5.05 through 12.02**. If you only see `privilege: retaining GoldHEN loader credentials on PS4`, that is expected — GoldHEN loader creds stay untouched. Missing debug-gate arming on an unsupported firmware leaves `PT_ATTACH` as permission denied. Memory read/scan via `mdbg` can still work. See [PS4 / GoldHEN launch notes](https://github.com/seregonwar/MemDBG/blob/main/docs/platform/ps4_goldhen_launch.md).
 
 ### PS5 (ps5debug / etaHEN)
 
@@ -18,7 +18,7 @@ MemDBG exposes a TCP command channel and an optional UDP log channel. The payloa
 3. The payload binds to `0.0.0.0:9020` (TCP) and broadcasts logs on `255.255.255.255:9023` (UDP).
 4. KLOG forwarding is available via a separate TCP stream — negotiate with the frontend after connection.
 
-> **Validation:** See the [PS5 validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/ps5_validation_2026-07-18.md) for tested firmware versions and known limitations.
+> **Validation:** See the [PS5 validation notes](https://github.com/seregonwar/MemDBG/blob/main/docs/archive/ps5_validation_2026-07-18.md) for tested firmware versions and known limitations.
 
 ### Host (PC testing)
 
