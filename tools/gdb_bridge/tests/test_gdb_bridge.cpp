@@ -149,6 +149,13 @@ int main() {
   CHECK("hex_to_bytes", hex_to_bytes(hex, back, 3U));
   CHECK("hex bytes match", back[0] == 0x01 && back[1] == 0x02 && back[2] == 0xFF);
 
+  /* qThreadExtraInfo body: ASCII name hex-encoded for IDA/GDB. */
+  CHECK("thread extra named",
+        gdb_thread_extra_info_hex(88, "main") == "6d61696e");
+  CHECK("thread extra empty fallback",
+        gdb_thread_extra_info_hex(0x58, "") ==
+            bytes_to_hex("LWP 88", 6U));
+
   CHECK("target xml non-empty", std::strlen(kMemdbgGdbTargetXml) > 100U);
   CHECK("target xml has architecture",
         std::strstr(kMemdbgGdbTargetXml, "i386:x86-64") != nullptr);

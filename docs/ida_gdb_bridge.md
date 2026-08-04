@@ -80,15 +80,20 @@ Oppure con GDB stock:
 
 ## Subset RSP supportato
 
-- `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`, thread info
+- `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`
+- Thread: `qfThreadInfo` / `qsThreadInfo`, `qThreadExtraInfo` (nome), `H`, `T`
 - `qXfer:features:read` → XML core GPR + SSE (`xmm0`–`xmm15`, `mxcsr`)
 - `qXfer:memory-map:read` → mappa da `process_maps` (tipo `ram`)
-- `vAttach`, `vCont` (`c`/`s`), `?`, `H`, `T`, `D`
+- `vAttach`, `vCont` (`c`/`s`), `?`, `D`
 - Registri: `g` / `G` / `p` / `P` (GPR + SSE via FXSAVE/`debug_get_fpregs`)
 - Memoria: `m` / `M`
 - Breakpoint: `Z0`/`z0` (software), `Z1`/`z1` (hardware)
 - Watchpoint: `Z2`–`Z4` / `z2`–`z4`
 - Stop reply via polling `DEBUG_POLL_EVENTS` (all-stop); Ctrl-C → `debug_stop`
+
+L’attach di processo usa `--pid` / `--name` sul bridge (oppure `vAttach` IDA in
+hex). Non c’è process-list OS via RSP (`qXfer:osdata`); PS3 / moduli stile
+deci3dbg sono fuori scope.
 
 I pacchetti non supportati ricevono una risposta RSP vuota (`$#00`).
 

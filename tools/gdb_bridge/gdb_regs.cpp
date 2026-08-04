@@ -6,6 +6,7 @@
 
 #include "gdb_regs.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 namespace memdbg::gdb_bridge {
@@ -56,6 +57,16 @@ bool gdb_reg_is_sse(int regno) {
 
 bool gdb_reg_valid(int regno) {
   return gdb_reg_is_core(regno) || gdb_reg_is_sse(regno);
+}
+
+std::string gdb_thread_extra_info_hex(int32_t tid, const std::string &name) {
+  std::string display = name;
+  if (display.empty()) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "LWP %d", static_cast<int>(tid));
+    display = buf;
+  }
+  return bytes_to_hex(display.data(), display.size());
 }
 
 std::string bytes_to_hex(const void *data, size_t size) {

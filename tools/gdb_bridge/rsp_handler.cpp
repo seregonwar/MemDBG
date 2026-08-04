@@ -371,6 +371,21 @@ std::string RspHandler::handle_query(const std::string &packet,
     return out;
   }
   if (packet == "qsThreadInfo") return "l";
+  if (packet.rfind("qThreadExtraInfo,", 0) == 0) {
+    uint64_t tid = 0U;
+    if (!parse_hex_u64(packet.c_str() + std::strlen("qThreadExtraInfo,"), tid)) {
+      return err_packet(1);
+    }
+    refresh_threads();
+    for (const auto &t : threads_) {
+      if (static_cast<uint64_t>(t.lwp) == tid) {
+        return gdb_thread_extra_info_hex(t.lwp, t.name);
+      }
+    }
+    logf("qThreadExtraInfo: unknown tid=0x%llx",
+         static_cast<unsigned long long>(tid));
+    return err_packet(1);
+  }
   if (packet.rfind("qXfer:features:read:", 0) == 0) {
     /* qXfer:features:read:annex:offset,length */
     const std::string rest = packet.substr(std::strlen("qXfer:features:read:"));
