@@ -743,7 +743,6 @@ void draw_status_bar(AppState &state, ImVec2 size) {
   text_ellipsis(state.status, avail_for_status, ui::colors().text);
 
   ImGui::SameLine();
-  ImGui::SetCursorPosX(warning_x);
   if (state.payload_outdated && !state.payload_outdated_remote_tag.empty()) {
     char warn_buf[256];
     std::snprintf(warn_buf, sizeof(warn_buf),
@@ -751,13 +750,21 @@ void draw_status_bar(AppState &state, ImVec2 size) {
                   state.hello.version.c_str(),
                   state.payload_outdated_remote_tag.c_str());
     if (warning_width > 120.0f * scl) {
+      const float text_w = ImGui::CalcTextSize(warn_buf).x;
+      /* Right-align against telemetry so status-text length never shifts it. */
+      ImGui::SetCursorPosX(text_w >= warning_width
+                               ? warning_x
+                               : warning_x + warning_width - text_w);
       text_ellipsis(warn_buf, warning_width, ui::colors().warning);
     } else {
+      const float mark_w = ImGui::CalcTextSize("!").x;
+      ImGui::SetCursorPosX(warning_x + warning_width - mark_w);
       ImGui::TextColored(ui::colors().warning, "%s", "!");
     }
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("%s\n%s", warn_buf, locale::tr("payload.outdated_hint"));
   } else {
+    ImGui::SetCursorPosX(warning_x);
     ImGui::Dummy(ImVec2(warning_width, ImGui::GetTextLineHeight()));
   }
 
