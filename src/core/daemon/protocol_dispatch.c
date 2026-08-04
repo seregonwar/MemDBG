@@ -12,6 +12,7 @@
 #include "memdbg/core/memdbg_instance.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/core/memdbg_log.h"
+#include "memdbg/daemon/daemon_config_file.h"
 
 #include "memdbg/debug/memdbg_disasm.h"
 #include "memdbg/debug/memdbg_assembler.h"
@@ -483,6 +484,75 @@ memdbg_status_t dispatch_packet(int fd, const memdbg_config_t *cfg,
                ? MEMDBG_OK
                : MEMDBG_ERR_NET;
 #endif
+  }
+
+  case MEMDBG_CMD_GET_SERVICES: {
+    if (req->length != 0U) return MEMDBG_ERR_PROTOCOL;
+    memdbg_config_t snap;
+    memdbg_daemon_config_snapshot(&snap);
+    memdbg_services_response_t resp;
+    memset(&resp, 0, sizeof(resp));
+    if (memdbg_legacy_is_running()) resp.active |= MEMDBG_SERVICE_LEGACY;
+    if (snap.enable_legacy_compat) resp.configured |= MEMDBG_SERVICE_LEGACY;
+    resp.debug_port = snap.debug_port;
+    resp.legacy_port = snap.legacy_port;
+    return send_response(fd, req, MEMDBG_OK, &resp, sizeof(resp)) == 0
+               ? MEMDBG_OK
+               : MEMDBG_ERR_NET;
+  }
+
+  case MEMDBG_CMD_SET_SERVICES: {
+    if (req->length != sizeof(memdbg_services_set_request_t))
+      return MEMDBG_ERR_PROTOCOL;
+    const memdbg_services_set_request_t *set =
+        (const memdbg_services_set_request_t *)body;
+    const uint32_t supported = MEMDBG_SERVICE_LEGACY;
+    if ((set->set_mask & ~supported) != 0U) return MEMDBG_ERR_UNSUPPORTED;
+    if (set->set_mask == 0U) return MEMDBG_ERR_PARAM;
+
+    memdbg_config_t snap;
+    memdbg_daemon_config_snapshot(&snap);
+    memdbg_status_t status = MEMDBG_OK;
+
+    if ((set->set_mask & MEMDBG_SERVICE_LEGACY) != 0U) {
+      const bool want = (set->enable_bits & MEMDBG_SERVICE_LEGACY) != 0U;
+      memdbg_daemon_config_set_legacy_enabled(want);
+      snap.enable_legacy_compat = want;
+      if (!want) {
+        memdbg_legacy_stop();
+        memdbg_log_write(MEMDBG_LOG_INFO,
+                         "services: legacy listener disabled (tcp/%u)",
+                         snap.legacy_port);
+      } else if (!memdbg_legacy_is_running()) {
+        status = memdbg_legacy_start(&snap);
+        if (status == MEMDBG_OK) {
+          memdbg_log_write(MEMDBG_LOG_INFO,
+                           "services: legacy listener enabled on tcp/%u",
+                           snap.legacy_port);
+        } else {
+          memdbg_log_write(MEMDBG_LOG_WARN,
+                           "services: legacy enable intent saved but bind "
+                           "failed on tcp/%u: %s",
+                           snap.legacy_port, memdbg_strerror(status));
+        }
+      }
+    }
+
+    /* Always persist intent so reboot / later bind matches SET. */
+    if (memdbg_daemon_config_save(snap.data_root, &snap) != 0 &&
+        status == MEMDBG_OK) {
+      status = MEMDBG_ERR_IO;
+    }
+
+    memdbg_services_response_t resp;
+    memset(&resp, 0, sizeof(resp));
+    if (memdbg_legacy_is_running()) resp.active |= MEMDBG_SERVICE_LEGACY;
+    if (snap.enable_legacy_compat) resp.configured |= MEMDBG_SERVICE_LEGACY;
+    resp.debug_port = snap.debug_port;
+    resp.legacy_port = snap.legacy_port;
+    return send_response(fd, req, status, &resp, sizeof(resp)) == 0
+               ? MEMDBG_OK
+               : MEMDBG_ERR_NET;
   }
 
   default:

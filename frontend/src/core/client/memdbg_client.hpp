@@ -93,6 +93,17 @@ public:
   bool ping();
   bool shutdown_payload();
 
+  struct ServicesInfo {
+    uint32_t active = 0;
+    uint32_t configured = 0;
+    uint16_t debug_port = 0;
+    uint16_t legacy_port = 0;
+  };
+  bool get_services(ServicesInfo &out);
+  /* Toggle MEMDBG_SERVICE_* bits. Persists on the console via daemon.conf. */
+  bool set_services(uint32_t set_mask, uint32_t enable_bits, ServicesInfo &out);
+  bool set_legacy_compat(bool enabled, ServicesInfo &out);
+
   /* Forward one native protocol command while preserving payload status.
      Used by the loopback plugin broker so plugins share the desktop session
      instead of opening independent console sockets. Returns false only for a

@@ -35,7 +35,7 @@ extern "C" {
  * the original protocol (Maps V2, versioned scans, batch writes, auth, etc.).
  * Feature level 3 appends the full payload version string to HELLO/discovery. */
 #define MEMDBG_PROTOCOL_VERSION 1U
-#define MEMDBG_PROTOCOL_FEATURE_LEVEL 3U
+#define MEMDBG_PROTOCOL_FEATURE_LEVEL 4U
 #define MEMDBG_PROTOCOL_MAX_PACKET (1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_MAP_RESPONSE (8U * 1024U * 1024U)
 #define MEMDBG_PROTOCOL_MAX_READ (1024U * 1024U)
@@ -184,8 +184,19 @@ typedef enum memdbg_command {
   /* Extended capabilities query */
   MEMDBG_CMD_GET_EXTENDED_CAPS = 0x0D03U,
 
+  /* Runtime daemon listeners (persist to data_root/daemon.conf) */
+  MEMDBG_CMD_GET_SERVICES = 0x0E00U,
+  MEMDBG_CMD_SET_SERVICES = 0x0E01U,
+
   MEMDBG_CMD_SHUTDOWN = 0x7f00U
 } memdbg_command_t;
+
+/* Bitmask for GET/SET_SERVICES */
+#define MEMDBG_SERVICE_LEGACY 0x00000001U
+/* Reserved for future remote toggles:
+ * #define MEMDBG_SERVICE_UDP_LOG   0x00000002U
+ * #define MEMDBG_SERVICE_DISCOVERY 0x00000004U
+ */
 
 typedef enum memdbg_platform_id {
   MEMDBG_PLATFORM_UNKNOWN = 0U,
@@ -1215,6 +1226,19 @@ typedef struct MEMDBG_PACKED memdbg_arena_config_request {
   uint32_t reserved;
 } memdbg_arena_config_request_t;
 
+/* GET_SERVICES response / SET_SERVICES request (feature level 4). */
+typedef struct MEMDBG_PACKED memdbg_services_response {
+  uint32_t active;      /* currently listening (MEMDBG_SERVICE_*) */
+  uint32_t configured;  /* persisted intent from daemon.conf / runtime */
+  uint16_t debug_port;
+  uint16_t legacy_port;
+} memdbg_services_response_t;
+
+typedef struct MEMDBG_PACKED memdbg_services_set_request {
+  uint32_t set_mask;    /* bits to change */
+  uint32_t enable_bits; /* new values for bits in set_mask */
+} memdbg_services_set_request_t;
+
 // Hijack mode: inject payload without blocking the caller
 
 typedef struct MEMDBG_PACKED memdbg_process_hijack_request {
@@ -1415,6 +1439,10 @@ static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire si
 /* Arena */
 static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
 
+/* Daemon services */
+static_assert(sizeof(memdbg_services_response_t) == 12U, "services response wire size changed");
+static_assert(sizeof(memdbg_services_set_request_t) == 8U, "services set request wire size changed");
+
 /* Scan job state enum validity */
 static_assert(MEMDBG_SCAN_JOB_PENDING == 0U, "scan job pending state changed");
 static_assert(MEMDBG_SCAN_JOB_RUNNING == 1U, "scan job running state changed");
@@ -1564,6 +1592,10 @@ _Static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire s
 /* Arena */
 _Static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
 
+/* Daemon services */
+_Static_assert(sizeof(memdbg_services_response_t) == 12U, "services response wire size changed");
+_Static_assert(sizeof(memdbg_services_set_request_t) == 8U, "services set request wire size changed");
+
 /* Scan job state enum validity */
 _Static_assert(MEMDBG_SCAN_JOB_PENDING == 0U, "scan job pending state changed");
 _Static_assert(MEMDBG_SCAN_JOB_RUNNING == 1U, "scan job running state changed");
@@ -1590,6 +1622,8 @@ _Static_assert(sizeof(memdbg_debug_fpregs_t) == 1032U, "debug fpregs wire size c
 _Static_assert(sizeof(memdbg_batch_process_info_response_t) == 8U, "batch process info response wire size changed");
 _Static_assert(sizeof(memdbg_auth_key_request_t) == 8U, "auth key request wire size changed");
 _Static_assert(sizeof(memdbg_arena_config_request_t) == 8U, "arena config request wire size changed");
+_Static_assert(sizeof(memdbg_services_response_t) == 12U, "services response wire size changed (C)");
+_Static_assert(sizeof(memdbg_services_set_request_t) == 8U, "services set request wire size changed (C)");
 _Static_assert(sizeof(memdbg_extended_caps_response_t) == 4U, "extended caps response prefix wire size changed");
 _Static_assert(MEMDBG_HELLO_V1_SIZE == 44U, "HELLO V1 size changed");
 _Static_assert(MEMDBG_HELLO_V2_SIZE == 64U, "HELLO V2 size changed");
