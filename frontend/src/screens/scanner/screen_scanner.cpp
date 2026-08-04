@@ -556,6 +556,7 @@ void draw_scanner(AppState &state, ImVec2 avail) {
       state.scan.async_label = "Auto-search pass " +
                                std::to_string(state.scan.auto_search_pass + 1);
       state.scan.async_start_time = ImGui::GetTime();
+      state.scan.async_epoch = state.conn.reconnect.epoch;
       state.scan.async_pending = true;
       state.scan.async_cancellable = true;
       state.scan.async_cancel_requested.store(false);

@@ -180,6 +180,8 @@ void poll_scanner_async(AppState &state) {
 
   /* Post-scan: capture snapshot on the UI thread */
   // snapshot was already captured by the async worker via temp storage
+  std::snprintf(state.scan.session_status, sizeof(state.scan.session_status),
+                "%s", status_local);
   set_status(state, status_local);
   push_notification(state, was_cancelled
       ? std::string(locale::tr("scanner.scan_stopped"))
