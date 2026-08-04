@@ -61,7 +61,7 @@ Click **Remove Detour** to restore the original bytes and clean up.
 | Assemble | `ASM_ENCODE` (`0x0A00`) | Gated by `MEMDBG_CAP_DISASSEMBLY`. Server-side Keystone assembler. Raw response: `ok(4) + byte_count(4) + insn_count(4) + code(N)`. |
 
 See [`protocol.md`](protocol.md) for the full wire format and
-[`feature_research.md`](feature_research.md) for platform capability status.
+[`archive/feature_research.md`](archive/feature_research.md) for platform capability status.
 
 ## Shellcode Patterns
 
@@ -132,5 +132,5 @@ x86-64. Save and restore any registers your shellcode depends on.
 
 - [Debugger / Patch Studio](frontend/src/screens/debugger/debugger_patch_studio.cpp)
 - [Protocol specification](protocol.md)
-- [Feature research](feature_research.md)
-- [PS5 validation notes](ps5_validation_2026-07-18.md)
+- [Feature research](archive/feature_research.md)
+- [PS5 validation notes](archive/ps5_validation_2026-07-18.md)

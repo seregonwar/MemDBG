@@ -60,6 +60,25 @@ Useful flags:
 | `--legacy-port=PORT` | Override the legacy TCP port. |
 | `--allow=ADDR` | Applies to both native and legacy TCP listeners. |
 
+Boot order is **defaults → `${data-root}/daemon.conf` → CLI**. CLI
+`--legacy-compat` / `--no-legacy-compat` override the file for the current run
+only and do **not** rewrite `daemon.conf`.
+
+### Remote toggle (parallel use with stock ps5debug)
+
+To free TCP `744` for another ps5debug instance while keeping MemDBG on `9020`:
+
+```text
+memdbg_probe --set-legacy=0 192.168.1.50 9020
+memdbg_probe --get-services 192.168.1.50 9020
+```
+
+This uses native commands `MEMDBG_CMD_SET_SERVICES` / `GET_SERVICES` (feature
+level 4). Disabling legacy stops the listener immediately and writes
+`legacy_compat=0` to `/data/memdbg/daemon.conf` so the setting survives reboot.
+Re-enable with `--set-legacy=1`. If bind fails because the port is still busy,
+the intent is still persisted and applied on the next successful start.
+
 The listener is best-effort. If port `744` is busy, MemDBG logs a warning and
 continues serving the native protocol on `9020`.
 

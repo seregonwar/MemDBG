@@ -1,6 +1,6 @@
 # PS4 / GoldHEN 실행 안내
 
-*지원 언어: [English](ps4_goldhen_launch.en.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
+*지원 언어: [English](../platform/ps4_goldhen_launch.md) · [Deutsch](ps4_goldhen_launch.de.md) · [Español](ps4_goldhen_launch.es.md) · [Français](ps4_goldhen_launch.fr.md) · [Italiano](ps4_goldhen_launch.it.md) · [日本語](ps4_goldhen_launch.ja.md) · [한국어](ps4_goldhen_launch.ko.md) · [Português](ps4_goldhen_launch.pt.md) · [Русский](ps4_goldhen_launch.ru.md)*
 
 GoldHEN 메뉴에서 MemDBG를 실행하면, 이전 시도에서 이미 MemDBG를 실행한 loader 프로세스에 페이로드가 주입될 수 있습니다. 이전 페이로드가 충돌하거나 정리 없이 종료된 경우 데이터 루트에 `memdbg.pid` 파일이 남아 있을 수 있습니다. PS4 커널은 PID를 빠르게 재사용하므로, 그 오래된 파일이 새로운 loader 프로세스와 우연히 일치하여 MemDBG가 이미 실행 중이라고 인식할 수 있습니다.
 
