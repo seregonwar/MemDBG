@@ -41,6 +41,7 @@ void start_snapshot_worker(AppState &state, bool refine, RefineMode mode,
       ? std::string(refine_mode_name(mode)) + " refinement"
       : "Refresh scan baseline";
   state.scan.async_start_time = ImGui::GetTime();
+  state.scan.async_epoch = state.conn.reconnect.epoch;
   state.scan.async_pending = true;
   state.scan.async_cancellable = true;
   state.scan.async_cancel_requested.store(false);
