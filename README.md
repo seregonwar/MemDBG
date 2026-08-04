@@ -263,7 +263,7 @@ Live console probes are built with the frontend tools:
 # IDA / GDB remote bridge (standalone build also under build/gdb_bridge/)
 ./build/gdb_bridge/Release/memdbg_gdb_bridge --host <console-ip> --pid <pid>
 
-# x64dbg plugin (optional; auto-fetches official pluginsdk-cmake — see docs/x64dbg_bridge.md)
+# x64dbg plugin (optional; auto-fetches official pluginsdk-cmake — see docs/bridges/x64dbg_bridge.md)
 # make x64dbg-plugin
 
 # Read-only maps, memory, scan, and four-connection benchmark
@@ -329,7 +329,7 @@ memory primitives, serialization, compression decisions, and client parsing.
 They are not synthetic memory-copy figures. Full methodology, the 256 KiB
 reset diagnosis, chunk sweep, cancellation/write validation, stress results,
 protocol coverage, limitations, and reproduction steps are in
-[`docs/ps5_validation_2026-07-18.md`](docs/ps5_validation_2026-07-18.md).
+[`docs/archive/ps5_validation_2026-07-18.md`](docs/archive/ps5_validation_2026-07-18.md).
 
 ## Localization
 
@@ -533,19 +533,23 @@ and Android build. Release artifacts include `SHA256SUMS.txt`.
 
 ## Documentation
 
+Engineering notes live under [`docs/`](docs/) (see [`docs/README.md`](docs/README.md)).
+The end-user product guide is [`github-pages/`](github-pages/).
+
 | Document | Purpose |
 |---|---|
-| [`docs/ida_gdb_bridge.md`](docs/ida_gdb_bridge.md) | Host GDB RSP proxy for IDA Pro Remote GDB (issue #37). |
-| [`docs/x64dbg_bridge.md`](docs/x64dbg_bridge.md) | x64dbg plugin bridge to MemDBG (issue #39). |
-| [`docs/showcase.md`](docs/showcase.md) | Product walkthrough and feature showcase. |
-| [`docs/ps4_goldhen_launch.md`](docs/ps4_goldhen_launch.md) | PS4 / GoldHEN launch notes and stale PID file handling. |
 | [`docs/protocol.md`](docs/protocol.md) | Internal MDBG wire protocol specification and extension rules. |
 | [`docs/ps5debug_compat.md`](docs/ps5debug_compat.md) | ps5debug compatibility layer for older trainer/debugger clients. |
-| [`docs/ps5_validation_2026-07-18.md`](docs/ps5_validation_2026-07-18.md) | Reproducible PS5 protocol, stability, and performance validation report. |
-| [`docs/feature_research.md`](docs/feature_research.md) | Planned work and technical research notes. |
+| [`docs/bridges/ida_gdb_bridge.md`](docs/bridges/ida_gdb_bridge.md) | Host GDB RSP proxy for IDA Pro Remote GDB (issue #37). |
+| [`docs/bridges/x64dbg_bridge.md`](docs/bridges/x64dbg_bridge.md) | x64dbg plugin bridge to MemDBG (issue #39). |
+| [`docs/platform/ps4_goldhen_launch.md`](docs/platform/ps4_goldhen_launch.md) | PS4 / GoldHEN launch notes and stale PID file handling. |
 | [`docs/plugins.md`](docs/plugins.md) | Plugin manifest and runtime contract. |
 | [`docs/mobile_architecture.md`](docs/mobile_architecture.md) | iOS/Android shell architecture. |
 | [`docs/release_packaging.md`](docs/release_packaging.md) | Release artifact and packaging details. |
+| [`docs/reconnect.md`](docs/reconnect.md) | Rest-mode reconnect state machine. |
+| [`docs/codecave.md`](docs/codecave.md) | Code-cave alloc / write / detour workflow. |
+| [`docs/showcase.md`](docs/showcase.md) | UI screenshot tour. |
+| [`docs/archive/`](docs/archive/) | Historical validation / research notes (non-normative). |
 | [`github-pages/`](github-pages/) | Static end-user guide for setup, scanning, trainer flow, and troubleshooting. |
 
 ## Project Status
