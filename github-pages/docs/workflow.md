@@ -148,9 +148,9 @@ For reverse engineering and precise control:
    - Set **watchpoints** on memory ranges (pauses when the value changes).
    - **Step** through code one instruction at a time.
    - View **disassembly** with xrefs and control flow.
-4. Click **Continue** to resume, or **Detach** to release control.
+4. Click **Continue** (Debugger screen) to resume, or **Detach** to release control.
 
-> **Warning:** Attaching the debugger pauses the game. This is normal — use Continue to resume. Some games have anti-debugging protections.
+> **Warning:** Attaching the debugger pauses the game (black screen / frozen audio is normal). Use **Debugger → Continue**, not only Task Manager **Continue Process**. After attach the process is ptrace-stopped; a plain `SIGCONT` cannot resume it.
 
 ## Quick reference
 

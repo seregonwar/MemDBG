@@ -275,25 +275,40 @@ memdbg_status_t memdbg_debugger_continue(void) {
 
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
   uint32_t count = 0;
-  if (memdbg_debugger_get_threads(lwps, NULL, NULL, &count,
-                                  MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
+  if (get_threads_locked(lwps, NULL, NULL, &count,
+                         MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
     for (uint32_t i = 0; i < count; ++i) {
       memdbg_debug_regs_t regs;
       memset(&regs, 0, sizeof(regs));
       if (pal_debug_get_regs((int)g_dbg.pid, lwps[i], &regs) != 0) continue;
       if (find_breakpoint_slot((uint64_t)(regs.r_rip - 1)) >= 0) {
         memdbg_status_t st = step_over_sw_breakpoint_locked(lwps[i]);
-        if (st != MEMDBG_OK) { debugger_unlock(); return st; }
+        if (st != MEMDBG_OK) {
+          memdbg_log_write(MEMDBG_LOG_WARN,
+                           "debugger: continue step-over failed pid=%d lwp=%d "
+                           "status=%d",
+                           (int)g_dbg.pid, (int)lwps[i], (int)st);
+          debugger_unlock();
+          return st;
+        }
       }
     }
   }
 
   if (pal_debug_continue((int)g_dbg.pid) != 0) {
+    int cont_errno = errno;
+    memdbg_status_t st = pal_status_from_errno_code(cont_errno);
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: continue failed pid=%d errno=%d (%s) status=%d",
+                     (int)g_dbg.pid, cont_errno, strerror(cont_errno),
+                     (int)st);
     debugger_unlock();
-    return pal_status_from_errno();
+    return st;
   }
   g_dbg.stopped = false;
   g_dbg.stop_lwp = 0;
+  memdbg_log_write(MEMDBG_LOG_INFO, "debugger: continued pid=%d",
+                   (int)g_dbg.pid);
   debugger_unlock();
   return MEMDBG_OK;
 }

@@ -229,6 +229,36 @@ memdbg_status_t handle_process_control(int fd,
   const memdbg_process_control_request_t *cr =
       (const memdbg_process_control_request_t *)body;
   if (cr->action != expected_action) return MEMDBG_ERR_PARAM;
+  if (cr->pid <= 0) {
+    return send_response(fd, req, MEMDBG_ERR_PARAM, NULL, 0U) == 0
+               ? MEMDBG_OK
+               : MEMDBG_ERR_NET;
+  }
+
+  /*
+   * When the debugger owns this PID, SIGSTOP/SIGCONT cannot resume a
+   * ptrace stop from PT_ATTACH. Route through the debugger API so Task
+   * Manager "Continue Process" actually unfreezes the target.
+   */
+  if (expected_action != 3U && memdbg_debugger_is_attached() &&
+      memdbg_debugger_attached_pid() == cr->pid) {
+    memdbg_status_t st = MEMDBG_OK;
+    if (expected_action == 1U) {
+      st = memdbg_debugger_stop();
+      memdbg_log_write(MEMDBG_LOG_INFO,
+                       "process-control: stop via debugger pid=%d status=%d",
+                       (int)cr->pid, (int)st);
+    } else if (expected_action == 2U) {
+      st = memdbg_debugger_continue();
+      memdbg_log_write(st == MEMDBG_OK ? MEMDBG_LOG_INFO : MEMDBG_LOG_WARN,
+                       "process-control: continue via debugger pid=%d status=%d",
+                       (int)cr->pid, (int)st);
+    } else {
+      st = MEMDBG_ERR_PARAM;
+    }
+    return send_response(fd, req, st, NULL, 0U) == 0 ? MEMDBG_OK
+                                                     : MEMDBG_ERR_NET;
+  }
 
   int signal_number = 0;
   switch (expected_action) {
@@ -238,10 +268,10 @@ memdbg_status_t handle_process_control(int fd,
   default: return MEMDBG_ERR_PARAM;
   }
   memdbg_status_t st = MEMDBG_OK;
-  if (cr->pid <= 0 || kill((pid_t)cr->pid, signal_number) != 0) {
+  if (kill((pid_t)cr->pid, signal_number) != 0) {
     if (errno == ESRCH) st = MEMDBG_ERR_NOT_FOUND;
     else if (errno == EPERM || errno == EACCES) st = MEMDBG_ERR_PERMISSION;
-    else st = cr->pid <= 0 ? MEMDBG_ERR_PARAM : MEMDBG_ERR_IO;
+    else st = MEMDBG_ERR_IO;
   }
   return send_response(fd, req, st, NULL, 0U) == 0
       ? MEMDBG_OK : MEMDBG_ERR_NET;
