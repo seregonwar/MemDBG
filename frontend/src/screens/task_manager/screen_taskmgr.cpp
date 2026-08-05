@@ -8,6 +8,7 @@
 #include "ui_widgets.hpp"
 #include "ui_icons.hpp"
 #include "confirm_modal.hpp"
+#include "screens/debugger/debugger_internal.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -685,22 +686,40 @@ static void draw_process_actions(AppState &state) {
   if (ui::soft_button((std::string(icons::kStop) + "  " +
                        locale::tr("taskmgr.stop_process")).c_str(),
                       ImVec2(button_w, button_h))) {
-    if (state.client.process_stop(state.taskmgr.selected_pid))
+    auto &ds = s_dbg_state;
+    const bool via_debugger =
+        ds.attached && ds.pid == state.taskmgr.selected_pid;
+    const bool ok = via_debugger ? state.client.debug_stop()
+                                 : state.client.process_stop(
+                                       state.taskmgr.selected_pid);
+    if (ok) {
+      if (via_debugger) ds.stopped = true;
       set_status(state, std::string(locale::tr("taskmgr.process_stopped")) +
                          " PID " + std::to_string(state.taskmgr.selected_pid));
-    else
+    } else {
       set_status(state, state.client.last_error());
+    }
   }
   if (!compact) ImGui::SameLine(0.0f, gap);
 
   if (ui::soft_button((std::string(icons::kPlay) + "  " +
                        locale::tr("taskmgr.continue_process")).c_str(),
                       ImVec2(button_w, button_h))) {
-    if (state.client.process_continue(state.taskmgr.selected_pid))
+    /* After debugger attach the target is ptrace-stopped; SIGCONT alone
+     * cannot resume it. Prefer DEBUG_CONTINUE when we own the session. */
+    auto &ds = s_dbg_state;
+    const bool via_debugger =
+        ds.attached && ds.pid == state.taskmgr.selected_pid;
+    const bool ok = via_debugger ? state.client.debug_continue()
+                                 : state.client.process_continue(
+                                       state.taskmgr.selected_pid);
+    if (ok) {
+      if (via_debugger) ds.stopped = false;
       set_status(state, std::string(locale::tr("taskmgr.process_continued")) +
                          " PID " + std::to_string(state.taskmgr.selected_pid));
-    else
+    } else {
       set_status(state, state.client.last_error());
+    }
   }
   if (!compact) ImGui::SameLine(0.0f, gap);
 

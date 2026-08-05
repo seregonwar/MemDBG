@@ -385,6 +385,11 @@ an existing family must be appended and must not reuse retired values.
 | `MEMDBG_CMD_PROCESS_STOP` | `0x0104` | `memdbg_process_control_request_t` with `action=1` | empty |
 | `MEMDBG_CMD_PROCESS_CONTINUE` | `0x0105` | `memdbg_process_control_request_t` with `action=2` | empty |
 | `MEMDBG_CMD_PROCESS_KILL` | `0x0106` | `memdbg_process_control_request_t` with `action=3` | empty |
+
+> When the debugger is already attached to the same PID, `PROCESS_STOP` /
+> `PROCESS_CONTINUE` are routed through `memdbg_debugger_stop()` /
+> `memdbg_debugger_continue()` (`PT_CONTINUE`) instead of `SIGSTOP` /
+> `SIGCONT`. A ptrace stop from attach cannot be cleared by `SIGCONT` alone.
 | `MEMDBG_CMD_BATCH_PROCESS_INFO` | `0x0107` | prefix + `int32_t pid[]` | prefix + `memdbg_process_info_response_t[]` |
 | `MEMDBG_CMD_PROCESS_PROTECT` | `0x0108` | `memdbg_process_protect_request_t` | `memdbg_process_protect_response_t` |
 | `MEMDBG_CMD_PROCESS_ALLOC` | `0x0109` | `memdbg_process_alloc_request_t` | `memdbg_process_alloc_response_t` |

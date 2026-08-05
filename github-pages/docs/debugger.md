@@ -22,7 +22,7 @@ The debugger gives you low-level control over the target process. You can pause 
 
 The process pauses immediately. The debugger takes control and the status shows "Attached" with the stop reason.
 
-> **Warning:** Attaching pauses the ENTIRE process, not just one thread. The game freezes, audio stops, and network connections may time out. This is normal.
+> **Warning:** Attaching pauses the ENTIRE process, not just one thread. The game freezes (often a black screen), audio stops, and network connections may time out. This is normal — resume with **Debugger → Continue** (or Task Manager **Continue Process**, which now uses the same ptrace continue when a debug session is active).
 
 ### Detach
 
