@@ -39,6 +39,12 @@ static void use_discovered_console(AppState &state, const DiscoveryConsole &cons
   std::snprintf(state.host, sizeof(state.host), "%s", console.ip.c_str());
   state.debug_port = console.debug_port;
   state.udp_port = console.udp_log_port ? console.udp_log_port : state.udp_port;
+  if (console.platform_id == MEMDBG_PLATFORM_PS4) {
+    state.payload_platform = 1;
+  } else if (console.platform_id == MEMDBG_PLATFORM_PS5) {
+    state.payload_platform = 2;
+  }
+  state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
   normalize_ports(state);
 }
 
@@ -49,10 +55,12 @@ static void draw_saved_targets_table(AppState &state, bool locked) {
       ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuter |
       ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY;
 
-  if (ImGui::BeginTable("ConsoleTargetsTable", 3, flags, ImVec2(0, 150.0f * scl))) {
+  if (ImGui::BeginTable("ConsoleTargetsTable", 4, flags, ImVec2(0, 150.0f * scl))) {
     ImGui::TableSetupColumn("Target", ImGuiTableColumnFlags_WidthStretch, 1.1f);
     ImGui::TableSetupColumn("Host", ImGuiTableColumnFlags_WidthStretch, 1.0f);
     ImGui::TableSetupColumn("Ports", ImGuiTableColumnFlags_WidthFixed, 100.0f * scl);
+    ImGui::TableSetupColumn(locale::tr("settings.payload_platform"),
+                            ImGuiTableColumnFlags_WidthFixed, 110.0f * scl);
     ImGui::TableHeadersRow();
 
     for (int i = 0; i < static_cast<int>(state.console_targets.size()); ++i) {
@@ -71,6 +79,13 @@ static void draw_saved_targets_table(AppState &state, bool locked) {
       ImGui::TextUnformatted(target.host.c_str());
       ImGui::TableSetColumnIndex(2);
       ImGui::Text("%d/%d", target.debug_port, target.udp_port);
+      ImGui::TableSetColumnIndex(3);
+      const char *platform_opts[] = {
+        locale::tr("settings.payload_platform_auto"),
+        locale::tr("settings.payload_platform_ps4"),
+        locale::tr("settings.payload_platform_ps5")
+      };
+      ImGui::TextUnformatted(platform_opts[std::clamp(target.payload_platform, 0, 2)]);
     }
     ImGui::EndTable();
   }
@@ -359,9 +374,11 @@ void draw_consoles(AppState &state, ImVec2 avail) {
     ImGui::Text("Discovered payloads");
     const ImGuiTableFlags flags =
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg;
-    if (ImGui::BeginTable("DiscoveredConsolesTable", 4, flags, ImVec2(0, 0))) {
+    if (ImGui::BeginTable("DiscoveredConsolesTable", 5, flags, ImVec2(0, 0))) {
       ImGui::TableSetupColumn("Name");
       ImGui::TableSetupColumn("Endpoint");
+      ImGui::TableSetupColumn(locale::tr("settings.payload_platform"),
+                              ImGuiTableColumnFlags_WidthFixed, 80.0f);
       ImGui::TableSetupColumn("Use", ImGuiTableColumnFlags_WidthFixed, 72.0f);
       ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_WidthFixed, 72.0f);
       ImGui::TableHeadersRow();
@@ -377,6 +394,9 @@ void draw_consoles(AppState &state, ImVec2 avail) {
         ImGui::TextUnformatted(endpoint.c_str());
 
         ImGui::TableSetColumnIndex(2);
+        ImGui::TextUnformatted(platform_name(console.platform_id).c_str());
+
+        ImGui::TableSetColumnIndex(3);
         ImGui::BeginDisabled(locked);
         const std::string use_id = "Use##Discovered" + std::to_string(i);
         if (ui::soft_button(use_id.c_str(), ImVec2(-1, 30.0f))) {
@@ -387,7 +407,7 @@ void draw_consoles(AppState &state, ImVec2 avail) {
         }
         ImGui::EndDisabled();
 
-        ImGui::TableSetColumnIndex(3);
+        ImGui::TableSetColumnIndex(4);
         ImGui::BeginDisabled(locked);
         const std::string add_id = "Add##Discovered" + std::to_string(i);
         if (ui::primary_button(add_id.c_str(), ImVec2(-1, 30.0f))) {
