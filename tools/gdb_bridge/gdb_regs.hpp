@@ -7,14 +7,19 @@
 #ifndef MEMDBG_GDB_BRIDGE_GDB_REGS_HPP
 #define MEMDBG_GDB_BRIDGE_GDB_REGS_HPP
 
-#include "memdbg/core/memdbg_protocol.h"
+#include "memdbg/pal/debug.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace memdbg::gdb_bridge {
 
-/* GDB org.gnu.gdb.i386.core + sse register numbers (amd64 layout). */
+/*
+ * +-------------------------------------------------------------------+
+ * | GDB AMD64 Register Enumeration                                    |
+ * +-------------------------------------------------------------------+
+ */
 enum GdbReg : int {
   GDB_RAX = 0,
   GDB_RBX = 1,
@@ -42,23 +47,62 @@ enum GdbReg : int {
   GDB_GS = 23,
   GDB_CORE_COUNT = 24,
 
+  /* x87 FPU Registers */
+  GDB_ST0 = 24,
+  GDB_ST1 = 25,
+  GDB_ST2 = 26,
+  GDB_ST3 = 27,
+  GDB_ST4 = 28,
+  GDB_ST5 = 29,
+  GDB_ST6 = 30,
+  GDB_ST7 = 31,
+  GDB_FCTRL = 32,
+  GDB_FSTAT = 33,
+  GDB_FTAG = 34,
+  GDB_FISEG = 35,
+  GDB_FIOFF = 36,
+  GDB_FOSEG = 37,
+  GDB_FOOFF = 38,
+  GDB_FOP = 39,
+  GDB_X87_COUNT = 16,
+
+  /* SSE Registers */
   GDB_XMM0 = 40,
+  GDB_XMM1 = 41,
+  GDB_XMM2 = 42,
+  GDB_XMM3 = 43,
+  GDB_XMM4 = 44,
+  GDB_XMM5 = 45,
+  GDB_XMM6 = 46,
   GDB_XMM7 = 47,
+  GDB_XMM8 = 48,
+  GDB_XMM9 = 49,
+  GDB_XMM10 = 50,
+  GDB_XMM11 = 51,
+  GDB_XMM12 = 52,
+  GDB_XMM13 = 53,
+  GDB_XMM14 = 54,
   GDB_XMM15 = 55,
   GDB_MXCSR = 56,
   GDB_REG_MAX = 57
 };
 
-/* FXSAVE offsets inside memdbg_debug_fpregs_t::data (AMD64). */
+constexpr size_t kFxsaveMinLen = 512U;
 constexpr size_t kFxsaveMxcsrOff = 24U;
 constexpr size_t kFxsaveXmm0Off = 160U;
 constexpr size_t kFxsaveXmmBytes = 16U;
-constexpr size_t kFxsaveMinLen = 416U; /* through xmm15 */
+constexpr size_t kX87PaddingBytes = 112U;
 
+/*
+ * +-------------------------------------------------------------------+
+ * | Register Properties and Wire Conversions                          |
+ * +-------------------------------------------------------------------+
+ */
 size_t gdb_reg_size(int regno);
-bool gdb_reg_valid(int regno);
 bool gdb_reg_is_core(int regno);
+bool gdb_reg_is_x87(int regno);
 bool gdb_reg_is_sse(int regno);
+bool gdb_reg_valid(int regno);
 
 /* Encode/decode little-endian hex used by RSP. */
 std::string bytes_to_hex(const void *data, size_t size);

@@ -42,6 +42,9 @@ size_t gdb_reg_size(int regno) {
   if (gdb_reg_is_core(regno)) {
     return regno <= GDB_RIP ? 8U : 4U;
   }
+  if (gdb_reg_is_x87(regno)) {
+    return regno <= GDB_ST7 ? 10U : 4U;
+  }
   if (regno >= GDB_XMM0 && regno <= GDB_XMM15) return kFxsaveXmmBytes;
   if (regno == GDB_MXCSR) return 4U;
   return 0U;
@@ -51,12 +54,16 @@ bool gdb_reg_is_core(int regno) {
   return regno >= 0 && regno < GDB_CORE_COUNT;
 }
 
+bool gdb_reg_is_x87(int regno) {
+  return regno >= GDB_ST0 && regno <= GDB_FOP;
+}
+
 bool gdb_reg_is_sse(int regno) {
   return (regno >= GDB_XMM0 && regno <= GDB_XMM15) || regno == GDB_MXCSR;
 }
 
 bool gdb_reg_valid(int regno) {
-  return gdb_reg_is_core(regno) || gdb_reg_is_sse(regno);
+  return gdb_reg_is_core(regno) || gdb_reg_is_x87(regno) || gdb_reg_is_sse(regno);
 }
 
 std::string gdb_thread_extra_info_hex(int32_t tid, const std::string &name) {
@@ -92,6 +99,11 @@ bool hex_to_bytes(const std::string &hex, void *out, size_t size) {
   return true;
 }
 
+/*
+ * +-------------------------------------------------------------------+
+ * | Register Access Routines                                          |
+ * +-------------------------------------------------------------------+
+ */
 uint64_t gdb_get_reg_value(const memdbg_debug_regs_t &regs, int regno) {
   switch (regno) {
   case GDB_RAX: return static_cast<uint64_t>(regs.r_rax);
@@ -189,6 +201,11 @@ bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno,
   return true;
 }
 
+/*
+ * +-------------------------------------------------------------------+
+ * | G-Packet Serialization                                            |
+ * +-------------------------------------------------------------------+
+ */
 std::string gdb_encode_g_core(const memdbg_debug_regs_t &regs) {
   std::string out;
   out.reserve(GDB_CORE_COUNT * 16U);
@@ -217,6 +234,9 @@ bool gdb_decode_g_core(const std::string &hex, memdbg_debug_regs_t &regs) {
 std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
                                 const memdbg_debug_fpregs_t *fpregs) {
   std::string out = gdb_encode_g_core(regs);
+  /* Insert x87 112-byte zero padding (224 hex zeros) for standard amd64 layout. */
+  out.append(kX87PaddingBytes * 2U, '0');
+
   /* Document order in target.xml: xmm0..xmm15 then mxcsr. */
   uint8_t tmp[16]{};
   for (int regno = GDB_XMM0; regno <= GDB_XMM15; ++regno) {
@@ -238,12 +258,11 @@ std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
 bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
                          memdbg_debug_fpregs_t *fpregs) {
   if (!gdb_decode_g_core(hex, regs)) return false;
-  /* Core hex length: 17*16 + 7*8 = 272+56 = 328 */
-  size_t offset = 328U;
+  /* Core hex length: 328 chars. x87 padding: 224 chars. Total prefix: 552 chars. */
+  size_t offset = 552U;
   if (hex.size() < offset) return false;
   if (!fpregs) {
-    /* Accept core-only writes. */
-    return hex.size() == offset || hex.size() >= offset;
+    return true;
   }
   ensure_fxsave(*fpregs);
   uint8_t tmp[16]{};
@@ -263,3 +282,4 @@ bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
 }
 
 } // namespace memdbg::gdb_bridge
+

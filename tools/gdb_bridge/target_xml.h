@@ -1,5 +1,5 @@
 /*
- * MemDBG - GDB target description for i386:x86-64 (core + SSE).
+ * MemDBG - GDB target description for i386:x86-64 (core + x87 + SSE).
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -7,8 +7,11 @@
 #ifndef MEMDBG_GDB_BRIDGE_TARGET_XML_H
 #define MEMDBG_GDB_BRIDGE_TARGET_XML_H
 
-/* Core GPRs + SSE (XMM0-15, MXCSR). X87 left out of the g-packet for now;
- * individual p/P can still be extended later. */
+/*
+ * +-------------------------------------------------------------------+
+ * | Target XML Description                                            |
+ * +-------------------------------------------------------------------+
+ */
 static const char kMemdbgGdbTargetXml[] =
     "<?xml version=\"1.0\"?>"
     "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">"
@@ -40,6 +43,24 @@ static const char kMemdbgGdbTargetXml[] =
     "<reg name=\"fs\" bitsize=\"32\" type=\"int32\" regnum=\"22\"/>"
     "<reg name=\"gs\" bitsize=\"32\" type=\"int32\" regnum=\"23\"/>"
     "</feature>"
+    "<feature name=\"org.gnu.gdb.i386.fpu\">"
+    "<reg name=\"st0\" bitsize=\"80\" type=\"i387_ext\" regnum=\"24\"/>"
+    "<reg name=\"st1\" bitsize=\"80\" type=\"i387_ext\" regnum=\"25\"/>"
+    "<reg name=\"st2\" bitsize=\"80\" type=\"i387_ext\" regnum=\"26\"/>"
+    "<reg name=\"st3\" bitsize=\"80\" type=\"i387_ext\" regnum=\"27\"/>"
+    "<reg name=\"st4\" bitsize=\"80\" type=\"i387_ext\" regnum=\"28\"/>"
+    "<reg name=\"st5\" bitsize=\"80\" type=\"i387_ext\" regnum=\"29\"/>"
+    "<reg name=\"st6\" bitsize=\"80\" type=\"i387_ext\" regnum=\"30\"/>"
+    "<reg name=\"st7\" bitsize=\"80\" type=\"i387_ext\" regnum=\"31\"/>"
+    "<reg name=\"fctrl\" bitsize=\"32\" type=\"int\" regnum=\"32\"/>"
+    "<reg name=\"fstat\" bitsize=\"32\" type=\"int\" regnum=\"33\"/>"
+    "<reg name=\"ftag\" bitsize=\"32\" type=\"int\" regnum=\"34\"/>"
+    "<reg name=\"fiseg\" bitsize=\"32\" type=\"int\" regnum=\"35\"/>"
+    "<reg name=\"fioff\" bitsize=\"32\" type=\"int\" regnum=\"36\"/>"
+    "<reg name=\"foseg\" bitsize=\"32\" type=\"int\" regnum=\"37\"/>"
+    "<reg name=\"fooff\" bitsize=\"32\" type=\"int\" regnum=\"38\"/>"
+    "<reg name=\"fop\" bitsize=\"32\" type=\"int\" regnum=\"39\"/>"
+    "</feature>"
     "<feature name=\"org.gnu.gdb.i386.sse\">"
     "<reg name=\"xmm0\" bitsize=\"128\" type=\"uint128\" regnum=\"40\"/>"
     "<reg name=\"xmm1\" bitsize=\"128\" type=\"uint128\" regnum=\"41\"/>"
@@ -62,3 +83,4 @@ static const char kMemdbgGdbTargetXml[] =
     "</target>";
 
 #endif /* MEMDBG_GDB_BRIDGE_TARGET_XML_H */
+

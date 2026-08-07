@@ -16,6 +16,9 @@
 
 namespace memdbg::gdb_bridge {
 
+/* Thread ID parser supporting multiprocess RSP syntax (p<pid>.<tid>, p<pid>, <tid>). */
+bool parse_thread_id(const char *s, int32_t &pid_out, int32_t &tid_out);
+
 class RspHandler {
 public:
   RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,

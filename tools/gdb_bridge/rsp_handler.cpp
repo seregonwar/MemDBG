@@ -23,6 +23,12 @@ namespace {
 
 constexpr uint32_t kMemChunk = 0x10000U; /* 64 KiB per MEMORY_READ */
 
+
+/*
+ * +-------------------------------------------------------------------+
+ * | Helper Functions                                                  |
+ * +-------------------------------------------------------------------+
+ */
 bool parse_hex_u64(const std::string &s, size_t begin, size_t end,
                    uint64_t &out) {
   if (begin >= end) return false;
@@ -65,6 +71,34 @@ int watch_type_from_z(char kind) {
 }
 
 } // namespace
+
+bool parse_thread_id(const char *s, int32_t &pid_out, int32_t &tid_out) {
+  if (s == nullptr || *s == '\0') return false;
+  if (*s == 'p') s++;
+  char *end = nullptr;
+  if (std::strncmp(s, "-1", 2) == 0) {
+    tid_out = -1;
+    s += 2;
+  } else {
+    uint64_t val = std::strtoull(s, &end, 16);
+    if (end == s) return false;
+    tid_out = static_cast<int32_t>(val);
+    s = end;
+  }
+  if (*s == '.') {
+    s++;
+    pid_out = tid_out;
+    if (std::strncmp(s, "-1", 2) == 0) {
+      tid_out = -1;
+    } else {
+      uint64_t val2 = std::strtoull(s, &end, 16);
+      if (end != s) tid_out = static_cast<int32_t>(val2);
+    }
+  } else {
+    pid_out = 0;
+  }
+  return true;
+}
 
 RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
                        bool verbose)
@@ -127,16 +161,16 @@ void RspHandler::refresh_threads() {
 }
 
 int32_t RspHandler::current_thread() const {
-  if (general_thread_ != 0) return general_thread_;
-  if (stop_lwp_ != 0) return stop_lwp_;
-  if (!threads_.empty()) return threads_[0].lwp;
-  return 0;
+  if (general_thread_ > 0) return general_thread_;
+  if (stop_lwp_ > 0) return stop_lwp_;
+  if (!threads_.empty() && threads_[0].lwp > 0) return threads_[0].lwp;
+  return pid_ > 0 ? pid_ : 0;
 }
 
 std::string RspHandler::stop_reply() const {
-  const int32_t tid = stop_lwp_ != 0 ? stop_lwp_ : current_thread();
+  const int32_t tid = stop_lwp_ > 0 ? stop_lwp_ : current_thread();
   char buf[64];
-  if (tid != 0) {
+  if (tid > 0) {
     std::snprintf(buf, sizeof(buf), "T05thread:%x;",
                   static_cast<unsigned>(tid));
   } else {
@@ -350,6 +384,13 @@ std::string RspHandler::handle_query(const std::string &packet,
   }
   if (packet == "qAttached") return attached_ ? "1" : "0";
   if (packet.rfind("qAttached:", 0) == 0) return attached_ ? "1" : "0";
+  if (packet == "qProcessInfo" || packet.rfind("qProcessInfo:", 0) == 0) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+                  "pid:%x;triple:x86_64-unknown-freebsd;endian:little;",
+                  static_cast<unsigned>(pid_ > 0 ? pid_ : 1));
+    return std::string(buf);
+  }
   if (packet == "qC") {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "QC%x",
@@ -359,32 +400,39 @@ std::string RspHandler::handle_query(const std::string &packet,
   if (packet == "qfThreadInfo") {
     refresh_threads();
     thread_info_started_ = true;
-    if (threads_.empty()) return "l";
+    if (threads_.empty()) {
+      if (pid_ > 0) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "m%x", static_cast<unsigned>(pid_));
+        return std::string(buf);
+      }
+      return "l";
+    }
     std::string out = "m";
     for (size_t i = 0; i < threads_.size(); ++i) {
       if (i > 0U) out.push_back(',');
       char buf[16];
       std::snprintf(buf, sizeof(buf), "%x",
-                    static_cast<unsigned>(threads_[i].lwp));
+                    static_cast<unsigned>(threads_[i].lwp > 0 ? threads_[i].lwp : pid_));
       out += buf;
     }
     return out;
   }
   if (packet == "qsThreadInfo") return "l";
   if (packet.rfind("qThreadExtraInfo,", 0) == 0) {
-    uint64_t tid = 0U;
-    if (!parse_hex_u64(packet.c_str() + std::strlen("qThreadExtraInfo,"), tid)) {
+    int32_t req_pid = 0, req_tid = 0;
+    if (!parse_thread_id(packet.c_str() + std::strlen("qThreadExtraInfo,"),
+                         req_pid, req_tid)) {
       return err_packet(1);
     }
     refresh_threads();
     for (const auto &t : threads_) {
-      if (static_cast<uint64_t>(t.lwp) == tid) {
+      if (t.lwp == req_tid || (req_tid <= 0 && t.lwp > 0)) {
         return gdb_thread_extra_info_hex(t.lwp, t.name);
       }
     }
-    logf("qThreadExtraInfo: unknown tid=0x%llx",
-         static_cast<unsigned long long>(tid));
-    return err_packet(1);
+    const int32_t fallback_tid = req_tid > 0 ? req_tid : (pid_ > 0 ? pid_ : 1);
+    return gdb_thread_extra_info_hex(fallback_tid, "");
   }
   if (packet.rfind("qXfer:features:read:", 0) == 0) {
     /* qXfer:features:read:annex:offset,length */
@@ -427,18 +475,16 @@ std::string RspHandler::handle_query(const std::string &packet,
 std::string RspHandler::handle_v(const std::string &packet,
                                  RspConnection &conn) {
   if (packet.rfind("vAttach;", 0) == 0) {
-    uint64_t pid = 0U;
-    if (!parse_hex_u64(packet.c_str() + 8, pid) || pid == 0U) {
+    int32_t req_pid = 0, req_tid = 0;
+    if (!parse_thread_id(packet.c_str() + 8, req_pid, req_tid)) {
       logf("vAttach: bad pid hex in '%s'", packet.c_str());
       return err_packet(1);
     }
-    const auto attach_pid = static_cast<int32_t>(pid);
-    /* RSP vAttach pid is hexadecimal. IDA's PID field is hex too: decimal 88
-     * typed as "88" becomes pid 0x88 = 136. */
+    const int32_t attach_pid = req_pid > 0 ? req_pid : req_tid;
     logf("vAttach pid=0x%x (%d decimal)", static_cast<unsigned>(attach_pid),
          static_cast<int>(attach_pid));
-    if (attached_ && pid_ == attach_pid) {
-      logf("vAttach: already attached to pid=%d", static_cast<int>(pid_));
+    if (attached_ && (pid_ == attach_pid || pid_ > 0)) {
+      logf("vAttach: reusing session for pid=%d", static_cast<int>(pid_));
       return stop_reply();
     }
     if (attached_) {
@@ -467,9 +513,9 @@ std::string RspHandler::handle_v(const std::string &packet,
     int32_t lwp = 0;
     const size_t colon = packet.find(':', 6U);
     if (colon != std::string::npos) {
-      uint64_t tid = 0U;
-      if (parse_hex_u64(packet, colon + 1U, packet.size(), tid)) {
-        lwp = static_cast<int32_t>(tid);
+      int32_t p_out = 0, t_out = 0;
+      if (parse_thread_id(packet.c_str() + colon + 1U, p_out, t_out)) {
+        lwp = t_out > 0 ? t_out : 0;
       }
     }
     if (action == 'c' || action == 'C') {
@@ -518,25 +564,15 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
         reply = err_packet(1);
       } else {
         const char which = packet[1];
-        int32_t tid = 0;
-        bool tid_ok = true;
-        if (packet[2] == '-') {
-          tid = -1;
+        int32_t req_pid = 0, req_tid = 0;
+        if (!parse_thread_id(packet.c_str() + 2, req_pid, req_tid)) {
+          reply = err_packet(1);
         } else {
-          uint64_t value = 0U;
-          if (!parse_hex_u64(packet.c_str() + 2, value)) {
-            tid_ok = false;
-            reply = err_packet(1);
-          } else {
-            tid = static_cast<int32_t>(value);
-          }
-        }
-        if (tid_ok) {
           if (which == 'g') {
-            if (tid > 0) general_thread_ = tid;
+            general_thread_ = req_tid;
             reply = "OK";
           } else if (which == 'c') {
-            continue_thread_ = tid > 0 ? tid : 0;
+            continue_thread_ = req_tid;
             reply = "OK";
           } else {
             reply = std::string();
@@ -680,15 +716,19 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
       reply = "OK";
     } else if (packet[0] == 'T') {
       refresh_threads();
-      uint64_t tid = 0U;
-      if (!parse_hex_u64(packet.c_str() + 1, tid)) {
+      int32_t req_pid = 0, req_tid = 0;
+      if (!parse_thread_id(packet.c_str() + 1, req_pid, req_tid)) {
         reply = err_packet(1);
       } else {
         reply = err_packet(1);
-        for (const auto &t : threads_) {
-          if (static_cast<uint64_t>(t.lwp) == tid) {
-            reply = "OK";
-            break;
+        if (req_tid <= 0 && attached_) {
+          reply = "OK";
+        } else {
+          for (const auto &t : threads_) {
+            if (t.lwp == req_tid) {
+              reply = "OK";
+              break;
+            }
           }
         }
       }
