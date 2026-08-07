@@ -5,6 +5,7 @@
  */
 
 #include "gdb_regs.hpp"
+#include "rsp_handler.hpp"
 #include "rsp_server.hpp"
 #include "target_xml.h"
 
@@ -25,6 +26,13 @@ static int failures;
   } while (0)
 
 int main() {
+  /* Multiprocess RSP thread ID parser tests */
+  int32_t pid_out = 0, tid_out = 0;
+  CHECK("parse_thread_id hex tid", parse_thread_id("4a", pid_out, tid_out) && pid_out == 0 && tid_out == 0x4A);
+  CHECK("parse_thread_id p4a.4a", parse_thread_id("p4a.4a", pid_out, tid_out) && pid_out == 0x4A && tid_out == 0x4A);
+  CHECK("parse_thread_id p4a.1001", parse_thread_id("p4a.1001", pid_out, tid_out) && pid_out == 0x4A && tid_out == 0x1001);
+  CHECK("parse_thread_id p-1.-1", parse_thread_id("p-1.-1", pid_out, tid_out) && pid_out == -1 && tid_out == -1);
+  CHECK("parse_thread_id -1", parse_thread_id("-1", pid_out, tid_out) && tid_out == -1);
   CHECK("checksum empty", rsp_checksum("") == 0U);
   CHECK("checksum abc", rsp_checksum("abc") ==
                             static_cast<uint8_t>('a' + 'b' + 'c'));
@@ -67,8 +75,8 @@ int main() {
         gdb_get_reg_value(regs, GDB_EFLAGS) == 0x246ULL);
 
   const std::string g = gdb_encode_g_packet(regs, nullptr);
-  /* core 328 + xmm 512 + mxcsr 8 = 848 hex chars */
-  CHECK("g packet size", g.size() == 848U);
+  /* core 328 + x87 padding 224 + xmm 512 + mxcsr 8 = 1072 hex chars (536 bytes) */
+  CHECK("g packet size", g.size() == 1072U);
 
   memdbg_debug_regs_t decoded{};
   CHECK("g decode succeeds", gdb_decode_g_packet(g, decoded, nullptr));
@@ -94,7 +102,7 @@ int main() {
         gdb_set_sse_bytes(fpregs, GDB_MXCSR,
                           reinterpret_cast<const uint8_t *>(&mxcsr), 4U));
   const std::string g2 = gdb_encode_g_packet(regs, &fpregs);
-  CHECK("g+sse size", g2.size() == 848U);
+  CHECK("g+sse size", g2.size() == 1072U);
   memdbg_debug_fpregs_t fpregs2{};
   memdbg_debug_regs_t decoded2{};
   CHECK("g+sse decode", gdb_decode_g_packet(g2, decoded2, &fpregs2));
@@ -133,11 +141,11 @@ int main() {
   CHECK("reject core as sse",
         !gdb_set_sse_bytes(fpregs, GDB_RAX, xmm0, 16U));
 
-  /* target.xml must not claim X87 yet (documented gap). */
-  CHECK("target xml no st0",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"st0\"") == nullptr);
-  CHECK("target xml no fctrl",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"fctrl\"") == nullptr);
+  /* target.xml includes X87 FPU feature. */
+  CHECK("target xml has st0",
+        std::strstr(kMemdbgGdbTargetXml, "name=\"st0\"") != nullptr);
+  CHECK("target xml has fctrl",
+        std::strstr(kMemdbgGdbTargetXml, "name=\"fctrl\"") != nullptr);
 
   uint64_t patched = 0xDEADBEEFCAFEULL;
   CHECK("set rbx", gdb_set_reg_value(regs, GDB_RBX, patched));

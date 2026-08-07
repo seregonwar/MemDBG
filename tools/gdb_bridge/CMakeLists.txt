@@ -51,8 +51,14 @@ target_link_libraries(memdbg_gdb_bridge PRIVATE Threads::Threads)
 add_executable(memdbg_gdb_bridge_test
   tests/test_gdb_bridge.cpp
   gdb_regs.cpp
+  rsp_handler.cpp
   rsp_server.cpp
+  ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
+  ${FRONTEND_ROOT}/src/core/client/client_operations.cpp
+  ${FRONTEND_ROOT}/src/core/client/client_scan.cpp
+  ${FRONTEND_ROOT}/src/core/client/client_debug.cpp
   ${FRONTEND_ROOT}/src/core/platform.cpp
+  ${REPO_ROOT}/src/util/lz4.c
 )
 
 target_include_directories(memdbg_gdb_bridge_test PRIVATE
