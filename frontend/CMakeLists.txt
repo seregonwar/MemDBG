@@ -486,8 +486,14 @@ target_link_libraries(memdbg_gdb_bridge PRIVATE Threads::Threads)
 add_executable(memdbg_gdb_bridge_test
   ${MEMDBG_GDB_BRIDGE_DIR}/tests/test_gdb_bridge.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/gdb_regs.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_server.cpp
+  src/core/client/memdbg_client.cpp
+  src/core/client/client_operations.cpp
+  src/core/client/client_scan.cpp
+  src/core/client/client_debug.cpp
   src/core/platform.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/lz4.c
 )
 
 target_include_directories(memdbg_gdb_bridge_test PRIVATE

@@ -229,6 +229,7 @@ jobs:
           run_frontend_test memdbg_payload_sender_test
           run_frontend_test memdbg_release_check_test
           run_frontend_test memdbg_client_test
+          run_frontend_test memdbg_gdb_bridge_test
           run_frontend_test memdbg_trainer_formats_test
           run_frontend_test memdbg_locale_manager_test
           run_frontend_test memdbg_plugin_manager_test
