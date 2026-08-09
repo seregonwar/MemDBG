@@ -178,6 +178,9 @@ bool load_frontend_settings(AppState &state, std::string *error) {
       std::snprintf(state.mem.dump_path, sizeof(state.mem.dump_path), "%s", value.c_str());
     } else if (key == "language") {
       state.language = static_cast<int>(locale::lang_from_code(value.c_str()));
+    } else if (key == "donation_banner_enabled") {
+      state.donation_banner_enabled =
+          value != "0" && value != "false" && value != "off";
     } else if (key == "last_debugger_pid") {
       state.last_debugger_pid = static_cast<int32_t>(std::atoi(value.c_str()));
     } else if (key == "taskmgr_prefetch_on_connect") {
@@ -291,6 +294,7 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "socket_timeout_ms=" << state.socket_timeout_ms << "\n";
   out << "dump_path=" << state.mem.dump_path << "\n";
   out << "last_debugger_pid=" << state.last_debugger_pid << "\n";
+  out << "donation_banner_enabled=" << (state.donation_banner_enabled ? 1 : 0) << "\n";
   out << "language=" << locale::lang_code(static_cast<locale::Lang>(state.language)) << "\n";
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr.prefetch_on_connect ? 1 : 0) << "\n";
   out << "payload_auto_fetch=" << (state.payload_auto_fetch ? 1 : 0) << "\n";

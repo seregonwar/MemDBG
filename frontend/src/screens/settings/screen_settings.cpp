@@ -387,6 +387,14 @@ static void draw_preferences_section(AppState &state) {
     ImGui::EndDisabled();
   }
 
+  if (ImGui::Checkbox(locale::tr("settings.donation_banner"), &state.donation_banner_enabled)) {
+    set_status(state, state.donation_banner_enabled
+        ? locale::tr("settings.donation_banner_on")
+        : locale::tr("settings.donation_banner_off"));
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", locale::tr("settings.donation_banner_hint"));
+
   ui::end_panel();
 }
 
