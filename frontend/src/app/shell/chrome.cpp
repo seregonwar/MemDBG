@@ -720,6 +720,68 @@ void draw_top_bar(AppState &state, ImVec2 size) {
   ImGui::PopStyleVar(2); ImGui::PopStyleColor();
 }
 
+/* ---- Donation banner ---- */
+
+void draw_donation_banner(AppState &state, ImVec2 size) {
+  if (!state.donation_banner_enabled) return;
+  const float scl = ui::dpi_scale();
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 0));
+  ImGui::BeginChild("DonationBanner", size, false, ImGuiWindowFlags_NoScrollbar);
+
+  /* Ko-fi-inspired warm coral palette. */
+  const ImVec4 coral(0.95f, 0.36f, 0.29f, 1.0f);        /* #F25C4A */
+  const ImVec4 coral_soft(1.00f, 0.45f, 0.38f, 1.0f);   /* hover   */
+  const ImVec4 coral_dim(0.70f, 0.26f, 0.21f, 1.0f);    /* active  */
+
+  /* Banner background drawn inside the child so it stays within the padded
+   * content area (does not bleed to the window edge). */
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const ImVec2 pos = ImGui::GetWindowPos();
+  const ImVec2 max = ImVec2(pos.x + ImGui::GetWindowWidth(),
+                            pos.y + ImGui::GetWindowHeight());
+  const float radius = 6.0f * scl;
+  dl->AddRectFilled(pos, max, ui::color_u32(ImVec4(0.50f, 0.10f, 0.11f, 0.85f)),
+                    radius);
+  dl->AddRect(pos, max, ui::color_u32(ImVec4(coral.x, coral.y, coral.z, 0.45f)),
+              radius, 0, 1.0f);
+
+  /* Left: coffee cup icon + invitation text, positioned with an explicit
+   * left offset so the cup never sits flush against the banner edge. */
+  const float icon_x = 32.0f * scl;
+  const float center_y = (size.y - ImGui::GetTextLineHeight()) * 0.5f;
+  ImGui::SetCursorPos(ImVec2(icon_x, center_y));
+  ImGui::TextColored(coral, "%s", icons::kCoffee);
+  ImGui::SameLine(0, 10.0f * scl);
+  ImGui::TextColored(ImVec4(1.0f, 0.97f, 0.96f, 0.95f), "%s",
+                     locale::tr("donation.banner_text"));
+
+  /* Right: coral donate button */
+  const char *donate_label = locale::tr("donation.donate");
+  const float btn_w = 170.0f * scl;
+  const float btn_h = 26.0f * scl;
+  ImGui::SameLine(ImGui::GetWindowWidth() - btn_w - 16.0f * scl);
+  ImGui::SetCursorPosY((size.y - btn_h) * 0.5f);
+  ImGui::PushStyleColor(ImGuiCol_Button, coral);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, coral_soft);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, coral_dim);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f * scl);
+  if (ImGui::Button(donate_label, ImVec2(btn_w, btn_h))) {
+    (void)platform::open_url("https://www.seregonwar.com/donations");
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", "https://www.seregonwar.com/donations");
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(4);
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor();
+}
+
 /* ---- Status bar ---- */
 
 void draw_status_bar(AppState &state, ImVec2 size) {

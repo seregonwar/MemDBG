@@ -62,6 +62,8 @@ constexpr const char *kPaste      = u8"\uf0ea"; /* paste */
 constexpr const char *kEdit       = u8"\uf044"; /* pen-to-square */
 constexpr const char *kTrash      = u8"\uf2ed"; /* trash-can */
 constexpr const char *kLink       = u8"\uf0c1"; /* link */
+constexpr const char *kHeart      = u8"\uf004"; /* heart */
+constexpr const char *kCoffee     = u8"\uf7b6"; /* mug-hot */
 constexpr const char *kExternalLink = u8"\uf08e"; /* arrow-up-right-from-square */
 constexpr const char *kClose      = u8"\uf00d"; /* xmark */
 

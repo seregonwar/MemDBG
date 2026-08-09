@@ -691,6 +691,7 @@ struct AppState {
   ActionJournal action_journal;
   CrashLogger crash_logger;
   bool crash_logging_enabled = true;
+  bool donation_banner_enabled = true;  /* show the support/donation banner under the top bar */
   uint64_t crash_udp_last_received = 0;
   bool crash_detected_on_startup = false;
   bool crash_report_dialog_open = false;

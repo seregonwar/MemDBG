@@ -315,16 +315,19 @@ void draw_app(AppState &state) {
       : std::clamp(win_size.x * 0.15f, sidebar_min, 224.0f * scl);
   const float top_h = 46.0f * scl;
   const float status_h = 26.0f * scl;
-  const float content_h = win_size.y - top_h - status_h;
+  const float banner_h = state.donation_banner_enabled ? 30.0f * scl : 0.0f;
+  const float content_h = win_size.y - top_h - status_h - banner_h;
 
   ImGui::SetCursorPos(ImVec2(0,0));
   draw_top_bar(state, ImVec2(win_size.x, top_h));
   ImGui::SetCursorPos(ImVec2(0, top_h));
+  draw_donation_banner(state, ImVec2(win_size.x, banner_h));
+  ImGui::SetCursorPos(ImVec2(0, top_h + banner_h));
   draw_sidebar(state, ImVec2(sidebar_w, content_h));
 
   /* â”€â”€ Resize handle â”€â”€ */
   const float handle_w = 5.0f * scl;
-  ImGui::SetCursorPos(ImVec2(sidebar_w, top_h));
+  ImGui::SetCursorPos(ImVec2(sidebar_w, top_h + banner_h));
   ImGui::InvisibleButton("##SidebarResize", ImVec2(handle_w, content_h));
   if (ImGui::IsItemHovered() || ImGui::IsItemActive())
     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -349,7 +352,7 @@ void draw_app(AppState &state) {
 
   /* Wrap the content area in a child window so a misbehaved screen cannot
    * draw over the sidebar/topbar even if it resets the cursor position. */
-  ImGui::SetCursorPos(ImVec2(sidebar_w + handle_w, top_h));
+  ImGui::SetCursorPos(ImVec2(sidebar_w + handle_w, top_h + banner_h));
   ImGui::BeginChild("AppContent", ImVec2(content_w, content_h), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   draw_screen(state, ImVec2(content_w, content_h));

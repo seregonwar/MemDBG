@@ -56,6 +56,7 @@ void text_ellipsis(const char *text, float max_width, ImVec4 color);
 void draw_sidebar(AppState &state, ImVec2 size);
 void set_notification_bottom_reserved(float value);
 void draw_top_bar(AppState &state, ImVec2 size);
+void draw_donation_banner(AppState &state, ImVec2 size);
 void draw_status_bar(AppState &state, ImVec2 size);
 void draw_notifications(AppState &state);
 void topbar_refresh_processes(AppState &state);
