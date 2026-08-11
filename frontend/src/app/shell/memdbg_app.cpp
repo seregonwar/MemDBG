@@ -782,14 +782,10 @@ void shutdown_app_shared(AppState &state) {
   state.plugin.run_pending = false;
   if (state.plugin_gui_bridge && state.plugin_gui_bridge->running())
     state.plugin_gui_bridge->stop();
-  if (state.payload_auto_shutdown && state.client.connected()) {
-    const bool shutdown_sent = state.client.shutdown_payload();
-    if (state.crash_logging_enabled) {
-      state.crash_logger.log(shutdown_sent ? "shutdown" : "error",
-          shutdown_sent ? "Automatic payload shutdown sent"
-                        : state.client.last_error().c_str());
-    }
-  }
+  /* Closing the frontend must never terminate the resident console payload.
+   * Besides being surprising, a synchronous SHUTDOWN request can block the UI
+   * until the socket timeout when the console has already powered off.  The
+   * Consoles screen retains the explicit "Shutdown Payload" action. */
   disconnect_console(state, "Application shutdown");
   state.udp_listener.stop();
   state.payload_fetcher.stop();

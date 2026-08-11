@@ -38,7 +38,6 @@ ConsoleTarget current_console_target_from_fields(const AppState &state) {
   target.payload_port = state.payload_port;
   target.payload_platform = state.payload_platform;
   target.payload_auto_inject = state.payload_auto_inject;
-  target.payload_auto_shutdown = state.payload_auto_shutdown;
   normalize_console_target(target);
   return target;
 }
@@ -53,7 +52,6 @@ static void apply_console_target(AppState &state, const ConsoleTarget &target) {
   state.payload_port = normalized.payload_port;
   state.payload_platform = normalized.payload_platform;
   state.payload_auto_inject = normalized.payload_auto_inject;
-  state.payload_auto_shutdown = normalized.payload_auto_shutdown;
   state.payload_fetcher.set_platform(payload_platform_filter(state.payload_platform));
 }
 
@@ -192,9 +190,6 @@ bool load_frontend_settings(AppState &state, std::string *error) {
     } else if (key == "payload_auto_inject") {
       state.payload_auto_inject =
           value == "1" || value == "true" || value == "on" || value == "yes";
-    } else if (key == "payload_auto_shutdown") {
-      state.payload_auto_shutdown =
-          value == "1" || value == "true" || value == "on" || value == "yes";
     } else if (key == "payload_platform") {
       state.payload_platform = std::atoi(value.c_str());
       if (state.payload_platform < 0 || state.payload_platform > 2)
@@ -243,9 +238,6 @@ bool load_frontend_settings(AppState &state, std::string *error) {
         target.payload_platform = std::atoi(value.c_str());
       } else if (field == "payload_auto_inject") {
         target.payload_auto_inject =
-            value == "1" || value == "true" || value == "on" || value == "yes";
-      } else if (field == "payload_auto_shutdown") {
-        target.payload_auto_shutdown =
             value == "1" || value == "true" || value == "on" || value == "yes";
       }
     }
@@ -299,7 +291,6 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
   out << "taskmgr_prefetch_on_connect=" << (state.taskmgr.prefetch_on_connect ? 1 : 0) << "\n";
   out << "payload_auto_fetch=" << (state.payload_auto_fetch ? 1 : 0) << "\n";
   out << "payload_auto_inject=" << (state.payload_auto_inject ? 1 : 0) << "\n";
-  out << "payload_auto_shutdown=" << (state.payload_auto_shutdown ? 1 : 0) << "\n";
   out << "payload_platform=" << state.payload_platform << "\n";
   out << "selected_target=" << selected_target << "\n";
   for (int i = 0; i < 4; ++i)
@@ -317,8 +308,6 @@ bool save_frontend_settings(const AppState &state, std::string *error) {
     out << "target." << i << ".payload_platform=" << target.payload_platform << "\n";
     out << "target." << i << ".payload_auto_inject="
         << (target.payload_auto_inject ? 1 : 0) << "\n";
-    out << "target." << i << ".payload_auto_shutdown="
-        << (target.payload_auto_shutdown ? 1 : 0) << "\n";
   }
   if (!out) {
     if (error != nullptr) *error = "Failed while writing " + path.string();

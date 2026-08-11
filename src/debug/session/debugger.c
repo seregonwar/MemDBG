@@ -310,6 +310,9 @@ memdbg_status_t memdbg_debugger_continue(void) {
   if (get_threads_locked(lwps, NULL, NULL, &count,
                          MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
     for (uint32_t i = 0; i < count; ++i) {
+      /* x86 DR6 hit bits are sticky.  Clear them only when resuming, after
+       * clients have had a chance to inspect the stop cause. */
+      clear_hardware_status_locked(lwps[i]);
       memdbg_debug_regs_t regs;
       memset(&regs, 0, sizeof(regs));
       if (pal_debug_get_regs((int)g_dbg.pid, lwps[i], &regs) != 0) continue;
@@ -412,6 +415,26 @@ memdbg_status_t memdbg_debugger_poll_events(void) {
               }
               g_dbg.stop_lwp = lwps[i];
               break;
+            }
+          }
+        }
+        if (g_dbg.stop_lwp == 0) {
+          /* A hardware data breakpoint traps after the instruction and does
+           * not have an INT3 at RIP-1.  DR6 B0..B3 identifies both the actual
+           * stopped LWP and the configured hardware slot. */
+          for (uint32_t i = 0; i < count && g_dbg.stop_lwp == 0; ++i) {
+            memdbg_debug_dbregs_t dbregs;
+            memset(&dbregs, 0, sizeof(dbregs));
+            if (pal_debug_get_dbregs((int)g_dbg.pid, lwps[i], &dbregs) != 0)
+              continue;
+            const uint64_t hits = dbregs.dr[6] & 0xFULL;
+            for (uint32_t slot = 0;
+                 slot < MEMDBG_DEBUGGER_MAX_WATCHPOINTS; ++slot) {
+              if ((hits & (1ULL << slot)) != 0U &&
+                  g_dbg.watchpoints[slot].installed) {
+                g_dbg.stop_lwp = lwps[i];
+                break;
+              }
             }
           }
         }

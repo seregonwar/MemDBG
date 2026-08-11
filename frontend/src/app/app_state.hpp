@@ -105,7 +105,6 @@ struct ConsoleTarget {
   int payload_port = 9021;
   int payload_platform = 0;  /* 0 = Auto, 1 = PS4, 2 = PS5 */
   bool payload_auto_inject = false;
-  bool payload_auto_shutdown = false;
 };
 
 struct CheatEntry {
@@ -702,7 +701,6 @@ struct AppState {
   PayloadFetcher payload_fetcher;
   bool payload_auto_fetch = false;
   bool payload_auto_inject = false;
-  bool payload_auto_shutdown = false;
   int payload_port = 9021;
   int payload_platform = 0;  /* 0 = Auto, 1 = PS4, 2 = PS5 */
   bool payload_inject_pending = false;

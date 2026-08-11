@@ -19,6 +19,12 @@ namespace memdbg::gdb_bridge {
 /* Thread ID parser supporting multiprocess RSP syntax (p<pid>.<tid>, p<pid>, <tid>). */
 bool parse_thread_id(const char *s, int32_t &pid_out, int32_t &tid_out);
 
+/* Convert x86 DR6 B0..B3 plus the installed slot metadata into the GDB RSP
+ * stop-reason field (watch/rwatch/awatch/hwbreak). */
+std::string gdb_watchpoint_stop_field(
+    uint64_t dr6,
+    const std::vector<memdbg::frontend::Client::DebugWatchpointEntry> &entries);
+
 class RspHandler {
 public:
   RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
@@ -48,6 +54,7 @@ private:
   bool safe_detach();
   void logf(const char *fmt, ...) const;
   void log_rsp_command(const std::string &packet) const;
+  void capture_stop_reason(int32_t lwp);
   int32_t current_thread() const;
   void refresh_threads();
 
@@ -58,6 +65,7 @@ private:
   int32_t general_thread_ = 0; /* Hg */
   int32_t continue_thread_ = 0; /* Hc; 0 = all */
   int32_t stop_lwp_ = 0;
+  std::string stop_reason_;
   bool thread_info_started_ = false;
   std::vector<memdbg::frontend::Client::DebugThreadEntry> threads_;
 };

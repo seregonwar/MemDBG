@@ -100,6 +100,27 @@ bool parse_thread_id(const char *s, int32_t &pid_out, int32_t &tid_out) {
   return true;
 }
 
+std::string gdb_watchpoint_stop_field(
+    uint64_t dr6,
+    const std::vector<memdbg::frontend::Client::DebugWatchpointEntry> &entries) {
+  const uint64_t hits = dr6 & 0xFULL;
+  for (const auto &entry : entries) {
+    if (!entry.installed || entry.slot >= 4U ||
+        (hits & (1ULL << entry.slot)) == 0U) {
+      continue;
+    }
+    if (entry.type == 0U) return "hwbreak:;";
+    const char *reason = entry.type == 1U ? "watch"
+                         : entry.type == 2U ? "rwatch"
+                                            : "awatch";
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s:%llx;", reason,
+                  static_cast<unsigned long long>(entry.address));
+    return std::string(buf);
+  }
+  return std::string();
+}
+
 RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
                        bool verbose)
     : client_(client), pid_(initial_pid), verbose_(verbose) {}
@@ -140,6 +161,7 @@ bool RspHandler::safe_detach() {
   }
   attached_ = false;
   stop_lwp_ = 0;
+  stop_reason_.clear();
   general_thread_ = 0;
   continue_thread_ = 0;
   threads_.clear();
@@ -183,14 +205,27 @@ int32_t RspHandler::current_thread() const {
 
 std::string RspHandler::stop_reply() const {
   const int32_t tid = stop_lwp_ > 0 ? stop_lwp_ : current_thread();
-  char buf[64];
+  std::string reply = "T05";
+  reply += stop_reason_;
   if (tid > 0) {
-    std::snprintf(buf, sizeof(buf), "T05thread:%x;",
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "thread:%x;",
                   static_cast<unsigned>(tid));
-  } else {
-    std::snprintf(buf, sizeof(buf), "S05");
+    reply += buf;
   }
-  return std::string(buf);
+  return reply;
+}
+
+void RspHandler::capture_stop_reason(int32_t lwp) {
+  stop_reason_.clear();
+  if (lwp <= 0) return;
+  memdbg::frontend::Client::DebugDbregs dbregs;
+  std::vector<memdbg::frontend::Client::DebugWatchpointEntry> entries;
+  if (!client_.debug_get_dbregs(lwp, dbregs) ||
+      !client_.debug_get_watchpoints(entries)) {
+    return;
+  }
+  stop_reason_ = gdb_watchpoint_stop_field(dbregs.dbregs.dr[6], entries);
 }
 
 std::string RspHandler::qxfer_features(const std::string &annex, size_t offset,
@@ -257,6 +292,7 @@ std::string RspHandler::handle_continue_or_step(bool step, RspConnection &conn,
          client_.last_error().c_str());
     return err_packet(1);
   }
+  stop_reason_.clear();
 
   for (;;) {
     if (conn.poll_interrupt(50U)) {
@@ -275,6 +311,7 @@ std::string RspHandler::handle_continue_or_step(bool step, RspConnection &conn,
     }
     if (stopped) {
       if (stop_lwp != 0) stop_lwp_ = stop_lwp;
+      capture_stop_reason(stop_lwp_);
       general_thread_ = stop_lwp_;
       return stop_reply();
     }
