@@ -233,6 +233,15 @@ memdbg_status_t pal_memory_read(int pid, uint64_t address, void *buffer,
   errno = 0;
   if (console_mdbg_copyout((pid_t)pid, (intptr_t)address, buffer, length) != 0) {
     const int first_errno = errno;
+#if defined(MEMDBG_PAL_PS4)
+    size_t ptrace_read = 0U;
+    if (pal_debug_memory_read(pid, address, buffer, length, &ptrace_read) == 0 &&
+        ptrace_read == length) {
+      if (read_out != NULL) *read_out = ptrace_read;
+      return MEMDBG_OK;
+    }
+    errno = first_errno;
+#endif
 #if defined(MEMDBG_PAL_PS5)
     /* DMAP is a fallback for a blocked mdbg primitive, not for an invalid or
      * partially unmapped user range. Walking an EFAULT range can touch an
@@ -278,8 +287,20 @@ memdbg_status_t pal_memory_write(int pid, uint64_t address,
 #endif
 
   errno = 0;
-  if (console_mdbg_copyin((pid_t)pid, (intptr_t)address, buffer, length) != 0)
+  if (console_mdbg_copyin((pid_t)pid, (intptr_t)address, buffer, length) != 0) {
+#if defined(MEMDBG_PAL_PS4)
+    const int first_errno = errno;
+    size_t ptrace_written = 0U;
+    if (pal_debug_memory_write(pid, address, buffer, length,
+                               &ptrace_written) == 0 &&
+        ptrace_written == length) {
+      if (written_out != NULL) *written_out = ptrace_written;
+      return MEMDBG_OK;
+    }
+    errno = first_errno;
+#endif
     return mdbg_errno_status();
+  }
 
   if (written_out != NULL) *written_out = length;
   return MEMDBG_OK;

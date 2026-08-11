@@ -51,7 +51,7 @@ void print_usage(const char *prog) {
                "  --listen [HOST:]N    RSP listen address (default 127.0.0.1:23946)\n"
                "  --pid PID            Optional pre-attach PID (decimal)\n"
                "  --name NAME          Resolve PID via process_list (e.g. eboot.bin)\n"
-               "  --verbose            Log RSP packets and MDBG attach/continue/detach\n"
+               "  --verbose            Log RSP replies and MDBG lifecycle details\n"
                "  --once               Exit after the first GDB client disconnects\n"
                "  --help               Show this help\n"
                "\n"
@@ -101,6 +101,25 @@ bool name_matches(const std::string &proc_name, const std::string &want) {
     }
   }
   return false;
+}
+
+bool print_process_list(memdbg::frontend::Client &client) {
+  std::vector<memdbg::frontend::ProcessEntry> procs;
+  if (!client.process_list(procs)) {
+    std::fprintf(stderr, "[gdb_bridge] process_list failed: %s\n",
+                 client.last_error().c_str());
+    return false;
+  }
+
+  std::fprintf(stderr, "[gdb_bridge] Available processes (%zu):\n",
+               procs.size());
+  std::fprintf(stderr, "[gdb_bridge] %7s %7s  %s\n", "PID", "PPID", "NAME");
+  for (const auto &p : procs) {
+    std::fprintf(stderr, "[gdb_bridge] %7d %7d  %s\n",
+                 static_cast<int>(p.pid), static_cast<int>(p.ppid),
+                 p.name.empty() ? "<unnamed>" : p.name.c_str());
+  }
+  return true;
 }
 
 bool resolve_process_name(memdbg::frontend::Client &client,
@@ -253,6 +272,9 @@ int main(int argc, char **argv) {
                  "[gdb_bridge] Warning: payload did not advertise "
                  "MEMDBG_CAP_DEBUGGER\n");
   }
+
+  /* Make PID discovery available without opening the desktop frontend. */
+  (void)print_process_list(client);
 
   if (!opt.process_name.empty()) {
     if (!resolve_process_name(client, opt.process_name, opt.pid)) {

@@ -68,12 +68,15 @@ bool gdb_reg_valid(int regno) {
 
 std::string gdb_thread_extra_info_hex(int32_t tid, const std::string &name) {
   std::string display = name;
+  bool firmware_fill = display.size() >= 8U;
   for (unsigned char c : display) {
     if (c < 0x20U || c > 0x7EU) {
       display.clear();
       break;
     }
+    if (c != 'F' && c != 'f') firmware_fill = false;
   }
+  if (firmware_fill) display.clear();
   if (display.empty()) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "LWP %d", static_cast<int>(tid));

@@ -14,6 +14,7 @@
 #include "memdbg/pal/pal_memory.h"
 #include "memdbg/core/memdbg_protocol.h"
 #include "memdbg/pal/pal_fileio.h"
+#include "memdbg/pal/debug.h"
 #include "memdbg/pal/pal_process.h"
 #include "memdbg/pal/pal_kernel_fast.h"
 #include "memdbg/scanner/walker.h"

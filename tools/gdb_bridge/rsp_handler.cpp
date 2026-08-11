@@ -114,14 +114,27 @@ void RspHandler::logf(const char *fmt, ...) const {
   std::fputc('\n', stderr);
 }
 
-void RspHandler::safe_detach() {
-  if (!attached_) return;
-  /* Resume before detach so the console process is not left stopped. */
-  if (!client_.debug_continue()) {
-    logf("pre-detach continue failed: %s", client_.last_error().c_str());
+void RspHandler::log_rsp_command(const std::string &packet) const {
+  /* Keep the exact IDA/GDB command sequence in every field report. */
+  if (packet.size() > 96U && !packet.empty() &&
+      (packet[0] == 'M' || packet[0] == 'X' || packet[0] == 'G')) {
+    std::fprintf(stderr, "[gdb_bridge] rsp <- %.64s... (%zu bytes)\n",
+                 packet.c_str(), packet.size());
+  } else {
+    std::fprintf(stderr, "[gdb_bridge] rsp <- %s\n", packet.c_str());
+  }
+}
+
+bool RspHandler::safe_detach() {
+  if (!attached_) return true;
+  /* Stop before the payload restores software breakpoints.  PT_DETACH resumes
+   * the process; continuing first races live code against INT3 removal. */
+  if (!client_.debug_stop()) {
+    logf("pre-detach stop failed: %s", client_.last_error().c_str());
   }
   if (!client_.debug_detach()) {
     logf("debug_detach failed: %s", client_.last_error().c_str());
+    return false;
   } else {
     logf("detached pid=%d", static_cast<int>(pid_));
   }
@@ -130,9 +143,10 @@ void RspHandler::safe_detach() {
   general_thread_ = 0;
   continue_thread_ = 0;
   threads_.clear();
+  return true;
 }
 
-void RspHandler::cleanup() { safe_detach(); }
+void RspHandler::cleanup() { (void)safe_detach(); }
 
 bool RspHandler::ensure_attached() {
   if (attached_) return true;
@@ -489,7 +503,7 @@ std::string RspHandler::handle_v(const std::string &packet,
     }
     if (attached_) {
       logf("vAttach: switching from pid=%d", static_cast<int>(pid_));
-      safe_detach();
+      if (!safe_detach()) return err_packet(1);
     }
     pid_ = attach_pid;
     if (!client_.debug_attach(pid_)) {
@@ -532,15 +546,7 @@ std::string RspHandler::handle_v(const std::string &packet,
 
 std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
   if (packet.empty()) return std::string();
-  if (verbose_) {
-    /* Truncate huge memory payloads in logs. */
-    if (packet.size() > 96U &&
-        (packet[0] == 'M' || packet[0] == 'X' || packet[0] == 'G')) {
-      logf("rsp <- %.64s... (%zu bytes)", packet.c_str(), packet.size());
-    } else {
-      logf("rsp <- %s", packet.c_str());
-    }
-  }
+  log_rsp_command(packet);
 
   std::string reply;
   if (packet[0] == 'q' || packet[0] == 'Q') {
@@ -705,8 +711,7 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
     } else if (packet[0] == 'z') {
       reply = handle_breakpoint(packet, false);
     } else if (packet[0] == 'D' || packet == "k") {
-      safe_detach();
-      reply = "OK";
+      reply = safe_detach() ? "OK" : err_packet(1);
     } else if (packet[0] == 'T') {
       refresh_threads();
       int32_t req_pid = 0, req_tid = 0;

@@ -45,8 +45,9 @@ private:
                              size_t length) const;
   std::string qxfer_memory_map(size_t offset, size_t length);
   bool ensure_attached();
-  void safe_detach();
+  bool safe_detach();
   void logf(const char *fmt, ...) const;
+  void log_rsp_command(const std::string &packet) const;
   int32_t current_thread() const;
   void refresh_threads();
 

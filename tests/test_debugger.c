@@ -662,6 +662,21 @@ static void test_stop_continue_step(void) {
   TEST_OK("step succeeds", st);
   TEST("step called PAL single_step", mock.step_called);
 
+  /* At an INT3, the internal step-over consumes the trap while restoring the
+   * breakpoint.  The completed stop must remain visible to protocol polling. */
+  mock.memory[0x1000] = 0x90;
+  TEST_OK("stop after plain step", memdbg_debugger_stop());
+  TEST_OK("set breakpoint for step-over",
+          memdbg_debugger_set_breakpoint(0x1000ULL, MEMDBG_BP_SOFTWARE));
+  mock.regs[0].r_rip = 0x1001;
+  mock.wait_call_count = 0;
+  st = memdbg_debugger_step(MOCK_LWP_MAIN);
+  TEST_OK("breakpoint step-over succeeds", st);
+  TEST("breakpoint step-over reports stopped", memdbg_debugger_is_stopped());
+  TEST_EQ_I("breakpoint step-over reports LWP",
+            memdbg_debugger_get_stop_lwp(), MOCK_LWP_MAIN);
+  TEST("breakpoint reinstalled after step-over", mock.memory[0x1000] == 0xCCU);
+
   TEST_OK("detach", memdbg_debugger_detach());
 }
 
@@ -1240,6 +1255,18 @@ static void test_detach_with_active_bp(void) {
   TEST("original byte restored after detach", mock.memory[0x5000] == 0x90U);
 
   TEST("not attached after detach", !memdbg_debugger_is_attached());
+
+  /* Detaching a running target must stop it before restoring INT3 bytes. */
+  mock_reset();
+  mock.memory[0x5000] = 0x90;
+  TEST_OK("running detach: attach", memdbg_debugger_attach(MOCK_PID));
+  TEST_OK("running detach: set SW BP",
+          memdbg_debugger_set_breakpoint(0x5000ULL, MEMDBG_BP_SOFTWARE));
+  TEST_OK("running detach: continue", memdbg_debugger_continue());
+  mock.stop_call_count = 0;
+  TEST_OK("running detach succeeds", memdbg_debugger_detach());
+  TEST("running detach stops before restore", mock.stop_call_count == 1);
+  TEST("running detach restores original byte", mock.memory[0x5000] == 0x90U);
 }
 
 /* ---- 12. Operations while detached should fail ---- */

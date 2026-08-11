@@ -168,6 +168,9 @@ int main() {
   CHECK("thread extra rejects non-text firmware fill",
         gdb_thread_extra_info_hex(0x49, std::string(15U, '\xff')) ==
             bytes_to_hex("LWP 73", 6U));
+  CHECK("thread extra rejects printable firmware fill",
+        gdb_thread_extra_info_hex(0x4A, "FFFFFFFFFFFFFFF") ==
+            bytes_to_hex("LWP 74", 6U));
 
   CHECK("target xml non-empty", std::strlen(kMemdbgGdbTargetXml) > 100U);
   CHECK("target xml has architecture",

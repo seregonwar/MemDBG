@@ -142,7 +142,9 @@ memdbg_status_t refresh_dbregs_from_thread(int32_t lwp) {
 
 // Internal single-step over a software breakpoint
 
-memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp) {
+memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp,
+                                               bool *stop_consumed_out) {
+  if (stop_consumed_out != NULL) *stop_consumed_out = false;
   memdbg_debug_regs_t regs;
   memset(&regs, 0, sizeof(regs));
   if (pal_debug_get_regs((int)g_dbg.pid, lwp, &regs) != 0) {
@@ -175,14 +177,41 @@ memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp) {
   }
 
   /* Wait for the single-step SIGTRAP. */
+  bool stopped = false;
+  bool forced_stop = false;
   for (int i = 0; i < 500; ++i) {
     int status = 0;
     int r = pal_debug_wait((int)g_dbg.pid, &status, true);
-    if (r == 1 && WIFSTOPPED(status)) break;
+    if (r == 1 && WIFSTOPPED(status)) {
+      stopped = true;
+      break;
+    }
+    if (r == -1 && errno != EINTR) {
+      break;
+    }
     debugger_sleep_ms(10);
   }
 
+  if (!stopped) {
+    /* Do not reinstall INT3 while the target may still be executing. */
+    forced_stop = true;
+    (void)pal_debug_stop((int)g_dbg.pid);
+    for (int i = 0; i < 500; ++i) {
+      int status = 0;
+      int r = pal_debug_wait((int)g_dbg.pid, &status, true);
+      if (r == 1 && WIFSTOPPED(status)) {
+        stopped = true;
+        break;
+      }
+      debugger_sleep_ms(10);
+    }
+  }
+
+  if (!stopped) return MEMDBG_ERR_STATE;
   st = install_sw_breakpoint(bp);
+  if (st != MEMDBG_OK) return st;
+  if (forced_stop) return MEMDBG_ERR_STATE;
+  if (stop_consumed_out != NULL) *stop_consumed_out = true;
   return st;
 }
 
