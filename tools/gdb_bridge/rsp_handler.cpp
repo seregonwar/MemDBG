@@ -376,7 +376,7 @@ std::string RspHandler::handle_query(const std::string &packet,
                                      RspConnection &conn) {
   if (packet.rfind("qSupported", 0) == 0) {
     return "PacketSize=1048576;qXfer:features:read+;qXfer:memory-map:read+;"
-           "swbreak+;hwbreak+;vContSupported+;QStartNoAckMode+";
+           "swbreak+;hwbreak+;QStartNoAckMode+";
   }
   if (packet == "QStartNoAckMode") {
     conn.set_no_ack(true);
@@ -483,7 +483,7 @@ std::string RspHandler::handle_v(const std::string &packet,
     const int32_t attach_pid = req_pid > 0 ? req_pid : req_tid;
     logf("vAttach pid=0x%x (%d decimal)", static_cast<unsigned>(attach_pid),
          static_cast<int>(attach_pid));
-    if (attached_ && (pid_ == attach_pid || pid_ > 0)) {
+    if (attached_ && pid_ == attach_pid) {
       logf("vAttach: reusing session for pid=%d", static_cast<int>(pid_));
       return stop_reply();
     }
@@ -587,12 +587,11 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
         if (!client_.debug_get_regs(current_thread(), regs)) {
           reply = err_packet(1);
         } else {
-          memdbg::frontend::Client::DebugFpregs fpregs;
-          const memdbg_debug_fpregs_t *fp = nullptr;
-          if (client_.debug_get_fpregs(current_thread(), fpregs)) {
-            fp = &fpregs.fpregs;
-          }
-          reply = gdb_encode_g_packet(regs.regs, fp);
+          /* IDA's Remote GDB debugger is interoperable with the PS4 reference
+           * gdbsrv when the bulk register packet contains the 24 amd64 core
+           * registers only.  Optional FP/SSE state remains available through
+           * individual p/P packets, but must not shift IDA's core layout. */
+          reply = gdb_encode_g_core(regs.regs);
         }
       }
     } else if (packet[0] == 'G') {
@@ -603,18 +602,12 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
         if (!client_.debug_get_regs(current_thread(), regs)) {
           reply = err_packet(1);
         } else {
-          memdbg::frontend::Client::DebugFpregs fpregs;
-          (void)client_.debug_get_fpregs(current_thread(), fpregs);
-          if (!gdb_decode_g_packet(packet.substr(1U), regs.regs, &fpregs.fpregs))
+          if (!gdb_decode_g_core(packet.substr(1U), regs.regs))
             reply = err_packet(1);
           else if (!client_.debug_set_regs(current_thread(), regs))
             reply = err_packet(1);
-          else {
-            if (fpregs.fpregs.length > 0U) {
-              (void)client_.debug_set_fpregs(current_thread(), fpregs);
-            }
+          else
             reply = "OK";
-          }
         }
       }
     } else if (packet[0] == 'p') {

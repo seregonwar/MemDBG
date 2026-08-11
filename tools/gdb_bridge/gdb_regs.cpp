@@ -68,6 +68,12 @@ bool gdb_reg_valid(int regno) {
 
 std::string gdb_thread_extra_info_hex(int32_t tid, const std::string &name) {
   std::string display = name;
+  for (unsigned char c : display) {
+    if (c < 0x20U || c > 0x7EU) {
+      display.clear();
+      break;
+    }
+  }
   if (display.empty()) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "LWP %d", static_cast<int>(tid));
@@ -282,4 +288,3 @@ bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
 }
 
 } // namespace memdbg::gdb_bridge
-

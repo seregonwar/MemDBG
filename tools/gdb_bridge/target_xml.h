@@ -1,5 +1,5 @@
 /*
- * MemDBG - GDB target description for i386:x86-64 (core + x87 + SSE).
+ * MemDBG - GDB target description for i386:x86-64.
  * Copyright (C) 2026 SeregonWar
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -12,75 +12,14 @@
  * | Target XML Description                                            |
  * +-------------------------------------------------------------------+
  */
+/* Keep the description intentionally minimal.  IDA then uses its built-in
+ * amd64 core layout, matching the known-good ps4-payload-dev/gdbsrv contract. */
 static const char kMemdbgGdbTargetXml[] =
-    "<?xml version=\"1.0\"?>"
-    "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">"
-    "<target version=\"1.0\">"
-    "<architecture>i386:x86-64</architecture>"
-    "<feature name=\"org.gnu.gdb.i386.core\">"
-    "<reg name=\"rax\" bitsize=\"64\" type=\"int64\" regnum=\"0\"/>"
-    "<reg name=\"rbx\" bitsize=\"64\" type=\"int64\" regnum=\"1\"/>"
-    "<reg name=\"rcx\" bitsize=\"64\" type=\"int64\" regnum=\"2\"/>"
-    "<reg name=\"rdx\" bitsize=\"64\" type=\"int64\" regnum=\"3\"/>"
-    "<reg name=\"rsi\" bitsize=\"64\" type=\"int64\" regnum=\"4\"/>"
-    "<reg name=\"rdi\" bitsize=\"64\" type=\"int64\" regnum=\"5\"/>"
-    "<reg name=\"rbp\" bitsize=\"64\" type=\"int64\" regnum=\"6\"/>"
-    "<reg name=\"rsp\" bitsize=\"64\" type=\"int64\" regnum=\"7\"/>"
-    "<reg name=\"r8\" bitsize=\"64\" type=\"int64\" regnum=\"8\"/>"
-    "<reg name=\"r9\" bitsize=\"64\" type=\"int64\" regnum=\"9\"/>"
-    "<reg name=\"r10\" bitsize=\"64\" type=\"int64\" regnum=\"10\"/>"
-    "<reg name=\"r11\" bitsize=\"64\" type=\"int64\" regnum=\"11\"/>"
-    "<reg name=\"r12\" bitsize=\"64\" type=\"int64\" regnum=\"12\"/>"
-    "<reg name=\"r13\" bitsize=\"64\" type=\"int64\" regnum=\"13\"/>"
-    "<reg name=\"r14\" bitsize=\"64\" type=\"int64\" regnum=\"14\"/>"
-    "<reg name=\"r15\" bitsize=\"64\" type=\"int64\" regnum=\"15\"/>"
-    "<reg name=\"rip\" bitsize=\"64\" type=\"code_ptr\" regnum=\"16\"/>"
-    "<reg name=\"eflags\" bitsize=\"32\" type=\"int32\" regnum=\"17\"/>"
-    "<reg name=\"cs\" bitsize=\"32\" type=\"int32\" regnum=\"18\"/>"
-    "<reg name=\"ss\" bitsize=\"32\" type=\"int32\" regnum=\"19\"/>"
-    "<reg name=\"ds\" bitsize=\"32\" type=\"int32\" regnum=\"20\"/>"
-    "<reg name=\"es\" bitsize=\"32\" type=\"int32\" regnum=\"21\"/>"
-    "<reg name=\"fs\" bitsize=\"32\" type=\"int32\" regnum=\"22\"/>"
-    "<reg name=\"gs\" bitsize=\"32\" type=\"int32\" regnum=\"23\"/>"
-    "</feature>"
-    "<feature name=\"org.gnu.gdb.i386.fpu\">"
-    "<reg name=\"st0\" bitsize=\"80\" type=\"i387_ext\" regnum=\"24\"/>"
-    "<reg name=\"st1\" bitsize=\"80\" type=\"i387_ext\" regnum=\"25\"/>"
-    "<reg name=\"st2\" bitsize=\"80\" type=\"i387_ext\" regnum=\"26\"/>"
-    "<reg name=\"st3\" bitsize=\"80\" type=\"i387_ext\" regnum=\"27\"/>"
-    "<reg name=\"st4\" bitsize=\"80\" type=\"i387_ext\" regnum=\"28\"/>"
-    "<reg name=\"st5\" bitsize=\"80\" type=\"i387_ext\" regnum=\"29\"/>"
-    "<reg name=\"st6\" bitsize=\"80\" type=\"i387_ext\" regnum=\"30\"/>"
-    "<reg name=\"st7\" bitsize=\"80\" type=\"i387_ext\" regnum=\"31\"/>"
-    "<reg name=\"fctrl\" bitsize=\"32\" type=\"int\" regnum=\"32\"/>"
-    "<reg name=\"fstat\" bitsize=\"32\" type=\"int\" regnum=\"33\"/>"
-    "<reg name=\"ftag\" bitsize=\"32\" type=\"int\" regnum=\"34\"/>"
-    "<reg name=\"fiseg\" bitsize=\"32\" type=\"int\" regnum=\"35\"/>"
-    "<reg name=\"fioff\" bitsize=\"32\" type=\"int\" regnum=\"36\"/>"
-    "<reg name=\"foseg\" bitsize=\"32\" type=\"int\" regnum=\"37\"/>"
-    "<reg name=\"fooff\" bitsize=\"32\" type=\"int\" regnum=\"38\"/>"
-    "<reg name=\"fop\" bitsize=\"32\" type=\"int\" regnum=\"39\"/>"
-    "</feature>"
-    "<feature name=\"org.gnu.gdb.i386.sse\">"
-    "<reg name=\"xmm0\" bitsize=\"128\" type=\"uint128\" regnum=\"40\"/>"
-    "<reg name=\"xmm1\" bitsize=\"128\" type=\"uint128\" regnum=\"41\"/>"
-    "<reg name=\"xmm2\" bitsize=\"128\" type=\"uint128\" regnum=\"42\"/>"
-    "<reg name=\"xmm3\" bitsize=\"128\" type=\"uint128\" regnum=\"43\"/>"
-    "<reg name=\"xmm4\" bitsize=\"128\" type=\"uint128\" regnum=\"44\"/>"
-    "<reg name=\"xmm5\" bitsize=\"128\" type=\"uint128\" regnum=\"45\"/>"
-    "<reg name=\"xmm6\" bitsize=\"128\" type=\"uint128\" regnum=\"46\"/>"
-    "<reg name=\"xmm7\" bitsize=\"128\" type=\"uint128\" regnum=\"47\"/>"
-    "<reg name=\"xmm8\" bitsize=\"128\" type=\"uint128\" regnum=\"48\"/>"
-    "<reg name=\"xmm9\" bitsize=\"128\" type=\"uint128\" regnum=\"49\"/>"
-    "<reg name=\"xmm10\" bitsize=\"128\" type=\"uint128\" regnum=\"50\"/>"
-    "<reg name=\"xmm11\" bitsize=\"128\" type=\"uint128\" regnum=\"51\"/>"
-    "<reg name=\"xmm12\" bitsize=\"128\" type=\"uint128\" regnum=\"52\"/>"
-    "<reg name=\"xmm13\" bitsize=\"128\" type=\"uint128\" regnum=\"53\"/>"
-    "<reg name=\"xmm14\" bitsize=\"128\" type=\"uint128\" regnum=\"54\"/>"
-    "<reg name=\"xmm15\" bitsize=\"128\" type=\"uint128\" regnum=\"55\"/>"
-    "<reg name=\"mxcsr\" bitsize=\"32\" type=\"int32\" regnum=\"56\"/>"
-    "</feature>"
-    "</target>";
+    "<?xml version=\"1.0\"?>\n"
+    "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">\n"
+    "<target>\n"
+    "<architecture>i386:x86-64</architecture>\n"
+    "<osabi>none</osabi>\n"
+    "</target>\n";
 
 #endif /* MEMDBG_GDB_BRIDGE_TARGET_XML_H */
-
