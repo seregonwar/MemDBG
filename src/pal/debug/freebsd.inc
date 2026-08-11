@@ -119,6 +119,12 @@ int pal_debug_wait(int pid, int *status, bool nohang) {
   int st = 0;
   if (status == NULL) status = &st;
   int flags = nohang ? WNOHANG : 0;
+#ifdef WUNTRACED
+  /* Make the initial PT_ATTACH/SIGSTOP observable on PS4 as well as on
+   * desktop FreeBSD.  The reference PS4 gdb server waits for this state
+   * before it reports a successful attach. */
+  flags |= WUNTRACED;
+#endif
   pid_t r = waitpid((pid_t)pid, status, flags);
   if (r == -1) return -1;
   if (nohang && r == 0) {
@@ -142,6 +148,7 @@ int pal_debug_attach(int pid) {
     if (r == -1) {
       wait_errno = errno;
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)
+#if defined(MEMDBG_PAL_DEBUG_PS5)
       if (wait_errno == ECHILD) {
         /* On console firmware, PT_ATTACH can succeed without exposing the
          * traced process through waitpid() as a child of this payload.  Treat
@@ -149,6 +156,7 @@ int pal_debug_attach(int pid) {
          * issue an explicit stop/poll if needed. */
         return 0;
       }
+#endif
       /* ECONNRESET can occur when the console's internal debugger daemon
        * momentarily resets the connection.  Retry instead of failing
        * immediately; a subsequent poll usually succeeds. */
@@ -162,13 +170,20 @@ int pal_debug_attach(int pid) {
     pal_debug_sleep_ms(10U);
   }
 
-#if defined(MEMDBG_PAL_DEBUG_CONSOLE)
+#if defined(MEMDBG_PAL_DEBUG_PS5)
   if (wait_errno == 0) {
     return 0;
   }
 #endif
 
-  (void)pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0);
+  /* Never expose a half-attached PS4 session.  Without a consumed wait event,
+   * the first PT_CONTINUE can leave the attach SIGSTOP pending indefinitely,
+   * which is observed as a permanent black screen.  PT_DETACH resumes the
+   * target; SIGCONT is a best-effort guard for an independent job-control
+   * stop if detach itself fails. */
+  if (pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0) == -1) {
+    (void)kill((pid_t)pid, SIGCONT);
+  }
   errno = wait_errno != 0 ? wait_errno : ETIMEDOUT;
   return -1;
 }
@@ -688,4 +703,3 @@ int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count
   return -1;
 #endif
 }
-

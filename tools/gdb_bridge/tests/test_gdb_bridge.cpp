@@ -92,6 +92,14 @@ int main() {
   CHECK("ss round-trip",
         static_cast<uint64_t>(decoded.r_ss) == 0x2BULL);
 
+  const std::string ida_core = gdb_encode_g_core(regs);
+  CHECK("IDA core g-packet size", ida_core.size() == 328U);
+  memdbg_debug_regs_t ida_decoded{};
+  CHECK("IDA core g-packet decode",
+        gdb_decode_g_core(ida_core, ida_decoded));
+  CHECK("IDA core RIP round-trip",
+        static_cast<uint64_t>(ida_decoded.r_rip) == 0x401000ULL);
+
   memdbg_debug_fpregs_t fpregs{};
   fpregs.length = 512U;
   std::memset(fpregs.data, 0, sizeof(fpregs.data));
@@ -141,12 +149,6 @@ int main() {
   CHECK("reject core as sse",
         !gdb_set_sse_bytes(fpregs, GDB_RAX, xmm0, 16U));
 
-  /* target.xml includes X87 FPU feature. */
-  CHECK("target xml has st0",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"st0\"") != nullptr);
-  CHECK("target xml has fctrl",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"fctrl\"") != nullptr);
-
   uint64_t patched = 0xDEADBEEFCAFEULL;
   CHECK("set rbx", gdb_set_reg_value(regs, GDB_RBX, patched));
   CHECK("get rbx", gdb_get_reg_value(regs, GDB_RBX) == patched);
@@ -163,16 +165,15 @@ int main() {
   CHECK("thread extra empty fallback",
         gdb_thread_extra_info_hex(0x58, "") ==
             bytes_to_hex("LWP 88", 6U));
+  CHECK("thread extra rejects non-text firmware fill",
+        gdb_thread_extra_info_hex(0x49, std::string(15U, '\xff')) ==
+            bytes_to_hex("LWP 73", 6U));
 
   CHECK("target xml non-empty", std::strlen(kMemdbgGdbTargetXml) > 100U);
   CHECK("target xml has architecture",
         std::strstr(kMemdbgGdbTargetXml, "i386:x86-64") != nullptr);
-  CHECK("target xml has rax",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"rax\"") != nullptr);
-  CHECK("target xml has xmm0",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"xmm0\"") != nullptr);
-  CHECK("target xml has mxcsr",
-        std::strstr(kMemdbgGdbTargetXml, "name=\"mxcsr\"") != nullptr);
+  CHECK("target xml uses IDA built-in register layout",
+        std::strstr(kMemdbgGdbTargetXml, "<reg ") == nullptr);
 
   CHECK("reg size rax", gdb_reg_size(GDB_RAX) == 8U);
   CHECK("reg size eflags", gdb_reg_size(GDB_EFLAGS) == 4U);
