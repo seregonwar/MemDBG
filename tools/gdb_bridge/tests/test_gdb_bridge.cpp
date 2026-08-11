@@ -172,6 +172,19 @@ int main() {
         gdb_thread_extra_info_hex(0x4A, "FFFFFFFFFFFFFFF") ==
             bytes_to_hex("LWP 74", 6U));
 
+  std::vector<memdbg::frontend::Client::DebugWatchpointEntry> watchpoints(3U);
+  watchpoints[0] = {0x1000U, 4U, 1U, 0U, true};
+  watchpoints[1] = {0x2000U, 4U, 2U, 1U, true};
+  watchpoints[2] = {0x3000U, 8U, 3U, 2U, true};
+  CHECK("write DR6 stop reason",
+        gdb_watchpoint_stop_field(1ULL, watchpoints) == "watch:1000;");
+  CHECK("read DR6 stop reason",
+        gdb_watchpoint_stop_field(2ULL, watchpoints) == "rwatch:2000;");
+  CHECK("access DR6 stop reason",
+        gdb_watchpoint_stop_field(4ULL, watchpoints) == "awatch:3000;");
+  CHECK("no DR6 hit has no stop reason",
+        gdb_watchpoint_stop_field(0ULL, watchpoints).empty());
+
   CHECK("target xml non-empty", std::strlen(kMemdbgGdbTargetXml) > 100U);
   CHECK("target xml has architecture",
         std::strstr(kMemdbgGdbTargetXml, "i386:x86-64") != nullptr);

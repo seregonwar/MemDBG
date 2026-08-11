@@ -64,8 +64,8 @@ static struct {
   memdbg_debug_regs_t   regs[8];
   int                   regs_lwp_idx[8]; /* which LWP each slot maps to */
 
-  /* Debug registers (shared across threads in this mock) */
-  memdbg_debug_dbregs_t dbregs;
+  /* Debug registers are per-thread; DR6 identifies the watchpoint owner. */
+  memdbg_debug_dbregs_t dbregs[8];
   memdbg_debug_fpregs_t fpregs;
   memdbg_debug_fsgsbase_t fsgsbase;
 
@@ -282,17 +282,19 @@ int pal_debug_set_regs(int pid, int32_t lwp, const memdbg_debug_regs_t *regs) {
 
 int pal_debug_get_dbregs(int pid, int32_t lwp, memdbg_debug_dbregs_t *dbregs) {
   (void)pid;
-  (void)lwp;
   if (dbregs == NULL) { errno = EINVAL; return -1; }
-  memcpy(dbregs, &mock.dbregs, sizeof(*dbregs));
+  int idx = mock_find_regs_idx(lwp);
+  if (idx < 0) { errno = ESRCH; return -1; }
+  memcpy(dbregs, &mock.dbregs[idx], sizeof(*dbregs));
   return 0;
 }
 
 int pal_debug_set_dbregs(int pid, int32_t lwp, const memdbg_debug_dbregs_t *dbregs) {
   (void)pid;
-  (void)lwp;
   if (dbregs == NULL) { errno = EINVAL; return -1; }
-  memcpy(&mock.dbregs, dbregs, sizeof(*dbregs));
+  int idx = mock_find_regs_idx(lwp);
+  if (idx < 0) { errno = ESRCH; return -1; }
+  memcpy(&mock.dbregs[idx], dbregs, sizeof(*dbregs));
   return 0;
 }
 
@@ -1068,6 +1070,22 @@ static void test_watchpoint(void) {
   TEST_OK("get_dbregs", memdbg_debugger_get_dbregs(MOCK_LWP_MAIN, &dbregs));
   TEST_EQ_LL("dr[slot] has address", dbregs.dr[found_slot], 0x3000ULL);
   TEST("dr7 has enable bits", (dbregs.dr[7] & (1ULL << (found_slot * 2))) != 0);
+  TEST_EQ_U("write watchpoint uses DR7 RW=01",
+            (uint32_t)((dbregs.dr[7] >> (16U + found_slot * 4U)) & 0x3ULL),
+            1U);
+
+  /* Data watchpoints trap after the access.  Identify the real stop thread
+   * from its DR6 slot bit instead of falling back to another thread. */
+  TEST_OK("continue before worker watchpoint hit", memdbg_debugger_continue());
+  mock.dbregs[1].dr[6] = 1ULL << found_slot;
+  mock.stopped = true;
+  TEST_OK("poll worker watchpoint hit", memdbg_debugger_poll_events());
+  TEST_EQ_I("watchpoint stop_lwp matches DR6 owner",
+            memdbg_debugger_get_stop_lwp(), MOCK_LWP_WORKER);
+
+  TEST_OK("continue clears sticky DR6", memdbg_debugger_continue());
+  TEST_EQ_LL("worker DR6 cleared on resume", mock.dbregs[1].dr[6], 0ULL);
+  mock.stopped = true;
 
   /* Invalid length */
   st = memdbg_debugger_set_watchpoint(0x4000ULL, 3U, 1U);

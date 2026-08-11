@@ -85,6 +85,7 @@ memdbg_status_t uninstall_sw_breakpoint(memdbg_breakpoint_t *bp);
 void build_dr7(uint32_t *dr7_out);
 memdbg_status_t apply_dbregs_to_all(void);
 memdbg_status_t refresh_dbregs_from_thread(int32_t lwp);
+void clear_hardware_status_locked(int32_t lwp);
 memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp,
                                                bool *stop_consumed_out);
 memdbg_status_t sync_hardware_dbregs_locked(void);

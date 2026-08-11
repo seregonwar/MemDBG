@@ -110,8 +110,6 @@ void draw_mobile_network(AppState &state, ImVec2 size) {
 
   ImGui::Checkbox("Auto inject on startup##MobileAutoInject",
                   &state.payload_auto_inject);
-  ImGui::Checkbox("Auto shutdown on exit##MobileAutoShutdown",
-                  &state.payload_auto_shutdown);
 
   ImGui::BeginDisabled(connected || connect_sequence_pending(state) ||
                        state.payload_inject_pending);

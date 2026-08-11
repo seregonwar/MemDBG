@@ -136,8 +136,20 @@ memdbg_status_t refresh_dbregs_from_thread(int32_t lwp) {
   if (pal_debug_get_dbregs((int)g_dbg.pid, lwp, &g_dbg.dbregs) != 0) {
     return pal_status_from_errno();
   }
+  /* DR6 contains sticky hit-status bits.  Never copy an old B0..B3 value to
+   * every thread while installing a new watchpoint. */
+  g_dbg.dbregs.dr[6] = 0;
   g_dbg.dbregs_valid = true;
   return MEMDBG_OK;
+}
+
+void clear_hardware_status_locked(int32_t lwp) {
+  memdbg_debug_dbregs_t dbregs;
+  memset(&dbregs, 0, sizeof(dbregs));
+  if (pal_debug_get_dbregs((int)g_dbg.pid, lwp, &dbregs) != 0) return;
+  if ((dbregs.dr[6] & 0xFULL) == 0U) return;
+  dbregs.dr[6] = 0;
+  (void)pal_debug_set_dbregs((int)g_dbg.pid, lwp, &dbregs);
 }
 
 // Internal single-step over a software breakpoint
@@ -145,6 +157,7 @@ memdbg_status_t refresh_dbregs_from_thread(int32_t lwp) {
 memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp,
                                                bool *stop_consumed_out) {
   if (stop_consumed_out != NULL) *stop_consumed_out = false;
+  clear_hardware_status_locked(lwp);
   memdbg_debug_regs_t regs;
   memset(&regs, 0, sizeof(regs));
   if (pal_debug_get_regs((int)g_dbg.pid, lwp, &regs) != 0) {
