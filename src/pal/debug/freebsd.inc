@@ -38,12 +38,14 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
 
 static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
   /*
-   * Use __syscall() to bypass the libc ptrace wrapper.  The libc wrapper on
-   * PS4 can corrupt the tracing state of the target process, causing crashes
-   * in subsequent mdbg_copyout/mdbg_copyin calls.  __syscall() exposes the
-   * raw ABI, so we must handle the errno=0 case explicitly: the kernel
-   * rejects a denied PT_ATTACH without setting errno, so we synthesize
-   * EPERM to give callers an actionable error instead of "No error".
+   * PS4 and PS5 do not share the same working ptrace entry point.  PS4's
+   * libc wrapper is required for the SDK tracing path used by PT_CONTINUE;
+   * issuing SYS_ptrace directly can attach successfully but
+   * leave the game permanently stopped (black screen).  PS5 instead needs
+   * the raw syscall while the temporary debug credentials are installed.
+   *
+   * Keep errno normalisation for both SDKs: some console runtimes return -1
+   * for a rejected operation without translating the kernel error.
    */
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)
   memdbg_ucred_backup_t backup;
@@ -54,7 +56,11 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
 #endif
 
   errno = 0;
+#if defined(MEMDBG_PAL_DEBUG_PS5)
   long result = (long)__syscall((quad_t)SYS_ptrace, op, pid, addr, data);
+#else
+  long result = (long)ptrace(op, (pid_t)pid, (caddr_t)addr, (int)data);
+#endif
   int operation_errno = errno;
   if (result == -1 && operation_errno == 0) operation_errno = EPERM;
 
