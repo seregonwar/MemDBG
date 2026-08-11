@@ -50,6 +50,28 @@ int pal_debug_stop(int pid) {
   return -1;
 }
 
+int pal_debug_memory_read(int pid, uint64_t address, void *buffer,
+                          size_t length, size_t *read_out) {
+  (void)pid;
+  (void)address;
+  (void)buffer;
+  (void)length;
+  if (read_out != NULL) *read_out = 0U;
+  errno = ENOTSUP;
+  return -1;
+}
+
+int pal_debug_memory_write(int pid, uint64_t address, const void *buffer,
+                           size_t length, size_t *written_out) {
+  (void)pid;
+  (void)address;
+  (void)buffer;
+  (void)length;
+  if (written_out != NULL) *written_out = 0U;
+  errno = ENOTSUP;
+  return -1;
+}
+
 int pal_debug_single_step(int pid, int32_t lwp) {
   (void)pid;
   (void)lwp;
@@ -194,4 +216,3 @@ int pal_debug_get_thread_extra_info(int pid, const int32_t *lwps, uint32_t count
   errno = ENOTSUP;
   return -1;
 }
-

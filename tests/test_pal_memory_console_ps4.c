@@ -1,6 +1,6 @@
 /*
- * MemDBG - Test the PS4 PAL memory backend (mdbg_copyout/copyin only,
- * no PTWALK, DMAP, or PS5-specific regions walk) using mocked PS4 SDK.
+ * MemDBG - Test the PS4 PAL memory backend (mdbg_copyout/copyin with ptrace
+ * fallback; no PTWALK, DMAP, or PS5-specific regions walk) using mocks.
  *
  * Compiles pal_memory_console.c on host by defining MEMDBG_PAL_CONSOLE=1
  * and MEMDBG_PAL_PS4=1 and providing stub <ps4/mdbg.h> (via -Itests/include)
@@ -23,12 +23,16 @@
 
 static int  g_mock_copyout_count        = 0;
 static int  g_mock_copyin_count         = 0;
+static int  g_mock_ptrace_read_count    = 0;
+static int  g_mock_ptrace_write_count   = 0;
 
 /* Configurable return values (set before each test case) */
 static int  g_mock_copyout_ret          = 0;   /* 0 = success */
 static int  g_mock_copyout_errno        = 0;
 static int  g_mock_copyin_ret           = 0;   /* 0 = success */
 static int  g_mock_copyin_errno         = 0;
+static int  g_mock_ptrace_read_ret      = -1;
+static int  g_mock_ptrace_write_ret     = -1;
 
 /* Copyout output buffer (filled by mock) */
 static uint8_t g_mock_copyout_data[256];
@@ -70,6 +74,36 @@ int mock_mdbg_copyin(pid_t pid, const void *buffer,
   return 0;
 }
 
+int pal_debug_memory_read(int pid, uint64_t address, void *buffer,
+                          size_t length, size_t *read_out) {
+  (void)pid;
+  (void)address;
+  ++g_mock_ptrace_read_count;
+  if (read_out != NULL) *read_out = 0U;
+  if (g_mock_ptrace_read_ret != 0) {
+    errno = EIO;
+    return -1;
+  }
+  memset(buffer, 0x5A, length);
+  if (read_out != NULL) *read_out = length;
+  return 0;
+}
+
+int pal_debug_memory_write(int pid, uint64_t address, const void *buffer,
+                           size_t length, size_t *written_out) {
+  (void)pid;
+  (void)address;
+  (void)buffer;
+  ++g_mock_ptrace_write_count;
+  if (written_out != NULL) *written_out = 0U;
+  if (g_mock_ptrace_write_ret != 0) {
+    errno = EIO;
+    return -1;
+  }
+  if (written_out != NULL) *written_out = length;
+  return 0;
+}
+
 /* ===================================================================
  *  Include the implementation under test
  *
@@ -100,11 +134,15 @@ static int g_failed = 0;
 static void reset_mocks(void) {
   g_mock_copyout_count       = 0;
   g_mock_copyin_count        = 0;
+  g_mock_ptrace_read_count   = 0;
+  g_mock_ptrace_write_count  = 0;
 
   g_mock_copyout_ret         = 0;
   g_mock_copyout_errno       = 0;
   g_mock_copyin_ret          = 0;
   g_mock_copyin_errno        = 0;
+  g_mock_ptrace_read_ret     = -1;
+  g_mock_ptrace_write_ret    = -1;
 
   g_mock_copyout_data_len    = 0;
 
@@ -130,7 +168,7 @@ static void test_read_direct(void) {
   TEST("PS4 read direct: data matches", buf[0] == 0xAA && buf[7] == 0xAA);
 }
 
-static void test_read_eacces_no_fallback(void) {
+static void test_read_eacces_failed_fallback(void) {
   reset_mocks();
   g_mock_copyout_ret   = -1;
   g_mock_copyout_errno = EACCES;
@@ -139,10 +177,27 @@ static void test_read_eacces_no_fallback(void) {
   size_t read_out = 0;
   memdbg_status_t st = pal_memory_read(100, 0x1000, buf, 8, &read_out);
 
-  /* PS4 has no PTWALK fallback — EACCES from mdbg_copyout returns error */
   TEST("PS4 read EACCES: status is error", st != MEMDBG_OK);
   TEST("PS4 read EACCES: copyout called", g_mock_copyout_count == 1);
+  TEST("PS4 read EACCES: ptrace fallback called",
+       g_mock_ptrace_read_count == 1);
   TEST("PS4 read EACCES: read_out == 0", read_out == 0);
+}
+
+static void test_read_ptrace_fallback(void) {
+  reset_mocks();
+  g_mock_copyout_ret = -1;
+  g_mock_copyout_errno = EACCES;
+  g_mock_ptrace_read_ret = 0;
+
+  uint8_t buf[8] = {0};
+  size_t read_out = 0;
+  memdbg_status_t st = pal_memory_read(100, 0x1000, buf, 8, &read_out);
+
+  TEST("PS4 ptrace read fallback: status OK", st == MEMDBG_OK);
+  TEST("PS4 ptrace read fallback: read_out == 8", read_out == 8);
+  TEST("PS4 ptrace read fallback: called once", g_mock_ptrace_read_count == 1);
+  TEST("PS4 ptrace read fallback: data copied", buf[0] == 0x5A && buf[7] == 0x5A);
 }
 
 static void test_read_efault_no_fallback(void) {
@@ -192,7 +247,7 @@ static void test_write_direct(void) {
   TEST("PS4 write direct: copyin called", g_mock_copyin_count == 1);
 }
 
-static void test_write_eacces_no_fallback(void) {
+static void test_write_eacces_failed_fallback(void) {
   reset_mocks();
   g_mock_copyin_ret   = -1;
   g_mock_copyin_errno = EACCES;
@@ -201,10 +256,27 @@ static void test_write_eacces_no_fallback(void) {
   size_t written = 0;
   memdbg_status_t st = pal_memory_write(100, 0x1000, data, 2, &written);
 
-  /* PS4 has no PTWALK or DMAP fallback — EACCES returns error */
   TEST("PS4 write EACCES: status is error", st != MEMDBG_OK);
   TEST("PS4 write EACCES: copyin called", g_mock_copyin_count == 1);
+  TEST("PS4 write EACCES: ptrace fallback called",
+       g_mock_ptrace_write_count == 1);
   TEST("PS4 write EACCES: written == 0", written == 0);
+}
+
+static void test_write_ptrace_fallback(void) {
+  reset_mocks();
+  g_mock_copyin_ret = -1;
+  g_mock_copyin_errno = EACCES;
+  g_mock_ptrace_write_ret = 0;
+
+  const uint8_t data[] = {0x11, 0x22};
+  size_t written = 0;
+  memdbg_status_t st = pal_memory_write(100, 0x1000, data, 2, &written);
+
+  TEST("PS4 ptrace write fallback: status OK", st == MEMDBG_OK);
+  TEST("PS4 ptrace write fallback: written == 2", written == 2);
+  TEST("PS4 ptrace write fallback: called once",
+       g_mock_ptrace_write_count == 1);
 }
 
 static void test_write_invalid_pid(void) {
@@ -298,7 +370,8 @@ int main(void) {
 
   printf("--- pal_memory_read ---\n");
   test_read_direct();
-  test_read_eacces_no_fallback();
+  test_read_eacces_failed_fallback();
+  test_read_ptrace_fallback();
   test_read_efault_no_fallback();
   test_read_invalid_pid();
   test_read_zero_length();
@@ -306,7 +379,8 @@ int main(void) {
 
   printf("--- pal_memory_write ---\n");
   test_write_direct();
-  test_write_eacces_no_fallback();
+  test_write_eacces_failed_fallback();
+  test_write_ptrace_fallback();
   test_write_invalid_pid();
   test_write_zero_length();
   printf("\n");

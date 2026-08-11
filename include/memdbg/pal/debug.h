@@ -49,6 +49,14 @@ int pal_debug_continue(int pid);
 /* Stop the whole process.  Uses SIGSTOP on the process group. */
 int pal_debug_stop(int pid);
 
+/* Read/write memory through the active ptrace session.  These helpers are
+ * primarily used as a console fallback when the mdbg copy primitive cannot
+ * access a traced process mapping. */
+int pal_debug_memory_read(int pid, uint64_t address, void *buffer,
+                          size_t length, size_t *read_out);
+int pal_debug_memory_write(int pid, uint64_t address, const void *buffer,
+                           size_t length, size_t *written_out);
+
 /* Single-step the given LWP. */
 int pal_debug_single_step(int pid, int32_t lwp);
 

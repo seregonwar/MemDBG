@@ -226,18 +226,50 @@ memdbg_status_t memdbg_debugger_detach(void) {
   debugger_lock();
   if (!g_dbg.attached) { debugger_unlock(); return MEMDBG_ERR_STATE; }
 
+  /* Restoring software breakpoints while the target is running races its
+   * instruction stream and can leave an INT3 behind.  Stop first; PT_DETACH
+   * resumes the process itself after all debugger state has been removed. */
+  if (!g_dbg.stopped) {
+    memdbg_status_t stop_st = memdbg_debugger_stop();
+    if (stop_st != MEMDBG_OK) {
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "debugger: detach could not stop pid=%d status=%d",
+                       (int)g_dbg.pid, (int)stop_st);
+      debugger_unlock();
+      return stop_st;
+    }
+  }
+
+  memdbg_status_t st = MEMDBG_OK;
   for (uint32_t i = 0; i < MEMDBG_DEBUGGER_MAX_BREAKPOINTS; ++i) {
     if (g_dbg.breakpoints[i].active &&
         g_dbg.breakpoints[i].kind == MEMDBG_BP_SOFTWARE) {
-      (void)uninstall_sw_breakpoint(&g_dbg.breakpoints[i]);
+      memdbg_status_t bp_st = uninstall_sw_breakpoint(&g_dbg.breakpoints[i]);
+      if (bp_st != MEMDBG_OK && st == MEMDBG_OK) st = bp_st;
     }
+  }
+
+  if (st != MEMDBG_OK) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: detach breakpoint restore failed pid=%d "
+                     "status=%d; keeping target stopped and attached",
+                     (int)g_dbg.pid, (int)st);
+    debugger_unlock();
+    return st;
   }
 
   memset(&g_dbg.dbregs, 0, sizeof(g_dbg.dbregs));
   if (g_dbg.dbregs_valid) (void)apply_dbregs_to_all();
 
-  memdbg_status_t st = MEMDBG_OK;
-  if (pal_debug_detach((int)g_dbg.pid) != 0) st = pal_status_from_errno();
+  if (pal_debug_detach((int)g_dbg.pid) != 0) {
+    st = pal_status_from_errno();
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: PT_DETACH failed pid=%d status=%d; "
+                     "session retained for retry",
+                     (int)g_dbg.pid, (int)st);
+    debugger_unlock();
+    return st;
+  }
 
   memdbg_log_write(MEMDBG_LOG_INFO, "debugger: detached pid=%d",
                    (int)g_dbg.pid);
@@ -282,7 +314,7 @@ memdbg_status_t memdbg_debugger_continue(void) {
       memset(&regs, 0, sizeof(regs));
       if (pal_debug_get_regs((int)g_dbg.pid, lwps[i], &regs) != 0) continue;
       if (find_breakpoint_slot((uint64_t)(regs.r_rip - 1)) >= 0) {
-        memdbg_status_t st = step_over_sw_breakpoint_locked(lwps[i]);
+        memdbg_status_t st = step_over_sw_breakpoint_locked(lwps[i], NULL);
         if (st != MEMDBG_OK) {
           memdbg_log_write(MEMDBG_LOG_WARN,
                            "debugger: continue step-over failed pid=%d lwp=%d "
@@ -316,8 +348,15 @@ memdbg_status_t memdbg_debugger_continue(void) {
 memdbg_status_t memdbg_debugger_step(int32_t lwp) {
   debugger_lock();
   if (!g_dbg.attached) { debugger_unlock(); return MEMDBG_ERR_STATE; }
-  memdbg_status_t st = step_over_sw_breakpoint_locked(lwp);
-  if (st == MEMDBG_OK) { g_dbg.stopped = false; g_dbg.stop_lwp = 0; }
+  bool stop_consumed = false;
+  memdbg_status_t st = step_over_sw_breakpoint_locked(lwp, &stop_consumed);
+  if (st == MEMDBG_OK) {
+    /* A software-breakpoint step-over waits for and consumes SIGTRAP so the
+     * original byte can be restored safely.  Preserve that completed stop for
+     * DEBUG_POLL_EVENTS; a plain PT_STEP is still completed asynchronously. */
+    g_dbg.stopped = stop_consumed;
+    g_dbg.stop_lwp = stop_consumed ? lwp : 0;
+  }
   debugger_unlock();
   return st;
 }

@@ -220,9 +220,51 @@ int pal_debug_syscall(int pid) {
 
 int pal_debug_stop(int pid) { return (kill((pid_t)pid, SIGSTOP) == 0) ? 0 : -1; }
 
+int pal_debug_memory_read(int pid, uint64_t address, void *buffer,
+                          size_t length, size_t *read_out) {
+  if (read_out != NULL) *read_out = 0U;
+  if (pid <= 0 || (buffer == NULL && length != 0U)) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (length == 0U) return 0;
+
+  struct ptrace_io_desc io;
+  memset(&io, 0, sizeof(io));
+  io.piod_op = PIOD_READ_D;
+  io.piod_offs = (void *)(uintptr_t)address;
+  io.piod_addr = buffer;
+  io.piod_len = length;
+  if (pal_debug_ptrace_raw(PT_IO, pid, &io, 0) == -1) return -1;
+  if (read_out != NULL) *read_out = io.piod_len;
+  return 0;
+}
+
+int pal_debug_memory_write(int pid, uint64_t address, const void *buffer,
+                           size_t length, size_t *written_out) {
+  if (written_out != NULL) *written_out = 0U;
+  if (pid <= 0 || (buffer == NULL && length != 0U)) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (length == 0U) return 0;
+
+  struct ptrace_io_desc io;
+  memset(&io, 0, sizeof(io));
+  io.piod_op = PIOD_WRITE_D;
+  io.piod_offs = (void *)(uintptr_t)address;
+  io.piod_addr = (void *)buffer;
+  io.piod_len = length;
+  if (pal_debug_ptrace_raw(PT_IO, pid, &io, 0) == -1) return -1;
+  if (written_out != NULL) *written_out = io.piod_len;
+  return 0;
+}
+
 int pal_debug_single_step(int pid, int32_t lwp) {
-  (void)pid;
-  return (pal_debug_ptrace_raw(PT_STEP, (int)lwp, (void *)(uintptr_t)1, 0) ==
+  (void)lwp;
+  /* PT_STEP addresses the traced process.  Register operations accept an LWP
+   * identifier, but passing that LWP as the ptrace pid makes PS4 reject F8. */
+  return (pal_debug_ptrace_raw(PT_STEP, pid, (void *)(uintptr_t)1, 0) ==
           -1)
              ? -1
              : 0;

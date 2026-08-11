@@ -58,11 +58,15 @@ standalone asset (`MemDBG-ida-gdb-bridge-{windows,linux,macos}`).
 | `--listen` | RSP bind address (`[host:]port`, default `127.0.0.1:23946`) |
 | `--pid` | Optional PID (**decimal**) to attach on first halt (`?`) |
 | `--name` | Resolve PID via `process_list` (e.g. `eboot.bin`) |
-| `--verbose` | Log RSP packets and MDBG attach/continue/detach |
+| `--verbose` | Also log RSP replies and MDBG attach/continue/detach details |
 | `--once` | Exit after the first GDB/IDA client disconnects |
 
-The bridge pings the payload every ~10s (idle timeout is 30s) and resumes the
-target before detach so the console process is not left frozen.
+The bridge prints the current process list immediately after connecting to the
+payload, so a PID can be selected without opening the desktop frontend. Incoming
+GDB/IDA commands are logged by default; use `--verbose` when replies and the
+MDBG debugger lifecycle are also needed. It pings the payload every ~10s (idle
+timeout is 30s). During detach it stops the target first, restores debugger
+state, and lets `PT_DETACH` resume execution safely.
 
 ## IDA Pro setup
 
