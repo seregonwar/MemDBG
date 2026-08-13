@@ -15,19 +15,35 @@ using namespace detail;
 std::string RspHandler::handle_read_all_registers() {
   if (!ensure_attached()) return err_packet(1);
   memdbg::frontend::Client::DebugRegs regs;
-  if (!backend_.debug_get_regs(current_thread(), regs)) return err_packet(1);
+  memdbg::frontend::Client::DebugFpregs fpregs;
+  if (!backend_.debug_get_regs(current_thread(), regs) ||
+      !backend_.debug_get_fpregs(current_thread(), fpregs)) {
+    return err_packet(1);
+  }
 
-  /* IDA matches the PS4 reference gdbsrv when g contains only the 24 amd64
-   * core registers. Optional x87/SSE state is available through p/P. */
-  return gdb_encode_g_core(regs.regs);
+  return gdb_encode_g_packet(regs.regs, &fpregs.fpregs);
 }
 
 std::string RspHandler::handle_write_all_registers(const std::string &packet) {
   if (!ensure_attached()) return err_packet(1);
+  const std::string payload = packet.substr(1U);
   memdbg::frontend::Client::DebugRegs regs;
-  if (!backend_.debug_get_regs(current_thread(), regs) ||
-      !gdb_decode_g_core(packet.substr(1U), regs.regs) ||
-      !backend_.debug_set_regs(current_thread(), regs)) {
+  if (!backend_.debug_get_regs(current_thread(), regs)) return err_packet(1);
+
+  /* Accept the old core-only G layout for compatibility with simple clients. */
+  if (payload.size() == kGdbCorePacketHexSize) {
+    if (!gdb_decode_g_core(payload, regs.regs) ||
+        !backend_.debug_set_regs(current_thread(), regs)) {
+      return err_packet(1);
+    }
+    return "OK";
+  }
+
+  memdbg::frontend::Client::DebugFpregs fpregs;
+  if (!backend_.debug_get_fpregs(current_thread(), fpregs) ||
+      !gdb_decode_g_packet(payload, regs.regs, &fpregs.fpregs) ||
+      !backend_.debug_set_regs(current_thread(), regs) ||
+      !backend_.debug_set_fpregs(current_thread(), fpregs)) {
     return err_packet(1);
   }
   return "OK";

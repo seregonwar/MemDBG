@@ -241,10 +241,11 @@ int main() {
 
   const std::string g = gdb_encode_g_packet(regs, nullptr);
   /* core 328 + x87 padding 224 + xmm 512 + mxcsr 8 = 1072 hex chars (536 bytes) */
-  CHECK("g packet size", g.size() == 1072U);
+  CHECK("g packet size", g.size() == kGdbPacketHexSize);
 
   memdbg_debug_regs_t decoded{};
   CHECK("g decode succeeds", gdb_decode_g_packet(g, decoded, nullptr));
+  CHECK("g decode rejects trailing bytes", !gdb_decode_g_packet(g + "00", decoded, nullptr));
   CHECK("rax round-trip", static_cast<uint64_t>(decoded.r_rax) == 0x1122334455667788ULL);
   CHECK("rsp round-trip", static_cast<uint64_t>(decoded.r_rsp) == 0x7FFFFFFFFULL);
   CHECK("rip round-trip", static_cast<uint64_t>(decoded.r_rip) == 0x401000ULL);
@@ -252,7 +253,7 @@ int main() {
   CHECK("ss round-trip", static_cast<uint64_t>(decoded.r_ss) == 0x2BULL);
 
   const std::string ida_core = gdb_encode_g_core(regs);
-  CHECK("IDA core g-packet size", ida_core.size() == 328U);
+  CHECK("IDA core g-packet size", ida_core.size() == kGdbCorePacketHexSize);
   memdbg_debug_regs_t ida_decoded{};
   CHECK("IDA core g-packet decode", gdb_decode_g_core(ida_core, ida_decoded));
   CHECK("IDA core RIP round-trip", static_cast<uint64_t>(ida_decoded.r_rip) == 0x401000ULL);
@@ -266,7 +267,7 @@ int main() {
   CHECK("set mxcsr",
         gdb_set_sse_bytes(fpregs, GDB_MXCSR, reinterpret_cast<const uint8_t *>(&mxcsr), 4U));
   const std::string g2 = gdb_encode_g_packet(regs, &fpregs);
-  CHECK("g+sse size", g2.size() == 1072U);
+  CHECK("g+sse size", g2.size() == kGdbPacketHexSize);
   memdbg_debug_fpregs_t fpregs2{};
   memdbg_debug_regs_t decoded2{};
   CHECK("g+sse decode", gdb_decode_g_packet(g2, decoded2, &fpregs2));
@@ -381,6 +382,12 @@ int main() {
         handler.handle("qXfer:exec-file:read:49:0,100", conn) == "l/app0/eboot.bin");
   const std::string process_xml = handler.handle("qXfer:osdata:read:processes:0,1000", conn);
   CHECK("process XML contains eboot", process_xml.find("eboot.bin") != std::string::npos);
+  const std::string target_description =
+    handler.handle("qXfer:features:read:target.xml:0,10000", conn);
+  CHECK("target XML is returned as a final qXfer chunk",
+        !target_description.empty() && target_description[0] == 'l');
+  CHECK("served target XML contains the amd64 core feature",
+        target_description.find("org.gnu.gdb.i386.core") != std::string::npos);
   CHECK("reject zero qXfer chunk",
         handler.handle("qXfer:features:read:target.xml:0,0", conn) == "E01");
 
@@ -409,6 +416,29 @@ int main() {
   CHECK("memory search miss", handler.handle("qSearch:memory:1000;10;missing", conn) == "0");
 
   CHECK("read RIP register", handler.handle("p10", conn) == "1010000000000000");
+  const std::string all_registers = handler.handle("g", conn);
+  CHECK("handler g returns complete target layout", all_registers.size() == kGdbPacketHexSize);
+  CHECK("handler g contains exact ST0 bytes",
+        all_registers.substr(kGdbCorePacketHexSize, 20U) == "a0a1a2a3a4a5a6a7a8a9");
+
+  memdbg_debug_regs_t written_regs = fake.regs.regs;
+  memdbg_debug_fpregs_t written_fpregs = fake.fpregs.fpregs;
+  written_regs.r_rax = static_cast<int64_t>(0x1122334455667788ULL);
+  const uint8_t written_xmm15[16] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+                                     0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
+  CHECK("prepare full G xmm15",
+        gdb_set_sse_bytes(written_fpregs, GDB_XMM15, written_xmm15, sizeof(written_xmm15)));
+  CHECK("handler accepts complete G packet",
+        handler.handle("G" + gdb_encode_g_packet(written_regs, &written_fpregs), conn) == "OK" &&
+          static_cast<uint64_t>(fake.regs.regs.r_rax) == 0x1122334455667788ULL);
+  uint8_t stored_xmm15[16]{};
+  CHECK("handler G writes SSE state",
+        gdb_get_sse_bytes(fake.fpregs.fpregs, GDB_XMM15, stored_xmm15, sizeof(stored_xmm15)) &&
+          std::memcmp(stored_xmm15, written_xmm15, sizeof(written_xmm15)) == 0);
+  CHECK("handler keeps legacy core-only G compatibility",
+        handler.handle("G" + gdb_encode_g_core(written_regs), conn) == "OK");
+  CHECK("handler rejects truncated G packet",
+        handler.handle("G" + std::string(kGdbCorePacketHexSize + 2U, '0'), conn) == "E01");
   CHECK("read x87 register without stack overread",
         handler.handle("p18", conn) == "a0a1a2a3a4a5a6a7a8a9");
   CHECK("write x87 register", handler.handle("P18=10111213141516171819", conn) == "OK" &&
@@ -450,8 +480,28 @@ int main() {
 
   CHECK("target xml non-empty", std::strlen(kMemdbgGdbTargetXml) > 100U);
   CHECK("target xml has architecture", std::strstr(kMemdbgGdbTargetXml, "i386:x86-64") != nullptr);
-  CHECK("target xml uses IDA built-in register layout",
-        std::strstr(kMemdbgGdbTargetXml, "<reg ") == nullptr);
+  CHECK("target xml declares required amd64 core feature",
+        std::strstr(kMemdbgGdbTargetXml, "org.gnu.gdb.i386.core") != nullptr);
+  CHECK("target xml declares SSE feature",
+        std::strstr(kMemdbgGdbTargetXml, "org.gnu.gdb.i386.sse") != nullptr);
+  CHECK("target xml core register order starts at rax",
+        std::strstr(kMemdbgGdbTargetXml,
+                    "<reg name=\"rax\" bitsize=\"64\" type=\"int64\" regnum=\"0\"") != nullptr);
+  CHECK("target xml x87 register declared",
+        std::strstr(kMemdbgGdbTargetXml, "<reg name=\"st0\" bitsize=\"80\"") != nullptr);
+  CHECK("target xml SSE register order starts at 40",
+        std::strstr(kMemdbgGdbTargetXml,
+                    "<reg name=\"xmm0\" bitsize=\"128\" type=\"vec128\" regnum=\"40\"") != nullptr);
+  CHECK("target xml register layout ends at mxcsr",
+        std::strstr(kMemdbgGdbTargetXml, "<reg name=\"mxcsr\" bitsize=\"32\"") != nullptr);
+  const std::string target_xml(kMemdbgGdbTargetXml);
+  size_t xml_register_count = 0U;
+  for (size_t offset = 0U; (offset = target_xml.find("<reg name=", offset)) != std::string::npos;
+       offset += std::strlen("<reg name=")) {
+    ++xml_register_count;
+  }
+  CHECK("target xml and serializer expose the same register count",
+        xml_register_count == static_cast<size_t>(GDB_REG_MAX));
 
   CHECK("reg size rax", gdb_reg_size(GDB_RAX) == 8U);
   CHECK("reg size eflags", gdb_reg_size(GDB_EFLAGS) == 4U);

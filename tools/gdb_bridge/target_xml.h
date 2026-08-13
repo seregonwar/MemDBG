@@ -7,19 +7,7 @@
 #ifndef MEMDBG_GDB_BRIDGE_TARGET_XML_H
 #define MEMDBG_GDB_BRIDGE_TARGET_XML_H
 
-/*
- * +-------------------------------------------------------------------+
- * | Target XML Description                                            |
- * +-------------------------------------------------------------------+
- */
-/* Keep the description intentionally minimal.  IDA then uses its built-in
- * amd64 core layout, matching the known-good ps4-payload-dev/gdbsrv contract. */
-static const char kMemdbgGdbTargetXml[] =
-    "<?xml version=\"1.0\"?>\n"
-    "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">\n"
-    "<target>\n"
-    "<architecture>i386:x86-64</architecture>\n"
-    "<osabi>none</osabi>\n"
-    "</target>\n";
+/* Complete AMD64 register description served through qXfer:features:read. */
+extern const char kMemdbgGdbTargetXml[];
 
 #endif /* MEMDBG_GDB_BRIDGE_TARGET_XML_H */

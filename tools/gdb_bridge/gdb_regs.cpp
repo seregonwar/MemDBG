@@ -304,8 +304,9 @@ std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
 
 bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
                          memdbg_debug_fpregs_t *fpregs) {
+  if (hex.size() != kGdbPacketHexSize) return false;
   if (!gdb_decode_g_core(hex, regs)) return false;
-  size_t offset = 328U;
+  size_t offset = kGdbCorePacketHexSize;
   if (!fpregs) { return hex.size() >= offset + kX87PaddingBytes * 2U; }
   ensure_fxsave(*fpregs);
   uint8_t x87[10]{};
