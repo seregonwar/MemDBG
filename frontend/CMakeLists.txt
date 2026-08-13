@@ -463,6 +463,12 @@ add_executable(memdbg_gdb_bridge
   ${MEMDBG_GDB_BRIDGE_DIR}/main.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_server.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_query.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_memory.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_registers.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_run.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_backend.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_protocol.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/gdb_regs.cpp
   src/core/client/memdbg_client.cpp
   src/core/client/client_operations.cpp
@@ -487,6 +493,12 @@ add_executable(memdbg_gdb_bridge_test
   ${MEMDBG_GDB_BRIDGE_DIR}/tests/test_gdb_bridge.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/gdb_regs.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_query.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_memory.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_registers.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_handler_run.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_backend.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/rsp_protocol.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_server.cpp
   src/core/client/memdbg_client.cpp
   src/core/client/client_operations.cpp

@@ -18,10 +18,14 @@
 namespace memdbg::gdb_bridge {
 
 namespace platform = memdbg::frontend::platform;
+namespace {
+constexpr size_t kMaxRspPacketBytes = 0x200000U;
+}
 
 uint8_t rsp_checksum(const std::string &payload) {
   unsigned sum = 0U;
-  for (unsigned char c : payload) sum = (sum + c) & 0xFFU;
+  for (unsigned char c : payload)
+    sum = (sum + c) & 0xFFU;
   return static_cast<uint8_t>(sum);
 }
 
@@ -39,18 +43,34 @@ std::string rsp_escape(const std::string &payload) {
   return out;
 }
 
+bool rsp_decode(const std::string &encoded, std::string &out) {
+  out.clear();
+  out.reserve(encoded.size());
+  for (size_t i = 0; i < encoded.size(); ++i) {
+    const unsigned char current = static_cast<unsigned char>(encoded[i]);
+    if (current == '}') {
+      if (i + 1U >= encoded.size()) return false;
+      out.push_back(static_cast<char>(static_cast<unsigned char>(encoded[++i]) ^ 0x20U));
+      continue;
+    }
+    if (current == '*') {
+      if (out.empty() || i + 1U >= encoded.size()) return false;
+      const unsigned char encoded_count = static_cast<unsigned char>(encoded[++i]);
+      if (encoded_count < 32U || encoded_count > 126U) return false;
+      const size_t repeat = static_cast<size_t>(encoded_count - 29U);
+      if (repeat > kMaxRspPacketBytes - out.size()) return false;
+      out.append(repeat, out.back());
+      continue;
+    }
+    out.push_back(static_cast<char>(current));
+    if (out.size() > kMaxRspPacketBytes) return false;
+  }
+  return true;
+}
+
 std::string rsp_unescape(const std::string &escaped) {
   std::string out;
-  out.reserve(escaped.size());
-  for (size_t i = 0; i < escaped.size(); ++i) {
-    if (escaped[i] == '}' && i + 1U < escaped.size()) {
-      out.push_back(static_cast<char>(static_cast<unsigned char>(escaped[i + 1U]) ^
-                                      0x20U));
-      ++i;
-    } else {
-      out.push_back(escaped[i]);
-    }
-  }
+  if (!rsp_decode(escaped, out)) return std::string();
   return out;
 }
 
@@ -88,17 +108,14 @@ int RspConnection::read_byte(uint32_t timeout_ms, bool *timed_out) {
     return static_cast<int>(c);
   }
 
-  if (timeout_ms > 0U) {
-    (void)platform::socket_set_recv_timeout(fd_, timeout_ms);
-  }
+  if (timeout_ms > 0U) { (void)platform::socket_set_recv_timeout(fd_, timeout_ms); }
 
   char ch = 0;
   const int n = platform::socket_recv(fd_, &ch, 1U);
   if (n == 1) return static_cast<unsigned char>(ch);
   if (n == 0) return -1;
   const int err = platform::socket_last_error_code();
-  if (platform::socket_error_would_block(err) ||
-      platform::socket_error_interrupted(err)) {
+  if (platform::socket_error_would_block(err) || platform::socket_error_interrupted(err)) {
     if (timed_out) *timed_out = true;
     return -2;
   }
@@ -124,6 +141,7 @@ RspPacket RspConnection::recv_packet() {
       if (c < 0) return packet;
       if (c == '#') break;
       body.push_back(static_cast<char>(c));
+      if (body.size() > kMaxRspPacketBytes) return packet;
     }
 
     const int c1 = read_byte(0U, nullptr);
@@ -147,8 +165,11 @@ RspPacket RspConnection::recv_packet() {
       if (!no_ack_) (void)send_ack(false);
       continue;
     }
+    if (!rsp_decode(body, packet.payload)) {
+      if (!no_ack_) (void)send_ack(false);
+      continue;
+    }
     if (!no_ack_) (void)send_ack(true);
-    packet.payload = rsp_unescape(body);
     packet.ok = true;
     return packet;
   }
@@ -199,14 +220,12 @@ RspServer::RspServer() : listen_fd_(platform::invalid_socket()) {}
 
 RspServer::~RspServer() { close_listen(); }
 
-bool RspServer::listen_on(const std::string &host, uint16_t port,
-                          std::string &error) {
+bool RspServer::listen_on(const std::string &host, uint16_t port, std::string &error) {
   close_listen();
 
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (!platform::socket_valid(listen_fd_)) {
-    error = "socket() failed: " + platform::socket_error_text(
-                                      platform::socket_last_error_code());
+    error = "socket() failed: " + platform::socket_error_text(platform::socket_last_error_code());
     return false;
   }
   (void)platform::socket_set_reuse_addr(listen_fd_);
@@ -223,24 +242,20 @@ bool RspServer::listen_on(const std::string &host, uint16_t port,
     return false;
   }
 
-  if (::bind(listen_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) !=
-      0) {
-    error = "bind() failed: " + platform::socket_error_text(
-                                    platform::socket_last_error_code());
+  if (::bind(listen_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+    error = "bind() failed: " + platform::socket_error_text(platform::socket_last_error_code());
     close_listen();
     return false;
   }
   if (::listen(listen_fd_, 1) != 0) {
-    error = "listen() failed: " + platform::socket_error_text(
-                                      platform::socket_last_error_code());
+    error = "listen() failed: " + platform::socket_error_text(platform::socket_last_error_code());
     close_listen();
     return false;
   }
 
   sockaddr_in bound{};
   platform::socklen_type len = sizeof(bound);
-  if (::getsockname(listen_fd_, reinterpret_cast<sockaddr *>(&bound), &len) ==
-      0) {
+  if (::getsockname(listen_fd_, reinterpret_cast<sockaddr *>(&bound), &len) == 0) {
     listen_port_ = ntohs(bound.sin_port);
   } else {
     listen_port_ = port;
@@ -263,10 +278,9 @@ platform::socket_handle_t RspServer::accept_client(std::string &error) {
   sockaddr_in peer{};
   platform::socklen_type len = sizeof(peer);
   platform::socket_handle_t client =
-      ::accept(listen_fd_, reinterpret_cast<sockaddr *>(&peer), &len);
+    ::accept(listen_fd_, reinterpret_cast<sockaddr *>(&peer), &len);
   if (!platform::socket_valid(client)) {
-    error = "accept() failed: " + platform::socket_error_text(
-                                      platform::socket_last_error_code());
+    error = "accept() failed: " + platform::socket_error_text(platform::socket_last_error_code());
     return platform::invalid_socket();
   }
   (void)platform::socket_set_nodelay(client);
@@ -274,8 +288,7 @@ platform::socket_handle_t RspServer::accept_client(std::string &error) {
   return client;
 }
 
-void RspServer::serve(platform::socket_handle_t client_fd,
-                      const Handler &handler) {
+void RspServer::serve(platform::socket_handle_t client_fd, const Handler &handler) {
   RspConnection conn(client_fd);
   for (;;) {
     RspPacket packet = conn.recv_packet();
