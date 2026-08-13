@@ -35,6 +35,7 @@ add_executable(memdbg_gdb_bridge
   rsp_backend.cpp
   rsp_protocol.cpp
   gdb_regs.cpp
+  target_xml.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/client/client_operations.cpp
   ${FRONTEND_ROOT}/src/core/client/client_scan.cpp
@@ -65,6 +66,7 @@ add_executable(memdbg_gdb_bridge_test
   rsp_backend.cpp
   rsp_protocol.cpp
   rsp_server.cpp
+  target_xml.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/client/client_operations.cpp
   ${FRONTEND_ROOT}/src/core/client/client_scan.cpp

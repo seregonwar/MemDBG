@@ -470,6 +470,7 @@ add_executable(memdbg_gdb_bridge
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_backend.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_protocol.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/gdb_regs.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/target_xml.cpp
   src/core/client/memdbg_client.cpp
   src/core/client/client_operations.cpp
   src/core/client/client_scan.cpp
@@ -500,6 +501,7 @@ add_executable(memdbg_gdb_bridge_test
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_backend.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_protocol.cpp
   ${MEMDBG_GDB_BRIDGE_DIR}/rsp_server.cpp
+  ${MEMDBG_GDB_BRIDGE_DIR}/target_xml.cpp
   src/core/client/memdbg_client.cpp
   src/core/client/client_operations.cpp
   src/core/client/client_scan.cpp

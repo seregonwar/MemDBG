@@ -94,6 +94,8 @@ constexpr size_t kFxsaveMxcsrOff = 24U;
 constexpr size_t kFxsaveXmm0Off = 160U;
 constexpr size_t kFxsaveXmmBytes = 16U;
 constexpr size_t kX87PaddingBytes = 112U;
+constexpr size_t kGdbCorePacketHexSize = 328U;
+constexpr size_t kGdbPacketHexSize = 1072U;
 
 /*
  * +-------------------------------------------------------------------+
