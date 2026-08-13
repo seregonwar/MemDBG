@@ -88,6 +88,8 @@ enum GdbReg : int {
 };
 
 constexpr size_t kFxsaveMinLen = 512U;
+constexpr size_t kFxsaveSt0Off = 32U;
+constexpr size_t kFxsaveStStride = 16U;
 constexpr size_t kFxsaveMxcsrOff = 24U;
 constexpr size_t kFxsaveXmm0Off = 160U;
 constexpr size_t kFxsaveXmmBytes = 16U;
@@ -118,17 +120,19 @@ bool gdb_set_reg_value(memdbg_debug_regs_t &regs, int regno, uint64_t value);
 std::string gdb_encode_g_core(const memdbg_debug_regs_t &regs);
 bool gdb_decode_g_core(const std::string &hex, memdbg_debug_regs_t &regs);
 
-/* Full g/G matching target.xml (core + SSE). Missing/short fpregs → zero SSE. */
+/* Standard amd64 g/G packet (core + x87 + SSE). */
 std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
                                 const memdbg_debug_fpregs_t *fpregs);
 bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
                          memdbg_debug_fpregs_t *fpregs);
 
-/* Read/write one SSE register into an FXSAVE-backed fpregs blob. */
-bool gdb_get_sse_bytes(const memdbg_debug_fpregs_t &fpregs, int regno,
-                       uint8_t *out, size_t out_size);
-bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno,
-                       const uint8_t *data, size_t size);
+/* Read/write one x87/SSE register in an FXSAVE-backed fpregs blob. */
+bool gdb_get_sse_bytes(const memdbg_debug_fpregs_t &fpregs, int regno, uint8_t *out,
+                       size_t out_size);
+bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno, const uint8_t *data, size_t size);
+bool gdb_get_x87_bytes(const memdbg_debug_fpregs_t &fpregs, int regno, uint8_t *out,
+                       size_t out_size);
+bool gdb_set_x87_bytes(memdbg_debug_fpregs_t &fpregs, int regno, const uint8_t *data, size_t size);
 
 } // namespace memdbg::gdb_bridge
 

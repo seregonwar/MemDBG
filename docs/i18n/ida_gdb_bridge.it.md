@@ -63,8 +63,8 @@ come asset dedicato (`MemDBG-ida-gdb-bridge-{windows,linux,macos}`).
 
 Subito dopo la connessione al payload il bridge stampa l'elenco dei processi,
 permettendo di scegliere il PID senza aprire il frontend desktop. I comandi
-GDB/IDA in ingresso vengono registrati automaticamente; `--verbose` aggiunge le
-risposte e il ciclo di vita del debugger MDBG. Il bridge fa ping al payload ogni
+GDB/IDA, le risposte e il ciclo di vita del debugger MDBG vengono registrati con
+`--verbose`; i byte binari sono sottoposti a escaping prima della stampa. Il bridge fa ping al payload ogni
 ~10s (idle timeout 30s). Durante il detach ferma prima il target, ripristina lo
 stato del debugger e lascia che `PT_DETACH` riprenda l'esecuzione in sicurezza.
 
@@ -86,20 +86,22 @@ Oppure con GDB stock:
 
 ## Subset RSP supportato
 
-- `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`
-- Thread: `qfThreadInfo` / `qsThreadInfo`, `qThreadExtraInfo` (nome), `H`, `T`
-- `qXfer:features:read` → XML core GPR + SSE (`xmm0`–`xmm15`, `mxcsr`)
+- `qSupported`, `QStartNoAckMode`, `QNonStop:0`, `qAttached`, `qC`, `qHostInfo`, `qOffsets`, `qSymbol`
+- Thread: `qfThreadInfo` / `qsThreadInfo`, `qThreadExtraInfo`, `qThreadStopInfo`, `qXfer:threads:read`, `H`, `T`
+- `qXfer:features:read` → descrizione target minimale `i386:x86-64`, mantenuta per compatibilità IDA
 - `qXfer:memory-map:read` → mappa da `process_maps` (tipo `ram`)
-- `vAttach`, `vCont` (`c`/`s`), `?`, `D`
-- Registri: `g` / `G` / `p` / `P` (GPR + SSE via FXSAVE/`debug_get_fpregs`)
-- Memoria: `m` / `M`
+- `qXfer:libraries:read`, `qXfer:exec-file:read`, `qXfer:osdata:read:processes`
+- `qMemoryRegionInfo` e `qSearch:memory`
+- `vAttach`, `vCont` validato (`c`/`C`/`s`/`S`), `vKill`, `?`, `D`, `k`
+- Registri: `g` / `G` / `p` / `P` (GPR, x87 e SSE via FXSAVE/`debug_get_fpregs`)
+- Memoria: `m` / `M` / `X` binario, con validazione mapping e overflow
 - Breakpoint: `Z0`/`z0` (software), `Z1`/`z1` (hardware)
 - Watchpoint: `Z2`–`Z4` / `z2`–`z4`
 - Stop reply via polling `DEBUG_POLL_EVENTS` (all-stop); Ctrl-C → `debug_stop`
 
 L’attach di processo usa `--pid` / `--name` sul bridge (oppure `vAttach` IDA in
-hex). Non c’è process-list OS via RSP (`qXfer:osdata`); PS3 / moduli stile
-deci3dbg sono fuori scope.
+hex). La lista processi e i mapping delle immagini caricate sono disponibili
+anche tramite XML RSP.
 
 I pacchetti non supportati ricevono una risposta RSP vuota (`$#00`).
 
@@ -108,7 +110,8 @@ I pacchetti non supportati ricevono una risposta RSP vuota (`$#00`).
 - Un solo PID attached (stesso vincolo della sessione debugger MemDBG).
 - Solo all-stop (niente non-stop GDB).
 - Niente `vRun` / spawn, niente `gdbsrv` on-console.
-- X87 (st0–st7 / fctrl…) non ancora in `target.xml` (SSE sì).
+- La descrizione target resta minimale per compatibilità IDA; x87/SSE sono
+  comunque disponibili tramite pacchetti individuali `p`/`P`.
 
 ## Sorgenti
 
@@ -116,4 +119,10 @@ I pacchetti non supportati ricevono una risposta RSP vuota (`$#00`).
 |---|---|
 | [`tools/gdb_bridge/`](../../tools/gdb_bridge/) | Sorgenti del bridge |
 | [`tools/gdb_bridge/gdb_regs.cpp`](../../tools/gdb_bridge/gdb_regs.cpp) | Mapping FreeBSD/`memdbg_debug_regs_t` ↔ ordine registri GDB |
-| [`tools/gdb_bridge/rsp_handler.cpp`](../../tools/gdb_bridge/rsp_handler.cpp) | RSP → API debug/memoria del `Client` |
+| [`tools/gdb_bridge/rsp_handler.cpp`](../../tools/gdb_bridge/rsp_handler.cpp) | Stato sessione e dispatcher pacchetti |
+| [`tools/gdb_bridge/rsp_handler_query.cpp`](../../tools/gdb_bridge/rsp_handler_query.cpp) | Query e trasferimenti XML |
+| [`tools/gdb_bridge/rsp_handler_memory.cpp`](../../tools/gdb_bridge/rsp_handler_memory.cpp) | Lettura, scrittura e ricerca memoria |
+| [`tools/gdb_bridge/rsp_handler_registers.cpp`](../../tools/gdb_bridge/rsp_handler_registers.cpp) | Pacchetti registri core, x87 e SSE |
+| [`tools/gdb_bridge/rsp_handler_run.cpp`](../../tools/gdb_bridge/rsp_handler_run.cpp) | Attach, resume, step e breakpoint |
+| [`tools/gdb_bridge/rsp_protocol.cpp`](../../tools/gdb_bridge/rsp_protocol.cpp) | Parsing rigoroso e primitive RSP comuni |
+| [`tools/gdb_bridge/rsp_backend.cpp`](../../tools/gdb_bridge/rsp_backend.cpp) | Adattatore `Client`; i test usano un backend finto deterministico |

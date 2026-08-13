@@ -28,6 +28,12 @@ add_executable(memdbg_gdb_bridge
   main.cpp
   rsp_server.cpp
   rsp_handler.cpp
+  rsp_handler_query.cpp
+  rsp_handler_memory.cpp
+  rsp_handler_registers.cpp
+  rsp_handler_run.cpp
+  rsp_backend.cpp
+  rsp_protocol.cpp
   gdb_regs.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/client/client_operations.cpp
@@ -52,6 +58,12 @@ add_executable(memdbg_gdb_bridge_test
   tests/test_gdb_bridge.cpp
   gdb_regs.cpp
   rsp_handler.cpp
+  rsp_handler_query.cpp
+  rsp_handler_memory.cpp
+  rsp_handler_registers.cpp
+  rsp_handler_run.cpp
+  rsp_backend.cpp
+  rsp_protocol.cpp
   rsp_server.cpp
   ${FRONTEND_ROOT}/src/core/client/memdbg_client.cpp
   ${FRONTEND_ROOT}/src/core/client/client_operations.cpp
