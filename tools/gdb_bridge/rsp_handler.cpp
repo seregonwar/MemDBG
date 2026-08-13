@@ -1,129 +1,21 @@
-/*
- * MemDBG - RSP command dispatch onto MDBG Client.
- * Copyright (C) 2026 SeregonWar
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-
 #include "rsp_handler.hpp"
 
 #include "gdb_regs.hpp"
-#include "target_xml.h"
 
-#include <cctype>
-#include <chrono>
 #include <cstdarg>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <thread>
-
+#include <utility>
 namespace memdbg::gdb_bridge {
 
-namespace {
+using namespace detail;
 
-constexpr uint32_t kMemChunk = 0x10000U; /* 64 KiB per MEMORY_READ */
+RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid, bool verbose)
+  : owned_backend_(make_client_rsp_backend(client)), backend_(*owned_backend_), pid_(initial_pid),
+    verbose_(verbose) {}
 
-
-/*
- * +-------------------------------------------------------------------+
- * | Helper Functions                                                  |
- * +-------------------------------------------------------------------+
- */
-bool parse_hex_u64(const std::string &s, size_t begin, size_t end,
-                   uint64_t &out) {
-  if (begin >= end) return false;
-  uint64_t value = 0U;
-  for (size_t i = begin; i < end; ++i) {
-    const char c = s[i];
-    int n = -1;
-    if (c >= '0' && c <= '9') n = c - '0';
-    else if (c >= 'a' && c <= 'f') n = c - 'a' + 10;
-    else if (c >= 'A' && c <= 'F') n = c - 'A' + 10;
-    else return false;
-    value = (value << 4U) | static_cast<uint64_t>(n);
-  }
-  out = value;
-  return true;
-}
-
-bool parse_hex_u64(const char *s, uint64_t &out) {
-  if (s == nullptr || *s == '\0') return false;
-  char *end = nullptr;
-  out = std::strtoull(s, &end, 16);
-  return end != s;
-}
-
-std::string err_packet(int code) {
-  char buf[8];
-  std::snprintf(buf, sizeof(buf), "E%02x", code & 0xFF);
-  return std::string(buf);
-}
-
-int watch_type_from_z(char kind) {
-  /* MemDBG: 0=exec, 1=write, 2=read, 3=rw */
-  switch (kind) {
-  case '1': return 0; /* hardware exec -> exec watch / HW BP uses set_breakpoint */
-  case '2': return 1;
-  case '3': return 2;
-  case '4': return 3;
-  default: return -1;
-  }
-}
-
-} // namespace
-
-bool parse_thread_id(const char *s, int32_t &pid_out, int32_t &tid_out) {
-  if (s == nullptr || *s == '\0') return false;
-  if (*s == 'p') s++;
-  char *end = nullptr;
-  if (std::strncmp(s, "-1", 2) == 0) {
-    tid_out = -1;
-    s += 2;
-  } else {
-    uint64_t val = std::strtoull(s, &end, 16);
-    if (end == s) return false;
-    tid_out = static_cast<int32_t>(val);
-    s = end;
-  }
-  if (*s == '.') {
-    s++;
-    pid_out = tid_out;
-    if (std::strncmp(s, "-1", 2) == 0) {
-      tid_out = -1;
-    } else {
-      uint64_t val2 = std::strtoull(s, &end, 16);
-      if (end != s) tid_out = static_cast<int32_t>(val2);
-    }
-  } else {
-    pid_out = 0;
-  }
-  return true;
-}
-
-std::string gdb_watchpoint_stop_field(
-    uint64_t dr6,
-    const std::vector<memdbg::frontend::Client::DebugWatchpointEntry> &entries) {
-  const uint64_t hits = dr6 & 0xFULL;
-  for (const auto &entry : entries) {
-    if (!entry.installed || entry.slot >= 4U ||
-        (hits & (1ULL << entry.slot)) == 0U) {
-      continue;
-    }
-    if (entry.type == 0U) return "hwbreak:;";
-    const char *reason = entry.type == 1U ? "watch"
-                         : entry.type == 2U ? "rwatch"
-                                            : "awatch";
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%s:%llx;", reason,
-                  static_cast<unsigned long long>(entry.address));
-    return std::string(buf);
-  }
-  return std::string();
-}
-
-RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
-                       bool verbose)
-    : client_(client), pid_(initial_pid), verbose_(verbose) {}
+RspHandler::RspHandler(RspBackend &backend, int32_t initial_pid, bool verbose)
+  : backend_(backend), pid_(initial_pid), verbose_(verbose) {}
 
 void RspHandler::logf(const char *fmt, ...) const {
   if (!verbose_ || fmt == nullptr) return;
@@ -136,35 +28,44 @@ void RspHandler::logf(const char *fmt, ...) const {
 }
 
 void RspHandler::log_rsp_command(const std::string &packet) const {
-  /* Keep the exact IDA/GDB command sequence in every field report. */
-  if (packet.size() > 96U && !packet.empty() &&
-      (packet[0] == 'M' || packet[0] == 'X' || packet[0] == 'G')) {
-    std::fprintf(stderr, "[gdb_bridge] rsp <- %.64s... (%zu bytes)\n",
-                 packet.c_str(), packet.size());
-  } else {
-    std::fprintf(stderr, "[gdb_bridge] rsp <- %s\n", packet.c_str());
+  if (!verbose_) return;
+  const size_t limit = packet.size() < 96U ? packet.size() : 96U;
+  std::string display;
+  display.reserve(limit);
+  for (size_t i = 0; i < limit; ++i) {
+    const unsigned char c = static_cast<unsigned char>(packet[i]);
+    if (c >= 0x20U && c <= 0x7EU) {
+      display.push_back(static_cast<char>(c));
+    } else {
+      char escaped[5];
+      std::snprintf(escaped, sizeof(escaped), "\\x%02x", c);
+      display += escaped;
+    }
   }
+  logf("rsp <- %s%s (%zu bytes)", display.c_str(), packet.size() > limit ? "..." : "",
+       packet.size());
 }
 
 bool RspHandler::safe_detach() {
   if (!attached_) return true;
   /* Stop before the payload restores software breakpoints.  PT_DETACH resumes
    * the process; continuing first races live code against INT3 removal. */
-  if (!client_.debug_stop()) {
-    logf("pre-detach stop failed: %s", client_.last_error().c_str());
-  }
-  if (!client_.debug_detach()) {
-    logf("debug_detach failed: %s", client_.last_error().c_str());
+  if (!backend_.debug_stop()) { logf("pre-detach stop failed: %s", backend_.last_error().c_str()); }
+  if (!backend_.debug_detach()) {
+    logf("debug_detach failed: %s", backend_.last_error().c_str());
     return false;
   } else {
     logf("detached pid=%d", static_cast<int>(pid_));
   }
   attached_ = false;
   stop_lwp_ = 0;
+  stop_signal_ = 5U;
   stop_reason_.clear();
   general_thread_ = 0;
   continue_thread_ = 0;
   threads_.clear();
+  memory_maps_.clear();
+  memory_maps_known_ = false;
   return true;
 }
 
@@ -177,8 +78,8 @@ bool RspHandler::ensure_attached() {
     return false;
   }
   logf("debug_attach pid=%d", static_cast<int>(pid_));
-  if (!client_.debug_attach(pid_)) {
-    logf("debug_attach failed: %s", client_.last_error().c_str());
+  if (!backend_.debug_attach(pid_)) {
+    logf("debug_attach failed: %s", backend_.last_error().c_str());
     return false;
   }
   attached_ = true;
@@ -187,13 +88,27 @@ bool RspHandler::ensure_attached() {
     stop_lwp_ = threads_[0].lwp;
     general_thread_ = stop_lwp_;
   }
+  (void)refresh_memory_maps();
   return true;
 }
 
 void RspHandler::refresh_threads() {
   threads_.clear();
   if (!attached_) return;
-  (void)client_.debug_get_threads(threads_);
+  (void)backend_.debug_get_threads(threads_);
+}
+
+bool RspHandler::refresh_memory_maps() {
+  std::vector<memdbg::frontend::MapEntry> maps;
+  if (!backend_.process_maps(pid_, maps)) {
+    memory_maps_.clear();
+    memory_maps_known_ = false;
+    logf("process map refresh failed: %s", backend_.last_error().c_str());
+    return false;
+  }
+  memory_maps_ = std::move(maps);
+  memory_maps_known_ = true;
+  return true;
 }
 
 int32_t RspHandler::current_thread() const {
@@ -205,12 +120,13 @@ int32_t RspHandler::current_thread() const {
 
 std::string RspHandler::stop_reply() const {
   const int32_t tid = stop_lwp_ > 0 ? stop_lwp_ : current_thread();
-  std::string reply = "T05";
+  char signal[4];
+  std::snprintf(signal, sizeof(signal), "T%02x", stop_signal_);
+  std::string reply(signal);
   reply += stop_reason_;
   if (tid > 0) {
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "thread:%x;",
-                  static_cast<unsigned>(tid));
+    std::snprintf(buf, sizeof(buf), "thread:%x;", static_cast<unsigned>(tid));
     reply += buf;
   }
   return reply;
@@ -221,364 +137,10 @@ void RspHandler::capture_stop_reason(int32_t lwp) {
   if (lwp <= 0) return;
   memdbg::frontend::Client::DebugDbregs dbregs;
   std::vector<memdbg::frontend::Client::DebugWatchpointEntry> entries;
-  if (!client_.debug_get_dbregs(lwp, dbregs) ||
-      !client_.debug_get_watchpoints(entries)) {
+  if (!backend_.debug_get_dbregs(lwp, dbregs) || !backend_.debug_get_watchpoints(entries)) {
     return;
   }
   stop_reason_ = gdb_watchpoint_stop_field(dbregs.dbregs.dr[6], entries);
-}
-
-std::string RspHandler::qxfer_features(const std::string &annex, size_t offset,
-                                       size_t length) const {
-  if (annex != "target.xml") return err_packet(1);
-  const std::string xml(kMemdbgGdbTargetXml);
-  if (offset >= xml.size()) return "l";
-  const size_t avail = xml.size() - offset;
-  const size_t n = length < avail ? length : avail;
-  const bool last = offset + n >= xml.size();
-  std::string out;
-  out.push_back(last ? 'l' : 'm');
-  out.append(xml, offset, n);
-  return out;
-}
-
-std::string RspHandler::qxfer_memory_map(size_t offset, size_t length) {
-  if (!ensure_attached()) return err_packet(1);
-  std::vector<memdbg::frontend::MapEntry> maps;
-  if (!client_.process_maps(pid_, maps)) return err_packet(1);
-
-  std::string xml = "<?xml version=\"1.0\"?>"
-                    "<!DOCTYPE memory-map PUBLIC "
-                    "\"+//IDN gnu.org/DTD GDB Memory Map V1.0//EN\" "
-                    "\"http://sourceware.org/gdb/gdb-memory-map.dtd\">"
-                    "<memory-map>";
-  for (const auto &m : maps) {
-    if (m.end <= m.start) continue;
-    const uint64_t len = m.end - m.start;
-    char buf[128];
-    std::snprintf(buf, sizeof(buf),
-                  "<memory type=\"ram\" start=\"0x%llx\" length=\"0x%llx\"/>",
-                  static_cast<unsigned long long>(m.start),
-                  static_cast<unsigned long long>(len));
-    xml += buf;
-  }
-  xml += "</memory-map>";
-
-  if (offset >= xml.size()) return "l";
-  const size_t avail = xml.size() - offset;
-  const size_t n = length < avail ? length : avail;
-  const bool last = offset + n >= xml.size();
-  std::string out;
-  out.push_back(last ? 'l' : 'm');
-  out.append(xml, offset, n);
-  return out;
-}
-
-std::string RspHandler::handle_continue_or_step(bool step, RspConnection &conn,
-                                                 int32_t lwp) {
-  if (!ensure_attached()) return err_packet(1);
-
-  bool ok = false;
-  if (step) {
-    const int32_t tid = lwp != 0 ? lwp : current_thread();
-    logf("debug_step lwp=%d", static_cast<int>(tid));
-    ok = client_.debug_step(tid);
-  } else {
-    logf("debug_continue");
-    ok = client_.debug_continue();
-  }
-  if (!ok) {
-    logf("%s failed: %s", step ? "debug_step" : "debug_continue",
-         client_.last_error().c_str());
-    return err_packet(1);
-  }
-  stop_reason_.clear();
-
-  for (;;) {
-    if (conn.poll_interrupt(50U)) {
-      (void)client_.debug_stop();
-      bool stopped = false;
-      int32_t stop_lwp = 0;
-      (void)client_.debug_poll_events(stopped, stop_lwp);
-      if (stop_lwp != 0) stop_lwp_ = stop_lwp;
-      return "T02"; /* SIGINT */
-    }
-
-    bool stopped = false;
-    int32_t stop_lwp = 0;
-    if (!client_.debug_poll_events(stopped, stop_lwp)) {
-      return err_packet(1);
-    }
-    if (stopped) {
-      if (stop_lwp != 0) stop_lwp_ = stop_lwp;
-      capture_stop_reason(stop_lwp_);
-      general_thread_ = stop_lwp_;
-      return stop_reply();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-}
-
-std::string RspHandler::handle_memory_read(const std::string &packet) {
-  /* maddr,length */
-  if (!ensure_attached()) return err_packet(1);
-  const size_t comma = packet.find(',');
-  if (comma == std::string::npos) return err_packet(1);
-  uint64_t addr = 0U;
-  uint64_t length = 0U;
-  if (!parse_hex_u64(packet, 1U, comma, addr)) return err_packet(1);
-  if (!parse_hex_u64(packet, comma + 1U, packet.size(), length))
-    return err_packet(1);
-  if (length == 0U) return std::string();
-  if (length > 0x100000U) length = 0x100000U;
-
-  std::string hex;
-  hex.reserve(static_cast<size_t>(length) * 2U);
-  uint64_t done = 0U;
-  while (done < length) {
-    uint32_t chunk = static_cast<uint32_t>(length - done);
-    if (chunk > kMemChunk) chunk = kMemChunk;
-    std::vector<uint8_t> data;
-    if (!client_.memory_read(pid_, addr + done, chunk, data) ||
-        data.size() != chunk) {
-      return err_packet(1);
-    }
-    hex += bytes_to_hex(data.data(), data.size());
-    done += chunk;
-  }
-  return hex;
-}
-
-std::string RspHandler::handle_memory_write(const std::string &packet) {
-  /* Maddr,length:XX... */
-  if (!ensure_attached()) return err_packet(1);
-  const size_t comma = packet.find(',');
-  const size_t colon = packet.find(':');
-  if (comma == std::string::npos || colon == std::string::npos || colon < comma)
-    return err_packet(1);
-  uint64_t addr = 0U;
-  uint64_t length = 0U;
-  if (!parse_hex_u64(packet, 1U, comma, addr)) return err_packet(1);
-  if (!parse_hex_u64(packet, comma + 1U, colon, length)) return err_packet(1);
-  const std::string hex = packet.substr(colon + 1U);
-  if (hex.size() != length * 2U) return err_packet(1);
-  std::vector<uint8_t> data(static_cast<size_t>(length));
-  if (length > 0U &&
-      !hex_to_bytes(hex, data.data(), static_cast<size_t>(length))) {
-    return err_packet(1);
-  }
-  uint32_t written = 0U;
-  if (!client_.memory_write(pid_, addr, data, written) ||
-      written != static_cast<uint32_t>(length)) {
-    return err_packet(1);
-  }
-  return "OK";
-}
-
-std::string RspHandler::handle_breakpoint(const std::string &packet,
-                                          bool enable) {
-  /* Ztype,addr,kind  / ztype,addr,kind */
-  if (!ensure_attached()) return err_packet(1);
-  if (packet.size() < 5U) return err_packet(1);
-  const char type = packet[1];
-  const size_t comma1 = packet.find(',', 2U);
-  if (comma1 == std::string::npos) return err_packet(1);
-  size_t comma2 = packet.find(',', comma1 + 1U);
-  if (comma2 == std::string::npos) comma2 = packet.size();
-  uint64_t addr = 0U;
-  uint64_t kind = 1U;
-  if (!parse_hex_u64(packet, comma1 + 1U, comma2, addr)) return err_packet(1);
-  if (comma2 < packet.size()) {
-    (void)parse_hex_u64(packet, comma2 + 1U, packet.size(), kind);
-  }
-  (void)kind;
-
-  if (type == '0') {
-    if (enable) {
-      if (!client_.debug_set_breakpoint(addr, 0U)) return err_packet(1);
-    } else {
-      if (!client_.debug_clear_breakpoint(addr)) return err_packet(1);
-    }
-    return "OK";
-  }
-  if (type == '1') {
-    if (enable) {
-      if (!client_.debug_set_breakpoint(addr, 1U)) return err_packet(1);
-    } else {
-      if (!client_.debug_clear_breakpoint(addr)) return err_packet(1);
-    }
-    return "OK";
-  }
-  const int wtype = watch_type_from_z(type);
-  if (wtype < 0) return std::string(); /* unsupported */
-  const uint32_t length = kind == 0U ? 1U : static_cast<uint32_t>(kind);
-  if (enable) {
-    if (!client_.debug_set_watchpoint(addr, length,
-                                      static_cast<uint32_t>(wtype))) {
-      return err_packet(1);
-    }
-  } else {
-    if (!client_.debug_clear_watchpoint(addr)) return err_packet(1);
-  }
-  return "OK";
-}
-
-std::string RspHandler::handle_query(const std::string &packet,
-                                     RspConnection &conn) {
-  if (packet.rfind("qSupported", 0) == 0) {
-    return "PacketSize=1048576;qXfer:features:read+;qXfer:memory-map:read+;"
-           "swbreak+;hwbreak+;QStartNoAckMode+";
-  }
-  if (packet == "QStartNoAckMode") {
-    conn.set_no_ack(true);
-    return "OK";
-  }
-  if (packet == "qAttached") return attached_ ? "1" : "0";
-  if (packet.rfind("qAttached:", 0) == 0) return attached_ ? "1" : "0";
-  if (packet == "qProcessInfo" || packet.rfind("qProcessInfo:", 0) == 0) {
-    char buf[128];
-    std::snprintf(buf, sizeof(buf),
-                  "pid:%x;triple:x86_64-unknown-freebsd;endian:little;",
-                  static_cast<unsigned>(pid_ > 0 ? pid_ : 1));
-    return std::string(buf);
-  }
-  if (packet == "qC") {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "QC%x",
-                  static_cast<unsigned>(current_thread()));
-    return std::string(buf);
-  }
-  if (packet == "qfThreadInfo") {
-    refresh_threads();
-    thread_info_started_ = true;
-    if (threads_.empty()) {
-      if (pid_ > 0) {
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "m%x", static_cast<unsigned>(pid_));
-        return std::string(buf);
-      }
-      return "l";
-    }
-    std::string out = "m";
-    for (size_t i = 0; i < threads_.size(); ++i) {
-      if (i > 0U) out.push_back(',');
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "%x",
-                    static_cast<unsigned>(threads_[i].lwp > 0 ? threads_[i].lwp : pid_));
-      out += buf;
-    }
-    return out;
-  }
-  if (packet == "qsThreadInfo") return "l";
-  if (packet.rfind("qThreadExtraInfo,", 0) == 0) {
-    int32_t req_pid = 0, req_tid = 0;
-    if (!parse_thread_id(packet.c_str() + std::strlen("qThreadExtraInfo,"),
-                         req_pid, req_tid)) {
-      return err_packet(1);
-    }
-    refresh_threads();
-    for (const auto &t : threads_) {
-      if (t.lwp == req_tid || (req_tid <= 0 && t.lwp > 0)) {
-        return gdb_thread_extra_info_hex(t.lwp, t.name);
-      }
-    }
-    const int32_t fallback_tid = req_tid > 0 ? req_tid : (pid_ > 0 ? pid_ : 1);
-    return gdb_thread_extra_info_hex(fallback_tid, "");
-  }
-  if (packet.rfind("qXfer:features:read:", 0) == 0) {
-    /* qXfer:features:read:annex:offset,length */
-    const std::string rest = packet.substr(std::strlen("qXfer:features:read:"));
-    const size_t colon = rest.find(':');
-    if (colon == std::string::npos) return err_packet(1);
-    const std::string annex = rest.substr(0U, colon);
-    const size_t comma = rest.find(',', colon + 1U);
-    if (comma == std::string::npos) return err_packet(1);
-    uint64_t offset = 0U;
-    uint64_t length = 0U;
-    if (!parse_hex_u64(rest, colon + 1U, comma, offset)) return err_packet(1);
-    if (!parse_hex_u64(rest, comma + 1U, rest.size(), length))
-      return err_packet(1);
-    return qxfer_features(annex, static_cast<size_t>(offset),
-                          static_cast<size_t>(length));
-  }
-  if (packet.rfind("qXfer:memory-map:read:", 0) == 0) {
-    /* qXfer:memory-map:read::offset,length  (empty annex) */
-    const std::string rest =
-        packet.substr(std::strlen("qXfer:memory-map:read:"));
-    const size_t colon = rest.find(':');
-    if (colon == std::string::npos) return err_packet(1);
-    const size_t comma = rest.find(',', colon + 1U);
-    if (comma == std::string::npos) return err_packet(1);
-    uint64_t offset = 0U;
-    uint64_t length = 0U;
-    if (!parse_hex_u64(rest, colon + 1U, comma, offset)) return err_packet(1);
-    if (!parse_hex_u64(rest, comma + 1U, rest.size(), length))
-      return err_packet(1);
-    return qxfer_memory_map(static_cast<size_t>(offset),
-                            static_cast<size_t>(length));
-  }
-  if (packet.rfind("qRcmd,", 0) == 0) {
-    return "OK";
-  }
-  return std::string(); /* unsupported query */
-}
-
-std::string RspHandler::handle_v(const std::string &packet,
-                                 RspConnection &conn) {
-  if (packet.rfind("vAttach;", 0) == 0) {
-    int32_t req_pid = 0, req_tid = 0;
-    if (!parse_thread_id(packet.c_str() + 8, req_pid, req_tid)) {
-      logf("vAttach: bad pid hex in '%s'", packet.c_str());
-      return err_packet(1);
-    }
-    const int32_t attach_pid = req_pid > 0 ? req_pid : req_tid;
-    logf("vAttach pid=0x%x (%d decimal)", static_cast<unsigned>(attach_pid),
-         static_cast<int>(attach_pid));
-    if (attached_ && pid_ == attach_pid) {
-      logf("vAttach: reusing session for pid=%d", static_cast<int>(pid_));
-      return stop_reply();
-    }
-    if (attached_) {
-      logf("vAttach: switching from pid=%d", static_cast<int>(pid_));
-      if (!safe_detach()) return err_packet(1);
-    }
-    pid_ = attach_pid;
-    if (!client_.debug_attach(pid_)) {
-      logf("vAttach debug_attach failed: %s", client_.last_error().c_str());
-      return err_packet(1);
-    }
-    attached_ = true;
-    refresh_threads();
-    if (!threads_.empty()) {
-      stop_lwp_ = threads_[0].lwp;
-      general_thread_ = stop_lwp_;
-    }
-    return stop_reply();
-  }
-  if (packet == "vCont?") {
-    return "vCont;c;C;s;S";
-  }
-  if (packet.rfind("vCont;", 0) == 0) {
-    /* Support first action only (all-stop MVP). */
-    const char action = packet.size() > 6U ? packet[6] : '\0';
-    int32_t lwp = 0;
-    const size_t colon = packet.find(':', 6U);
-    if (colon != std::string::npos) {
-      int32_t p_out = 0, t_out = 0;
-      if (parse_thread_id(packet.c_str() + colon + 1U, p_out, t_out)) {
-        lwp = t_out > 0 ? t_out : 0;
-      }
-    }
-    if (action == 'c' || action == 'C') {
-      return handle_continue_or_step(false, conn, lwp);
-    }
-    if (action == 's' || action == 'S') {
-      return handle_continue_or_step(true, conn, lwp);
-    }
-    return err_packet(1);
-  }
-  if (packet == "vMustReplyEmpty") return std::string();
-  return std::string();
 }
 
 std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
@@ -592,8 +154,10 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
     reply = handle_v(packet, conn);
   } else if (packet == "?") {
     if (!attached_ && pid_ > 0) {
-      if (!ensure_attached()) reply = "W00";
-      else reply = stop_reply();
+      if (!ensure_attached())
+        reply = "W00";
+      else
+        reply = stop_reply();
     } else {
       reply = attached_ ? stop_reply() : "W00";
     }
@@ -611,7 +175,26 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
         if (!parse_thread_id(packet.c_str() + 2, req_pid, req_tid)) {
           reply = err_packet(1);
         } else {
-          if (which == 'g') {
+          if (req_pid > 0 && pid_ > 0 && req_pid != pid_) {
+            reply = err_packet(1);
+          } else if (attached_ && req_tid > 0) {
+            refresh_threads();
+            const bool exists = req_tid == pid_ || std::any_of(threads_.begin(), threads_.end(),
+                                                               [&](const auto &thread) {
+                                                                 return thread.lwp == req_tid;
+                                                               });
+            if (!exists) {
+              reply = err_packet(1);
+            } else if (which == 'g') {
+              general_thread_ = req_tid;
+              reply = "OK";
+            } else if (which == 'c') {
+              continue_thread_ = req_tid;
+              reply = "OK";
+            } else {
+              reply = std::string();
+            }
+          } else if (which == 'g') {
             general_thread_ = req_tid;
             reply = "OK";
           } else if (which == 'c') {
@@ -622,137 +205,44 @@ std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {
           }
         }
       }
-    } else if (packet[0] == 'g') {
-      if (!ensure_attached()) {
-        reply = err_packet(1);
-      } else {
-        memdbg::frontend::Client::DebugRegs regs;
-        if (!client_.debug_get_regs(current_thread(), regs)) {
-          reply = err_packet(1);
-        } else {
-          /* IDA's Remote GDB debugger is interoperable with the PS4 reference
-           * gdbsrv when the bulk register packet contains the 24 amd64 core
-           * registers only.  Optional FP/SSE state remains available through
-           * individual p/P packets, but must not shift IDA's core layout. */
-          reply = gdb_encode_g_core(regs.regs);
-        }
-      }
+    } else if (packet == "g") {
+      reply = handle_read_all_registers();
     } else if (packet[0] == 'G') {
-      if (!ensure_attached()) {
-        reply = err_packet(1);
-      } else {
-        memdbg::frontend::Client::DebugRegs regs;
-        if (!client_.debug_get_regs(current_thread(), regs)) {
-          reply = err_packet(1);
-        } else {
-          if (!gdb_decode_g_core(packet.substr(1U), regs.regs))
-            reply = err_packet(1);
-          else if (!client_.debug_set_regs(current_thread(), regs))
-            reply = err_packet(1);
-          else
-            reply = "OK";
-        }
-      }
+      reply = handle_write_all_registers(packet);
     } else if (packet[0] == 'p') {
-      if (!ensure_attached()) {
-        reply = err_packet(1);
-      } else {
-        uint64_t regno = 0U;
-        if (!parse_hex_u64(packet.c_str() + 1, regno) ||
-            !gdb_reg_valid(static_cast<int>(regno))) {
-          reply = err_packet(1);
-        } else {
-          const int ir = static_cast<int>(regno);
-          const size_t size = gdb_reg_size(ir);
-          if (gdb_reg_is_sse(ir)) {
-            memdbg::frontend::Client::DebugFpregs fpregs;
-            if (!client_.debug_get_fpregs(current_thread(), fpregs))
-              reply = err_packet(1);
-            else {
-              uint8_t buf[16]{};
-              if (!gdb_get_sse_bytes(fpregs.fpregs, ir, buf, sizeof(buf)))
-                reply = err_packet(1);
-              else
-                reply = bytes_to_hex(buf, size);
-            }
-          } else {
-            memdbg::frontend::Client::DebugRegs regs;
-            if (!client_.debug_get_regs(current_thread(), regs)) {
-              reply = err_packet(1);
-            } else {
-              uint64_t value = gdb_get_reg_value(regs.regs, ir);
-              if (size == 4U) value &= 0xFFFFFFFFULL;
-              reply = bytes_to_hex(&value, size);
-            }
-          }
-        }
-      }
+      reply = handle_read_register(packet);
     } else if (packet[0] == 'P') {
-      if (!ensure_attached()) {
-        reply = err_packet(1);
-      } else {
-        const size_t eq = packet.find('=');
-        if (eq == std::string::npos) {
-          reply = err_packet(1);
-        } else {
-          uint64_t regno = 0U;
-          if (!parse_hex_u64(packet, 1U, eq, regno) ||
-              !gdb_reg_valid(static_cast<int>(regno))) {
-            reply = err_packet(1);
-          } else {
-            const int ir = static_cast<int>(regno);
-            const size_t size = gdb_reg_size(ir);
-            if (gdb_reg_is_sse(ir)) {
-              uint8_t buf[16]{};
-              if (!hex_to_bytes(packet.substr(eq + 1U), buf, size))
-                reply = err_packet(1);
-              else {
-                memdbg::frontend::Client::DebugFpregs fpregs;
-                (void)client_.debug_get_fpregs(current_thread(), fpregs);
-                if (!gdb_set_sse_bytes(fpregs.fpregs, ir, buf, size))
-                  reply = err_packet(1);
-                else if (!client_.debug_set_fpregs(current_thread(), fpregs))
-                  reply = err_packet(1);
-                else
-                  reply = "OK";
-              }
-            } else {
-              uint64_t value = 0U;
-              if (!hex_to_bytes(packet.substr(eq + 1U), &value, size))
-                reply = err_packet(1);
-              else {
-                memdbg::frontend::Client::DebugRegs regs;
-                if (!client_.debug_get_regs(current_thread(), regs))
-                  reply = err_packet(1);
-                else if (!gdb_set_reg_value(regs.regs, ir, value))
-                  reply = err_packet(1);
-                else if (!client_.debug_set_regs(current_thread(), regs))
-                  reply = err_packet(1);
-                else
-                  reply = "OK";
-              }
-            }
-          }
-        }
-      }
+      reply = handle_write_register(packet);
     } else if (packet[0] == 'm') {
       reply = handle_memory_read(packet);
     } else if (packet[0] == 'M') {
       reply = handle_memory_write(packet);
+    } else if (packet[0] == 'X') {
+      reply = handle_binary_memory_write(packet);
     } else if (packet[0] == 'c' || packet[0] == 'C') {
-      reply = handle_continue_or_step(false, conn, continue_thread_);
+      reply = handle_resume_packet(packet, false, conn);
     } else if (packet[0] == 's' || packet[0] == 'S') {
-      reply = handle_continue_or_step(true, conn, continue_thread_);
+      reply = handle_resume_packet(packet, true, conn);
     } else if (packet[0] == 'Z') {
       reply = handle_breakpoint(packet, true);
     } else if (packet[0] == 'z') {
       reply = handle_breakpoint(packet, false);
-    } else if (packet[0] == 'D' || packet == "k") {
-      reply = safe_detach() ? "OK" : err_packet(1);
+    } else if (packet[0] == 'D') {
+      bool valid_detach = packet == "D";
+      if (!valid_detach && packet.rfind("D;", 0U) == 0U) {
+        uint64_t detach_pid = 0U;
+        valid_detach = detail::parse_hex_u64(packet, 2U, packet.size(), detach_pid) &&
+                       detach_pid == static_cast<uint64_t>(pid_);
+      }
+      reply = valid_detach && safe_detach() ? "OK" : err_packet(1);
+    } else if (packet == "k") {
+      reply = attached_ && kill_process(pid_) ? "OK" : err_packet(1);
     } else if (packet[0] == 'T') {
       refresh_threads();
       int32_t req_pid = 0, req_tid = 0;
       if (!parse_thread_id(packet.c_str() + 1, req_pid, req_tid)) {
+        reply = err_packet(1);
+      } else if (req_pid > 0 && req_pid != pid_) {
         reply = err_packet(1);
       } else {
         reply = err_packet(1);

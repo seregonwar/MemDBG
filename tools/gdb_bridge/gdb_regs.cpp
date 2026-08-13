@@ -24,14 +24,11 @@ int hex_value(char c) {
   return -1;
 }
 
-bool fxsave_ready(const memdbg_debug_fpregs_t &fpregs) {
-  return fpregs.length >= kFxsaveMinLen;
-}
+bool fxsave_ready(const memdbg_debug_fpregs_t &fpregs) { return fpregs.length >= kFxsaveMinLen; }
 
 void ensure_fxsave(memdbg_debug_fpregs_t &fpregs) {
   if (fpregs.length < kFxsaveMinLen) {
-    std::memset(fpregs.data + fpregs.length, 0,
-                kFxsaveMinLen - fpregs.length);
+    std::memset(fpregs.data + fpregs.length, 0, kFxsaveMinLen - fpregs.length);
     fpregs.length = static_cast<uint32_t>(kFxsaveMinLen);
   }
 }
@@ -39,24 +36,16 @@ void ensure_fxsave(memdbg_debug_fpregs_t &fpregs) {
 } // namespace
 
 size_t gdb_reg_size(int regno) {
-  if (gdb_reg_is_core(regno)) {
-    return regno <= GDB_RIP ? 8U : 4U;
-  }
-  if (gdb_reg_is_x87(regno)) {
-    return regno <= GDB_ST7 ? 10U : 4U;
-  }
+  if (gdb_reg_is_core(regno)) { return regno <= GDB_RIP ? 8U : 4U; }
+  if (gdb_reg_is_x87(regno)) { return regno <= GDB_ST7 ? 10U : 4U; }
   if (regno >= GDB_XMM0 && regno <= GDB_XMM15) return kFxsaveXmmBytes;
   if (regno == GDB_MXCSR) return 4U;
   return 0U;
 }
 
-bool gdb_reg_is_core(int regno) {
-  return regno >= 0 && regno < GDB_CORE_COUNT;
-}
+bool gdb_reg_is_core(int regno) { return regno >= 0 && regno < GDB_CORE_COUNT; }
 
-bool gdb_reg_is_x87(int regno) {
-  return regno >= GDB_ST0 && regno <= GDB_FOP;
-}
+bool gdb_reg_is_x87(int regno) { return regno >= GDB_ST0 && regno <= GDB_FOP; }
 
 bool gdb_reg_is_sse(int regno) {
   return (regno >= GDB_XMM0 && regno <= GDB_XMM15) || regno == GDB_MXCSR;
@@ -176,8 +165,8 @@ bool gdb_set_reg_value(memdbg_debug_regs_t &regs, int regno, uint64_t value) {
   }
 }
 
-bool gdb_get_sse_bytes(const memdbg_debug_fpregs_t &fpregs, int regno,
-                       uint8_t *out, size_t out_size) {
+bool gdb_get_sse_bytes(const memdbg_debug_fpregs_t &fpregs, int regno, uint8_t *out,
+                       size_t out_size) {
   if (!out || !gdb_reg_is_sse(regno)) return false;
   const size_t need = gdb_reg_size(regno);
   if (out_size < need) return false;
@@ -187,15 +176,12 @@ bool gdb_get_sse_bytes(const memdbg_debug_fpregs_t &fpregs, int regno,
     std::memcpy(out, fpregs.data + kFxsaveMxcsrOff, 4U);
     return true;
   }
-  const size_t off =
-      kFxsaveXmm0Off +
-      static_cast<size_t>(regno - GDB_XMM0) * kFxsaveXmmBytes;
+  const size_t off = kFxsaveXmm0Off + static_cast<size_t>(regno - GDB_XMM0) * kFxsaveXmmBytes;
   std::memcpy(out, fpregs.data + off, kFxsaveXmmBytes);
   return true;
 }
 
-bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno,
-                       const uint8_t *data, size_t size) {
+bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno, const uint8_t *data, size_t size) {
   if (!data || !gdb_reg_is_sse(regno)) return false;
   if (size != gdb_reg_size(regno)) return false;
   ensure_fxsave(fpregs);
@@ -203,11 +189,60 @@ bool gdb_set_sse_bytes(memdbg_debug_fpregs_t &fpregs, int regno,
     std::memcpy(fpregs.data + kFxsaveMxcsrOff, data, 4U);
     return true;
   }
-  const size_t off =
-      kFxsaveXmm0Off +
-      static_cast<size_t>(regno - GDB_XMM0) * kFxsaveXmmBytes;
+  const size_t off = kFxsaveXmm0Off + static_cast<size_t>(regno - GDB_XMM0) * kFxsaveXmmBytes;
   std::memcpy(fpregs.data + off, data, kFxsaveXmmBytes);
   return true;
+}
+
+bool gdb_get_x87_bytes(const memdbg_debug_fpregs_t &fpregs, int regno, uint8_t *out,
+                       size_t out_size) {
+  if (!out || !gdb_reg_is_x87(regno)) return false;
+  const size_t need = gdb_reg_size(regno);
+  if (out_size < need) return false;
+  std::memset(out, 0, need);
+  if (!fxsave_ready(fpregs)) return true;
+
+  if (regno >= GDB_ST0 && regno <= GDB_ST7) {
+    const size_t offset = kFxsaveSt0Off + static_cast<size_t>(regno - GDB_ST0) * kFxsaveStStride;
+    std::memcpy(out, fpregs.data + offset, 10U);
+    return true;
+  }
+
+  uint32_t value = 0U;
+  switch (regno) {
+  case GDB_FCTRL: std::memcpy(&value, fpregs.data + 0U, 2U); break;
+  case GDB_FSTAT: std::memcpy(&value, fpregs.data + 2U, 2U); break;
+  case GDB_FTAG: std::memcpy(&value, fpregs.data + 4U, 1U); break;
+  case GDB_FISEG: value = 0U; break;
+  case GDB_FIOFF: std::memcpy(&value, fpregs.data + 8U, 4U); break;
+  case GDB_FOSEG: value = 0U; break;
+  case GDB_FOOFF: std::memcpy(&value, fpregs.data + 16U, 4U); break;
+  case GDB_FOP: std::memcpy(&value, fpregs.data + 6U, 2U); break;
+  default: return false;
+  }
+  std::memcpy(out, &value, 4U);
+  return true;
+}
+
+bool gdb_set_x87_bytes(memdbg_debug_fpregs_t &fpregs, int regno, const uint8_t *data, size_t size) {
+  if (!data || !gdb_reg_is_x87(regno) || size != gdb_reg_size(regno)) return false;
+  ensure_fxsave(fpregs);
+  if (regno >= GDB_ST0 && regno <= GDB_ST7) {
+    const size_t offset = kFxsaveSt0Off + static_cast<size_t>(regno - GDB_ST0) * kFxsaveStStride;
+    std::memcpy(fpregs.data + offset, data, 10U);
+    return true;
+  }
+  switch (regno) {
+  case GDB_FCTRL: std::memcpy(fpregs.data + 0U, data, 2U); return true;
+  case GDB_FSTAT: std::memcpy(fpregs.data + 2U, data, 2U); return true;
+  case GDB_FTAG: std::memcpy(fpregs.data + 4U, data, 1U); return true;
+  case GDB_FISEG: return true; /* not represented by 64-bit FXSAVE */
+  case GDB_FIOFF: std::memcpy(fpregs.data + 8U, data, 4U); return true;
+  case GDB_FOSEG: return true; /* not represented by 64-bit FXSAVE */
+  case GDB_FOOFF: std::memcpy(fpregs.data + 16U, data, 4U); return true;
+  case GDB_FOP: std::memcpy(fpregs.data + 6U, data, 2U); return true;
+  default: return false;
+  }
 }
 
 /*
@@ -243,8 +278,13 @@ bool gdb_decode_g_core(const std::string &hex, memdbg_debug_regs_t &regs) {
 std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
                                 const memdbg_debug_fpregs_t *fpregs) {
   std::string out = gdb_encode_g_core(regs);
-  /* Insert x87 112-byte zero padding (224 hex zeros) for standard amd64 layout. */
-  out.append(kX87PaddingBytes * 2U, '0');
+  uint8_t x87[10]{};
+  for (int regno = GDB_ST0; regno <= GDB_FOP; ++regno) {
+    const size_t size = gdb_reg_size(regno);
+    std::memset(x87, 0, sizeof(x87));
+    if (fpregs) (void)gdb_get_x87_bytes(*fpregs, regno, x87, sizeof(x87));
+    out += bytes_to_hex(x87, size);
+  }
 
   /* Document order in target.xml: xmm0..xmm15 then mxcsr. */
   uint8_t tmp[16]{};
@@ -257,9 +297,7 @@ std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
     out += bytes_to_hex(tmp, kFxsaveXmmBytes);
   }
   uint8_t mxcsr[4]{};
-  if (fpregs) {
-    (void)gdb_get_sse_bytes(*fpregs, GDB_MXCSR, mxcsr, sizeof(mxcsr));
-  }
+  if (fpregs) { (void)gdb_get_sse_bytes(*fpregs, GDB_MXCSR, mxcsr, sizeof(mxcsr)); }
   out += bytes_to_hex(mxcsr, sizeof(mxcsr));
   return out;
 }
@@ -267,18 +305,23 @@ std::string gdb_encode_g_packet(const memdbg_debug_regs_t &regs,
 bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
                          memdbg_debug_fpregs_t *fpregs) {
   if (!gdb_decode_g_core(hex, regs)) return false;
-  /* Core hex length: 328 chars. x87 padding: 224 chars. Total prefix: 552 chars. */
-  size_t offset = 552U;
-  if (hex.size() < offset) return false;
-  if (!fpregs) {
-    return true;
-  }
+  size_t offset = 328U;
+  if (!fpregs) { return hex.size() >= offset + kX87PaddingBytes * 2U; }
   ensure_fxsave(*fpregs);
+  uint8_t x87[10]{};
+  for (int regno = GDB_ST0; regno <= GDB_FOP; ++regno) {
+    const size_t size = gdb_reg_size(regno);
+    if (offset + size * 2U > hex.size() ||
+        !hex_to_bytes(hex.substr(offset, size * 2U), x87, size) ||
+        !gdb_set_x87_bytes(*fpregs, regno, x87, size)) {
+      return false;
+    }
+    offset += size * 2U;
+  }
   uint8_t tmp[16]{};
   for (int regno = GDB_XMM0; regno <= GDB_XMM15; ++regno) {
     if (offset + kFxsaveXmmBytes * 2U > hex.size()) return false;
-    if (!hex_to_bytes(hex.substr(offset, kFxsaveXmmBytes * 2U), tmp,
-                      kFxsaveXmmBytes)) {
+    if (!hex_to_bytes(hex.substr(offset, kFxsaveXmmBytes * 2U), tmp, kFxsaveXmmBytes)) {
       return false;
     }
     if (!gdb_set_sse_bytes(*fpregs, regno, tmp, kFxsaveXmmBytes)) return false;
