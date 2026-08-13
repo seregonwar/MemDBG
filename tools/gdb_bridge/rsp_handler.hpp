@@ -7,28 +7,21 @@
 #ifndef MEMDBG_GDB_BRIDGE_RSP_HANDLER_HPP
 #define MEMDBG_GDB_BRIDGE_RSP_HANDLER_HPP
 
-#include "memdbg_client.hpp"
+#include "rsp_backend.hpp"
+#include "rsp_protocol.hpp"
 #include "rsp_server.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace memdbg::gdb_bridge {
 
-/* Thread ID parser supporting multiprocess RSP syntax (p<pid>.<tid>, p<pid>, <tid>). */
-bool parse_thread_id(const char *s, int32_t &pid_out, int32_t &tid_out);
-
-/* Convert x86 DR6 B0..B3 plus the installed slot metadata into the GDB RSP
- * stop-reason field (watch/rwatch/awatch/hwbreak). */
-std::string gdb_watchpoint_stop_field(
-    uint64_t dr6,
-    const std::vector<memdbg::frontend::Client::DebugWatchpointEntry> &entries);
-
 class RspHandler {
 public:
-  RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
-             bool verbose = false);
+  RspHandler(memdbg::frontend::Client &client, int32_t initial_pid, bool verbose = false);
+  RspHandler(RspBackend &backend, int32_t initial_pid, bool verbose = false);
 
   std::string handle(const std::string &packet, RspConnection &conn);
 
@@ -44,12 +37,24 @@ private:
   std::string handle_memory_read(const std::string &packet);
   std::string handle_memory_write(const std::string &packet);
   std::string handle_breakpoint(const std::string &packet, bool enable);
-  std::string handle_continue_or_step(bool step, RspConnection &conn,
-                                      int32_t lwp);
+  std::string handle_continue_or_step(bool step, RspConnection &conn, int32_t lwp);
   std::string stop_reply() const;
-  std::string qxfer_features(const std::string &annex, size_t offset,
-                             size_t length) const;
+  std::string qxfer_features(const std::string &annex, size_t offset, size_t length) const;
   std::string qxfer_memory_map(size_t offset, size_t length);
+  std::string qxfer_threads(size_t offset, size_t length);
+  std::string qxfer_libraries(size_t offset, size_t length);
+  std::string qxfer_exec_file(size_t offset, size_t length);
+  std::string qxfer_osdata(const std::string &annex, size_t offset, size_t length);
+  std::string handle_binary_memory_write(const std::string &packet);
+  std::string handle_search_memory(const std::string &packet);
+  std::string handle_read_all_registers();
+  std::string handle_write_all_registers(const std::string &packet);
+  std::string handle_read_register(const std::string &packet);
+  std::string handle_write_register(const std::string &packet);
+  std::string handle_resume_packet(const std::string &packet, bool step, RspConnection &conn);
+  std::string memory_region_info(const std::string &packet);
+  bool set_program_counter(uint64_t address);
+  bool kill_process(int32_t target_pid);
   bool ensure_attached();
   bool safe_detach();
   void logf(const char *fmt, ...) const;
@@ -57,17 +62,22 @@ private:
   void capture_stop_reason(int32_t lwp);
   int32_t current_thread() const;
   void refresh_threads();
+  bool refresh_memory_maps();
 
-  memdbg::frontend::Client &client_;
+  std::unique_ptr<RspBackend> owned_backend_;
+  RspBackend &backend_;
   int32_t pid_ = 0;
   bool attached_ = false;
   bool verbose_ = false;
   int32_t general_thread_ = 0; /* Hg */
   int32_t continue_thread_ = 0; /* Hc; 0 = all */
   int32_t stop_lwp_ = 0;
+  uint8_t stop_signal_ = 5U; /* SIGTRAP */
   std::string stop_reason_;
   bool thread_info_started_ = false;
   std::vector<memdbg::frontend::Client::DebugThreadEntry> threads_;
+  std::vector<memdbg::frontend::MapEntry> memory_maps_;
+  bool memory_maps_known_ = false;
 };
 
 } // namespace memdbg::gdb_bridge

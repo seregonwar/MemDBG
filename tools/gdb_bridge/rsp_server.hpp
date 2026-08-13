@@ -58,8 +58,7 @@ private:
 
 class RspServer {
 public:
-  using Handler = std::function<std::string(const std::string &packet,
-                                            RspConnection &conn)>;
+  using Handler = std::function<std::string(const std::string &packet, RspConnection &conn)>;
 
   RspServer();
   ~RspServer();
@@ -72,8 +71,7 @@ public:
 
   /* Serve packets until disconnect. Handler returns RSP payload (no $/#).
    * Empty string => empty OK packet. "E01" style errors are pass-through. */
-  void serve(memdbg::frontend::platform::socket_handle_t client_fd,
-             const Handler &handler);
+  void serve(memdbg::frontend::platform::socket_handle_t client_fd, const Handler &handler);
 
   uint16_t listen_port() const { return listen_port_; }
 
@@ -84,6 +82,7 @@ private:
 
 uint8_t rsp_checksum(const std::string &payload);
 std::string rsp_escape(const std::string &payload);
+bool rsp_decode(const std::string &encoded, std::string &out);
 std::string rsp_unescape(const std::string &escaped);
 
 } // namespace memdbg::gdb_bridge

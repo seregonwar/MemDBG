@@ -63,8 +63,8 @@ standalone asset (`MemDBG-ida-gdb-bridge-{windows,linux,macos}`).
 
 The bridge prints the current process list immediately after connecting to the
 payload, so a PID can be selected without opening the desktop frontend. Incoming
-GDB/IDA commands are logged by default; use `--verbose` when replies and the
-MDBG debugger lifecycle are also needed. It pings the payload every ~10s (idle
+GDB/IDA commands, replies, and the MDBG debugger lifecycle are logged with
+`--verbose`; binary packet bytes are escaped before printing. It pings the payload every ~10s (idle
 timeout is 30s). During detach it stops the target first, restores debugger
 state, and lets `PT_DETACH` resume execution safely.
 
@@ -86,19 +86,21 @@ You can also use stock GDB:
 
 ## Supported RSP subset
 
-- `qSupported`, `QStartNoAckMode`, `qAttached`, `qC`
-- Threads: `qfThreadInfo` / `qsThreadInfo`, `qThreadExtraInfo` (display name), `H`, `T`
-- `qXfer:features:read` → core GPR + SSE (`xmm0`–`xmm15`, `mxcsr`) XML
+- `qSupported`, `QStartNoAckMode`, `QNonStop:0`, `qAttached`, `qC`, `qHostInfo`, `qOffsets`, `qSymbol`
+- Threads: `qfThreadInfo` / `qsThreadInfo`, `qThreadExtraInfo`, `qThreadStopInfo`, `qXfer:threads:read`, `H`, `T`
+- `qXfer:features:read` → the intentionally minimal `i386:x86-64` target description used by IDA
 - `qXfer:memory-map:read` → map from `process_maps` (`ram` entries)
-- `vAttach`, `vCont` (`c`/`s`), `?`, `D`
-- Registers: `g` / `G` / `p` / `P` (GPR + SSE via FXSAVE / `debug_get_fpregs`)
-- Memory: `m` / `M`
+- `qXfer:libraries:read`, `qXfer:exec-file:read`, `qXfer:osdata:read:processes`
+- `qMemoryRegionInfo` and `qSearch:memory`
+- `vAttach`, validated `vCont` (`c`/`C`/`s`/`S`), `vKill`, `?`, `D`, `k`
+- Registers: `g` / `G` / `p` / `P` (GPR, x87 and SSE via FXSAVE / `debug_get_fpregs`)
+- Memory: `m` / `M` / binary `X`, with mapped-range and overflow validation
 - Breakpoints: `Z0`/`z0` (software), `Z1`/`z1` (hardware)
 - Watchpoints: `Z2`–`Z4` / `z2`–`z4`
 - Stop replies via polling `DEBUG_POLL_EVENTS` (all-stop); Ctrl-C → `debug_stop`
 
-Process attach uses bridge `--pid` / `--name` (or IDA `vAttach` in hex). There is
-no RSP OS process-list (`qXfer:osdata`); PS3 / deci3dbg-style modules are out of scope.
+Process attach uses bridge `--pid` / `--name` (or IDA `vAttach` in hex). The OS
+process list and loaded image mappings are also available through RSP XML.
 
 Unsupported packets receive an empty RSP reply (`$#00`).
 
@@ -107,7 +109,8 @@ Unsupported packets receive an empty RSP reply (`$#00`).
 - Single attached PID (same constraint as the MemDBG debugger session).
 - All-stop only (no GDB non-stop mode).
 - No `vRun` / spawn, no on-console `gdbsrv`.
-- X87 (st0–st7 / fctrl…) not in `target.xml` yet (SSE is).
+- The target description stays minimal for IDA compatibility; x87/SSE remain
+  available through individual `p`/`P` packets.
 
 ## Source
 
@@ -115,4 +118,10 @@ Unsupported packets receive an empty RSP reply (`$#00`).
 |---|---|
 | [`tools/gdb_bridge/`](../../tools/gdb_bridge/) | Bridge sources |
 | [`tools/gdb_bridge/gdb_regs.cpp`](../../tools/gdb_bridge/gdb_regs.cpp) | FreeBSD/`memdbg_debug_regs_t` ↔ GDB register order |
-| [`tools/gdb_bridge/rsp_handler.cpp`](../../tools/gdb_bridge/rsp_handler.cpp) | RSP → `Client` debug/memory APIs |
+| [`tools/gdb_bridge/rsp_handler.cpp`](../../tools/gdb_bridge/rsp_handler.cpp) | Session state and packet dispatcher |
+| [`tools/gdb_bridge/rsp_handler_query.cpp`](../../tools/gdb_bridge/rsp_handler_query.cpp) | Queries and XML transfers |
+| [`tools/gdb_bridge/rsp_handler_memory.cpp`](../../tools/gdb_bridge/rsp_handler_memory.cpp) | Memory read/write/search |
+| [`tools/gdb_bridge/rsp_handler_registers.cpp`](../../tools/gdb_bridge/rsp_handler_registers.cpp) | Core, x87 and SSE register packets |
+| [`tools/gdb_bridge/rsp_handler_run.cpp`](../../tools/gdb_bridge/rsp_handler_run.cpp) | Attach, resume, step and breakpoints |
+| [`tools/gdb_bridge/rsp_protocol.cpp`](../../tools/gdb_bridge/rsp_protocol.cpp) | Strict parsing and shared RSP primitives |
+| [`tools/gdb_bridge/rsp_backend.cpp`](../../tools/gdb_bridge/rsp_backend.cpp) | Production `Client` adapter; tests use a deterministic fake backend |
