@@ -1237,7 +1237,9 @@ inline bool connect_sequence_pending(const AppState &state) {
   return state.conn.connect_pending || state.payload_auto_inject_waiting ||
          (state.payload_inject_pending && state.payload_connect_after_inject) ||
          state.payload_post_inject_connect ||
-         state.payload_connect_retry_at > 0.0;
+         state.payload_connect_retry_at > 0.0 ||
+         state.conn.reconnect.phase == ConnectionPhase::Reconnecting ||
+         state.conn.reconnect.phase == ConnectionPhase::WaitingForWake;
 }
 
 /* ---- shared state helpers ---- */

@@ -20,7 +20,8 @@ namespace memdbg::gdb_bridge {
 
 class RspHandler {
 public:
-  RspHandler(memdbg::frontend::Client &client, int32_t initial_pid, bool verbose = false);
+  RspHandler(memdbg::frontend::Client &client, int32_t initial_pid, bool fpregs_supported,
+             bool verbose = false);
   RspHandler(RspBackend &backend, int32_t initial_pid, bool verbose = false);
 
   std::string handle(const std::string &packet, RspConnection &conn);

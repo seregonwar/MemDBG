@@ -15,13 +15,17 @@ using namespace detail;
 std::string RspHandler::handle_read_all_registers() {
   if (!ensure_attached()) return err_packet(1);
   memdbg::frontend::Client::DebugRegs regs;
-  memdbg::frontend::Client::DebugFpregs fpregs;
-  if (!backend_.debug_get_regs(current_thread(), regs) ||
-      !backend_.debug_get_fpregs(current_thread(), fpregs)) {
-    return err_packet(1);
+  if (!backend_.debug_get_regs(current_thread(), regs)) return err_packet(1);
+
+  if (backend_.debug_fpregs_supported()) {
+    memdbg::frontend::Client::DebugFpregs fpregs;
+    if (!backend_.debug_get_fpregs(current_thread(), fpregs)) return err_packet(1);
+    return gdb_encode_g_packet(regs.regs, &fpregs.fpregs);
   }
 
-  return gdb_encode_g_packet(regs.regs, &fpregs.fpregs);
+  /* Preserve the target.xml packet size without touching unsafe PS4 ptrace
+   * FP operations.  GDB and IDA accept zero-filled unavailable registers. */
+  return gdb_encode_g_packet(regs.regs, nullptr);
 }
 
 std::string RspHandler::handle_write_all_registers(const std::string &packet) {
@@ -39,14 +43,21 @@ std::string RspHandler::handle_write_all_registers(const std::string &packet) {
     return "OK";
   }
 
-  memdbg::frontend::Client::DebugFpregs fpregs;
-  if (!backend_.debug_get_fpregs(current_thread(), fpregs) ||
-      !gdb_decode_g_packet(payload, regs.regs, &fpregs.fpregs) ||
-      !backend_.debug_set_regs(current_thread(), regs) ||
-      !backend_.debug_set_fpregs(current_thread(), fpregs)) {
-    return err_packet(1);
+  if (backend_.debug_fpregs_supported()) {
+    memdbg::frontend::Client::DebugFpregs fpregs;
+    if (!backend_.debug_get_fpregs(current_thread(), fpregs) ||
+        !gdb_decode_g_packet(payload, regs.regs, &fpregs.fpregs) ||
+        !backend_.debug_set_regs(current_thread(), regs) ||
+        !backend_.debug_set_fpregs(current_thread(), fpregs)) {
+      return err_packet(1);
+    }
+    return "OK";
   }
-  return "OK";
+
+  return gdb_decode_g_packet(payload, regs.regs, nullptr) &&
+           backend_.debug_set_regs(current_thread(), regs)
+           ? "OK"
+           : err_packet(1);
 }
 
 std::string RspHandler::handle_read_register(const std::string &packet) {
@@ -59,6 +70,7 @@ std::string RspHandler::handle_read_register(const std::string &packet) {
   const int ir = static_cast<int>(regno);
   const size_t size = gdb_reg_size(ir);
   if (gdb_reg_is_sse(ir) || gdb_reg_is_x87(ir)) {
+    if (!backend_.debug_fpregs_supported()) return std::string(size * 2U, '0');
     memdbg::frontend::Client::DebugFpregs fpregs;
     if (!backend_.debug_get_fpregs(current_thread(), fpregs)) return err_packet(1);
     uint8_t buf[16]{};
@@ -88,6 +100,7 @@ std::string RspHandler::handle_write_register(const std::string &packet) {
   if (gdb_reg_is_sse(ir) || gdb_reg_is_x87(ir)) {
     uint8_t buf[16]{};
     if (!hex_to_bytes(packet.substr(eq + 1U), buf, size)) return err_packet(1);
+    if (!backend_.debug_fpregs_supported()) return "OK";
     memdbg::frontend::Client::DebugFpregs fpregs;
     if (!backend_.debug_get_fpregs(current_thread(), fpregs)) return err_packet(1);
     const bool set = gdb_reg_is_sse(ir) ? gdb_set_sse_bytes(fpregs.fpregs, ir, buf, size)

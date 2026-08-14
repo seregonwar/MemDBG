@@ -662,6 +662,15 @@ static void test_connect_sequence_pending() {
   state.payload_connect_retry_at = 1.0;
   TEST("connect_retry_at detected", connect_sequence_pending(state));
   state.payload_connect_retry_at = 0.0;
+
+  /* Automatic reconnect remains cancellable during both the active attempt
+   * and the idle backoff between attempts. */
+  state.conn.reconnect.phase = ConnectionPhase::Reconnecting;
+  TEST("active reconnect detected", connect_sequence_pending(state));
+  state.conn.reconnect.phase = ConnectionPhase::WaitingForWake;
+  TEST("reconnect backoff detected", connect_sequence_pending(state));
+  state.conn.reconnect.phase = ConnectionPhase::Disconnected;
+  TEST("disconnected phase is not pending", !connect_sequence_pending(state));
 }
 
 /* ---- client_async_busy ---- */

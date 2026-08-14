@@ -39,6 +39,7 @@ public:
   virtual bool debug_get_regs(int32_t lwp, memdbg::frontend::Client::DebugRegs &out) = 0;
   virtual bool debug_set_regs(int32_t lwp, const memdbg::frontend::Client::DebugRegs &in) = 0;
   virtual bool debug_get_dbregs(int32_t lwp, memdbg::frontend::Client::DebugDbregs &out) = 0;
+  virtual bool debug_fpregs_supported() const = 0;
   virtual bool debug_get_fpregs(int32_t lwp, memdbg::frontend::Client::DebugFpregs &out) = 0;
   virtual bool debug_set_fpregs(int32_t lwp, const memdbg::frontend::Client::DebugFpregs &in) = 0;
   virtual bool debug_set_breakpoint(uint64_t address, uint32_t kind) = 0;
@@ -50,7 +51,8 @@ public:
   virtual bool debug_poll_events(bool &stopped, int32_t &stop_lwp) = 0;
 };
 
-std::unique_ptr<RspBackend> make_client_rsp_backend(memdbg::frontend::Client &client);
+std::unique_ptr<RspBackend> make_client_rsp_backend(memdbg::frontend::Client &client,
+                                                    bool fpregs_supported);
 
 } // namespace memdbg::gdb_bridge
 

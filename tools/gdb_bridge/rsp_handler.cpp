@@ -10,9 +10,10 @@ namespace memdbg::gdb_bridge {
 
 using namespace detail;
 
-RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid, bool verbose)
-  : owned_backend_(make_client_rsp_backend(client)), backend_(*owned_backend_), pid_(initial_pid),
-    verbose_(verbose) {}
+RspHandler::RspHandler(memdbg::frontend::Client &client, int32_t initial_pid,
+                       bool fpregs_supported, bool verbose)
+  : owned_backend_(make_client_rsp_backend(client, fpregs_supported)), backend_(*owned_backend_),
+    pid_(initial_pid), verbose_(verbose) {}
 
 RspHandler::RspHandler(RspBackend &backend, int32_t initial_pid, bool verbose)
   : backend_(backend), pid_(initial_pid), verbose_(verbose) {}
