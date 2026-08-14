@@ -13,7 +13,8 @@ namespace {
 
 class ClientRspBackend final : public RspBackend {
 public:
-  explicit ClientRspBackend(memdbg::frontend::Client &client) : client_(client) {}
+  ClientRspBackend(memdbg::frontend::Client &client, bool fpregs_supported)
+    : client_(client), fpregs_supported_(fpregs_supported) {}
 
   std::string last_error() const override { return client_.last_error(); }
   bool process_list(std::vector<memdbg::frontend::ProcessEntry> &out) override {
@@ -51,6 +52,7 @@ public:
   bool debug_get_dbregs(int32_t lwp, memdbg::frontend::Client::DebugDbregs &out) override {
     return client_.debug_get_dbregs(lwp, out);
   }
+  bool debug_fpregs_supported() const override { return fpregs_supported_; }
   bool debug_get_fpregs(int32_t lwp, memdbg::frontend::Client::DebugFpregs &out) override {
     return client_.debug_get_fpregs(lwp, out);
   }
@@ -79,12 +81,14 @@ public:
 
 private:
   memdbg::frontend::Client &client_;
+  bool fpregs_supported_ = false;
 };
 
 } // namespace
 
-std::unique_ptr<RspBackend> make_client_rsp_backend(memdbg::frontend::Client &client) {
-  return std::make_unique<ClientRspBackend>(client);
+std::unique_ptr<RspBackend> make_client_rsp_backend(memdbg::frontend::Client &client,
+                                                    bool fpregs_supported) {
+  return std::make_unique<ClientRspBackend>(client, fpregs_supported);
 }
 
 } // namespace memdbg::gdb_bridge

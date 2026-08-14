@@ -5,6 +5,7 @@
  */
 
 #include "internal.h"
+#include "memdbg/pal/pal_time.h"
 #include "memdbg/scanner/flashscan.h"
 
 /* ---- Shared globals ---- */
@@ -184,6 +185,7 @@ static void legacy_spawn_client(socket_t fd, const memdbg_config_t *cfg) {
 
 static void *legacy_listener_thread(void *arg) {
   (void)arg;
+  uint32_t accept_failures = 0U;
   while (atomic_load_explicit(&g_legacy_running, memory_order_relaxed) && !memdbg_daemon_should_stop()) {
     struct sockaddr_storage ss; socklen_t slen = (socklen_t)sizeof(ss);
     int ready = legacy_wait_for_fd(g_legacy_listen_fd);
@@ -194,7 +196,21 @@ static void *legacy_listener_thread(void *arg) {
       break;
     }
     socket_t client_fd = accept(g_legacy_listen_fd, (struct sockaddr *)&ss, &slen);
-    if (client_fd < 0) { if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue; if (memdbg_daemon_should_stop()) break; memdbg_log_write(MEMDBG_LOG_WARN, "ps5debug-legacy: accept failed: %s", pal_socket_last_error()); continue; }
+    if (client_fd < 0) {
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
+      if (memdbg_daemon_should_stop()) break;
+      /* A persistent console socket error used to spin here and generate
+       * hundreds of megabytes of identical warnings.  Log the first error,
+       * then at most once per minute while backing off. */
+      if (accept_failures == 0U || accept_failures % 60U == 0U)
+        memdbg_log_write(MEMDBG_LOG_WARN,
+                         "ps5debug-legacy: accept failed: %s",
+                         pal_socket_last_error());
+      if (accept_failures != UINT32_MAX) ++accept_failures;
+      memdbg_sleep_ms(1000U);
+      continue;
+    }
+    accept_failures = 0U;
     if (!legacy_peer_allowed(&g_legacy_cfg, &ss)) { (void)pal_socket_close(client_fd); continue; }
     legacy_spawn_client(client_fd, &g_legacy_cfg);
   }

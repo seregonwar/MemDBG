@@ -273,6 +273,14 @@ int main(int argc, char **argv) {
                  "MEMDBG_CAP_DEBUGGER\n");
   }
 
+  /* PS4 advertises FP ptrace operations on SDKs where PT_GETFPREGS exists,
+   * but executing it can tear down the debugger transport while the process
+   * remains stopped.  Keep the complete AMD64 RSP layout and synthesize the
+   * unavailable FP portion instead. */
+  const bool fpregs_supported =
+    hello.platform_id != MEMDBG_PLATFORM_PS4 &&
+    (hello.capabilities & MEMDBG_CAP_DEBUG_FPREGS) != 0U;
+
   /* Make PID discovery available without opening the desktop frontend. */
   (void)print_process_list(client);
 
@@ -331,7 +339,7 @@ int main(int argc, char **argv) {
     }
     std::fprintf(stderr, "[gdb_bridge] GDB client connected\n");
 
-    memdbg::gdb_bridge::RspHandler handler(client, opt.pid, opt.verbose);
+    memdbg::gdb_bridge::RspHandler handler(client, opt.pid, fpregs_supported, opt.verbose);
     server.serve(client_fd, [&](const std::string &packet,
                                 memdbg::gdb_bridge::RspConnection &conn) {
       return handler.handle(packet, conn);

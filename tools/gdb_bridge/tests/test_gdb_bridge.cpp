@@ -125,11 +125,14 @@ public:
     out = dbregs;
     return attached;
   }
+  bool debug_fpregs_supported() const override { return fpregs_available; }
   bool debug_get_fpregs(int32_t, memdbg::frontend::Client::DebugFpregs &out) override {
+    fpregs_reads++;
     out = fpregs;
     return attached;
   }
   bool debug_set_fpregs(int32_t, const memdbg::frontend::Client::DebugFpregs &in) override {
+    fpregs_writes++;
     fpregs = in;
     return attached;
   }
@@ -167,7 +170,10 @@ public:
   bool attached = false;
   bool detached = false;
   bool maps_ok = true;
+  bool fpregs_available = true;
   int continued = 0;
+  int fpregs_reads = 0;
+  int fpregs_writes = 0;
   int32_t stepped_lwp = 0;
   int32_t killed_pid = 0;
   uint64_t breakpoint_address = 0U;
@@ -477,6 +483,35 @@ int main() {
         handler.handle("vAttach;49", conn).find("T05thread:49;") == 0U);
   CHECK("legacy kill packet",
         handler.handle("k", conn) == "OK" && fake.killed_pid == 0x49 && !handler.attached());
+
+  /* Regression: PS4 PT_GETFPREGS can drop MDBG immediately after vAttach,
+   * leaving the debuggee stopped on a black screen.  The bridge must still
+   * satisfy IDA's full AMD64 layout without calling either FP operation. */
+  FakeRspBackend ps4;
+  ps4.fpregs_available = false;
+  RspHandler ps4_handler(ps4, 0, false);
+  CHECK("PS4 regression attach", ps4_handler.handle("vAttach;49", conn) == "T05thread:49;");
+  const std::string ps4_registers = ps4_handler.handle("g", conn);
+  CHECK("PS4 g keeps complete IDA register layout",
+        ps4_registers.size() == kGdbPacketHexSize);
+  CHECK("PS4 g synthesizes unavailable FP registers",
+        ps4_registers.substr(kGdbCorePacketHexSize) ==
+          std::string(kGdbPacketHexSize - kGdbCorePacketHexSize, '0'));
+  CHECK("PS4 individual FP read is safely synthesized",
+        ps4_handler.handle("p18", conn) == std::string(20U, '0'));
+  CHECK("PS4 individual FP write is safely ignored",
+        ps4_handler.handle("P18=10111213141516171819", conn) == "OK");
+  written_regs.r_rax = static_cast<int64_t>(0x8877665544332211ULL);
+  CHECK("PS4 full G writes core registers only",
+        ps4_handler.handle("G" + gdb_encode_g_packet(written_regs, &written_fpregs), conn) ==
+            "OK" &&
+          static_cast<uint64_t>(ps4.regs.regs.r_rax) == 0x8877665544332211ULL);
+  std::string malformed_ps4_g = gdb_encode_g_packet(written_regs, &written_fpregs);
+  malformed_ps4_g.back() = 'z';
+  CHECK("PS4 full G still validates ignored FP bytes",
+        ps4_handler.handle("G" + malformed_ps4_g, conn) == "E01");
+  CHECK("PS4 attach and register exchange never touch FP ptrace",
+        ps4.fpregs_reads == 0 && ps4.fpregs_writes == 0);
 
   CHECK("target xml non-empty", std::strlen(kMemdbgGdbTargetXml) > 100U);
   CHECK("target xml has architecture", std::strstr(kMemdbgGdbTargetXml, "i386:x86-64") != nullptr);

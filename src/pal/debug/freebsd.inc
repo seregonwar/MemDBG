@@ -85,7 +85,11 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
 bool pal_debug_supported(void) { return true; }
 
 bool pal_debug_fpregs_supported(void) {
-#if (defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE) &&                 \
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE) && !defined(MEMDBG_PAL_DEBUG_PS5)
+  /* Orbis headers expose FP ptrace requests, but invoking PT_GETFPREGS can
+   * terminate the debugger connection and leave the traced game stopped. */
+  return false;
+#elif (defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE) &&               \
      defined(PT_SETXSTATE)) ||                                               \
     (defined(PT_GETFPREGS) && defined(PT_SETFPREGS))
   return true;
@@ -420,7 +424,11 @@ int pal_debug_get_fpregs(int pid, int32_t lwp,
                          memdbg_debug_fpregs_t *fpregs) {
   (void)pid;
   if (fpregs == NULL) { errno = EINVAL; return -1; }
-#if defined(MEMDBG_PAL_DEBUG_PS5)
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE) && !defined(MEMDBG_PAL_DEBUG_PS5)
+  (void)lwp;
+  errno = ENOTSUP;
+  return -1;
+#elif defined(MEMDBG_PAL_DEBUG_PS5)
   return kern_get_fpregs(pid, (int)lwp, fpregs) == 0 ? 0 : -1;
 #elif defined(PT_GETXSTATE_INFO) && defined(PT_GETXSTATE)
   {
@@ -463,7 +471,11 @@ int pal_debug_set_fpregs(int pid, int32_t lwp,
   (void)pid;
   if (fpregs == NULL || fpregs->length == 0U ||
       fpregs->length > MEMDBG_DEBUG_FPREGS_MAX) { errno = EINVAL; return -1; }
-#if defined(MEMDBG_PAL_DEBUG_PS5)
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE) && !defined(MEMDBG_PAL_DEBUG_PS5)
+  (void)lwp;
+  errno = ENOTSUP;
+  return -1;
+#elif defined(MEMDBG_PAL_DEBUG_PS5)
   return kern_set_fpregs(pid, (int)lwp, fpregs) == 0 ? 0 : -1;
 #elif defined(PT_SETXSTATE)
   if ((fpregs->flags & MEMDBG_DEBUG_FPREGS_FLAG_XSTATE) != 0U) {

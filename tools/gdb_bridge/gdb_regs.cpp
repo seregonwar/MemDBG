@@ -307,7 +307,13 @@ bool gdb_decode_g_packet(const std::string &hex, memdbg_debug_regs_t &regs,
   if (hex.size() != kGdbPacketHexSize) return false;
   if (!gdb_decode_g_core(hex, regs)) return false;
   size_t offset = kGdbCorePacketHexSize;
-  if (!fpregs) { return hex.size() >= offset + kX87PaddingBytes * 2U; }
+  if (!fpregs) {
+    uint8_t ignored = 0U;
+    for (; offset < hex.size(); offset += 2U) {
+      if (!hex_to_bytes(hex.substr(offset, 2U), &ignored, 1U)) return false;
+    }
+    return true;
+  }
   ensure_fxsave(*fpregs);
   uint8_t x87[10]{};
   for (int regno = GDB_ST0; regno <= GDB_FOP; ++regno) {
