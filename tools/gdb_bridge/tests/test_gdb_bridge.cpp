@@ -454,6 +454,11 @@ int main() {
   CHECK("reject malformed register number", handler.handle("p10junk", conn) == "E01");
   CHECK("software breakpoint", handler.handle("Z0,1010,1", conn) == "OK" &&
                                  fake.breakpoint_address == 0x1010U && fake.breakpoint_kind == 0U);
+  /* Simulate the payload writing INT3 (0xCC) into target memory; the bridge
+   * must mask it back out of reads so IDA sees the original instruction. */
+  fake.memory[0x1010U - 0x1000U] = 0xCCU;
+  CHECK("software breakpoint masked from memory read",
+        handler.handle("m1010,4", conn) == "10111213");
   CHECK("reject invalid software breakpoint kind", handler.handle("Z0,1010,2", conn) == "E22");
   CHECK("write watchpoint", handler.handle("Z2,2000,4", conn) == "OK" &&
                               fake.watchpoint.installed && fake.watchpoint.type == 1U);
@@ -470,6 +475,14 @@ int main() {
   CHECK("reject malformed secondary vCont action",
         handler.handle("vCont;c;invalid", conn) == "E01");
   CHECK("reject trailing empty vCont action", handler.handle("vCont;c;", conn) == "E01");
+  /* RIP lands one byte past a hit software breakpoint; the stop reply must
+   * carry the standard 'swbreak' reason so IDA recognizes the breakpoint. */
+  fake.regs.regs.r_rip = 0x1011;
+  CHECK("software breakpoint stop reason",
+        handler.handle("c", conn).find("swbreak:;") != std::string::npos);
+  CHECK("clearing software breakpoint removes shadow",
+        handler.handle("z0,1010,1", conn) == "OK" &&
+            handler.handle("m1010,4", conn) == "cc111213");
   CHECK("reject mismatched qAttached pid", handler.handle("qAttached:50", conn) == "0");
   CHECK("unsupported monitor command is not reported as executed",
         handler.handle("qRcmd,68656c70", conn).empty());

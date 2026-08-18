@@ -67,6 +67,7 @@ bool RspHandler::safe_detach() {
   threads_.clear();
   memory_maps_.clear();
   memory_maps_known_ = false;
+  sw_breakpoints_.clear();
   return true;
 }
 
@@ -136,12 +137,24 @@ std::string RspHandler::stop_reply() const {
 void RspHandler::capture_stop_reason(int32_t lwp) {
   stop_reason_.clear();
   if (lwp <= 0) return;
+
   memdbg::frontend::Client::DebugDbregs dbregs;
   std::vector<memdbg::frontend::Client::DebugWatchpointEntry> entries;
-  if (!backend_.debug_get_dbregs(lwp, dbregs) || !backend_.debug_get_watchpoints(entries)) {
-    return;
+  if (backend_.debug_get_dbregs(lwp, dbregs) && backend_.debug_get_watchpoints(entries)) {
+    stop_reason_ = gdb_watchpoint_stop_field(dbregs.dbregs.dr[6], entries);
+    if (!stop_reason_.empty()) return;
   }
-  stop_reason_ = gdb_watchpoint_stop_field(dbregs.dbregs.dr[6], entries);
+
+  /* A software breakpoint traps with RIP one byte past the INT3.  Report the
+   * standard 'swbreak' stop reason so IDA recognizes its own breakpoint hit
+   * instead of surfacing a bare SIGTRAP. */
+  memdbg::frontend::Client::DebugRegs regs;
+  if (backend_.debug_get_regs(lwp, regs)) {
+    const uint64_t rip = static_cast<uint64_t>(regs.regs.r_rip);
+    if (rip != 0U && sw_breakpoints_.find(rip - 1U) != sw_breakpoints_.end()) {
+      stop_reason_ = "swbreak:;";
+    }
+  }
 }
 
 std::string RspHandler::handle(const std::string &packet, RspConnection &conn) {

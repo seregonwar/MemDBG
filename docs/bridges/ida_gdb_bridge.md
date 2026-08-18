@@ -99,6 +99,11 @@ You can also use stock GDB:
 - Watchpoints: `Z2`–`Z4` / `z2`–`z4`
 - Stop replies via polling `DEBUG_POLL_EVENTS` (all-stop); Ctrl-C → `debug_stop`
 
+Software breakpoints (`Z0`) write an INT3 (`0xCC`) into the target just like a real
+GDB stub. The bridge remembers each inserted breakpoint's original byte and masks it
+back out of memory reads, so IDA disassembles the real instruction instead of
+`db 0CCh`; breakpoint hits carry the standard `swbreak:` stop reason.
+
 Process attach uses bridge `--pid` / `--name` (or IDA `vAttach` in hex). The OS
 process list and loaded image mappings are also available through RSP XML.
 
