@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace memdbg::gdb_bridge {
@@ -79,6 +80,10 @@ private:
   std::vector<memdbg::frontend::Client::DebugThreadEntry> threads_;
   std::vector<memdbg::frontend::MapEntry> memory_maps_;
   bool memory_maps_known_ = false;
+  /* Software breakpoints the bridge inserted: address -> original byte.
+   * The payload writes INT3 (0xCC) into the target; masking it back out of
+   * memory reads keeps IDA's disassembly intact. */
+  std::unordered_map<uint64_t, uint8_t> sw_breakpoints_;
 };
 
 } // namespace memdbg::gdb_bridge

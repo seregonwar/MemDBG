@@ -5,6 +5,7 @@
  */
 
 #include "internal.h"
+#include "memdbg/core/memdbg_log.h"
 #include "memdbg/pal/debug.h"
 #include "memdbg/pal/pal_memory.h"
 #include <errno.h>
@@ -126,7 +127,14 @@ memdbg_status_t apply_dbregs_to_all(void) {
   if (st != MEMDBG_OK) return st;
   for (uint32_t i = 0; i < count; ++i) {
     if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[i], &g_dbg.dbregs) != 0) {
-      return pal_status_from_errno();
+      int dbg_errno = errno;
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "debugger: dbregs write failed pid=%d lwp=%d "
+                       "errno=%d (%s); hardware watchpoints unavailable on "
+                       "this target",
+                       (int)g_dbg.pid, (int)lwps[i], dbg_errno,
+                       strerror(dbg_errno));
+      return pal_status_from_errno_code(dbg_errno);
     }
   }
   return MEMDBG_OK;
@@ -134,7 +142,14 @@ memdbg_status_t apply_dbregs_to_all(void) {
 
 memdbg_status_t refresh_dbregs_from_thread(int32_t lwp) {
   if (pal_debug_get_dbregs((int)g_dbg.pid, lwp, &g_dbg.dbregs) != 0) {
-    return pal_status_from_errno();
+    int dbg_errno = errno;
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: dbregs read failed pid=%d lwp=%d "
+                     "errno=%d (%s); hardware watchpoints unavailable on "
+                     "this target",
+                     (int)g_dbg.pid, (int)lwp, dbg_errno,
+                     strerror(dbg_errno));
+    return pal_status_from_errno_code(dbg_errno);
   }
   /* DR6 contains sticky hit-status bits.  Never copy an old B0..B3 value to
    * every thread while installing a new watchpoint. */

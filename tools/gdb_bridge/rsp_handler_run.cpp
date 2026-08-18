@@ -136,9 +136,17 @@ std::string RspHandler::handle_breakpoint(const std::string &packet, bool enable
   if (type == '0') {
     if (kind != 1U) return err_packet(0x22);
     if (enable) {
+      /* Capture the original byte before the payload writes INT3, so memory
+       * reads can be masked back to the real instruction. */
+      std::vector<uint8_t> original;
+      if (!backend_.memory_read(pid_, addr, 1U, original) || original.size() != 1U) {
+        return err_packet(1);
+      }
       if (!backend_.debug_set_breakpoint(addr, 0U)) return err_packet(1);
+      sw_breakpoints_[addr] = original[0];
     } else {
       if (!backend_.debug_clear_breakpoint(addr)) return err_packet(1);
+      sw_breakpoints_.erase(addr);
     }
     return "OK";
   }

@@ -49,6 +49,15 @@ std::string RspHandler::handle_memory_read(const std::string &packet) {
     if (!backend_.memory_read(pid_, addr + done, chunk, data) || data.size() != chunk) {
       return err_packet(1);
     }
+    /* Restore the original instruction bytes over any software breakpoints the
+     * bridge inserted, so IDA disassembles real code instead of 'db 0CCh'. */
+    const uint64_t chunk_begin = addr + done;
+    for (const auto &entry : sw_breakpoints_) {
+      const uint64_t bp_addr = entry.first;
+      if (bp_addr >= chunk_begin && bp_addr < chunk_begin + chunk) {
+        data[static_cast<size_t>(bp_addr - chunk_begin)] = entry.second;
+      }
+    }
     hex += bytes_to_hex(data.data(), data.size());
     done += chunk;
   }

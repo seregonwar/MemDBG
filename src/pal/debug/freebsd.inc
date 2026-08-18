@@ -62,7 +62,20 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
   long result = (long)ptrace(op, (pid_t)pid, (caddr_t)addr, (int)data);
 #endif
   int operation_errno = errno;
+#if defined(MEMDBG_PAL_DEBUG_CONSOLE) && !defined(MEMDBG_PAL_DEBUG_PS5)
+  /*
+   * Orbis (PS4) ptrace reports successful register requests as -1 without
+   * setting errno (PT_GETREGS/PT_SETREGS/PT_GETDBREGS/PT_SETDBREGS).  The
+   * reference ps4debug-NG debugger relies on the same behaviour: "-1 with
+   * errno == 0" means the operation succeeded.  Normalising it to EPERM here
+   * turns a working PT_SETDBREGS into a spurious E01 watchpoint failure.
+   */
+  if (result == -1 && operation_errno == 0) {
+    result = 0;
+  }
+#else
   if (result == -1 && operation_errno == 0) operation_errno = EPERM;
+#endif
 
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)
   if (memdbg_privilege_end_ptrace(&backup) != 0) {

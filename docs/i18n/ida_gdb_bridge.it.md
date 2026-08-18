@@ -99,6 +99,11 @@ Oppure con GDB stock:
 - Watchpoint: `Z2`–`Z4` / `z2`–`z4`
 - Stop reply via polling `DEBUG_POLL_EVENTS` (all-stop); Ctrl-C → `debug_stop`
 
+I breakpoint software (`Z0`) scrivono un INT3 (`0xCC`) nel target, come farebbe
+un vero stub GDB. Il bridge ricorda il byte originale di ogni breakpoint inserito
+e lo rimaschera nelle letture di memoria, così IDA disassembla l’istruzione reale
+invece di `db 0CCh`; gli hit dei breakpoint riportano il motivo `swbreak:` standard.
+
 L’attach di processo usa `--pid` / `--name` sul bridge (oppure `vAttach` IDA in
 hex). La lista processi e i mapping delle immagini caricate sono disponibili
 anche tramite XML RSP.
