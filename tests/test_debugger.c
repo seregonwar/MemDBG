@@ -86,6 +86,8 @@ static struct {
   bool     resume_called[8];
   int      attach_errno;
   int      thread_list_errno;
+  int32_t  dbregs_set_fail_lwp;
+  int      dbregs_set_fail_errno;
 } mock = {0};
 
 /* ---- Mock helpers ---- */
@@ -294,6 +296,10 @@ int pal_debug_set_dbregs(int pid, int32_t lwp, const memdbg_debug_dbregs_t *dbre
   if (dbregs == NULL) { errno = EINVAL; return -1; }
   int idx = mock_find_regs_idx(lwp);
   if (idx < 0) { errno = ESRCH; return -1; }
+  if (mock.dbregs_set_fail_lwp == lwp) {
+    errno = mock.dbregs_set_fail_errno != 0 ? mock.dbregs_set_fail_errno : EIO;
+    return -1;
+  }
   memcpy(&mock.dbregs[idx], dbregs, sizeof(*dbregs));
   return 0;
 }
@@ -1120,6 +1126,73 @@ static void test_watchpoint(void) {
   TEST_OK("detach", memdbg_debugger_detach());
 }
 
+static void test_watchpoint_apply_rollback(void) {
+  printf("\n--- Watchpoint apply rollback ---\n");
+
+  mock_reset();
+  mock.dbregs[0].dr[0] = 0xAAA0ULL;
+  mock.dbregs[0].dr[7] = 0x400ULL;
+  mock.dbregs[1].dr[0] = 0xBBB0ULL;
+  mock.dbregs[1].dr[7] = 0x800ULL;
+  TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
+
+  mock.dbregs_set_fail_lwp = MOCK_LWP_WORKER;
+  mock.dbregs_set_fail_errno = EIO;
+  memdbg_status_t st =
+      memdbg_debugger_set_watchpoint(0x3500ULL, 4U, 1U);
+  TEST_ERR("partial watchpoint apply reports failure", st, MEMDBG_ERR_IO);
+  TEST_EQ_LL("main DR0 restored after partial apply",
+             mock.dbregs[0].dr[0], 0xAAA0ULL);
+  TEST_EQ_LL("main DR7 restored after partial apply",
+             mock.dbregs[0].dr[7], 0x400ULL);
+  TEST_EQ_LL("worker DR0 unchanged after rejected apply",
+             mock.dbregs[1].dr[0], 0xBBB0ULL);
+  TEST_EQ_LL("worker DR7 unchanged after rejected apply",
+             mock.dbregs[1].dr[7], 0x800ULL);
+
+  memdbg_watchpoint_t wps[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
+  uint32_t count = 0;
+  TEST_OK("watchpoint snapshot after failed apply",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count));
+  int installed = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (wps[i].installed) ++installed;
+  }
+  TEST_EQ_I("failed watchpoint is not tracked", installed, 0);
+
+  mock.dbregs_set_fail_lwp = 0;
+  mock.dbregs_set_fail_errno = 0;
+  TEST_OK("write watchpoint succeeds after transient failure",
+          memdbg_debugger_set_watchpoint(0x3500ULL, 4U, 1U));
+  TEST_EQ_U("main retry keeps write-only DR7 RW=01",
+            (uint32_t)((mock.dbregs[0].dr[7] >> 16U) & 0x3ULL), 1U);
+  TEST_EQ_U("worker retry keeps write-only DR7 RW=01",
+            (uint32_t)((mock.dbregs[1].dr[7] >> 16U) & 0x3ULL), 1U);
+
+  mock.dbregs_set_fail_lwp = MOCK_LWP_WORKER;
+  mock.dbregs_set_fail_errno = EIO;
+  st = memdbg_debugger_clear_watchpoint(0x3500ULL);
+  TEST_ERR("partial watchpoint clear reports failure", st, MEMDBG_ERR_IO);
+  TEST_EQ_U("failed clear leaves main write-only watchpoint armed",
+            (uint32_t)((mock.dbregs[0].dr[7] >> 16U) & 0x3ULL), 1U);
+  TEST_OK("watchpoint snapshot after failed clear",
+          memdbg_debugger_watchpoints_snapshot(
+              wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count));
+  installed = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (wps[i].installed) ++installed;
+  }
+  TEST_EQ_I("failed clear remains tracked", installed, 1);
+
+  mock.dbregs_set_fail_lwp = 0;
+  mock.dbregs_set_fail_errno = 0;
+  TEST_OK("clear retried watchpoint",
+          memdbg_debugger_clear_watchpoint(0x3500ULL));
+
+  TEST_OK("detach", memdbg_debugger_detach());
+}
+
 /* ---- 9. Thread suspend / resume ---- */
 
 static void test_thread_suspend_resume(void) {
@@ -1520,6 +1593,7 @@ int main(void) {
   test_software_breakpoint();
   test_hardware_breakpoint();
   test_watchpoint();
+  test_watchpoint_apply_rollback();
   test_thread_suspend_resume();
   test_poll_events();
   test_detach_with_active_bp();
