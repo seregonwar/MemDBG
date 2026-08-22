@@ -9,6 +9,7 @@
 #include "memdbg/pal/debug.h"
 #include "memdbg/pal/pal_memory.h"
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 
@@ -122,21 +123,51 @@ void build_dr7(uint32_t *dr7_out) {
 
 memdbg_status_t apply_dbregs_to_all(void) {
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
-  uint32_t count = 0;    memdbg_status_t st = get_threads_locked(lwps, NULL, NULL, &count,
+  uint32_t count = 0;
+  memdbg_status_t st = get_threads_locked(lwps, NULL, NULL, &count,
                                           MEMDBG_DEBUGGER_MAX_THREADS);
   if (st != MEMDBG_OK) return st;
+  if (count == 0U) return MEMDBG_OK;
+
+  memdbg_debug_dbregs_t *original =
+      (memdbg_debug_dbregs_t *)calloc(count, sizeof(*original));
+  if (original == NULL) return MEMDBG_ERR_NOMEM;
+
+  for (uint32_t i = 0; i < count; ++i) {
+    if (pal_debug_get_dbregs((int)g_dbg.pid, lwps[i], &original[i]) != 0) {
+      int dbg_errno = errno;
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "debugger: dbregs snapshot failed pid=%d lwp=%d "
+                       "errno=%d (%s)",
+                       (int)g_dbg.pid, (int)lwps[i], dbg_errno,
+                       strerror(dbg_errno));
+      free(original);
+      return pal_status_from_errno_code(dbg_errno);
+    }
+  }
+
   for (uint32_t i = 0; i < count; ++i) {
     if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[i], &g_dbg.dbregs) != 0) {
       int dbg_errno = errno;
       memdbg_log_write(MEMDBG_LOG_WARN,
                        "debugger: dbregs write failed pid=%d lwp=%d "
-                       "errno=%d (%s); hardware watchpoints unavailable on "
-                       "this target",
+                       "errno=%d (%s); rolling back %u thread(s)",
                        (int)g_dbg.pid, (int)lwps[i], dbg_errno,
-                       strerror(dbg_errno));
+                       strerror(dbg_errno), (unsigned int)(i + 1U));
+      for (uint32_t j = 0; j <= i; ++j) {
+        if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[j], &original[j]) != 0) {
+          memdbg_log_write(MEMDBG_LOG_WARN,
+                           "debugger: dbregs rollback failed pid=%d lwp=%d "
+                           "errno=%d (%s)",
+                           (int)g_dbg.pid, (int)lwps[j], errno,
+                           strerror(errno));
+        }
+      }
+      free(original);
       return pal_status_from_errno_code(dbg_errno);
     }
   }
+  free(original);
   return MEMDBG_OK;
 }
 
@@ -253,10 +284,11 @@ memdbg_status_t sync_hardware_dbregs_locked(void) {
         count == 0) {
       return MEMDBG_ERR_IO;
     }
-    if (refresh_dbregs_from_thread(lwps[0]) != MEMDBG_OK) {
-      return pal_status_from_errno();
-    }
+    memdbg_status_t refresh_st = refresh_dbregs_from_thread(lwps[0]);
+    if (refresh_st != MEMDBG_OK) return refresh_st;
   }
+
+  memdbg_debug_dbregs_t previous = g_dbg.dbregs;
 
   for (uint32_t i = 0; i < MEMDBG_DEBUGGER_MAX_WATCHPOINTS; ++i) {
     const memdbg_watchpoint_t *wp = &g_dbg.watchpoints[i];
@@ -271,7 +303,9 @@ memdbg_status_t sync_hardware_dbregs_locked(void) {
   build_dr7(&dr7);
   g_dbg.dbregs.dr[7] = (uint64_t)dr7;
 
-  return apply_dbregs_to_all();
+  memdbg_status_t st = apply_dbregs_to_all();
+  if (st != MEMDBG_OK) g_dbg.dbregs = previous;
+  return st;
 }
 
 
@@ -373,12 +407,14 @@ memdbg_status_t memdbg_debugger_clear_breakpoint(uint64_t address) {
   } else if (bp->kind == MEMDBG_BP_HARDWARE) {
     int hw = find_watchpoint_slot(address);
     if (hw >= 0) {
+      memdbg_watchpoint_t previous = g_dbg.watchpoints[hw];
       memset(&g_dbg.watchpoints[hw], 0, sizeof(g_dbg.watchpoints[hw]));
       st = sync_hardware_dbregs_locked();
+      if (st != MEMDBG_OK) g_dbg.watchpoints[hw] = previous;
     }
   }
 
-  memset(bp, 0, sizeof(*bp));
+  if (st == MEMDBG_OK) memset(bp, 0, sizeof(*bp));
   debugger_unlock();
   return st;
 }
@@ -491,26 +527,38 @@ memdbg_status_t memdbg_debugger_clear_watchpoint(uint64_t address) {
     return MEMDBG_ERR_NOT_FOUND;
   }
 
+  memdbg_watchpoint_t previous = g_dbg.watchpoints[slot];
   memset(&g_dbg.watchpoints[slot], 0, sizeof(g_dbg.watchpoints[slot]));
   memdbg_status_t st = sync_hardware_dbregs_locked();
+  if (st != MEMDBG_OK) g_dbg.watchpoints[slot] = previous;
   debugger_unlock();
   return st;
 }
 
 memdbg_status_t memdbg_debugger_clear_all_watchpoints(uint32_t *cleared) {
   uint32_t c = 0;
+  memdbg_watchpoint_t previous[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
   debugger_lock();
   if (!g_dbg.attached) {
     debugger_unlock();
     if (cleared != NULL) *cleared = 0;
     return MEMDBG_ERR_STATE;
   }
+  memcpy(previous, g_dbg.watchpoints, sizeof(previous));
   for (uint32_t i = 0; i < MEMDBG_DEBUGGER_MAX_WATCHPOINTS; ++i) {
     if (!g_dbg.watchpoints[i].installed) continue;
     memset(&g_dbg.watchpoints[i], 0, sizeof(g_dbg.watchpoints[i]));
     ++c;
   }
-  if (c > 0) (void)sync_hardware_dbregs_locked();
+  if (c > 0) {
+    memdbg_status_t st = sync_hardware_dbregs_locked();
+    if (st != MEMDBG_OK) {
+      memcpy(g_dbg.watchpoints, previous, sizeof(previous));
+      if (cleared != NULL) *cleared = 0;
+      debugger_unlock();
+      return st;
+    }
+  }
   if (cleared != NULL) *cleared = c;
   debugger_unlock();
   return MEMDBG_OK;
