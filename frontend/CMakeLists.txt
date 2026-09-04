@@ -217,6 +217,7 @@ add_executable(memdbg_frontend
   src/action_journal/action_journal.cpp
   src/core/crash_logger.cpp
   src/core/discovery_client.cpp
+  src/core/gdb_bridge_runner.cpp
   src/core/github_profile.cpp
   src/core/client/memdbg_client.cpp
   src/core/client/client_operations.cpp

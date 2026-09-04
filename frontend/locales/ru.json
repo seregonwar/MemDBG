@@ -1298,5 +1298,22 @@
   "udp.listener_stopped": "UDP сервер остановлен",
   "udp.restarted": "UDP перезапущен",
   "udp.started": "UDP запущен",
-  "udp.stopped": "UDP остановлен"
+  "udp.stopped": "UDP остановлен",
+  "debugger.bridge_title": "Мост GDB для IDA",
+  "debugger.bridge_idle": "ожидание",
+  "debugger.bridge_console": "Консоль",
+  "debugger.bridge_console_tip": "Мост подключается к той консоли, к которой подключён фронтенд.",
+  "debugger.bridge_listen": "IDA подключается здесь (Remote GDB)",
+  "debugger.bridge_target": "Цель",
+  "debugger.bridge_target_tip": "Подключитесь заранее по PID или имени процесса, либо оставьте оба поля пустыми и подключайтесь из IDA. Указывайте только PID или только имя.",
+  "debugger.bridge_verbose": "Подробный журнал",
+  "debugger.bridge_once": "Завершать после первого отключения клиента",
+  "debugger.bridge_start": "Запустить",
+  "debugger.bridge_stop": "Остановить",
+  "debugger.bridge_started_status": "Мост GDB запущен — укажите в IDA Remote GDB debugger адрес прослушивания",
+  "debugger.bridge_stopped_status": "Мост GDB остановлен",
+  "debugger.bridge_pid_or_name": "Мост GDB: укажите только PID или только имя процесса, не оба",
+  "debugger.bridge_exited": "мост завершился с кодом",
+  "debugger.bridge_binary": "Файл",
+  "debugger.bridge_binary_missing": "memdbg_gdb_bridge не найден рядом с исполняемым файлом фронтенда"
 }

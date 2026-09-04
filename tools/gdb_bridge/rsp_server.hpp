@@ -20,7 +20,17 @@ struct RspPacket {
   std::string payload;
   bool is_interrupt = false; /* Ctrl-C (\x03) */
   bool ok = false;
+  bool timed_out = false; /* idle wait, connection still alive */
 };
+
+/* Cooperative shutdown flag (signal handlers set it; accept/serve/run loops
+ * poll it so the bridge can detach the target before exiting). */
+void request_shutdown();
+/* Optional cooperative shutdown sentinel used by the desktop frontend.
+ * Creating this file asks the bridge to run the same cleanup path as SIGTERM,
+ * including a debugger detach before process exit. */
+void configure_shutdown_file(const std::string &path);
+bool shutdown_requested();
 
 class RspConnection {
 public:
@@ -66,7 +76,8 @@ public:
   bool listen_on(const std::string &host, uint16_t port, std::string &error);
   void close_listen();
 
-  /* Accept one client (blocking). Returns invalid socket on failure. */
+  /* Accept one client. Blocks, but wakes every few hundred ms to observe
+   * shutdown_requested(). Returns invalid socket on failure or shutdown. */
   memdbg::frontend::platform::socket_handle_t accept_client(std::string &error);
 
   /* Serve packets until disconnect. Handler returns RSP payload (no $/#).

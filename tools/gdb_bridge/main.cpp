@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -24,7 +25,54 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
+
+/* Closing the bridge window or pressing Ctrl+C must not leave the game
+ * attached to a dead session: the handlers only raise a flag, and the
+ * accept/serve/run loops detach the target on the way out. */
+#if defined(_WIN32)
+BOOL WINAPI bridge_console_ctrl_handler(DWORD event) {
+  switch (event) {
+  case CTRL_C_EVENT:
+  case CTRL_BREAK_EVENT:
+  case CTRL_CLOSE_EVENT:
+  case CTRL_LOGOFF_EVENT:
+  case CTRL_SHUTDOWN_EVENT:
+    memdbg::gdb_bridge::request_shutdown();
+    return TRUE;
+  default:
+    return FALSE;
+  }
+}
+#else
+extern "C" void bridge_signal_handler(int) {
+  memdbg::gdb_bridge::request_shutdown();
+}
+#endif
+
+void install_shutdown_handlers() {
+#if defined(_WIN32)
+  (void)SetConsoleCtrlHandler(bridge_console_ctrl_handler, TRUE);
+#else
+  struct sigaction sa;
+  std::memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = &bridge_signal_handler;
+  (void)sigemptyset(&sa.sa_mask);
+  for (int sig : {SIGINT, SIGTERM, SIGHUP}) {
+    (void)sigaction(sig, &sa, nullptr);
+  }
+#endif
+}
 
 struct Options {
   std::string console_host = "127.0.0.1";
@@ -35,6 +83,7 @@ struct Options {
   std::string process_name;
   bool once = false;
   bool verbose = false;
+  std::string shutdown_file; /* internal frontend lifecycle sentinel */
 };
 
 void print_usage(const char *prog) {
@@ -213,6 +262,12 @@ bool parse_args(int argc, char **argv, Options &opt) {
       opt.once = true;
       continue;
     }
+    if (std::strcmp(arg, "--shutdown-file") == 0) {
+      const char *v = need_value("--shutdown-file");
+      if (!v) return false;
+      opt.shutdown_file = v;
+      continue;
+    }
     std::fprintf(stderr, "Unknown option: %s\n", arg);
     return false;
   }
@@ -235,6 +290,11 @@ int main(int argc, char **argv) {
     print_usage(argv[0]);
     return 1;
   }
+
+  if (!opt.shutdown_file.empty()) {
+    memdbg::gdb_bridge::configure_shutdown_file(opt.shutdown_file);
+  }
+  install_shutdown_handlers();
 
   std::string sock_error;
   if (!memdbg::frontend::platform::socket_startup(&sock_error)) {
@@ -332,6 +392,10 @@ int main(int argc, char **argv) {
     std::string accept_error;
     auto client_fd = server.accept_client(accept_error);
     if (!memdbg::frontend::platform::socket_valid(client_fd)) {
+      if (memdbg::gdb_bridge::shutdown_requested()) {
+        std::fprintf(stderr, "[gdb_bridge] Shutting down\n");
+        break;
+      }
       std::fprintf(stderr, "[gdb_bridge] Accept failed: %s\n",
                    accept_error.c_str());
       exit_code = 1;
@@ -347,6 +411,7 @@ int main(int argc, char **argv) {
     handler.cleanup();
 
     std::fprintf(stderr, "[gdb_bridge] GDB client disconnected\n");
+    if (memdbg::gdb_bridge::shutdown_requested()) break;
     if (opt.once) break;
   }
 

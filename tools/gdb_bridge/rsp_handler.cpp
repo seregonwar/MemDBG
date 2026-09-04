@@ -2,6 +2,7 @@
 
 #include "gdb_regs.hpp"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>

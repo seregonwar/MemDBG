@@ -333,6 +333,7 @@ jobs:
                 chmod +x "dist/$pkg/MemDBG.app/Contents/MacOS/"*
                 cp "$bridge_bin" "dist/$pkg/memdbg_gdb_bridge"
                 chmod +x "dist/$pkg/memdbg_gdb_bridge"
+                cp tools/gdb_bridge/ida/memdbg_ida_ui.py "dist/$pkg/memdbg_ida_ui.py"
                 cat > "dist/$pkg/MemDBG.app/Contents/Resources/BUILD_INFO.txt" <<EOF
           project=MemDBG
           version=${MEMDBG_RELEASE_VERSION}
@@ -346,7 +347,7 @@ jobs:
           version=${MEMDBG_RELEASE_VERSION}
           component=frontend
           platform=${{ matrix.platform }}
-          includes=MemDBG.app,memdbg_gdb_bridge
+          includes=MemDBG.app,memdbg_gdb_bridge,memdbg_ida_ui.py
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
@@ -367,6 +368,7 @@ jobs:
                 mkdir -p "dist/$bridge_pkg"
                 cp "$bridge_bin" "dist/$bridge_pkg/memdbg_gdb_bridge"
                 chmod +x "dist/$bridge_pkg/memdbg_gdb_bridge"
+                cp tools/gdb_bridge/ida/memdbg_ida_ui.py "dist/$bridge_pkg/memdbg_ida_ui.py"
                 if [ -f docs/bridges/ida_gdb_bridge.md ]; then
                   cp docs/bridges/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
                 fi
@@ -398,6 +400,7 @@ jobs:
                 cp "$frontend_bin" "dist/$pkg/"
                 cp "$probe_bin" "dist/$pkg/"
                 cp "$bridge_bin" "dist/$pkg/"
+                cp tools/gdb_bridge/ida/memdbg_ida_ui.py "dist/$pkg/memdbg_ida_ui.py"
                 chmod +x "dist/$pkg/$(basename "$frontend_bin")" \
                   "dist/$pkg/$(basename "$probe_bin")" \
                   "dist/$pkg/$(basename "$bridge_bin")"
@@ -434,7 +437,7 @@ jobs:
           version=${MEMDBG_RELEASE_VERSION}
           component=frontend
           platform=${{ matrix.platform }}
-          includes=memdbg_frontend,memdbg_probe,memdbg_gdb_bridge
+          includes=memdbg_frontend,memdbg_probe,memdbg_gdb_bridge,memdbg_ida_ui.py
           ref=${{ github.ref_name }}
           sha=${{ github.sha }}
           EOF
@@ -444,6 +447,7 @@ jobs:
                 mkdir -p "dist/$bridge_pkg"
                 cp "$bridge_bin" "dist/$bridge_pkg/$(basename "$bridge_bin")"
                 chmod +x "dist/$bridge_pkg/$(basename "$bridge_bin")"
+                cp tools/gdb_bridge/ida/memdbg_ida_ui.py "dist/$bridge_pkg/memdbg_ida_ui.py"
                 if [ -f docs/bridges/ida_gdb_bridge.md ]; then
                   cp docs/bridges/ida_gdb_bridge.md "dist/$bridge_pkg/README.md"
                 fi

@@ -1298,5 +1298,22 @@
   "udp.listener_stopped": "UDP リスナーを停止しました",
   "udp.restarted": "UDP を再起動しました",
   "udp.started": "UDP を開始しました",
-  "udp.stopped": "UDP を停止しました"
+  "udp.stopped": "UDP を停止しました",
+  "debugger.bridge_title": "IDA GDBブリッジ",
+  "debugger.bridge_idle": "アイドル",
+  "debugger.bridge_console": "コンソール",
+  "debugger.bridge_console_tip": "ブリッジはフロントエンドが接続中のコンソールに接続します。",
+  "debugger.bridge_listen": "IDAの接続先(Remote GDB)",
+  "debugger.bridge_target": "ターゲット",
+  "debugger.bridge_target_tip": "PIDまたはプロセス名で事前アタッチ、両方空ならIDAからアタッチ。PIDと名前の同時指定は不可。",
+  "debugger.bridge_verbose": "詳細ログ",
+  "debugger.bridge_once": "最初の切断後に終了",
+  "debugger.bridge_start": "開始",
+  "debugger.bridge_stop": "停止",
+  "debugger.bridge_started_status": "GDBブリッジを開始しました — IDAのRemote GDBデバッガをリッスンアドレスに向けてください",
+  "debugger.bridge_stopped_status": "GDBブリッジを停止しました",
+  "debugger.bridge_pid_or_name": "GDBブリッジ: PIDかプロセス名のどちらか一方のみ指定してください",
+  "debugger.bridge_exited": "ブリッジ終了コード",
+  "debugger.bridge_binary": "バイナリ",
+  "debugger.bridge_binary_missing": "フロントエンド実行ファイルの隣に memdbg_gdb_bridge が見つかりません"
 }

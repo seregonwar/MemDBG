@@ -121,54 +121,89 @@ void build_dr7(uint32_t *dr7_out) {
   *dr7_out = dr7;
 }
 
-memdbg_status_t apply_dbregs_to_all(void) {
+memdbg_status_t apply_dbregs_to_all(bool allow_partial) {
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
   uint32_t count = 0;
   memdbg_status_t st = get_threads_locked(lwps, NULL, NULL, &count,
                                           MEMDBG_DEBUGGER_MAX_THREADS);
   if (st != MEMDBG_OK) return st;
-  if (count == 0U) return MEMDBG_OK;
+
+  /* A data/execute watchpoint is useful even when one transient LWP rejects
+   * PT_GET/SETDBREGS (PS4 can race thread teardown here).  Treat a partial
+   * arm as success and retry the missing LWP on the next resume.  Clearing is
+   * stricter: if any live LWP could not be cleared, roll back the threads we
+   * changed so an untracked "ghost" watchpoint is never left behind. */
+  if (count == 0U) return allow_partial ? MEMDBG_ERR_IO : MEMDBG_OK;
 
   memdbg_debug_dbregs_t *original =
       (memdbg_debug_dbregs_t *)calloc(count, sizeof(*original));
-  if (original == NULL) return MEMDBG_ERR_NOMEM;
+  bool *changed = (bool *)calloc(count, sizeof(*changed));
+  if (original == NULL || changed == NULL) {
+    free(original);
+    free(changed);
+    return MEMDBG_ERR_NOMEM;
+  }
 
+  uint32_t applied = 0U;
+  uint32_t skipped = 0U;
+  int last_errno = 0;
   for (uint32_t i = 0; i < count; ++i) {
     if (pal_debug_get_dbregs((int)g_dbg.pid, lwps[i], &original[i]) != 0) {
-      int dbg_errno = errno;
+      last_errno = errno;
+      ++skipped;
       memdbg_log_write(MEMDBG_LOG_WARN,
-                       "debugger: dbregs snapshot failed pid=%d lwp=%d "
+                       "debugger: dbregs snapshot skipped pid=%d lwp=%d "
                        "errno=%d (%s)",
-                       (int)g_dbg.pid, (int)lwps[i], dbg_errno,
-                       strerror(dbg_errno));
-      free(original);
-      return pal_status_from_errno_code(dbg_errno);
+                       (int)g_dbg.pid, (int)lwps[i], last_errno,
+                       strerror(last_errno));
+      continue;
     }
+    if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[i], &g_dbg.dbregs) != 0) {
+      last_errno = errno;
+      ++skipped;
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "debugger: dbregs write skipped pid=%d lwp=%d "
+                       "errno=%d (%s)",
+                       (int)g_dbg.pid, (int)lwps[i], last_errno,
+                       strerror(last_errno));
+      continue;
+    }
+    changed[i] = true;
+    ++applied;
   }
 
+  if (skipped == 0U) {
+    free(changed);
+    free(original);
+    return MEMDBG_OK;
+  }
+
+  if (allow_partial && applied > 0U) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: hardware watchpoint armed on %u/%u threads; "
+                     "skipped threads will be retried on resume",
+                     (unsigned int)applied, (unsigned int)count);
+    free(changed);
+    free(original);
+    return MEMDBG_OK;
+  }
+
+  /* Strict updates (removal/clear) must be atomic.  A complete failure in
+   * partial mode must also restore any thread changed before the failure so
+   * the request is safe to reject. */
   for (uint32_t i = 0; i < count; ++i) {
-    if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[i], &g_dbg.dbregs) != 0) {
-      int dbg_errno = errno;
+    if (!changed[i]) continue;
+    if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[i], &original[i]) != 0) {
       memdbg_log_write(MEMDBG_LOG_WARN,
-                       "debugger: dbregs write failed pid=%d lwp=%d "
-                       "errno=%d (%s); rolling back %u thread(s)",
-                       (int)g_dbg.pid, (int)lwps[i], dbg_errno,
-                       strerror(dbg_errno), (unsigned int)(i + 1U));
-      for (uint32_t j = 0; j <= i; ++j) {
-        if (pal_debug_set_dbregs((int)g_dbg.pid, lwps[j], &original[j]) != 0) {
-          memdbg_log_write(MEMDBG_LOG_WARN,
-                           "debugger: dbregs rollback failed pid=%d lwp=%d "
-                           "errno=%d (%s)",
-                           (int)g_dbg.pid, (int)lwps[j], errno,
-                           strerror(errno));
-        }
-      }
-      free(original);
-      return pal_status_from_errno_code(dbg_errno);
+                       "debugger: dbregs rollback failed pid=%d lwp=%d "
+                       "errno=%d (%s)",
+                       (int)g_dbg.pid, (int)lwps[i], errno, strerror(errno));
     }
   }
+  free(changed);
   free(original);
-  return MEMDBG_OK;
+  return last_errno != 0 ? pal_status_from_errno_code(last_errno)
+                         : MEMDBG_ERR_IO;
 }
 
 memdbg_status_t refresh_dbregs_from_thread(int32_t lwp) {
@@ -194,6 +229,18 @@ void clear_hardware_status_locked(int32_t lwp) {
   memset(&dbregs, 0, sizeof(dbregs));
   if (pal_debug_get_dbregs((int)g_dbg.pid, lwp, &dbregs) != 0) return;
   if ((dbregs.dr[6] & 0xFULL) == 0U) return;
+  /* Rewrite the authoritative DR0..DR3/DR7 configuration instead of echoing
+   * the per-thread readback: a stale or partially populated PT_GETDBREGS
+   * result must never disarm an installed watchpoint.  DR6 is the only field
+   * being cleared here. */
+  for (uint32_t i = 0; i < MEMDBG_DEBUGGER_MAX_WATCHPOINTS; ++i) {
+    dbregs.dr[i] = g_dbg.watchpoints[i].installed
+                       ? (uint64_t)(int64_t)g_dbg.watchpoints[i].address
+                       : 0ULL;
+  }
+  uint32_t dr7 = 0;
+  build_dr7(&dr7);
+  dbregs.dr[7] = (uint64_t)dr7;
   dbregs.dr[6] = 0;
   (void)pal_debug_set_dbregs((int)g_dbg.pid, lwp, &dbregs);
 }
@@ -201,8 +248,10 @@ void clear_hardware_status_locked(int32_t lwp) {
 // Internal single-step over a software breakpoint
 
 memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp,
-                                               bool *stop_consumed_out) {
+                                               bool *stop_consumed_out,
+                                               bool *watch_hit_out) {
   if (stop_consumed_out != NULL) *stop_consumed_out = false;
+  if (watch_hit_out != NULL) *watch_hit_out = false;
   clear_hardware_status_locked(lwp);
   memdbg_debug_regs_t regs;
   memset(&regs, 0, sizeof(regs));
@@ -270,13 +319,36 @@ memdbg_status_t step_over_sw_breakpoint_locked(int32_t lwp,
   st = install_sw_breakpoint(bp);
   if (st != MEMDBG_OK) return st;
   if (forced_stop) return MEMDBG_ERR_STATE;
+
+  /* A single step that also performed a watched access reports one debug
+   * trap for both reasons.  DR6 BS (bit 14) is set only when the trap was a
+   * single-step; a trap carrying just a B0..B3 hit bit is a data watchpoint
+   * firing on the stepped instruction and must be reported as a stop instead
+   * of being silently resumed. */
+  if (watch_hit_out != NULL) {
+    memdbg_debug_dbregs_t dbregs;
+    memset(&dbregs, 0, sizeof(dbregs));
+    if (pal_debug_get_dbregs((int)g_dbg.pid, lwp, &dbregs) == 0) {
+      const uint64_t dr6 = dbregs.dr[6];
+      if ((dr6 & 0x4000ULL) == 0U) {
+        for (uint32_t i = 0; i < MEMDBG_DEBUGGER_MAX_WATCHPOINTS; ++i) {
+          if (g_dbg.watchpoints[i].installed &&
+              (dr6 & (1ULL << i)) != 0U) {
+            *watch_hit_out = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   if (stop_consumed_out != NULL) *stop_consumed_out = true;
   return st;
 }
 
 // Internal hardware debug-register synchronisation
 
-memdbg_status_t sync_hardware_dbregs_locked(void) {
+memdbg_status_t sync_hardware_dbregs_locked(bool allow_partial) {
   if (!g_dbg.dbregs_valid) {
     int32_t lwps[1];
     uint32_t count = 0;
@@ -303,8 +375,12 @@ memdbg_status_t sync_hardware_dbregs_locked(void) {
   build_dr7(&dr7);
   g_dbg.dbregs.dr[7] = (uint64_t)dr7;
 
-  memdbg_status_t st = apply_dbregs_to_all();
-  if (st != MEMDBG_OK) g_dbg.dbregs = previous;
+  memdbg_status_t st = apply_dbregs_to_all(allow_partial);
+  if (st != MEMDBG_OK) {
+    /* apply_dbregs_to_all restored the per-thread registers.  Keep the cached
+     * copy in sync with that rollback as well. */
+    g_dbg.dbregs = previous;
+  }
   return st;
 }
 
@@ -369,7 +445,7 @@ memdbg_status_t memdbg_debugger_set_breakpoint_cond(
       fake.slot = (uint32_t)hw;
       fake.installed = true;
       g_dbg.watchpoints[hw] = fake;
-      st = sync_hardware_dbregs_locked();
+      st = sync_hardware_dbregs_locked(true);
       if (st != MEMDBG_OK) {
         memset(&g_dbg.watchpoints[hw], 0,
                sizeof(g_dbg.watchpoints[hw]));
@@ -409,7 +485,7 @@ memdbg_status_t memdbg_debugger_clear_breakpoint(uint64_t address) {
     if (hw >= 0) {
       memdbg_watchpoint_t previous = g_dbg.watchpoints[hw];
       memset(&g_dbg.watchpoints[hw], 0, sizeof(g_dbg.watchpoints[hw]));
-      st = sync_hardware_dbregs_locked();
+      st = sync_hardware_dbregs_locked(false);
       if (st != MEMDBG_OK) g_dbg.watchpoints[hw] = previous;
     }
   }
@@ -441,7 +517,7 @@ memdbg_status_t memdbg_debugger_clear_all_breakpoints(uint32_t *cleared) {
     memset(bp, 0, sizeof(*bp));
     ++c;
   }
-  if (c > 0) (void)sync_hardware_dbregs_locked();
+  if (c > 0) (void)sync_hardware_dbregs_locked(false);
   if (cleared != NULL) *cleared = c;
   debugger_unlock();
   return MEMDBG_OK;
@@ -505,7 +581,7 @@ memdbg_status_t memdbg_debugger_set_watchpoint(uint64_t address,
   wp->slot = (uint32_t)slot;
   wp->installed = true;
 
-  memdbg_status_t st = sync_hardware_dbregs_locked();
+  memdbg_status_t st = sync_hardware_dbregs_locked(true);
   if (st != MEMDBG_OK) {
     memset(wp, 0, sizeof(*wp));
   }
@@ -529,7 +605,7 @@ memdbg_status_t memdbg_debugger_clear_watchpoint(uint64_t address) {
 
   memdbg_watchpoint_t previous = g_dbg.watchpoints[slot];
   memset(&g_dbg.watchpoints[slot], 0, sizeof(g_dbg.watchpoints[slot]));
-  memdbg_status_t st = sync_hardware_dbregs_locked();
+  memdbg_status_t st = sync_hardware_dbregs_locked(false);
   if (st != MEMDBG_OK) g_dbg.watchpoints[slot] = previous;
   debugger_unlock();
   return st;
@@ -551,7 +627,7 @@ memdbg_status_t memdbg_debugger_clear_all_watchpoints(uint32_t *cleared) {
     ++c;
   }
   if (c > 0) {
-    memdbg_status_t st = sync_hardware_dbregs_locked();
+    memdbg_status_t st = sync_hardware_dbregs_locked(false);
     if (st != MEMDBG_OK) {
       memcpy(g_dbg.watchpoints, previous, sizeof(previous));
       if (cleared != NULL) *cleared = 0;
