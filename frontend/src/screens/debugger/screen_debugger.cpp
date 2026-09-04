@@ -833,7 +833,8 @@ void draw_gdb_bridge_panel(AppState &state, DebuggerState &ds) {
     return;
   }
 
-  if (ds.bridge_binary.empty()) ds.bridge_binary = GdbBridgeRunner::locate_binary();
+  if (ds.bridge_binary.empty())
+    ds.bridge_binary = GdbBridgeRunner::locate_binary().string();
 
   ImGui::TextColored(ui::colors().dim, "%s %s:%d",
                      locale::tr("debugger.bridge_console"),
