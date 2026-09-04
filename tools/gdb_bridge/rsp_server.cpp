@@ -6,12 +6,17 @@
 
 #include "rsp_server.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <string>
 
 #if defined(_WIN32)
 #include <winsock2.h>
 #else
+#include <errno.h>
+#include <poll.h>
 #include <unistd.h>
 #endif
 
@@ -20,6 +25,61 @@ namespace memdbg::gdb_bridge {
 namespace platform = memdbg::frontend::platform;
 namespace {
 constexpr size_t kMaxRspPacketBytes = 0x200000U;
+/* serve() uses a recv timeout so blocking reads wake up periodically and can
+ * observe shutdown_requested() while IDA stays idle. */
+constexpr uint32_t kServeRecvTimeoutMs = 1000U;
+constexpr uint32_t kAcceptPollMs = 250U;
+
+std::atomic<bool> &shutdown_flag() {
+  static std::atomic<bool> flag{false};
+  return flag;
+}
+
+std::string &shutdown_file_path() {
+  static std::string path;
+  return path;
+}
+
+/* Wait until the listen socket is readable or the timeout elapses.
+ * Returns 1 readable, 0 timeout/retry, -1 error. */
+int wait_readable(platform::socket_handle_t fd, uint32_t timeout_ms) {
+#if defined(_WIN32)
+  fd_set read_set;
+  FD_ZERO(&read_set);
+  FD_SET(fd, &read_set);
+  timeval tv;
+  tv.tv_sec = static_cast<long>(timeout_ms) / 1000L;
+  tv.tv_usec = (static_cast<long>(timeout_ms) % 1000L) * 1000L;
+  return ::select(0, &read_set, nullptr, nullptr, &tv);
+#else
+  pollfd pfd{};
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+  const int ready = ::poll(&pfd, 1, static_cast<int>(timeout_ms));
+  if (ready < 0) return platform::socket_error_interrupted(errno) ? 0 : -1;
+  return ready;
+#endif
+}
+} // namespace
+
+void request_shutdown() {
+  shutdown_flag().store(true, std::memory_order_relaxed);
+}
+
+void configure_shutdown_file(const std::string &path) {
+  shutdown_file_path() = path;
+}
+
+bool shutdown_requested() {
+  if (shutdown_flag().load(std::memory_order_relaxed)) return true;
+  const std::string &path = shutdown_file_path();
+  if (path.empty()) return false;
+  std::error_code ec;
+  if (std::filesystem::exists(path, ec) && !ec) {
+    shutdown_flag().store(true, std::memory_order_relaxed);
+    return true;
+  }
+  return false;
 }
 
 uint8_t rsp_checksum(const std::string &payload) {
@@ -127,6 +187,10 @@ RspPacket RspConnection::recv_packet() {
   for (;;) {
     bool timed_out = false;
     const int b = read_byte(0U, &timed_out);
+    if (b == -2) {
+      packet.timed_out = true;
+      return packet;
+    }
     if (b < 0) return packet;
     if (b == 0x03) {
       packet.is_interrupt = true;
@@ -137,7 +201,7 @@ RspPacket RspConnection::recv_packet() {
 
     std::string body;
     for (;;) {
-      const int c = read_byte(0U, nullptr);
+      const int c = read_byte(kServeRecvTimeoutMs, nullptr);
       if (c < 0) return packet;
       if (c == '#') break;
       body.push_back(static_cast<char>(c));
@@ -275,6 +339,20 @@ platform::socket_handle_t RspServer::accept_client(std::string &error) {
     error = "listen socket is not open";
     return platform::invalid_socket();
   }
+  for (;;) {
+    if (shutdown_requested()) {
+      error = "shutdown requested";
+      return platform::invalid_socket();
+    }
+    const int ready = wait_readable(listen_fd_, kAcceptPollMs);
+    if (ready < 0) {
+      error = "poll() failed: " +
+              platform::socket_error_text(platform::socket_last_error_code());
+      return platform::invalid_socket();
+    }
+    if (ready == 0) continue;
+    break;
+  }
   sockaddr_in peer{};
   platform::socklen_type len = sizeof(peer);
   platform::socket_handle_t client =
@@ -291,7 +369,14 @@ platform::socket_handle_t RspServer::accept_client(std::string &error) {
 void RspServer::serve(platform::socket_handle_t client_fd, const Handler &handler) {
   RspConnection conn(client_fd);
   for (;;) {
+    /* Idle reads wake up periodically so shutdown stays responsive even when
+     * IDA has no outstanding request. */
+    (void)platform::socket_set_recv_timeout(client_fd, kServeRecvTimeoutMs);
     RspPacket packet = conn.recv_packet();
+    if (packet.timed_out && !packet.ok) {
+      if (shutdown_requested()) break;
+      continue;
+    }
     if (!packet.ok) break;
     if (packet.is_interrupt) {
       /* Spurious interrupt outside run-control: ignore. */
@@ -299,6 +384,7 @@ void RspServer::serve(platform::socket_handle_t client_fd, const Handler &handle
     }
     const std::string reply = handler(packet.payload, conn);
     if (!conn.send_packet(reply)) break;
+    if (shutdown_requested()) break;
   }
 }
 

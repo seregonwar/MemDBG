@@ -11,6 +11,7 @@
 #include "ui_icons.hpp"
 #include "confirm_modal.hpp"
 #include "debugger_disassembly.hpp"
+#include "gdb_bridge_runner.hpp"
 #include "trainer_format.hpp"
 
 #include <algorithm>
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -137,6 +139,16 @@ struct DebuggerState {
   Client::DebugFsGsBase fsgsbase{};
   bool has_fpregs = false;
   bool has_fsgsbase = false;
+
+  /* IDA GDB bridge subprocess */
+  bool bridge_open = false;
+  bool bridge_verbose = false;
+  bool bridge_once = false;
+  char bridge_listen[64] = "127.0.0.1:23946";
+  char bridge_pid[32] = {};
+  char bridge_name[64] = "eboot.bin";
+  std::unique_ptr<GdbBridgeRunner> bridge_runner;
+  std::string bridge_binary;
 };
 
 /* Extern debugger singleton and async futures */

@@ -1297,5 +1297,22 @@
   "udp.listener_stopped": "Listener UDP fermato",
   "udp.restarted": "UDP riavviato",
   "udp.started": "UDP avviato",
-  "udp.stopped": "UDP fermato"
+  "udp.stopped": "UDP fermato",
+  "debugger.bridge_title": "Bridge GDB per IDA",
+  "debugger.bridge_idle": "inattivo",
+  "debugger.bridge_console": "Console",
+  "debugger.bridge_console_tip": "Il bridge si collega alla console a cui il frontend è connesso.",
+  "debugger.bridge_listen": "IDA si collega qui (Remote GDB)",
+  "debugger.bridge_target": "Target",
+  "debugger.bridge_target_tip": "Pre-allega tramite PID o nome del processo, oppure lascia entrambi vuoti e collega da IDA. Usa solo PID oppure nome, non entrambi.",
+  "debugger.bridge_verbose": "Log dettagliato",
+  "debugger.bridge_once": "Esci dopo la prima disconnessione del client",
+  "debugger.bridge_start": "Avvia",
+  "debugger.bridge_stop": "Ferma",
+  "debugger.bridge_started_status": "Bridge GDB avviato — punta il debugger Remote GDB di IDA all'indirizzo di ascolto",
+  "debugger.bridge_stopped_status": "Bridge GDB fermato",
+  "debugger.bridge_pid_or_name": "Bridge GDB: usa solo PID oppure nome del processo, non entrambi",
+  "debugger.bridge_exited": "bridge terminato con codice",
+  "debugger.bridge_binary": "Binario",
+  "debugger.bridge_binary_missing": "memdbg_gdb_bridge non trovato accanto all'eseguibile del frontend"
 }

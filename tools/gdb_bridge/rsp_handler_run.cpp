@@ -37,6 +37,15 @@ std::string RspHandler::handle_continue_or_step(bool step, RspConnection &conn, 
   stop_reason_.clear();
 
   for (;;) {
+    /* Bridge termination (SIGINT/SIGTERM/console close): detach safely before
+     * exiting so the target is left running instead of traced by a dead
+     * session. */
+    if (shutdown_requested()) {
+      logf("shutdown during %s: detaching", step ? "step" : "continue");
+      (void)safe_detach();
+      return stop_reply();
+    }
+
     if (conn.poll_interrupt(50U)) {
       (void)backend_.debug_stop();
       bool stopped = false;

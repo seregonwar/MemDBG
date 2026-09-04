@@ -68,6 +68,35 @@ GDB/IDA, le risposte e il ciclo di vita del debugger MDBG vengono registrati con
 ~10s (idle timeout 30s). Durante il detach ferma prima il target, ripristina lo
 stato del debugger e lascia che `PT_DETACH` riprenda l'esecuzione in sicurezza.
 
+## Avvio dal frontend
+
+Il frontend desktop può eseguire il bridge come sottoprocesso: apri la
+schermata **Debugger** ed espandi **Bridge GDB per IDA**. Lancia
+`memdbg_gdb_bridge` dalla directory del frontend (o dal `PATH`) con l'indirizzo
+della console a cui il frontend è connesso, ne cattura l'output in un pannello
+di log e il pulsante **Ferma** lo termina in modo pulito. Lasciando vuoti sia
+PID sia nome, l'attach è delegato al primo `vAttach` di IDA.
+
+## Chiusura sicura e detach
+
+Il bridge gestisce `SIGINT`/`SIGTERM`/`SIGHUP` (ed eventi console di Windows
+come `Ctrl+C` o la chiusura della finestra): prima di uscire ferma il target,
+scollega la sessione di debug e riprende il gioco, così chiudere il bridge non
+lascia più il gioco agganciato a una sessione morta. Se il processo viene
+ucciso senza poter eseguire i propri handler, è il payload stesso a fare detach
+appena l'ultimo client MDBG si disconnette.
+
+### Il dialogo "Please wait…" di IDA
+
+Mentre il debuggato è in esecuzione, IDA Pro mostra la sua piccola finestra
+**Please wait…** (con pulsante **Suspend**) ogni volta che attende un evento di
+debug: è UI di IDA, mostrata con ogni stub GDB-remote, e il bridge non può
+sopprimerla. Scompare non appena il target segnala uno stop. Se resta per sempre
+dopo aver impostato un watchpoint hardware, significa che il watchpoint non è
+mai scattato: con le correzioni ai watchpoint del payload (ri-armo dei registri
+debug a ogni resume, attribuzione degli hit via DR6) i watchpoint in scrittura
+fermano di nuovo il target e il dialogo scompare.
+
 ## Setup IDA Pro
 
 1. Avvia il payload MemDBG sulla console e verifica che la porta `9020` sia raggiungibile.

@@ -1298,5 +1298,22 @@
   "udp.listener_stopped": "UDP 리스너 중지됨",
   "udp.restarted": "UDP 다시 시작됨",
   "udp.started": "UDP 시작됨",
-  "udp.stopped": "UDP 중지됨"
+  "udp.stopped": "UDP 중지됨",
+  "debugger.bridge_title": "IDA GDB 브리지",
+  "debugger.bridge_idle": "대기 중",
+  "debugger.bridge_console": "콘솔",
+  "debugger.bridge_console_tip": "브리지는 프론트엔드가 연결된 콘솔에 연결됩니다.",
+  "debugger.bridge_listen": "IDA 연결 주소 (Remote GDB)",
+  "debugger.bridge_target": "대상",
+  "debugger.bridge_target_tip": "PID 또는 프로세스 이름으로 미리 연결하거나, 둘 다 비워 두고 IDA에서 연결하세요. PID와 이름은 동시에 사용할 수 없습니다.",
+  "debugger.bridge_verbose": "상세 로그",
+  "debugger.bridge_once": "첫 연결 종료 후 종료",
+  "debugger.bridge_start": "시작",
+  "debugger.bridge_stop": "중지",
+  "debugger.bridge_started_status": "GDB 브리지 시작됨 — IDA의 Remote GDB 디버거를 수신 주소로 지정하세요",
+  "debugger.bridge_stopped_status": "GDB 브리지 중지됨",
+  "debugger.bridge_pid_or_name": "GDB 브리지: PID 또는 프로세스 이름 중 하나만 사용하세요",
+  "debugger.bridge_exited": "브리지 종료 코드",
+  "debugger.bridge_binary": "바이너리",
+  "debugger.bridge_binary_missing": "프론트엔드 실행 파일 옆에서 memdbg_gdb_bridge를 찾을 수 없습니다"
 }

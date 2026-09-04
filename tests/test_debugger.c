@@ -88,6 +88,9 @@ static struct {
   int      thread_list_errno;
   int32_t  dbregs_set_fail_lwp;
   int      dbregs_set_fail_errno;
+  /* DR6 value the CPU would latch when a stepped instruction performs a
+   * watched access (0 disables the simulation). */
+  uint64_t step_trap_dr6;
 } mock = {0};
 
 /* ---- Mock helpers ---- */
@@ -207,11 +210,14 @@ int pal_debug_stop(int pid) {
 
 int pal_debug_single_step(int pid, int32_t lwp) {
   (void)pid;
-  (void)lwp;
   if (!mock.attached) { errno = ESRCH; return -1; }
   mock.step_called = true;
   mock.single_step_count++;
   mock.stopped = true;
+  if (mock.step_trap_dr6 != 0) {
+    int idx = mock_find_regs_idx(lwp);
+    if (idx >= 0) mock.dbregs[idx].dr[6] = mock.step_trap_dr6;
+  }
   return 0;
 }
 
@@ -1126,8 +1132,8 @@ static void test_watchpoint(void) {
   TEST_OK("detach", memdbg_debugger_detach());
 }
 
-static void test_watchpoint_apply_rollback(void) {
-  printf("\n--- Watchpoint apply rollback ---\n");
+static void test_watchpoint_partial_lwp_retry(void) {
+  printf("\n--- Watchpoint partial-LWP retry ---\n");
 
   mock_reset();
   mock.dbregs[0].dr[0] = 0xAAA0ULL;
@@ -1136,46 +1142,53 @@ static void test_watchpoint_apply_rollback(void) {
   mock.dbregs[1].dr[7] = 0x800ULL;
   TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
 
+  /* PS4 can reject DBREG access for one LWP while the rest of the process is
+   * perfectly debuggable (typically a thread teardown race).  Do not reject
+   * the whole watchpoint: arm the reachable threads and keep it tracked. */
   mock.dbregs_set_fail_lwp = MOCK_LWP_WORKER;
   mock.dbregs_set_fail_errno = EIO;
-  memdbg_status_t st =
-      memdbg_debugger_set_watchpoint(0x3500ULL, 4U, 1U);
-  TEST_ERR("partial watchpoint apply reports failure", st, MEMDBG_ERR_IO);
-  TEST_EQ_LL("main DR0 restored after partial apply",
-             mock.dbregs[0].dr[0], 0xAAA0ULL);
-  TEST_EQ_LL("main DR7 restored after partial apply",
-             mock.dbregs[0].dr[7], 0x400ULL);
-  TEST_EQ_LL("worker DR0 unchanged after rejected apply",
+  TEST_OK("partial watchpoint arm succeeds",
+          memdbg_debugger_set_watchpoint(0x3500ULL, 4U, 1U));
+  TEST_EQ_LL("reachable thread receives DR0",
+             mock.dbregs[0].dr[0], 0x3500ULL);
+  TEST_EQ_U("reachable thread keeps write-only DR7 RW=01",
+            (uint32_t)((mock.dbregs[0].dr[7] >> 16U) & 0x3ULL), 1U);
+  TEST_EQ_LL("rejected worker is untouched",
              mock.dbregs[1].dr[0], 0xBBB0ULL);
-  TEST_EQ_LL("worker DR7 unchanged after rejected apply",
-             mock.dbregs[1].dr[7], 0x800ULL);
 
   memdbg_watchpoint_t wps[MEMDBG_DEBUGGER_MAX_WATCHPOINTS];
   uint32_t count = 0;
-  TEST_OK("watchpoint snapshot after failed apply",
+  TEST_OK("watchpoint snapshot after partial arm",
           memdbg_debugger_watchpoints_snapshot(
               wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count));
   int installed = 0;
   for (uint32_t i = 0; i < count; ++i) {
     if (wps[i].installed) ++installed;
   }
-  TEST_EQ_I("failed watchpoint is not tracked", installed, 0);
+  TEST_EQ_I("partial watchpoint remains tracked", installed, 1);
 
+  /* The next resume re-applies the authoritative configuration.  Once the
+   * transient LWP failure is gone, the worker is armed too. */
   mock.dbregs_set_fail_lwp = 0;
   mock.dbregs_set_fail_errno = 0;
-  TEST_OK("write watchpoint succeeds after transient failure",
-          memdbg_debugger_set_watchpoint(0x3500ULL, 4U, 1U));
-  TEST_EQ_U("main retry keeps write-only DR7 RW=01",
-            (uint32_t)((mock.dbregs[0].dr[7] >> 16U) & 0x3ULL), 1U);
+  TEST_OK("resume retries skipped worker", memdbg_debugger_continue());
+  TEST_EQ_LL("worker retry receives DR0", mock.dbregs[1].dr[0], 0x3500ULL);
   TEST_EQ_U("worker retry keeps write-only DR7 RW=01",
             (uint32_t)((mock.dbregs[1].dr[7] >> 16U) & 0x3ULL), 1U);
 
+  /* Clearing is deliberately stricter.  Keep another watchpoint installed so
+   * DR7 stays non-zero: removal must still be treated as a strict update, not
+   * mistaken for another partial arm. */
+  TEST_OK("arm second write watchpoint",
+          memdbg_debugger_set_watchpoint(0x3600ULL, 4U, 1U));
+  TEST_EQ_LL("second watchpoint uses DR1", mock.dbregs[0].dr[1], 0x3600ULL);
+
   mock.dbregs_set_fail_lwp = MOCK_LWP_WORKER;
   mock.dbregs_set_fail_errno = EIO;
-  st = memdbg_debugger_clear_watchpoint(0x3500ULL);
+  memdbg_status_t st = memdbg_debugger_clear_watchpoint(0x3500ULL);
   TEST_ERR("partial watchpoint clear reports failure", st, MEMDBG_ERR_IO);
-  TEST_EQ_U("failed clear leaves main write-only watchpoint armed",
-            (uint32_t)((mock.dbregs[0].dr[7] >> 16U) & 0x3ULL), 1U);
+  TEST_EQ_LL("failed clear restores main DR0", mock.dbregs[0].dr[0], 0x3500ULL);
+  TEST_EQ_LL("failed clear preserves main DR1", mock.dbregs[0].dr[1], 0x3600ULL);
   TEST_OK("watchpoint snapshot after failed clear",
           memdbg_debugger_watchpoints_snapshot(
               wps, MEMDBG_DEBUGGER_MAX_WATCHPOINTS, &count));
@@ -1183,13 +1196,103 @@ static void test_watchpoint_apply_rollback(void) {
   for (uint32_t i = 0; i < count; ++i) {
     if (wps[i].installed) ++installed;
   }
-  TEST_EQ_I("failed clear remains tracked", installed, 1);
+  TEST_EQ_I("failed clear keeps both watchpoints tracked", installed, 2);
 
   mock.dbregs_set_fail_lwp = 0;
   mock.dbregs_set_fail_errno = 0;
-  TEST_OK("clear retried watchpoint",
+  TEST_OK("clear retried first watchpoint",
           memdbg_debugger_clear_watchpoint(0x3500ULL));
+  TEST_OK("clear second watchpoint",
+          memdbg_debugger_clear_watchpoint(0x3600ULL));
+  TEST_OK("detach", memdbg_debugger_detach());
+}
 
+
+/* ---- 8c. Watchpoint re-arming on resume ----
+ * Threads spawned after a watchpoint was installed start with cleared debug
+ * registers; every resume must re-apply DR0..DR3/DR7 to the whole thread list
+ * or the new LWP will never trap on the watchpoint. */
+
+static void test_watchpoint_resume_arming(void) {
+  printf("\n--- Watchpoint resume arming ---\n");
+
+  mock_reset();
+  TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
+
+  /* Only the main thread exists when the write watchpoint is armed. */
+  mock.lwp_count = 1;
+  TEST_OK("arm write watchpoint",
+          memdbg_debugger_set_watchpoint(0x3000ULL, 4U, 1U));
+  TEST("main DR7 armed", mock.dbregs[0].dr[7] != 0);
+
+  /* A worker thread appears afterwards with cleared debug registers, as a
+   * freshly spawned LWP does. */
+  mock.lwp_count = 2;
+  memset(&mock.dbregs[1], 0, sizeof(mock.dbregs[1]));
+
+  TEST_OK("continue after new thread", memdbg_debugger_continue());
+  TEST_EQ_LL("new thread DR0 armed", mock.dbregs[1].dr[0], 0x3000ULL);
+  TEST("new thread DR7 armed", mock.dbregs[1].dr[7] != 0);
+  TEST_EQ_U("new thread DR7 RW=01 write",
+            (uint32_t)((mock.dbregs[1].dr[7] >> 16U) & 0x3ULL), 1U);
+
+  /* Sticky DR6 from an earlier stop is cleared by the same re-sync. */
+  mock.dbregs[0].dr[6] = 0x1ULL;
+  TEST_OK("continue after sticky DR6", memdbg_debugger_continue());
+  TEST_EQ_LL("main DR6 cleared on resume", mock.dbregs[0].dr[6], 0ULL);
+
+  TEST_OK("detach", memdbg_debugger_detach());
+}
+
+/* ---- 8d. Step-over preserves data watchpoint hits ----
+ * A step over an INT3 whose instruction performs a watched access reports one
+ * debug trap for both reasons.  DR6 BS (bit 14) is clear for a pure
+ * watchpoint trap; the stop must be preserved instead of silently resumed. */
+
+static void test_step_over_watchpoint_hit(void) {
+  printf("\n--- Step-over watchpoint hit ---\n");
+
+  mock_reset();
+  mock.memory[0x1000] = 0x90;
+  TEST_OK("attach", memdbg_debugger_attach(MOCK_PID));
+  TEST_OK("set SW BP at 0x1000",
+          memdbg_debugger_set_breakpoint(0x1000ULL, MEMDBG_BP_SOFTWARE));
+  TEST_OK("arm write watchpoint at 0x2000",
+          memdbg_debugger_set_watchpoint(0x2000ULL, 4U, 1U));
+
+  /* Plain single-step trap (BS set): consumed as before. */
+  mock.regs[0].r_rip = 0x1001;
+  mock.wait_call_count = 0;
+  mock.step_trap_dr6 = 0x4001ULL; /* BS | slot 0 */
+  TEST_OK("step with BS set succeeds", memdbg_debugger_step(MOCK_LWP_MAIN));
+  TEST("step with BS set reports stopped", memdbg_debugger_is_stopped());
+  TEST("INT3 reinstalled after BS step", mock.memory[0x1000] == 0xCCU);
+
+  /* Pure watchpoint trap (BS clear): the hit must not be swallowed. */
+  mock.regs[0].r_rip = 0x1001;
+  mock.wait_call_count = 0;
+  mock.step_trap_dr6 = 0x1ULL; /* slot 0 hit, no BS */
+  TEST_OK("step with watch hit succeeds", memdbg_debugger_step(MOCK_LWP_MAIN));
+  TEST("watch hit keeps target stopped", memdbg_debugger_is_stopped());
+  TEST_EQ_I("watch hit stop_lwp", memdbg_debugger_get_stop_lwp(),
+            MOCK_LWP_MAIN);
+  TEST("watch hit DR6 preserved for stop reason",
+       mock.dbregs[0].dr[6] == 0x1ULL);
+  TEST("INT3 reinstalled after watch hit", mock.memory[0x1000] == 0xCCU);
+
+  /* Continue over the breakpoint reports the watch hit instead of resuming. */
+  mock.regs[0].r_rip = 0x1001;
+  mock.wait_call_count = 0;
+  mock.step_trap_dr6 = 0x1ULL;
+  TEST_OK("continue reports watch hit during step-over",
+          memdbg_debugger_continue());
+  TEST("continue watch hit keeps target stopped",
+       memdbg_debugger_is_stopped());
+  TEST_EQ_I("continue watch hit stop_lwp", memdbg_debugger_get_stop_lwp(),
+            MOCK_LWP_MAIN);
+  TEST("continue leaves INT3 installed", mock.memory[0x1000] == 0xCCU);
+
+  mock.step_trap_dr6 = 0;
   TEST_OK("detach", memdbg_debugger_detach());
 }
 
@@ -1593,7 +1696,9 @@ int main(void) {
   test_software_breakpoint();
   test_hardware_breakpoint();
   test_watchpoint();
-  test_watchpoint_apply_rollback();
+  test_watchpoint_partial_lwp_retry();
+  test_watchpoint_resume_arming();
+  test_step_over_watchpoint_hit();
   test_thread_suspend_resume();
   test_poll_events();
   test_detach_with_active_bp();

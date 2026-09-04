@@ -11,6 +11,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -554,6 +556,22 @@ int main() {
   CHECK("reg size rax", gdb_reg_size(GDB_RAX) == 8U);
   CHECK("reg size eflags", gdb_reg_size(GDB_EFLAGS) == 4U);
   CHECK("invalid regno", !gdb_reg_valid(-1) && !gdb_reg_valid(GDB_REG_MAX));
+
+  /* Frontend lifecycle sentinel: CREATE_NO_WINDOW children on Windows cannot
+   * receive console Ctrl events, so the frontend asks for the exact same
+   * cooperative cleanup path by creating a private marker file. */
+  const std::filesystem::path shutdown_marker =
+      std::filesystem::temp_directory_path() / "memdbg-gdb-bridge-test.shutdown";
+  std::error_code shutdown_ec;
+  (void)std::filesystem::remove(shutdown_marker, shutdown_ec);
+  configure_shutdown_file(shutdown_marker.string());
+  CHECK("shutdown marker absent does not stop bridge", !shutdown_requested());
+  {
+    std::ofstream marker(shutdown_marker);
+    marker << "shutdown\n";
+  }
+  CHECK("shutdown marker requests cooperative stop", shutdown_requested());
+  (void)std::filesystem::remove(shutdown_marker, shutdown_ec);
 
   if (failures == 0) {
     std::fprintf(stdout, "All gdb_bridge tests passed\n");

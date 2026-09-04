@@ -789,6 +789,161 @@ void reset_debugger_state(AppState &state) {
   s_dbg_state = DebuggerState{};
 }
 
+/* ---- IDA GDB bridge subprocess panel ---- */
+
+namespace {
+
+std::string trim_bridge_text(const char *text) {
+  if (text == nullptr) return {};
+  const char *begin = text;
+  while (*begin == ' ' || *begin == '\t') ++begin;
+  const char *end = begin + std::strlen(begin);
+  while (end > begin && (end[-1] == ' ' || end[-1] == '\t')) --end;
+  return std::string(begin, static_cast<size_t>(end - begin));
+}
+
+} // namespace
+
+void draw_gdb_bridge_panel(AppState &state, DebuggerState &ds) {
+  const float scl = ui::dpi_scale();
+  if (!ds.bridge_runner) ds.bridge_runner = std::make_unique<GdbBridgeRunner>();
+  GdbBridgeRunner &runner = *ds.bridge_runner;
+  runner.poll_output();
+
+  ImGui::Spacing();
+  ui::begin_panel("GdbBridge", locale::tr("debugger.bridge_title"),
+                  ImVec2(0, 0));
+
+  const bool running = runner.running();
+  const std::string header = std::string(icons::kTerminal) + "  " +
+                             locale::tr("debugger.bridge_title") + "  ##bridge_header";
+  if (ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_None)) {
+    ds.bridge_open = true;
+  } else {
+    ds.bridge_open = false;
+  }
+  ImGui::SameLine();
+  ui::status_dot(running ? ui::colors().success : ui::colors().dim);
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "%s",
+                     running ? "RSP" : locale::tr("debugger.bridge_idle"));
+
+  if (!ds.bridge_open) {
+    ui::end_panel();
+    return;
+  }
+
+  if (ds.bridge_binary.empty()) ds.bridge_binary = GdbBridgeRunner::locate_binary();
+
+  ImGui::TextColored(ui::colors().dim, "%s %s:%d",
+                     locale::tr("debugger.bridge_console"),
+                     state.host, state.debug_port);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", locale::tr("debugger.bridge_console_tip"));
+  }
+
+  const float input_w = 240.0f * scl;
+  ImGui::PushItemWidth(input_w);
+  ImGui::InputTextWithHint("##bridge_listen", "127.0.0.1:23946",
+                           ds.bridge_listen, sizeof(ds.bridge_listen));
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "%s",
+                     locale::tr("debugger.bridge_listen"));
+
+  ImGui::PushItemWidth(0.4f * input_w);
+  ImGui::InputTextWithHint("##bridge_pid", "PID",
+                           ds.bridge_pid, sizeof(ds.bridge_pid));
+  ImGui::SameLine();
+  ImGui::InputTextWithHint("##bridge_name", "eboot.bin",
+                           ds.bridge_name, sizeof(ds.bridge_name));
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::TextColored(ui::colors().dim, "%s",
+                     locale::tr("debugger.bridge_target"));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", locale::tr("debugger.bridge_target_tip"));
+  }
+
+  ImGui::Checkbox(locale::tr("debugger.bridge_verbose"), &ds.bridge_verbose);
+  ImGui::SameLine();
+  ImGui::Checkbox(locale::tr("debugger.bridge_once"), &ds.bridge_once);
+
+  const bool have_binary = !ds.bridge_binary.empty();
+  if (running) {
+    if (ui::danger_button((std::string(icons::kStop) + "  " +
+                           locale::tr("debugger.bridge_stop")).c_str(),
+                          ImVec2(120.0f * scl, 0))) {
+      runner.stop();
+      set_status(state, locale::tr("debugger.bridge_stopped_status"));
+    }
+  } else {
+    ImGui::BeginDisabled(!have_binary);
+    if (ui::primary_button((std::string(icons::kPlay) + "  " +
+                            locale::tr("debugger.bridge_start")).c_str(),
+                           ImVec2(120.0f * scl, 0))) {
+      const std::string pid_text = trim_bridge_text(ds.bridge_pid);
+      const std::string name_text = trim_bridge_text(ds.bridge_name);
+      if (!pid_text.empty() && !name_text.empty()) {
+        set_status(state, locale::tr("debugger.bridge_pid_or_name"));
+      } else {
+        GdbBridgeRunner::Config cfg;
+        cfg.binary = ds.bridge_binary;
+        cfg.host = state.host;
+        cfg.mdbg_port = static_cast<uint16_t>(state.debug_port);
+        cfg.listen = trim_bridge_text(ds.bridge_listen);
+        cfg.pid = pid_text;
+        cfg.name = name_text;
+        cfg.verbose = ds.bridge_verbose;
+        cfg.once = ds.bridge_once;
+        std::string error;
+        if (runner.start(cfg, error)) {
+          set_status(state, locale::tr("debugger.bridge_started_status"));
+        } else {
+          set_status(state, "GDB bridge: " + error);
+        }
+      }
+    }
+    ImGui::EndDisabled();
+    if (!have_binary && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", locale::tr("debugger.bridge_binary_missing"));
+    }
+  }
+
+  if (!running && runner.has_exit_code()) {
+    ImGui::SameLine();
+    ImGui::TextColored(ui::colors().warning, "%s %d",
+                       locale::tr("debugger.bridge_exited"),
+                       runner.exit_code());
+  }
+  if (!running && !have_binary) {
+    ImGui::TextColored(ui::colors().warning, "%s",
+                       locale::tr("debugger.bridge_binary_missing"));
+  }
+
+  const std::string binary_line =
+      std::string(locale::tr("debugger.bridge_binary")) + ": " +
+      (have_binary ? ds.bridge_binary
+                   : std::string(locale::tr("debugger.bridge_binary_missing")));
+  ImGui::TextColored(ui::colors().dim, "%s", binary_line.c_str());
+
+  const float log_h = std::min(200.0f * scl,
+                               ImGui::GetContentRegionAvail().y);
+  if (log_h > 40.0f * scl) {
+    ImGui::BeginChild("##bridge_log", ImVec2(0, log_h), true,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    for (const std::string &line : runner.lines()) {
+      ImGui::TextUnformatted(line.c_str());
+    }
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) {
+      ImGui::SetScrollHereY(1.0f);
+    }
+    ImGui::EndChild();
+  }
+
+  ui::end_panel();
+}
+
 void draw_debugger(AppState &state, ImVec2 avail) {
   auto &ds = dstate(state);
   poll_debugger_attach(state, ds);
@@ -937,6 +1092,8 @@ void draw_debugger(AppState &state, ImVec2 avail) {
     ImGui::EndDisabled();
   }
   ui::end_panel();
+
+  draw_gdb_bridge_panel(state, ds);
 
   ImGui::Spacing();
   if (!ds.attached) {

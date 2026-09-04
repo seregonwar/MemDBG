@@ -259,7 +259,7 @@ memdbg_status_t memdbg_debugger_detach(void) {
   }
 
   memset(&g_dbg.dbregs, 0, sizeof(g_dbg.dbregs));
-  if (g_dbg.dbregs_valid) (void)apply_dbregs_to_all();
+  if (g_dbg.dbregs_valid) (void)apply_dbregs_to_all(false);
 
   if (pal_debug_detach((int)g_dbg.pid) != 0) {
     st = pal_status_from_errno();
@@ -305,19 +305,37 @@ memdbg_status_t memdbg_debugger_continue(void) {
   debugger_lock();
   if (!g_dbg.attached) { debugger_unlock(); return MEMDBG_ERR_STATE; }
 
+  /* Re-arm DR0..DR3/DR7 from the authoritative watchpoint table before
+   * resuming.  Threads spawned after a watchpoint was installed start with
+   * cleared debug registers and would never trap on it, and x86 DR6 hit bits
+   * are sticky until clients have inspected the stop cause.  One sync covers
+   * both instead of trusting per-thread readbacks. */
+  bool hw_armed = false;
+  for (uint32_t i = 0; i < MEMDBG_DEBUGGER_MAX_WATCHPOINTS; ++i) {
+    if (g_dbg.watchpoints[i].installed) { hw_armed = true; break; }
+  }
+  if (hw_armed) {
+    memdbg_status_t sync_st = sync_hardware_dbregs_locked(true);
+    if (sync_st != MEMDBG_OK) {
+      memdbg_log_write(MEMDBG_LOG_WARN,
+                       "debugger: dbregs re-sync before continue failed "
+                       "pid=%d status=%d",
+                       (int)g_dbg.pid, (int)sync_st);
+    }
+  }
+
   int32_t lwps[MEMDBG_DEBUGGER_MAX_THREADS];
   uint32_t count = 0;
   if (get_threads_locked(lwps, NULL, NULL, &count,
                          MEMDBG_DEBUGGER_MAX_THREADS) == MEMDBG_OK) {
     for (uint32_t i = 0; i < count; ++i) {
-      /* x86 DR6 hit bits are sticky.  Clear them only when resuming, after
-       * clients have had a chance to inspect the stop cause. */
-      clear_hardware_status_locked(lwps[i]);
       memdbg_debug_regs_t regs;
       memset(&regs, 0, sizeof(regs));
       if (pal_debug_get_regs((int)g_dbg.pid, lwps[i], &regs) != 0) continue;
       if (find_breakpoint_slot((uint64_t)(regs.r_rip - 1)) >= 0) {
-        memdbg_status_t st = step_over_sw_breakpoint_locked(lwps[i], NULL);
+        bool watch_hit = false;
+        memdbg_status_t st =
+            step_over_sw_breakpoint_locked(lwps[i], NULL, &watch_hit);
         if (st != MEMDBG_OK) {
           memdbg_log_write(MEMDBG_LOG_WARN,
                            "debugger: continue step-over failed pid=%d lwp=%d "
@@ -325,6 +343,18 @@ memdbg_status_t memdbg_debugger_continue(void) {
                            (int)g_dbg.pid, (int)lwps[i], (int)st);
           debugger_unlock();
           return st;
+        }
+        if (watch_hit) {
+          /* The stepped instruction performed a watched access: report the
+           * stop instead of resuming, or the hit would be silently lost. */
+          g_dbg.stopped = true;
+          g_dbg.stop_lwp = lwps[i];
+          memdbg_log_write(MEMDBG_LOG_INFO,
+                           "debugger: watchpoint hit during step-over pid=%d "
+                           "lwp=%d",
+                           (int)g_dbg.pid, (int)lwps[i]);
+          debugger_unlock();
+          return MEMDBG_OK;
         }
       }
     }
@@ -352,7 +382,9 @@ memdbg_status_t memdbg_debugger_step(int32_t lwp) {
   debugger_lock();
   if (!g_dbg.attached) { debugger_unlock(); return MEMDBG_ERR_STATE; }
   bool stop_consumed = false;
-  memdbg_status_t st = step_over_sw_breakpoint_locked(lwp, &stop_consumed);
+  bool watch_hit = false;
+  memdbg_status_t st =
+      step_over_sw_breakpoint_locked(lwp, &stop_consumed, &watch_hit);
   if (st == MEMDBG_OK) {
     /* A software-breakpoint step-over waits for and consumes SIGTRAP so the
      * original byte can be restored safely.  Preserve that completed stop for

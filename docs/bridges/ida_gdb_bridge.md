@@ -68,6 +68,37 @@ GDB/IDA commands, replies, and the MDBG debugger lifecycle are logged with
 timeout is 30s). During detach it stops the target first, restores debugger
 state, and lets `PT_DETACH` resume execution safely.
 
+## Running from the frontend
+
+The desktop frontend can host the bridge as a subprocess: open the
+**Debugger** screen and expand **IDA GDB Bridge**. It launches
+`memdbg_gdb_bridge` from the frontend's own directory (or `PATH`) with the
+console address of the current connection, captures its output into a log pane,
+and the **Stop** button terminates it cleanly. Leaving both PID and name empty
+defers the attach to IDA's first `vAttach`.
+
+## Safe shutdown and detach
+
+The bridge handles `SIGINT`/`SIGTERM`/`SIGHUP` (and Windows console events such
+as `Ctrl+C` or closing the console window): it stops the target, detaches the
+debugger session, and resumes the game before exiting, so closing the bridge no
+longer leaves the title traced by a dead client. When the process is killed
+without a chance to run its handlers, the payload itself detaches the session
+as soon as the last MDBG client disconnects.
+
+### Removing IDA's "Please wait… Running" dialog
+
+The bridge package includes `memdbg_ida_ui.py`, an optional IDAPython companion
+for the stock Remote GDB debugger. Copy it into IDA's `plugins` directory and
+restart IDA. While a GDB debuggee is running, the helper detects IDA's own
+**Please wait…** modal and closes it once per run transition. It does not change
+RSP all-stop semantics, stop delivery, or the **Suspend** command.
+
+The helper only calls IDA's `hide_wait_box()` when the active modal is actually
+the debugger wait window (with a `find_widget()` fallback on older IDA builds),
+so it does not blindly pop IDA's global wait-box stack. Removing the helper
+restores stock IDA behavior.
+
 ## IDA Pro setup
 
 1. Start the MemDBG payload on the console and confirm port `9020` is reachable.
