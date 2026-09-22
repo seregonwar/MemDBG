@@ -91,12 +91,12 @@ as soon as the last MDBG client disconnects.
 The bridge package includes `memdbg_ida_ui.py`, an optional IDAPython companion
 for the stock Remote GDB debugger. Copy it into IDA's `plugins` directory and
 restart IDA. While a GDB debuggee is running, the helper detects IDA's own
-**Please wait…** modal and closes it once per run transition. It does not change
+**Please wait…** modal and hides it once per run transition. It does not change
 RSP all-stop semantics, stop delivery, or the **Suspend** command.
 
-The helper only calls IDA's `hide_wait_box()` when the active modal is actually
-the debugger wait window (with a `find_widget()` fallback on older IDA builds),
-so it does not blindly pop IDA's global wait-box stack. Removing the helper
+The helper identifies the visible Qt wait dialog by its **Please wait** title
+and **Running** label, then hides that window without changing IDA's wait-box
+stack. IDA closes the wait box normally at the next stop. Removing the helper
 restores stock IDA behavior.
 
 ## IDA Pro setup

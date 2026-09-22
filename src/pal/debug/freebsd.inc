@@ -8,8 +8,54 @@
 #include <sys/wait.h>
 
 #if defined(MEMDBG_PAL_DEBUG_PS5)
+#include <dlfcn.h>
+#include <pthread.h>
 #include <ps5/kernel.h>
 #include "memdbg/pal/pal_kernel_fast.h"
+
+typedef int (*pal_debug_get_app_id_fn)(int, int *);
+typedef int (*pal_debug_continue_app_fn)(int);
+static pthread_once_t pal_debug_syscore_once = PTHREAD_ONCE_INIT;
+static void *pal_debug_syscore = NULL;
+static pal_debug_get_app_id_fn pal_debug_get_app_id = NULL;
+static pal_debug_continue_app_fn pal_debug_continue_app = NULL;
+
+static void pal_debug_resolve_syscore(void) {
+  pal_debug_syscore = dlopen("libSceSysCore.sprx", RTLD_LAZY);
+  if (pal_debug_syscore != NULL) {
+    pal_debug_get_app_id = (pal_debug_get_app_id_fn)dlsym(
+        pal_debug_syscore, "_sceApplicationGetAppId");
+    pal_debug_continue_app = (pal_debug_continue_app_fn)dlsym(
+        pal_debug_syscore, "sceApplicationContinue");
+  }
+  if (pal_debug_get_app_id == NULL || pal_debug_continue_app == NULL) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: PS5 SysCore application resume unavailable");
+  }
+}
+
+/* PS5 pauses the application as well as the traced process.  PT_CONTINUE
+ * alone can leave the game's display black until SysCore releases that pause.
+ * Resolve the optional SysCore entry points at runtime so other payload SDKs
+ * do not need to link against a private import library. */
+static void pal_debug_resume_application(int pid) {
+  (void)pthread_once(&pal_debug_syscore_once, pal_debug_resolve_syscore);
+  if (pal_debug_get_app_id == NULL || pal_debug_continue_app == NULL) return;
+  int app_id = 0;
+  int result = pal_debug_get_app_id(pid, &app_id);
+  if (result != 0 || app_id <= 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: PS5 application ID lookup failed pid=%d rc=%d app=%d",
+                     pid, result, app_id);
+    return;
+  }
+  result = pal_debug_continue_app(app_id);
+  if (result != 0) {
+    memdbg_log_write(MEMDBG_LOG_WARN,
+                     "debugger: PS5 application continue failed pid=%d rc=%d",
+                     pid, result);
+  }
+}
 
 static int pal_debug_kernel_copyout(intptr_t source, void *destination,
                                     size_t length) {
@@ -58,6 +104,21 @@ static long pal_debug_ptrace_raw(int op, int pid, void *addr, long data) {
   errno = 0;
 #if defined(MEMDBG_PAL_DEBUG_PS5)
   long result = (long)__syscall((quad_t)SYS_ptrace, op, pid, addr, data);
+#elif defined(PLATFORM_PS4) || defined(PS4) || defined(__ORBIS__)
+  long result;
+  if (op == PT_GETDBREGS || op == PT_SETDBREGS) {
+    /* Orbis's libc ptrace wrapper is needed to resume a game, but its
+     * debug-register path differs from the raw syscall used by ps4debug-NG.
+     * Try the kernel entry point first for watchpoints, retaining the SDK
+     * wrapper as a fallback on firmware that rejects the raw operation. */
+    result = (long)__syscall((quad_t)SYS_ptrace, op, pid, addr, data);
+    if (result == -1 && errno != 0) {
+      errno = 0;
+      result = (long)ptrace(op, (pid_t)pid, (caddr_t)addr, (int)data);
+    }
+  } else {
+    result = (long)ptrace(op, (pid_t)pid, (caddr_t)addr, (int)data);
+  }
 #else
   long result = (long)ptrace(op, (pid_t)pid, (caddr_t)addr, (int)data);
 #endif
@@ -135,6 +196,7 @@ static void pal_debug_sleep_ms(uint32_t ms) {
 int pal_debug_wait(int pid, int *status, bool nohang) {
   int st = 0;
   if (status == NULL) status = &st;
+#if !defined(MEMDBG_PAL_DEBUG_PS5)
   int flags = nohang ? WNOHANG : 0;
 #ifdef WUNTRACED
   /* Make the initial PT_ATTACH/SIGSTOP observable on PS4 as well as on
@@ -142,7 +204,15 @@ int pal_debug_wait(int pid, int *status, bool nohang) {
    * before it reports a successful attach. */
   flags |= WUNTRACED;
 #endif
+#endif
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  /* Use the same raw syscall path as PS5 ptrace so attach and subsequent
+   * breakpoint stops are observed through the same kernel interface. */
+  pid_t r = (pid_t)__syscall((quad_t)SYS_wait4, (pid_t)pid, status,
+                            nohang ? WNOHANG : 0, NULL);
+#else
   pid_t r = waitpid((pid_t)pid, status, flags);
+#endif
   if (r == -1) return -1;
   if (nohang && r == 0) {
     *status = 0;
@@ -165,15 +235,6 @@ int pal_debug_attach(int pid) {
     if (r == -1) {
       wait_errno = errno;
 #if defined(MEMDBG_PAL_DEBUG_CONSOLE)
-#if defined(MEMDBG_PAL_DEBUG_PS5)
-      if (wait_errno == ECHILD) {
-        /* On console firmware, PT_ATTACH can succeed without exposing the
-         * traced process through waitpid() as a child of this payload.  Treat
-         * the successful ptrace attach as authoritative and let higher layers
-         * issue an explicit stop/poll if needed. */
-        return 0;
-      }
-#endif
       /* ECONNRESET can occur when the console's internal debugger daemon
        * momentarily resets the connection.  Retry instead of failing
        * immediately; a subsequent poll usually succeeds. */
@@ -187,13 +248,7 @@ int pal_debug_attach(int pid) {
     pal_debug_sleep_ms(10U);
   }
 
-#if defined(MEMDBG_PAL_DEBUG_PS5)
-  if (wait_errno == 0) {
-    return 0;
-  }
-#endif
-
-  /* Never expose a half-attached PS4 session.  Without a consumed wait event,
+  /* Never expose a half-attached console session. Without a consumed wait event,
    * the first PT_CONTINUE can leave the attach SIGSTOP pending indefinitely,
    * which is observed as a permanent black screen.  PT_DETACH resumes the
    * target; SIGCONT is a best-effort guard for an independent job-control
@@ -201,6 +256,9 @@ int pal_debug_attach(int pid) {
   if (pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0) == -1) {
     (void)kill((pid_t)pid, SIGCONT);
   }
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  pal_debug_resume_application(pid);
+#endif
   errno = wait_errno != 0 ? wait_errno : ETIMEDOUT;
   return -1;
 }
@@ -209,12 +267,17 @@ int pal_debug_detach(int pid) {
 #if defined(MEMDBG_PAL_DEBUG_PS5)
   kern_thread_cache_flush();
 #endif
-  return (pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0) == -1) ? -1 : 0;
+  if (pal_debug_ptrace_raw(PT_DETACH, pid, NULL, 0) == -1) return -1;
+#if defined(MEMDBG_PAL_DEBUG_PS5)
+  pal_debug_resume_application(pid);
+#endif
+  return 0;
 }
 
 int pal_debug_continue(int pid) {
 #if defined(MEMDBG_PAL_DEBUG_PS5)
   kern_thread_cache_flush();
+  pal_debug_resume_application(pid);
 #endif
   return (pal_debug_ptrace_raw(PT_CONTINUE, pid, (void *)(uintptr_t)1, 0) ==
           -1)

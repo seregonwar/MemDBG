@@ -10,6 +10,19 @@ import ida_kernwin
 _POLL_MS = 50
 
 
+def _qt_widgets():
+    # IDA 9 uses PySide6; older supported releases use PyQt5.
+    try:
+        from PySide6 import QtWidgets
+        return QtWidgets
+    except ImportError:
+        try:
+            from PyQt5 import QtWidgets
+            return QtWidgets
+        except ImportError:
+            return None
+
+
 def _debugger_name():
     try:
         name = ida_idd.dbg_get_name()
@@ -49,24 +62,24 @@ class _WaitBoxSuppressor:
             self.timer = None
         self.hidden_for_run = False
 
-    def _wait_box_visible(self):
-        try:
-            get_modal = getattr(ida_kernwin, "get_active_modal_widget", None)
-            if callable(get_modal):
-                widget = get_modal()
-                if widget is not None:
-                    title = ida_kernwin.get_widget_title(widget) or ""
-                    if str(title).lower().startswith("please wait"):
-                        return True
-        except Exception:
-            pass
-        for caption in ("Please wait...", "Please wait…"):
-            try:
-                if ida_kernwin.find_widget(caption) is not None:
-                    return True
-            except Exception:
-                pass
-        return False
+    def _running_wait_box(self):
+        # IDA's get_active_modal_widget() explicitly excludes its wait box,
+        # and find_widget() only searches IDA TWidgets. Inspect Qt's top-level
+        # dialogs instead, then require the debugger's Running label so an
+        # unrelated progress dialog is never hidden.
+        qt = _qt_widgets()
+        app = qt.QApplication.instance() if qt is not None else None
+        if app is None:
+            return None
+        for widget in app.topLevelWidgets():
+            if not widget.isVisible():
+                continue
+            if not widget.windowTitle().strip().lower().startswith("please wait"):
+                continue
+            labels = widget.findChildren(qt.QLabel)
+            if any("running" in label.text().lower() for label in labels):
+                return widget
+        return None
 
     def _tick(self):
         try:
@@ -75,11 +88,13 @@ class _WaitBoxSuppressor:
                 self.hidden_for_run = False
                 return _POLL_MS
 
-            if not self.hidden_for_run and self._wait_box_visible():
-                # One hide per RUN transition: never blindly pop IDA's global
-                # wait-box stack when the debugger dialog is not visible.
-                ida_kernwin.hide_wait_box()
-                self.hidden_for_run = True
+            if not self.hidden_for_run:
+                wait_box = self._running_wait_box()
+                if wait_box is not None:
+                    # Preserve IDA's own wait-box stack. IDA will pop it when
+                    # the process stops; only its Qt window is hidden here.
+                    wait_box.hide()
+                    self.hidden_for_run = True
         except Exception:
             self.hidden_for_run = False
         return _POLL_MS

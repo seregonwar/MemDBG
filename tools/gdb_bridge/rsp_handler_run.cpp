@@ -162,7 +162,11 @@ std::string RspHandler::handle_breakpoint(const std::string &packet, bool enable
   if (type == '1') {
     if (kind != 1U) return err_packet(0x22);
     if (enable) {
-      if (!backend_.debug_set_breakpoint(addr, 1U)) return err_packet(1);
+      if (!backend_.debug_set_breakpoint(addr, 1U)) {
+        logf("hardware breakpoint set failed at 0x%llx: %s",
+             static_cast<unsigned long long>(addr), backend_.last_error().c_str());
+        return err_packet(1);
+      }
     } else {
       if (!backend_.debug_clear_breakpoint(addr)) return err_packet(1);
     }
@@ -175,6 +179,9 @@ std::string RspHandler::handle_breakpoint(const std::string &packet, bool enable
   if (length != 1U && length != 2U && length != 4U && length != 8U) return err_packet(0x22);
   if (enable) {
     if (!backend_.debug_set_watchpoint(addr, length, static_cast<uint32_t>(wtype))) {
+      logf("watchpoint set failed at 0x%llx length=%u type=%u: %s",
+           static_cast<unsigned long long>(addr), length,
+           static_cast<unsigned>(wtype), backend_.last_error().c_str());
       return err_packet(1);
     }
   } else {
