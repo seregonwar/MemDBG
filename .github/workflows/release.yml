@@ -666,16 +666,14 @@ jobs:
 
       - name: Set up Android SDK
         if: steps.detect.outputs.enabled == '1'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install NDK and CMake
         if: steps.detect.outputs.enabled == '1'
         shell: bash
         run: |
           set -euo pipefail
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
-          yes | "${SDK}/cmdline-tools/latest/bin/sdkmanager" \
-            "ndk;26.1.10909125" "cmake;3.22.1" >/dev/null || true
+          sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
 
       - name: Cache Gradle
         if: steps.detect.outputs.enabled == '1'
