@@ -88,14 +88,13 @@ appena l'ultimo client MDBG si disconnette.
 
 ### Il dialogo "Please wait…" di IDA
 
-Mentre il debuggato è in esecuzione, IDA Pro mostra la sua piccola finestra
-**Please wait…** (con pulsante **Suspend**) ogni volta che attende un evento di
-debug: è UI di IDA, mostrata con ogni stub GDB-remote, e il bridge non può
-sopprimerla. Scompare non appena il target segnala uno stop. Se resta per sempre
-dopo aver impostato un watchpoint hardware, significa che il watchpoint non è
-mai scattato: con le correzioni ai watchpoint del payload (ri-armo dei registri
-debug a ogni resume, attribuzione degli hit via DR6) i watchpoint in scrittura
-fermano di nuovo il target e il dialogo scompare.
+Il pacchetto del bridge include `memdbg_ida_ui.py`, un plugin IDAPython
+facoltativo per il debugger Remote GDB. Copialo nella directory `plugins` di
+IDA e riavvia IDA. Il plugin individua la finestra Qt **Please wait…** con il
+testo **Running** e la nasconde mentre il processo è in esecuzione, lasciando
+intatta la gestione interna delle finestre di attesa di IDA. La finestra viene
+chiusa normalmente al successivo stop del target; il comando **Suspend** resta
+disponibile dal menu del debugger.
 
 ## Setup IDA Pro
 
